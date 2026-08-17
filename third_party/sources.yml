@@ -1,0 +1,73 @@
+schema: 1
+checked_at: "2026-08-12"
+sources:
+  - name: Vector
+    url: https://github.com/JingMatrix/Vector.git
+    revision: a0ab735e13a3593839421c99c1c1aba6a129be7d
+    role: primary-framework-reference
+    license: GPL-3.0
+    import_policy: reference-only
+
+  - name: LSPosed
+    url: https://github.com/LSPosed/LSPosed.git
+    revision: df74d83eb03a44cc6ad268841ac2ada28d077c77
+    role: upstream-architecture-reference
+    license: GPL-3.0
+    import_policy: reference-only
+
+  - name: LSPatch
+    url: https://github.com/JingMatrix/LSPatch.git
+    revision: ae8b908305a348ec80f7900599c2dab30d56f901
+    role: non-root-comparison
+    license: GPL-3.0
+    import_policy: reference-only
+
+  - name: NPatch
+    url: https://github.com/7723mod/NPatch.git
+    revision: 24e1a3c110f29dd1338428bcc66a9eba76e00b30
+    role: non-root-derived-reference
+    license: verify-before-use
+    import_policy: reference-only
+
+  - name: LSPlant
+    url: https://github.com/LSPosed/LSPlant.git
+    revision: 61e10e51eb99dca00dd873f48c28a674dd2b4c4c
+    role: art-hook-engine-reference
+    license: LGPL-3.0
+    import_policy: reference-only
+
+  - name: libxposed-api
+    url: https://github.com/libxposed/api.git
+    revision: 39cac0845771547c9c67a3e3ce255af110a54a0e
+    role: modern-module-api-reference
+    license: Apache-2.0
+    import_policy: dependency-or-reference
+
+  - name: libxposed-service
+    url: https://github.com/libxposed/service.git
+    revision: 3318940876192e29cf6ab07637e899e22a87ebf0
+    role: framework-service-reference
+    license: Apache-2.0
+    import_policy: dependency-or-reference
+
+  - name: QAuxiliary
+    url: https://github.com/cinit/QAuxiliary.git
+    revision: 896237e4a7f222afb8605d3ae3981bdceb2863c7
+    role: host-adaptation-reference
+    license: verify-per-file
+    import_policy: no-copy-before-license-review
+
+  - name: BiliRoaming
+    url: https://github.com/yujincheng08/BiliRoaming.git
+    revision: 5653b061cd2a2d3a8c60e480f978d8152f97c505
+    role: module-implementation-reference
+    license: GPL-3.0
+    import_policy: reference-only
+
+  - name: Gradle-Wrapper
+    url: https://services.gradle.org/distributions/gradle-8.12-wrapper.jar.sha256
+    revision: "8.12"
+    role: target-app-build-bootstrap
+    license: Apache-2.0
+    artifact_sha256: 2db75c40782f5e8ba1fc278a5574bab070adccb2d21ca5a6e5ed840888448046
+    import_policy: verified-build-tool

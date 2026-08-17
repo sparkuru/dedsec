@@ -1,3 +1,7 @@
-
-
-archive
+archive/
+workbench/upstreams/
+**/.gradle/
+**/build/
+**/local.properties
+**/.idea/
+**/*.iml
