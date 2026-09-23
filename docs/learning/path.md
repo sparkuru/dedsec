@@ -96,7 +96,7 @@
 
 学习动作：建立 host adapter、稳定领域模型、版本自检、诊断报告、兼容矩阵和 release。
 
-验收：项目满足 `projects/README.md` 的发布契约，且不依赖 `labs/`、`src/` 或本地参考仓库。
+验收：项目满足 `projects/README.md` 的发布契约，且不依赖 `labs/`、`workbench/upstreams/` 或历史遗留材料。
 
 ## 人机分工
 

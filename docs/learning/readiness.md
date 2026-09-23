@@ -6,11 +6,12 @@
 
 | 项目 | 状态 | 证据或下一动作 |
 |---|---|---|
-| 仓库边界 | 已就绪 | `docs/`、`labs/`、`projects/`、`workbench/` 已分工 |
+| 仓库边界 | 迁移中 | `docs/`、`labs/`、`projects/`、`workbench/` 已分工；历史 `src/` 仅保留待分类材料 |
 | 证据规范 | 已就绪 | `docs/research/README.md` |
 | 上游 revision | 已就绪 | `third_party/upstreams.lock` |
 | 实验模板 | 已就绪 | `labs/_template/README.md` |
-| target app 源码 | 已就绪 | [`labs/target-app/`](../../labs/target-app/README.md) |
+| target app 源码 | 已就绪 | [`labs/example-app/`](../../labs/example-app/README.md) |
+| 遗留材料 | 迁移中 | [遗留材料与上游参考清单](../research/materials-inventory.md) |
 | target app 本机构建 | 阻塞 | 当前主机没有 Android SDK、系统 Gradle和 `javac` |
 | ADB 客户端 | 已就绪 | Debian ADB 34.0.5 |
 | 设备基线 | 待采集 | 运行 `scripts/device-preflight.sh` |

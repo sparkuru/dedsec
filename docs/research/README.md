@@ -36,4 +36,5 @@
 - [框架地图](framework-map.md)
 - [能力与边界](capability-model.md)
 - [Vector 源码阅读索引](vector-reading-index.md)
-- [`src/` 现状审计](src-inventory.md)
+- [CaptureSposed 架构审计](donthookmyscreenshot-audit.md)
+- [遗留材料与上游参考清单](materials-inventory.md)

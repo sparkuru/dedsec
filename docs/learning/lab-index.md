@@ -4,7 +4,7 @@
 
 | 实验 | 核心问题 | 主要证据 | 前置 |
 |---|---|---|---|
-| [`target-app`](../../labs/target-app/README.md) | 如何构造稳定、可观察的 Hook 靶点 | 测试、日志、进程表 | 无 |
+| [`example-app`](../../labs/example-app/README.md) | 如何构造稳定、可观察的 Hook 靶点 | 测试、日志、进程表 | 无 |
 | `01-legacy-api` | XposedBridge 如何改变方法调用 | 参数、返回值、异常和线程日志 | target app |
 | `02-libxposed-api` | modern API 如何表达同一能力 | API 对照、scope、service 日志 | 01 |
 | `03-classloader-dexkit` | 如何在混淆和多 ClassLoader 下定位目标 | resolver 报告、唯一性测试 | 01–02 |

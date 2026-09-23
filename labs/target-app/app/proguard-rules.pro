@@ -1,1 +1,0 @@
--keep class io.github.wkyuu.dedsec.target.targets.** { *; }

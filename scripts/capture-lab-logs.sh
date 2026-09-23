@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 SCRIPT_NAME=$(basename "$0")
 readonly SCRIPT_NAME
-readonly TARGET_PACKAGE="io.github.wkyuu.dedsec.target"
+readonly TARGET_PACKAGE="im.majo.dedsec.example"
 readonly STYLE_RESET=$'\033[0m'
 readonly STYLE_TITLE=$'\033[1;36m'
 readonly STYLE_SUCCESS=$'\033[0;32m'

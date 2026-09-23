@@ -54,4 +54,4 @@
 - `R5.3` 建立版本自检、错误码和完整性状态。
 - `R5.4` 将实验实现迁入独立 `projects/<name>`。
 
-完成证据：产品不依赖 `labs/`、`src/` 或本地上游 clone。
+完成证据：产品不依赖 `labs/`、`workbench/upstreams/` 或历史遗留材料；第三方来源已登记并可按固定 revision 重建。

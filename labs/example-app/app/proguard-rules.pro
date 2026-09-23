@@ -1,0 +1,1 @@
+-keep class im.majo.dedsec.example.targets.** { *; }

@@ -5,7 +5,7 @@ SCRIPT_NAME=$(basename "$0")
 readonly SCRIPT_NAME
 REPO_ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 readonly REPO_ROOT
-readonly TARGET_ROOT="$REPO_ROOT/labs/target-app"
+readonly TARGET_ROOT="$REPO_ROOT/labs/example-app"
 readonly STYLE_RESET=$'\033[0m'
 readonly STYLE_TITLE=$'\033[1;36m'
 readonly STYLE_SUCCESS=$'\033[0;32m'
@@ -68,9 +68,9 @@ verify_required_files() {
 		"docs/research/vector-reading-index.md"
 		"third_party/upstreams.lock"
 		"labs/_template/README.md"
-		"labs/target-app/gradlew"
-		"labs/target-app/gradle/wrapper/gradle-wrapper.jar"
-		"labs/target-app/app/src/main/AndroidManifest.xml"
+		"labs/example-app/gradlew"
+		"labs/example-app/gradle/wrapper/gradle-wrapper.jar"
+		"labs/example-app/app/src/main/AndroidManifest.xml"
 	)
 	local relative_path
 
