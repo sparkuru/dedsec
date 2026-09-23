@@ -1,0 +1,21 @@
+#!/bin/sh
+set -eu
+
+app_home=$(CDPATH='' cd -P "$(dirname "$0")" && pwd -P)
+
+if [ -n "${JAVA_HOME:-}" ]; then
+	java_command="$JAVA_HOME/bin/java"
+else
+	java_command=$(command -v java || true)
+fi
+
+if [ -z "$java_command" ] || [ ! -x "$java_command" ]; then
+	printf 'Error: Java executable not found. Set JAVA_HOME or add java to PATH.\n' >&2
+	exit 1
+fi
+
+exec "$java_command" \
+	-Dorg.gradle.appname=gradlew \
+	-classpath "$app_home/gradle/wrapper/gradle-wrapper.jar" \
+	org.gradle.wrapper.GradleWrapperMain \
+	"$@"
