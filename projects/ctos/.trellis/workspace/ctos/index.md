@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 1
-- **Last Active**: 2026-09-25
+- **Total Sessions**: 2
+- **Last Active**: 2026-09-26
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~36 | Active |
+| `journal-1.md` | ~57 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 2 | 2026-09-26 | 终端输入同步与输出选择 | `d716d15` | `antitrust` |
 | 1 | 2026-09-25 | 可信状态工作台与 QQ 分身连接 | `90024df` | `antitrust` |
 <!-- @@@/auto:session-history -->
 

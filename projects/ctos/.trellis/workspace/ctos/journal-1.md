@@ -34,3 +34,24 @@
 ### Status
 
 [OK] **Completed**
+
+
+## Session 2: 终端输入同步与输出选择
+
+**Date**: 2026-09-26
+**Task**: 终端输入同步与输出选择
+**Branch**: `antitrust`
+
+### Summary
+
+完成终端双入口、底部普通输入、Tab 与 Shell 行同步、会话命令历史、输出选择及界面文案收敛；Flutter 分析和 22 项测试通过，当前 APK 在 PLR110 实测 i→Tab→d→执行、↑/↓ 与输出快照。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `d716d15` | (see git log) |
+
+### Status
+
+[OK] **Completed**
