@@ -1,4 +1,5 @@
 .dart_tool/
+.devhome/
 .flutter-plugins-dependencies
 build/
 android/.gradle/

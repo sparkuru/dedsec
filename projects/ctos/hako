@@ -1,0 +1,161 @@
+#!/usr/bin/env bash
+# hako - Run ctOS Flutter and Android build commands in a temporary container.
+#
+# Image: ghcr.io/cirruslabs/flutter:3.35.7, pinned by registry digest.
+# The host needs Docker only. The first run copies the toolchains into the
+# ignored .devhome directory and installs this project's NDK 27.0.12077973.
+#
+# Usage from projects/ctos:
+#   ./hako flutter pub get
+#   ./hako flutter analyze
+#   ./hako flutter test
+#   ./hako flutter build apk --release --target-platform android-arm64
+#   ./hako current  # Build and replace the single dist/ctos-current-arm64.apk.
+#   ./hako bash -lc 'cd android && ./gradlew :app:lintRelease --console=plain'
+#
+# ctOS has no development server. No container or host ports are published.
+# The Android PTY build requires Linux x86_64, so the container uses amd64.
+# Root-group read access is needed for one 0640 font cache file in this image;
+# the process still runs with the host UID and the Docker socket is not mounted.
+set -Eeuo pipefail
+
+readonly IMAGE='ghcr.io/cirruslabs/flutter:3.35.7@sha256:d271a49ddd8ce1be6c7954f7eabe0e03766c8a1bf1430f0dce780888a21ed408'
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly REPO_ROOT
+readonly DEVHOME="${REPO_ROOT}/.devhome"
+readonly DIST_DIR="${REPO_ROOT}/dist"
+readonly CURRENT_APK="${DIST_DIR}/ctos-current-arm64.apk"
+readonly BUILD_APK="${REPO_ROOT}/build/app/outputs/flutter-apk/app-release.apk"
+STEP_INDEX=0
+
+usage() {
+	printf 'Usage: ./hako <container command> [args...]\n' >&2
+	printf '       ./hako current\n' >&2
+	printf 'Example: ./hako flutter build apk --release --target-platform android-arm64\n' >&2
+}
+
+quote_command() {
+	local arg
+	for arg in "$@"; do
+		printf '%q ' "$arg"
+	done
+}
+
+log_step() {
+	local label=$1
+	shift
+	STEP_INDEX=$((STEP_INDEX + 1))
+	printf '#%s [hako %s] %s\n' "$STEP_INDEX" "$label" "$(quote_command "$@")" >&2
+}
+
+publish_current() (
+	local apk checksum temporary_apk temporary_sum
+
+	[[ -f "$BUILD_APK" ]] || {
+		printf '[hako] built APK not found: %s\n' "$BUILD_APK" >&2
+		return 1
+	}
+
+	log_step publish mkdir -p "$DIST_DIR"
+	mkdir -p "$DIST_DIR"
+	for apk in "$DIST_DIR"/*.apk; do
+		[[ -e "$apk" ]] || continue
+		case "$apk" in
+		"$CURRENT_APK" | "$DIST_DIR/ctos-0.1.0-arm64.apk") ;;
+		*)
+			printf '[hako] unexpected APK in dist; inspect it before publishing: %s\n' "$apk" >&2
+			return 1
+			;;
+		esac
+	done
+
+	log_step publish mktemp "$DIST_DIR/.ctos-current-arm64.XXXXXXXX"
+	temporary_apk=$(mktemp "$DIST_DIR/.ctos-current-arm64.XXXXXXXX")
+	log_step publish mktemp "$DIST_DIR/.SHA256SUMS.XXXXXXXX"
+	temporary_sum=$(mktemp "$DIST_DIR/.SHA256SUMS.XXXXXXXX")
+	trap 'rm -f -- "$temporary_apk" "$temporary_sum"' EXIT
+
+	log_step publish install -m 0644 "$BUILD_APK" "$temporary_apk"
+	install -m 0644 "$BUILD_APK" "$temporary_apk"
+	log_step publish cmp "$BUILD_APK" "$temporary_apk"
+	cmp "$BUILD_APK" "$temporary_apk"
+	log_step publish sha256sum "$temporary_apk"
+	checksum=$(sha256sum "$temporary_apk")
+	log_step publish write "$temporary_sum"
+	printf '%s  ctos-current-arm64.apk\n' "${checksum%% *}" >"$temporary_sum"
+	log_step publish chmod 0644 "$temporary_sum"
+	chmod 0644 "$temporary_sum"
+	log_step publish mv -- "$temporary_apk" "$CURRENT_APK"
+	mv -- "$temporary_apk" "$CURRENT_APK"
+	log_step publish mv -- "$temporary_sum" "$DIST_DIR/SHA256SUMS"
+	mv -- "$temporary_sum" "$DIST_DIR/SHA256SUMS"
+	log_step publish sha256sum --check "$DIST_DIR/SHA256SUMS"
+	(cd "$DIST_DIR" && sha256sum --check SHA256SUMS)
+	if [[ -f "$DIST_DIR/ctos-0.1.0-arm64.apk" ]]; then
+		log_step publish rm -- "$DIST_DIR/ctos-0.1.0-arm64.apk"
+		rm -- "$DIST_DIR/ctos-0.1.0-arm64.apk"
+	fi
+)
+
+main() {
+	local -a tty_flags=()
+	local -a docker_cmd=()
+	local current_mode=false
+
+	if [[ $# -eq 0 || ${1:-} == --help || ${1:-} == -h ]]; then
+		usage
+		[[ $# -gt 0 ]]
+		return
+	fi
+	if [[ $1 == current ]]; then
+		[[ $# -eq 1 ]] || {
+			usage
+			return 2
+		}
+		current_mode=true
+		# shellcheck disable=SC2016 # Expanded by Bash inside the container.
+		set -- /bin/bash -c 'flutter build apk --release --target-platform android-arm64 && "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify "$PWD/build/app/outputs/flutter-apk/app-release.apk"'
+	fi
+
+	command -v docker >/dev/null 2>&1 || {
+		printf '[hako] Docker is required on the host\n' >&2
+		return 127
+	}
+
+	log_step internal mkdir -p "$DEVHOME"
+	mkdir -p "$DEVHOME"
+
+	log_step internal write "$DEVHOME/local.properties"
+	printf 'sdk.dir=/app/.devhome/android-sdk\nflutter.sdk=/app/.devhome/flutter\n' \
+		>"$DEVHOME/local.properties"
+
+	[[ ! -t 0 ]] || tty_flags+=(-i)
+	[[ ! -t 0 || ! -t 1 ]] || tty_flags+=(-t)
+
+	docker_cmd=(
+		docker run --rm --platform linux/amd64
+		"${tty_flags[@]}"
+		--user "$(id -u):$(id -g)"
+		--group-add 0
+		-e HOME=/app/.devhome
+		-e HAKO_STEP_INDEX="$((STEP_INDEX + 1))"
+		-v "${REPO_ROOT}:/app"
+		-v "${DEVHOME}/local.properties:/app/android/local.properties"
+		-w /app
+		--label "hako.repo=${REPO_ROOT}"
+		--label "hako.scope=${HAKO_SCOPE:-manual}"
+		--label 'hako.service='
+		"$IMAGE" /bin/bash /app/hako-env.sh "$@"
+	)
+
+	log_step run "${docker_cmd[@]}"
+	if [[ $current_mode == true ]]; then
+		"${docker_cmd[@]}"
+		STEP_INDEX=100
+		publish_current
+	else
+		exec "${docker_cmd[@]}"
+	fi
+}
+
+main "$@"
