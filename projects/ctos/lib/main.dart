@@ -8,6 +8,7 @@ import 'connection_info.dart';
 import 'connection_state.dart';
 import 'device_info.dart';
 import 'device_page.dart';
+import 'terminal_interaction.dart';
 import 'traffic.dart';
 
 const native = MethodChannel('ctos/native');
@@ -55,8 +56,12 @@ class Observatory extends StatefulWidget {
 class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
   final tracker = TrafficTracker();
   final terminal = Terminal(maxLines: 3000);
-  final command = TextEditingController();
+  final terminalInputFocus = FocusNode();
+  final terminalInputKey = GlobalKey<TerminalCommandInputState>();
+  final terminalLineTracker = TerminalEditableLineTracker();
+  final terminalHistory = TerminalCommandHistory();
   Timer? timer;
+  Timer? terminalLineSyncTimer;
   Timer? connectionStaleTimer;
   StreamSubscription<dynamic>? terminalEvents;
   Map<String, dynamic> snapshot = {};
@@ -72,6 +77,17 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
   bool commandRunning = false;
   bool loading = false, granting = true, foreground = true;
   bool session = false;
+  bool terminalBusy = false;
+  bool terminalExitedDuringStart = false;
+  int terminalGeneration = 0;
+  int terminalLineSyncGeneration = 0;
+  bool terminalLineSyncPending = false;
+  bool terminalLineWriteReady = false;
+  DateTime? terminalLineSyncStarted;
+  DateTime? terminalLineLastInputAt;
+  DateTime? terminalLineLastOutputAt;
+  String terminalLineBaseline = '';
+  Future<void> terminalWriteTail = Future.value();
   int tab = 0;
   int infoTab = 0;
   String error = '',
@@ -102,8 +118,19 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
         .transform(const Utf8Decoder(allowMalformed: true))
         .listen((event) {
           terminal.write(event);
-          if (event.contains('[session exited:') && mounted)
-            setState(() => session = false);
+          if (terminalLineSyncPending) {
+            terminalLineLastOutputAt = DateTime.now();
+            scheduleTerminalLineSync();
+          }
+          if (event.contains('[session exited:') && mounted) {
+            cancelTerminalLineSync(resetTracker: true);
+            setState(() {
+              if (terminalBusy && !session) terminalExitedDuringStart = true;
+              session = false;
+              terminalMode = '未连接';
+              terminalGeneration++;
+            });
+          }
         }, onError: (Object e) => terminal.write('\r\n$e\r\n'));
     terminal.onOutput = (text) => sendTerminal(text);
     terminal.onResize = (columns, rows, width, height) {
@@ -113,7 +140,6 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
           'rows': rows,
         });
     };
-    terminal.write('ctOS / local terminal\r\n选择应用 Shell 或 Root PTY 开始。\r\n');
     refresh();
     refreshDevice();
     unawaited(restoreRoot());
@@ -137,9 +163,10 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
   @override
   void dispose() {
     timer?.cancel();
+    terminalLineSyncTimer?.cancel();
     connectionStaleTimer?.cancel();
     terminalEvents?.cancel();
-    command.dispose();
+    terminalInputFocus.dispose();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -301,29 +328,244 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
   }
 
   Future<void> startTerminal(bool privileged) async {
+    if (session || terminalBusy || (privileged && !root)) return;
+    cancelTerminalLineSync(resetTracker: true);
+    terminalHistory.reset();
+    setState(() {
+      terminalBusy = true;
+      terminalExitedDuringStart = false;
+    });
     try {
+      terminal.write('\r\n── ${privileged ? 'Root PTY' : '应用 Shell'} ──\r\n');
       final mode = await native.invokeMethod<String>('terminalStart', {
         'root': privileged,
         'columns': terminal.viewWidth,
         'rows': terminal.viewHeight,
       });
-      if (mounted)
+      if (mounted) {
         setState(() {
-          session = true;
-          terminalMode = mode!;
+          session = !terminalExitedDuringStart;
+          terminalMode = session
+              ? mode ?? (privileged ? 'Root PTY' : '应用 Shell')
+              : '未连接';
+          terminalGeneration++;
         });
+      }
     } catch (e) {
       notice(e.toString());
+    } finally {
+      if (mounted) setState(() => terminalBusy = false);
     }
   }
 
-  Future<void> sendTerminal(String text) async {
-    if (!session) return;
+  Future<void> stopTerminal() async {
+    if (!session || terminalBusy) return;
+    cancelTerminalLineSync(resetTracker: true);
+    setState(() => terminalBusy = true);
     try {
-      await native.invokeMethod('terminalWrite', {'text': text});
+      await terminalWriteTail;
+      await native.invokeMethod('terminalStop');
+      if (mounted) {
+        setState(() {
+          session = false;
+          terminalMode = '未连接';
+          terminalGeneration++;
+        });
+      }
     } catch (e) {
       notice(e.toString());
+    } finally {
+      if (mounted) setState(() => terminalBusy = false);
     }
+  }
+
+  void sendTerminal(String text) {
+    if (!session || terminalBusy || text.isEmpty) return;
+    final generation = terminalGeneration;
+    terminalWriteTail = terminalWriteTail.then((_) async {
+      if (!session || generation != terminalGeneration) return;
+      try {
+        await native.invokeMethod('terminalWrite', {'text': text});
+      } catch (e) {
+        notice(e.toString());
+      }
+    });
+  }
+
+  void sendTerminalInput(String text) {
+    if (text.contains('\r') || text.contains('\n')) {
+      terminalHistory.record(terminalInputKey.currentState?.visibleText ?? '');
+      cancelTerminalLineSync(resetTracker: true);
+    } else if (session) {
+      terminalLineTracker.captureBeforeInput(terminal);
+      if (terminalLineSyncPending) {
+        terminalLineLastInputAt = DateTime.now();
+      }
+    }
+    sendTerminal(text);
+    waitForTerminalLineWrites();
+  }
+
+  void waitForTerminalLineWrites() {
+    if (!terminalLineSyncPending) return;
+    terminalLineWriteReady = false;
+    final generation = terminalLineSyncGeneration;
+    final writeTail = terminalWriteTail;
+    unawaited(
+      writeTail.then((_) {
+        if (!mounted ||
+            generation != terminalLineSyncGeneration ||
+            !identical(writeTail, terminalWriteTail)) {
+          return;
+        }
+        terminalLineWriteReady = true;
+        scheduleTerminalLineSync();
+      }),
+    );
+  }
+
+  void cancelTerminalLineSync({bool resetTracker = false}) {
+    terminalLineSyncTimer?.cancel();
+    terminalLineSyncPending = false;
+    terminalLineWriteReady = false;
+    terminalLineLastInputAt = null;
+    terminalLineLastOutputAt = null;
+    terminalLineSyncGeneration++;
+    if (resetTracker) terminalLineTracker.reset();
+  }
+
+  void scheduleTerminalLineSync() {
+    if (!terminalLineSyncPending || !terminalLineWriteReady) return;
+    terminalLineSyncTimer?.cancel();
+    terminalLineSyncTimer = Timer(
+      const Duration(milliseconds: 80),
+      tryTerminalLineSync,
+    );
+  }
+
+  void tryTerminalLineSync() {
+    if (!terminalLineSyncPending || !terminalLineWriteReady || !session) return;
+    final input = terminalInputKey.currentState;
+    final now = DateTime.now();
+    final line = terminalLineTracker.readCurrentCommand(terminal);
+    final elapsed = now.difference(terminalLineSyncStarted!);
+    var lastActivity = terminalLineLastOutputAt ?? terminalLineSyncStarted!;
+    if (terminalLineLastInputAt != null &&
+        terminalLineLastInputAt!.isAfter(lastActivity)) {
+      lastActivity = terminalLineLastInputAt!;
+    }
+    final stalledFor = now.difference(lastActivity);
+    final recentEdit =
+        terminalLineLastInputAt != null &&
+        now.difference(terminalLineLastInputAt!) <
+            const Duration(milliseconds: 150);
+    final localText = input?.visibleText ?? terminalLineBaseline;
+    final localDeletion =
+        terminalLineLastInputAt != null &&
+        localText.length < terminalLineBaseline.length;
+    final outputAfterDeletion =
+        !localDeletion ||
+        (terminalLineLastOutputAt != null &&
+            terminalLineLastOutputAt!.isAfter(terminalLineLastInputAt!));
+    final outputQuiet =
+        terminalLineLastOutputAt == null ||
+        now.difference(terminalLineLastOutputAt!) >=
+            Duration(milliseconds: localDeletion ? 450 : 200);
+    final localSuffix = localText.startsWith(terminalLineBaseline)
+        ? localText.substring(terminalLineBaseline.length)
+        : '';
+    if (recentEdit ||
+        !outputAfterDeletion ||
+        input?.isComposing == true ||
+        (line != null &&
+            localSuffix.isNotEmpty &&
+            !line.endsWith(localSuffix))) {
+      if (stalledFor < const Duration(milliseconds: 900)) {
+        scheduleTerminalLineSync();
+      } else {
+        failTerminalLineSync();
+      }
+      return;
+    }
+    if (line != null && line != terminalLineBaseline && outputQuiet) {
+      input?.applyShellLine(line);
+      cancelTerminalLineSync();
+      return;
+    }
+    if (localDeletion &&
+        line != null &&
+        line == terminalLineBaseline &&
+        outputQuiet) {
+      input?.applyShellLine(line);
+      cancelTerminalLineSync();
+      return;
+    }
+    if (line == terminalLineBaseline) {
+      if (localText != terminalLineBaseline &&
+          stalledFor >= const Duration(milliseconds: 900)) {
+        failTerminalLineSync();
+      } else if (elapsed >= const Duration(seconds: 3)) {
+        // A no-op Tab can produce no new bytes. Keep the matching visible text.
+        cancelTerminalLineSync();
+      } else {
+        scheduleTerminalLineSync();
+      }
+      return;
+    }
+    if (stalledFor >= const Duration(milliseconds: 900)) {
+      failTerminalLineSync();
+      return;
+    }
+    scheduleTerminalLineSync();
+  }
+
+  void failTerminalLineSync() {
+    terminalInputKey.currentState?.clearLocalWithoutWrite();
+    cancelTerminalLineSync(resetTracker: true);
+    notice('当前命令行无法同步，请以终端显示为准');
+  }
+
+  void sendTerminalControl(String label, String sequence) {
+    final input = terminalInputKey.currentState;
+    if (label == '↑' || label == '↓') {
+      if (terminalLineSyncPending) {
+        notice('请等待当前补全完成');
+        terminalInputFocus.requestFocus();
+        return;
+      }
+      final command = label == '↑'
+          ? terminalHistory.previous(input?.visibleText ?? '')
+          : terminalHistory.next();
+      if (command != null && input != null) {
+        input.prepareForShellControl(flushComposing: true);
+        cancelTerminalLineSync(resetTracker: true);
+        terminalLineTracker.beginControl(terminal, input.visibleText);
+        input.replaceFromHistory(command);
+      }
+      terminalInputFocus.requestFocus();
+      return;
+    }
+    final shellEditsLine = label == 'Tab';
+    input?.prepareForShellControl(flushComposing: shellEditsLine);
+    if (shellEditsLine && input != null) {
+      cancelTerminalLineSync();
+      terminalLineBaseline = input.visibleText;
+      terminalLineSyncPending = terminalLineTracker.beginControl(
+        terminal,
+        terminalLineBaseline,
+      );
+      terminalLineSyncStarted = DateTime.now();
+      if (!terminalLineSyncPending) {
+        input.clearLocalWithoutWrite();
+        notice('当前命令行无法同步，请以终端显示为准');
+      }
+    } else if (!shellEditsLine) {
+      cancelTerminalLineSync(resetTracker: true);
+      if (label == 'Ctrl-C') terminalHistory.cancelNavigation();
+    }
+    sendTerminal(sequence);
+    waitForTerminalLineWrites();
+    terminalInputFocus.requestFocus();
   }
 
   Future<void> export() async {
@@ -390,21 +632,22 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
     body: SafeArea(
       child: Column(
         children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 2, 20, 10),
-            child: Align(
-              alignment: Alignment.centerLeft,
-              child: Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  status('APP 可用', true),
-                  status(root ? 'ROOT 在线' : 'ROOT 未连接', root),
-                  status(module ? 'VECTOR 在线' : 'VECTOR 未响应', module),
-                ],
+          if (tab != 3 || MediaQuery.viewInsetsOf(context).bottom == 0)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 2, 20, 10),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    status('APP 可用', true),
+                    status(root ? 'ROOT 在线' : 'ROOT 未连接', root),
+                    status(module ? 'VECTOR 在线' : 'VECTOR 未响应', module),
+                  ],
+                ),
               ),
             ),
-          ),
           if (error.isNotEmpty)
             Padding(
               padding: const EdgeInsets.all(12),
@@ -507,7 +750,6 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
             vertical: 20,
           ),
           children: [
-            heading('工作台', '设备状态与下一步操作'),
             card(
               Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -577,11 +819,6 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
               Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text(
-                    '继续操作',
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                  ),
-                  const SizedBox(height: 8),
                   Text(
                     '${networks.length} 个网络 · ${interfaces.length} 个接口'
                     ' · ${snapshot['kernel']?['source'] ?? '等待采样'}',
@@ -670,7 +907,7 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
   Widget commandsPage() => ListView(
     padding: const EdgeInsets.all(20),
     children: [
-      heading('只读命令', '在 App 权限下按需执行，不启动 Shell'),
+      heading('只读命令', 'App 权限'),
       card(
         Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -679,7 +916,7 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
               'device.info',
               style: TextStyle(fontWeight: FontWeight.bold),
             ),
-            const Text('读取设备型号、版本、架构和运行时间'),
+            const Text('型号 · Android 版本 · 架构 · 运行时间'),
             Align(
               alignment: Alignment.centerRight,
               child: FilledButton(
@@ -700,7 +937,7 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
               'memory.snapshot',
               style: TextStyle(fontWeight: FontWeight.bold),
             ),
-            const Text('读取当前内存总量、可用量和低内存状态'),
+            const Text('内存总量 · 可用量 · 低内存状态'),
             Align(
               alignment: Alignment.centerRight,
               child: FilledButton(
@@ -755,7 +992,7 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
         padding: const EdgeInsets.all(20),
         children: [
           heading(
-            '看见每一条链路',
+            '网络概览',
             '${snapshot['device'] ?? 'Android'} · Android ${snapshot['android'] ?? '—'}',
           ),
           if (!root)
@@ -1050,12 +1287,12 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              heading('连接检索', 'TCP / UDP 快照 · 支持 IP、端口、UID、包名过滤'),
+              heading('连接检索', 'TCP / UDP 快照'),
               TextField(
                 onChanged: (value) => setState(() => connectionQuery = value),
                 decoration: const InputDecoration(
                   prefixIcon: Icon(Icons.search),
-                  hintText: '例如 :443、ESTAB、com.android',
+                  hintText: 'IP、端口、状态、UID 或包名',
                 ),
               ),
               const SizedBox(height: 8),
@@ -1272,94 +1509,127 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
     ),
   );
 
-  Widget terminalPage() => Column(
-    children: [
-      Padding(
-        padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
-        child: Row(
-          children: [
-            Expanded(
-              child: Text(
-                terminalMode,
-                style: const TextStyle(color: mint, fontSize: 11),
-              ),
-            ),
-            TextButton(
-              onPressed: () => startTerminal(false),
-              child: const Text('App'),
-            ),
-            TextButton(
-              onPressed: root ? () => startTerminal(true) : null,
-              child: const Text('Root PTY'),
-            ),
-            IconButton(
-              onPressed: () async {
-                await native.invokeMethod('terminalStop');
-                if (mounted) setState(() => session = false);
-              },
-              tooltip: '关闭会话',
-              icon: const Icon(Icons.stop_circle_outlined),
-            ),
-          ],
-        ),
-      ),
-      Expanded(
-        child: Container(
-          color: const Color(0xff080c12),
-          padding: const EdgeInsets.all(8),
-          child: TerminalView(
-            terminal,
-            textStyle: const TerminalStyle(fontSize: 12),
-            autofocus: false,
-          ),
-        ),
-      ),
-      SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: Row(
-          children: [
-            for (final entry in {
-              'Ctrl-C': '\x03',
-              'Tab': '\t',
-              'Esc': '\x1b',
-              '↑': '\x1b[A',
-              '↓': '\x1b[B',
-              'ip addr': 'ip addr\r',
-              'ss': 'ss -tunape\r',
-              'id': 'id\r',
-            }.entries)
-              TextButton(
-                onPressed: session ? () => sendTerminal(entry.value) : null,
-                child: Text(entry.key, style: const TextStyle(fontSize: 11)),
-              ),
-          ],
-        ),
-      ),
-      Padding(
-        padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
-        child: TextField(
-          controller: command,
-          autocorrect: false,
-          enableSuggestions: false,
-          style: const TextStyle(fontFamily: 'monospace', fontSize: 13),
-          decoration: InputDecoration(
-            hintText: '输入命令，例如 ip -br addr',
-            isDense: true,
-            suffixIcon: IconButton(
-              onPressed: session ? submitCommand : null,
-              icon: const Icon(Icons.send),
+  Widget terminalPage() {
+    if (!session) {
+      return ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          const Text('选择终端会话', style: TextStyle(fontSize: 18)),
+          const SizedBox(height: 12),
+          Card(
+            child: ListTile(
+              key: const Key('terminal-app-entry'),
+              leading: const Icon(Icons.terminal, color: mint),
+              title: const Text('应用 Shell'),
+              subtitle: const Text('以应用权限运行本地 Shell'),
+              trailing: terminalBusy
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.chevron_right),
+              onTap: terminalBusy ? null : () => startTerminal(false),
             ),
           ),
-          onSubmitted: (_) => submitCommand(),
-        ),
-      ),
-    ],
-  );
+          Card(
+            child: ListTile(
+              key: const Key('terminal-root-entry'),
+              leading: const Icon(Icons.admin_panel_settings_outlined),
+              title: const Text('Root PTY'),
+              subtitle: Text(root ? '以已授权的 Root 权限运行' : 'Root 未连接，请先在工作台授权'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: terminalBusy || !root ? null : () => startTerminal(true),
+            ),
+          ),
+        ],
+      );
+    }
 
-  void submitCommand() {
-    if (!session || command.text.isEmpty) return;
-    sendTerminal('${command.text}\n');
-    command.clear();
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 4, 12, 4),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  terminalMode,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: mint, fontSize: 12),
+                ),
+              ),
+              TextButton(
+                onPressed: terminalBusy ? null : stopTerminal,
+                child: const Text('换用'),
+              ),
+              TextButton(
+                style: TextButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  minimumSize: const Size(0, 44),
+                ),
+                onPressed: () {
+                  final output = terminalOutputSnapshot(terminal);
+                  Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) => TerminalOutputPage(output: output),
+                    ),
+                  );
+                },
+                child: const Text('选择输出'),
+              ),
+              IconButton(
+                onPressed: terminalBusy ? null : stopTerminal,
+                tooltip: '关闭会话',
+                icon: const Icon(Icons.stop_circle_outlined),
+              ),
+            ],
+          ),
+        ),
+        Expanded(
+          child: Container(
+            color: const Color(0xff080c12),
+            padding: const EdgeInsets.all(8),
+            child: TerminalView(
+              terminal,
+              key: const Key('terminal-output-view'),
+              readOnly: true,
+              textStyle: const TerminalStyle(fontSize: 12),
+              autofocus: false,
+            ),
+          ),
+        ),
+        SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: Row(
+            children: [
+              for (final entry in {
+                'Ctrl-C': '\x03',
+                'Tab': '\t',
+                'Esc': '\x1b',
+                '↑': '\x1b[A',
+                '↓': '\x1b[B',
+              }.entries)
+                TextButton(
+                  onPressed: terminalBusy
+                      ? null
+                      : () => sendTerminalControl(entry.key, entry.value),
+                  child: Text(entry.key, style: const TextStyle(fontSize: 11)),
+                ),
+            ],
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+          child: TerminalCommandInput(
+            key: terminalInputKey,
+            onWrite: sendTerminalInput,
+            focusNode: terminalInputFocus,
+          ),
+        ),
+      ],
+    );
   }
 
   String counter(dynamic value) => value is num && value >= 0 ? '$value' : '—';

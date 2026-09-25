@@ -1,0 +1,2 @@
+{"file":".trellis/spec/frontend/index.md","reason":"Frontend guideline index and relevant pre-development checklist for the Flutter terminal UI."}
+{"file":".trellis/tasks/09-26-terminal-flow-output-selection/research/terminal-input-and-output.md","reason":"Pinned xterm API behavior, IME constraints, and output-buffer evidence needed for implementation."}

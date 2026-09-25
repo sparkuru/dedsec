@@ -18,7 +18,9 @@
   "commit": null,
   "pr_url": null,
   "subtasks": [],
-  "children": [],
+  "children": [
+    "09-26-terminal-flow-output-selection"
+  ],
   "parent": "09-25-product-experience-opportunities",
   "relatedFiles": [],
   "notes": "",

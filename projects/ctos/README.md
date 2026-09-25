@@ -4,7 +4,7 @@
 
 项目各种信息统一入口：[design/README.md](design/README.md)。产品规划、约束、架构及验证记录均在 `design/` 维护。
 
-状态：`incubating`。Android 11 开发板在较早包验证了 Vector 桥接和完整 4 项设备测试；Android 16 手机在当前包通过分身解析与 Root/PTY 四项定向测试，更早包验证过启动及覆盖安装后自动恢复 Root。该手机的 Vector 桥接未响应；重启后的新模块加载尚未验收。
+状态：`incubating`。Android 11 开发板在较早包验证了 Vector 桥接和完整 4 项设备测试；Android 16 手机在当前包完成终端输入、输出选择及 App/Root PTY 定向检查，更早包验证过分身解析、启动及覆盖安装后自动恢复 Root。该手机的 Vector 桥接未响应；重启后的新模块加载尚未验收。
 
 唯一 current 安装包：`dist/ctos-current-arm64.apk`，校验和见 `dist/SHA256SUMS`。完整的已验证/待验证项目见 [verification.md](design/verification.md)。
 
@@ -16,7 +16,7 @@
 - 接口：地址、MTU、收发字节和包数、错误、丢包；按接口计算实时速率。
 - 连接：TCP/UDP 快照，可按 IP、端口、状态、UID、应用名称、分身别名或包名检索；重新进入或从其他应用返回时刷新。
 - 系统模块：在 system_server 中采集系统可见网络，通过受签名权限保护的广播返回。
-- 终端：APK 内置原生 PTY，支持应用权限和已授权 Root 会话，xterm 渲染、Ctrl-C、ANSI 和窗口尺寸调整。
+- 终端：APK 内置原生 PTY，提供应用 Shell / Root PTY 双入口、普通键盘输入、Tab 补全、Ctrl-C 与输出选择复制；xterm 渲染 ANSI 并随界面调整尺寸。
 - JSON 导出：通过系统文件选择器保存，不上传数据。
 
 ## 安装

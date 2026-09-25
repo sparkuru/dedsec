@@ -2,6 +2,8 @@
 
 已验证设备包括 T-CHIP / Firefly AIO-3568J（Android 11 / API 30、arm64、SELinux Permissive）及 OnePlus PLR110（Android 16 / API 36、arm64、SELinux Enforcing）。
 
+2026-09-26 终端版当前 APK SHA-256 为 `1a610e33fc018d20f4b99161d6eb5e91f4eb594930f0d0033e3eea5c873245ae`；在 PLR110 `192.168.9.9:45075` 覆盖安装并核对设备 `base.apk` 哈希。该包 App Shell 的 `ec`→Tab→`echo` 在终端和输入框同步显示；执行命令后 ↑ 恢复完整命令、↓ 恢复空草稿；“选择输出”子页显示当前快照。较早的 `da530c09…` 包在同机证实普通文本输入类型 `0x1`、发送动作、中文候选提交与退格、App/Root PTY 的 `id` 及选择输出复制；当前包未逐项重测这些操作。厂商键盘蓝色主题由输入法决定。Android 11 开发板及其他输入法对当前包未验收；更多检查与截图见 [verification.md](verification.md)。
+
 2026-09-25 当前分身别名版 APK SHA-256 为 `19b8922bce927066dcec7fd9a7d45ac5caf148f32943d8c1c44090738560791d`。PLR110 覆盖安装与设备哈希匹配，Flutter 15 项、Android lint/测试包构建及分身解析与 Root/PTY 四项定向仪器测试通过。该机 Oplus 桌面可提供 QQ 分身别名 `tim`；前一轮实机包已显示 UID 99910377 卡片，当前包的精确别名筛选通过模拟测试。其他 ROM 的桌面别名提供者未验证，缺失时保留原名、包名和用户 ID。`ef6e9981…` 中间包的全量仪器测试 5 项中 Vector 桥接仍失败；Android 11 对当前包待验收。详情见 [verification.md](verification.md)。
 
 2026-09-25 应用图标版 APK SHA-256 为 `78d7af8db4474970cd4bbcb7a9dc16c3dc9333fc13a4a3de455473ab2393537f`。PLR110 覆盖安装与设备哈希匹配，Root/PTY 三项仪器测试通过；导出修正前同界面版本 `c9965efa…` 的 Quick Connect 真实图标与显示名筛选通过，该版仅在导出时排除图标数据。Flutter 14 项、Android lint/测试包构建通过。Android 包可见性限制部分应用图标/名称；不可得时保留包名与占位图标。Android 11 与 Vector 对该版仍待验收。

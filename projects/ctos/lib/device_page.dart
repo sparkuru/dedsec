@@ -25,11 +25,6 @@ class DevicePage extends StatelessWidget {
           '设备信息',
           style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold),
         ),
-        const SizedBox(height: 4),
-        const Text(
-          '本机按需采集 · 各项分别标明来源与状态',
-          style: TextStyle(color: Colors.white54, fontSize: 12),
-        ),
         const SizedBox(height: 16),
         if (loading) const LinearProgressIndicator(),
         if (error.isNotEmpty)

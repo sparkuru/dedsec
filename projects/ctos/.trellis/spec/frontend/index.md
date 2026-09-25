@@ -19,6 +19,7 @@ This directory contains guidelines for frontend development. Fill in each file w
 | [Hook Guidelines](./hook-guidelines.md) | Custom hooks, data fetching patterns | To fill |
 | [State Management](./state-management.md) | Local state, global state, server state | To fill |
 | [Connection Snapshots](./connection-snapshots.md) | Native payload, freshness, clone alias and search contracts | Current |
+| [Terminal Interaction](./terminal-interaction.md) | PTY input, IME, shortcuts, output selection, and device checks | Current |
 | [Quality Guidelines](./quality-guidelines.md) | Code standards, forbidden patterns | To fill |
 | [Type Safety](./type-safety.md) | Type patterns, validation | To fill |
 

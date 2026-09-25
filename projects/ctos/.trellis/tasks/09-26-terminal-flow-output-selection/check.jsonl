@@ -1,0 +1,2 @@
+{"file":".trellis/spec/frontend/index.md","reason":"Review Flutter UI consistency and applicable frontend validation guidance."}
+{"file":".trellis/tasks/09-26-terminal-flow-output-selection/research/terminal-input-and-output.md","reason":"Verify implementation against pinned xterm IME and rendered-buffer behavior."}
