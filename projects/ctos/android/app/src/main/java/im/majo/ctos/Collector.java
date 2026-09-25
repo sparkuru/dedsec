@@ -2,19 +2,28 @@ package im.majo.ctos;
 
 import android.content.Context;
 import android.content.pm.ApplicationInfo;
+import android.content.pm.PackageManager;
+import android.graphics.Bitmap;
+import android.graphics.Canvas;
+import android.graphics.drawable.Drawable;
 import android.os.SystemClock;
+import android.util.Base64;
 import org.json.JSONArray;
 import org.json.JSONObject;
+import java.io.ByteArrayOutputStream;
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public final class Collector {
     private Collector() {}
+    private static final int UID_PER_USER = 100000;
     private static volatile RootSession rootSession;
 
     public static synchronized JSONObject authorizeRoot() throws Exception {
@@ -113,27 +122,71 @@ public final class Collector {
 
     public static JSONObject connections(Context context, boolean root) throws Exception {
         JSONObject result = command(root ? "ss -tunape; ctos_exit=$?; printf '\\n@PACKAGES@\\n'; " +
-                "cmd package list packages -U; exit \"$ctos_exit\"" : "ss -tunape", root, 8);
-        String[] sections = result.getString("output").split("@PACKAGES@", 2);
+                "cmd package list packages -U; printf '\\n@USERS@\\n'; " +
+                "dumpsys user | grep 'UserInfo{'; printf '\\n@ALIASES@\\n'; " +
+                "content query --uri content://com.android.launcher.OplusFavoritesProvider/favorites " +
+                "--projection title:intent:profileId 2>/dev/null; exit \"$ctos_exit\"" : "ss -tunape", root, 12);
+        String[] sections = result.getString("output").split("@(?:PACKAGES|USERS|ALIASES)@");
+        Pattern uid = Pattern.compile("uid:(\\d+)");
+        Set<Integer> observedUids = new HashSet<>();
+        for (String line : sections[0].split("\n")) {
+            Matcher match = uid.matcher(line);
+            if (match.find()) observedUids.add(Integer.parseInt(match.group(1)));
+        }
+        Map<Integer, Integer> userBySerial = userIdsBySerial(sections.length > 2 ? sections[2] : "");
+        Map<String, String> aliases = launcherAliases(sections.length > 3 ? sections[3] : "", userBySerial);
         Map<Integer, String> packages = new HashMap<>();
+        Map<Integer, JSONArray> appRows = new HashMap<>();
+        Set<String> knownPackages = new HashSet<>();
+        Map<String, ApplicationInfo> visibleApps = new HashMap<>();
+        PackageManager packageManager = context.getPackageManager();
         for (ApplicationInfo app : context.getPackageManager().getInstalledApplications(0)) {
-            String label = context.getPackageManager().getApplicationLabel(app).toString();
-            packages.merge(app.uid, label + " (" + app.packageName + ")", (a, b) -> a + ", " + b);
+            visibleApps.put(app.packageName, app);
+            if (!observedUids.contains(app.uid)) continue;
+            String label = packageManager.getApplicationLabel(app).toString();
+            int userId = app.uid / UID_PER_USER;
+            String alias = aliases.getOrDefault(userId + ":" + app.packageName, "");
+            packages.merge(app.uid, (alias.isEmpty() ? label : alias) + " (" + app.packageName + ")",
+                    (a, b) -> a + ", " + b);
+            knownPackages.add(app.uid + ":" + app.packageName);
+            JSONObject row = new JSONObject().put("label", label).put("packageName", app.packageName)
+                    .put("alias", alias).put("userId", userId)
+                    .put("applicationName", app.name == null ? "" : app.name)
+                    .put("processName", app.processName == null ? "" : app.processName);
+            String icon = appIcon(packageManager, app);
+            if (icon != null) row.put("icon", icon);
+            appRows.computeIfAbsent(app.uid, ignored -> new JSONArray()).put(row);
         }
         if (sections.length > 1) {
-            Pattern packageLine = Pattern.compile("package:(\\S+)\\s+uid:(\\d+)");
+            Pattern packageLine = Pattern.compile("package:(\\S+)\\s+uid:([\\d,]+)");
             for (String line : sections[1].split("\n")) {
                 Matcher match = packageLine.matcher(line);
                 if (!match.find()) continue;
-                int uidValue = Integer.parseInt(match.group(2));
                 String packageName = match.group(1);
-                String previous = packages.get(uidValue);
-                if (previous == null) packages.put(uidValue, packageName);
-                else if (!previous.contains(packageName)) packages.put(uidValue, previous + ", " + packageName);
+                ApplicationInfo baseApp = visibleApps.get(packageName);
+                for (String uidText : match.group(2).split(",")) {
+                    int uidValue = Integer.parseInt(uidText);
+                    if (!observedUids.contains(uidValue)) continue;
+                    if (!knownPackages.add(uidValue + ":" + packageName)) continue;
+                    int userId = uidValue / UID_PER_USER;
+                    String label = baseApp == null ? packageName : packageManager.getApplicationLabel(baseApp).toString();
+                    String alias = aliases.getOrDefault(userId + ":" + packageName, "");
+                    String previous = packages.get(uidValue);
+                    String owner = (alias.isEmpty() ? label : alias) + " (" + packageName + ")";
+                    packages.put(uidValue, previous == null ? owner : previous + ", " + owner);
+                    JSONObject row = new JSONObject().put("label", label).put("packageName", packageName)
+                            .put("alias", alias).put("userId", userId)
+                            .put("applicationName", baseApp == null || baseApp.name == null ? "" : baseApp.name)
+                            .put("processName", baseApp == null || baseApp.processName == null ? "" : baseApp.processName);
+                    if (baseApp != null) {
+                        String icon = appIcon(packageManager, baseApp);
+                        if (icon != null) row.put("icon", icon);
+                    }
+                    appRows.computeIfAbsent(uidValue, ignored -> new JSONArray()).put(row);
+                }
             }
         }
         StringBuilder output = new StringBuilder();
-        Pattern uid = Pattern.compile("uid:(\\d+)");
         for (String line : sections[0].split("\n")) {
             output.append(line);
             Matcher match = uid.matcher(line);
@@ -143,8 +196,55 @@ public final class Collector {
             }
             output.append('\n');
         }
+        JSONObject apps = new JSONObject();
+        for (Map.Entry<Integer, JSONArray> entry : appRows.entrySet())
+            apps.put(String.valueOf(entry.getKey()), entry.getValue());
         result.put("output", output.toString());
+        result.put("apps", apps);
         result.put("partial", !root || output.toString().contains("Permission denied"));
+        return result;
+    }
+
+    private static String appIcon(PackageManager packageManager, ApplicationInfo app) {
+        try {
+            Drawable drawable = packageManager.getApplicationIcon(app).mutate();
+            Bitmap bitmap = Bitmap.createBitmap(72, 72, Bitmap.Config.ARGB_8888);
+            drawable.setBounds(0, 0, 72, 72);
+            drawable.draw(new Canvas(bitmap));
+            ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+            boolean encoded = bitmap.compress(Bitmap.CompressFormat.PNG, 100, bytes);
+            bitmap.recycle();
+            return encoded ? Base64.encodeToString(bytes.toByteArray(), Base64.NO_WRAP) : null;
+        } catch (RuntimeException ignored) { return null; }
+    }
+
+    static Map<Integer, Integer> userIdsBySerial(String output) {
+        Map<Integer, Integer> result = new HashMap<>();
+        Pattern userLine = Pattern.compile("UserInfo\\{(\\d+):[^}]*\\} serialNo=(\\d+)");
+        for (String line : output.split("\n")) {
+            Matcher match = userLine.matcher(line);
+            if (match.find()) result.put(Integer.parseInt(match.group(2)), Integer.parseInt(match.group(1)));
+        }
+        return result;
+    }
+
+    static Map<String, String> launcherAliases(String output, Map<Integer, Integer> userBySerial) {
+        Map<String, String> result = new HashMap<>();
+        Pattern component = Pattern.compile("component=([^/;]+)");
+        for (String line : output.split("\n")) {
+            int titleStart = line.indexOf("title=");
+            int intentStart = line.indexOf(", intent=", titleStart);
+            int profileStart = line.lastIndexOf(", profileId=");
+            if (titleStart < 0 || intentStart < 0 || profileStart < intentStart) continue;
+            Matcher match = component.matcher(line.substring(intentStart, profileStart));
+            if (!match.find()) continue;
+            try {
+                int serial = Integer.parseInt(line.substring(profileStart + 12).trim());
+                Integer userId = userBySerial.get(serial);
+                if (userId != null && userId != 0)
+                    result.put(userId + ":" + match.group(1), line.substring(titleStart + 6, intentStart));
+            } catch (NumberFormatException ignored) { }
+        }
         return result;
     }
 }

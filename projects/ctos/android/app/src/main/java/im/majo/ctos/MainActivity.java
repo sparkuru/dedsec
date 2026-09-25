@@ -23,9 +23,12 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public final class MainActivity extends FlutterActivity {
+    private static final String ROOT_PREFERENCES = "root_access";
+    private static final String AUTO_ROOT = "auto_start";
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ExecutorService worker = Executors.newFixedThreadPool(2);
     private final ExecutorService terminalWorker = Executors.newSingleThreadExecutor();
+    private final Object rootLock = new Object();
     private volatile boolean root;
     private volatile JSONObject systemSnapshot;
     private volatile long systemReceived;
@@ -69,6 +72,32 @@ public final class MainActivity extends FlutterActivity {
         sendBroadcast(new Intent(SystemModule.QUERY).setPackage("android").putExtra("nonce", nonce));
     }
 
+    private boolean autoRootEnabled() {
+        return getSharedPreferences(ROOT_PREFERENCES, MODE_PRIVATE).getBoolean(AUTO_ROOT, true);
+    }
+
+    private void setAutoRootEnabled(boolean enabled) {
+        getSharedPreferences(ROOT_PREFERENCES, MODE_PRIVATE).edit().putBoolean(AUTO_ROOT, enabled).apply();
+    }
+
+    private JSONObject authorizeRoot() throws Exception {
+        synchronized (rootLock) {
+            if (root) return new JSONObject().put("root", true).put("exit", 0).put("output", "uid=0 (active)");
+            root = false;
+            try {
+                JSONObject probe = Collector.authorizeRoot();
+                if (destroyed) { Collector.closeRoot(); throw new IllegalStateException("Activity is closed"); }
+                root = probe.getInt("exit") == 0 && probe.getString("output").contains("uid=0(");
+                setAutoRootEnabled(root);
+                return probe.put("root", root);
+            } catch (Exception error) {
+                root = false;
+                if (!destroyed) setAutoRootEnabled(false);
+                throw error;
+            }
+        }
+    }
+
     private void call(MethodCall call, MethodChannel.Result result) {
         if (call.method.equals("export")) {
             if (exportResult != null) { result.error("BUSY", "An export is already open", null); return; }
@@ -84,12 +113,13 @@ public final class MainActivity extends FlutterActivity {
             try {
                 Object value;
                 switch (call.method) {
+                    case "rootAuto": {
+                        value = autoRootEnabled() ? authorizeRoot().put("attempted", true).toString()
+                                : new JSONObject().put("root", root).put("attempted", false).toString();
+                        break;
+                    }
                     case "root": {
-                        root = false;
-                        JSONObject probe = Collector.authorizeRoot();
-                        if (destroyed) { Collector.closeRoot(); throw new IllegalStateException("Activity is closed"); }
-                        root = probe.getInt("exit") == 0 && probe.getString("output").contains("uid=0(");
-                        value = probe.put("root", root).toString();
+                        value = authorizeRoot().toString();
                         break;
                     }
                     case "snapshot": {
@@ -105,6 +135,7 @@ public final class MainActivity extends FlutterActivity {
                             catch (Exception error) {
                                 root = false;
                                 Collector.closeRoot();
+                                setAutoRootEnabled(false);
                                 data.put("rootError", "Root session ended; authorize Root again");
                             }
                         }
@@ -115,7 +146,19 @@ public final class MainActivity extends FlutterActivity {
                         value = data.toString();
                         break;
                     }
-                    case "connections": value = Collector.connections(this, root).toString(); break;
+                    case "connections": {
+                        try { value = Collector.connections(this, root).toString(); }
+                        catch (Exception error) {
+                            if (root) {
+                                root = false;
+                                Collector.closeRoot();
+                                setAutoRootEnabled(false);
+                            }
+                            throw error;
+                        }
+                        break;
+                    }
+                    case "deviceSnapshot": value = DeviceSnapshot.collect(this).toString(); break;
                     case "terminalStart": value = startTerminal(Boolean.TRUE.equals(call.argument("root")),
                             dimension(call.argument("columns"), 80), dimension(call.argument("rows"), 24)); break;
                     case "terminalWrite": {

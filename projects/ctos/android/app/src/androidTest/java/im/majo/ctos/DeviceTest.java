@@ -13,6 +13,7 @@ import androidx.test.platform.app.InstrumentationRegistry;
 import org.json.JSONObject;
 import org.junit.Test;
 import java.nio.charset.StandardCharsets;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -21,6 +22,18 @@ import static org.junit.Assert.*;
 
 public class DeviceTest {
     private Context context() { return InstrumentationRegistry.getInstrumentation().getTargetContext(); }
+
+    @Test public void cloneLauncherAliasMapsToCloneUidProfile() {
+        Map<Integer, Integer> users = Collector.userIdsBySerial(
+                "UserInfo{0:Owner:4c13} serialNo=0 isPrimary=true\n" +
+                "UserInfo{999:MultiApp:4001010} serialNo=10 isPrimary=false parentId=0\n");
+        assertEquals(Integer.valueOf(999), users.get(10));
+        Map<String, String> aliases = Collector.launcherAliases(
+                "Row: 23 title=QQ, intent=#Intent;component=com.tencent.mobileqq/.Splash;end, profileId=0\n" +
+                "Row: 24 title=tim, intent=#Intent;component=com.tencent.mobileqq/.Splash;end, profileId=10\n", users);
+        assertEquals("tim", aliases.get("999:com.tencent.mobileqq"));
+        assertNull(aliases.get("0:com.tencent.mobileqq"));
+    }
 
     @Test(timeout = 45000) public void rootCountersAndConnections() throws Exception {
         JSONObject identity = Collector.authorizeRoot();
@@ -47,6 +60,7 @@ public class DeviceTest {
         assertEquals(connections.toString(), 0, connections.getInt("exit"));
         assertFalse(connections.toString(), connections.getBoolean("partial"));
         assertTrue(connections.getString("output").contains("tcp"));
+        assertNotNull(connections.getJSONObject("apps"));
         Collector.closeRoot();
     }
 
