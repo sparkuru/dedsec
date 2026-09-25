@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/frontend/index.md", "reason": "Flutter 前端约定索引"}
+{"file": ".trellis/spec/trellis-plus/index.md", "reason": "项目 UI 与交付约束"}
+{"file": ".trellis/spec/trellis-plus/validation.md", "reason": "ctOS 验证命令与设备边界"}
+{"file": ".trellis/tasks/09-25-trustworthy-state-workbench/design.md", "reason": "本任务状态合同和视觉决策"}
+{"file": ".trellis/tasks/09-25-trustworthy-state-workbench/research/ui-and-state.md", "reason": "源码证据与 UUPM 调研结论"}
