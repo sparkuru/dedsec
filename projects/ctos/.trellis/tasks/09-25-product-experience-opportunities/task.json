@@ -1,0 +1,30 @@
+{
+  "id": "product-experience-opportunities",
+  "name": "product-experience-opportunities",
+  "title": "ctOS 产品与体验改进探索",
+  "description": "",
+  "status": "planning",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "ctos",
+  "assignee": "ctos",
+  "createdAt": "2026-09-25",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "antitrust",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "09-25-read-only-task-loop",
+    "09-25-interface-terminal-polish",
+    "09-25-trustworthy-state-workbench"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {}
+}
