@@ -90,3 +90,35 @@
 ### Next Steps
 
 - 保留现有任务状态；后续功能或跨设备验证由用户另行指定。
+
+
+## Session 4: Workbench and HFTP fixes: sanitized closeout
+
+**Date**: 2026-09-28
+**Task**: Workbench and HFTP fixes: sanitized closeout
+**Branch**: `WORK-BRANCH`
+
+### Summary
+
+已脱敏提交工作台/HFTP保留修复并归档当前专项；熄屏限制保留，Root电源扩展暂缓。
+
+### Main Changes
+
+完成工作台表单与结果体验、HFTP 配置/有界日志、显式可选 Root 网络 adapter，以及停止边界、同端口重启和日志页面状态修复。Python HTTP 与 SAF 文件访问继续保持 App 权限。
+
+用户要求保留当前停止修复、不扩大 Root 范围，并明确要求脱敏后提交。已提交的文档和两处测试示例泛化设备、LAN/ADB、动态 UID/PID、用户/本机路径；原始临时证据及构建产物未纳入提交，历史提交未重写。本记录中的分支角色已脱敏。
+
+实现阶段证据：73 项 Flutter、25 项 Python、Android lint/build、native 传输与控制回归、十项手机定向检查及三轮亮屏 LAN 传输/真实 App 停止/同端口重启（含 31 MiB）通过。脱敏后复核：17/17 日志测试、analyze、AndroidTest Java 编译、JSON/JSONL、137 个相对链接和精确候选隐私检查通过；生产逻辑及已验证 APK 未变化，本轮未操作设备。
+
+熄屏连接仍失败，仅 App 锁归属和回收已验证；独立 Root 电源能力暂缓、未实现、未触发。其他 ROM、物理无 Root 设备、Wi-Fi 丢失和五小时持续运行仍未验收。本任务按用户收敛后的保留范围归档；其他活跃任务保持原状态，不自动开启后续工作。
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `d0aeb01` | (see git log) |
+
+### Status
+
+[OK] **Completed**
