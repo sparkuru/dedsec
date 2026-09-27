@@ -27,8 +27,25 @@ phone conclusions remain separate. Native UI visual quality, permissions,
 Root or Vector behavior, and hardware-dependent paths may require targeted
 human review after automated checks.
 
-There is currently no browser application, Playwright configuration, or
-browser test command. Do not invent a Playwright Validation Profile. If a
-future task adds a browser-accessible UI, classify its automation mode, build
-one repository-confirmed Playwright profile in this spec layer, and run the
-focused browser check before requesting residual human review.
+The Flutter application remains native, without a Flutter-web build or a
+repository Playwright dependency. HFTP now exposes a small browser interface;
+use the focused service profile below. Do not apply it to native Flutter UI.
+
+## HFTP browser validation profile
+
+- Mode: development service smoke test, loopback only. The confirmed source
+  is `android/app/src/main/python/ctos_tools/hftp.py`; the temporary runner
+  creates FileServer with an ephemeral port and a fresh /tmp share directory.
+- Runner: isolated uv environment + Playwright 1.55.0 in
+  `/tmp/ctos-tools-check`, using the existing local Chromium executable.
+  `UV_CACHE_DIR=/tmp/ctos-tools-uv-cache PYTHONDONTWRITEBYTECODE=1 uv run
+  --offline --no-sync browser_check.py` from that directory. The task check
+  record identifies the exact runner, hash and screenshot. Recreate temporary
+  fixtures before replay if /tmp has been removed; this is not a persistent
+  project CI suite or a production-server test.
+- Use a disposable authenticated browser context; block requests outside the
+  loopback origin. Verify upload, encoded directory names, nested upload,
+  download, no overwrite, CSP-compatible execution, and 375 px layout.
+- The runner shuts down its server and browser. Android foreground service,
+  notification permission and background/stop behavior require separately
+  authorized device validation; browser success does not establish those.

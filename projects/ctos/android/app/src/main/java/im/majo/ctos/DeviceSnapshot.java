@@ -11,8 +11,6 @@ import android.os.StatFs;
 import android.os.SystemClock;
 import org.json.JSONArray;
 import org.json.JSONObject;
-import java.io.BufferedReader;
-import java.io.FileReader;
 
 public final class DeviceSnapshot {
     private DeviceSnapshot() {}
@@ -34,16 +32,6 @@ public final class DeviceSnapshot {
             manager.getMemoryInfo(info);
             return new JSONObject().put("totalBytes", info.totalMem)
                     .put("availableBytes", info.availMem).put("low", info.lowMemory);
-        }));
-        result.put("cpu", section("/proc/loadavg", () -> {
-            try (BufferedReader reader = new BufferedReader(new FileReader("/proc/loadavg"))) {
-                String line = reader.readLine();
-                if (line == null) throw new IllegalStateException("Empty load average");
-                String[] fields = line.trim().split("\\s+");
-                if (fields.length < 3) throw new IllegalStateException("Invalid load average");
-                return new JSONObject().put("load1", fields[0]).put("load5", fields[1])
-                        .put("load15", fields[2]).put("cores", Runtime.getRuntime().availableProcessors());
-            }
         }));
         result.put("battery", section("ACTION_BATTERY_CHANGED", () -> {
             Intent battery = context.registerReceiver(null, new IntentFilter(Intent.ACTION_BATTERY_CHANGED));

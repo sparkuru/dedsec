@@ -1,27 +1,94 @@
 package im.majo.ctos;
 
-import android.content.BroadcastReceiver;
 import android.content.Context;
-import android.content.Intent;
-import android.content.IntentFilter;
 import android.os.SystemClock;
-import android.os.Build;
 import android.net.ConnectivityManager;
 import android.net.LinkProperties;
-import androidx.core.content.ContextCompat;
 import androidx.test.platform.app.InstrumentationRegistry;
 import org.json.JSONObject;
 import org.junit.Test;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
-import java.util.UUID;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicReference;
 import static org.junit.Assert.*;
 
 public class DeviceTest {
     private Context context() { return InstrumentationRegistry.getInstrumentation().getTargetContext(); }
+
+    @Test(timeout = 45000) public void bundledPythonRunsSdkWithoutRootAndRejectsUnknownScripts() throws Exception {
+        PortablePackages packages = new PortablePackages(context());
+        PythonRunner runner = new PythonRunner(context(), packages);
+        try {
+            assertTrue(runner.claim("catalog"));
+            JSONObject catalog = runner.execute(null, null);
+            assertEquals("3.13.9", catalog.getString("python"));
+            java.util.Set<String> ids = new java.util.HashSet<>();
+            for (int i = 0; i < catalog.getJSONArray("scripts").length(); i++)
+                ids.add(catalog.getJSONArray("scripts").getJSONObject(i).getString("id"));
+            assertTrue(ids.containsAll(java.util.Arrays.asList("python.selftest", "text.digest", "tools.password",
+                    "tools.encoder", "tools.ip", "tools.crypto", "tools.hftp")));
+            assertEquals("python3", catalog.getString("terminal"));
+            assertTrue(runner.claim("check"));
+            JSONObject checked = runner.execute("python.selftest", null);
+            assertEquals(checked.toString(), "completed", checked.getString("state"));
+            assertTrue(checked.getJSONObject("data").getBoolean("sqliteCheck"));
+            assertTrue(runner.claim("digest"));
+            JSONObject digest = runner.execute("text.digest", java.util.Collections.singletonMap("text", "中文🙂"));
+            assertEquals(3, digest.getJSONObject("data").getInt("characters"));
+            assertTrue(runner.claim("device"));
+            JSONObject device = runner.execute("device.info", null);
+            assertEquals(android.os.Build.MODEL, device.getJSONObject("data").getJSONObject("data").getString("model"));
+            assertFalse(DeviceSnapshot.collect(context()).has("cpu"));
+            assertTrue(runner.claim("unknown"));
+            try { runner.execute("unknown.script", null); fail("Unknown scripts must fail"); }
+            catch (IllegalStateException expected) { assertTrue(expected.getMessage().contains("Unknown script")); }
+            assertTrue(runner.claim("after-failure"));
+            assertEquals("completed", runner.execute("memory.snapshot", null).getString("state"));
+        } finally { runner.close(); }
+    }
+
+    @Test(timeout = 30000) public void pythonCancellationAndTimeoutRecycleTheProcess() throws Exception {
+        PortablePackages packages = new PortablePackages(context());
+        packages.prepare();
+        PythonRunner runner = new PythonRunner(context(), packages);
+        try {
+            assertTrue(runner.claim("cancel"));
+            assertFalse(runner.claim("duplicate"));
+            runner.cancel("cancel");
+            assertEquals("cancelled", runner.execute("python.selftest", null).getString("state"));
+            assertTrue(runner.claim("retry"));
+            assertEquals("completed", runner.execute("python.selftest", null).getString("state"));
+            assertTrue(runner.claim("running-cancel"));
+            java.util.concurrent.FutureTask<JSONObject> active = new java.util.concurrent.FutureTask<>(
+                    () -> runner.execute("python.selftest", null));
+            new Thread(active, "ctos-test-python").start();
+            java.lang.reflect.Field process = PythonRunner.class.getDeclaredField("process");
+            process.setAccessible(true);
+            long deadline = SystemClock.elapsedRealtime() + 5000;
+            boolean cancelledRunning = false;
+            while (SystemClock.elapsedRealtime() < deadline && !active.isDone()) {
+                synchronized (runner) {
+                    if (process.get(runner) != null) {
+                        runner.cancel("running-cancel");
+                        cancelledRunning = true;
+                        break;
+                    }
+                }
+                SystemClock.sleep(1);
+            }
+            assertTrue("Must cancel an actual launched Python process", cancelledRunning);
+            assertEquals("cancelled", active.get(5, java.util.concurrent.TimeUnit.SECONDS).getString("state"));
+            assertTrue(runner.claim("after-running-cancel"));
+            assertEquals("completed", runner.execute("python.selftest", null).getString("state"));
+        } finally { runner.close(); }
+        PythonRunner timeout = new PythonRunner(context(), packages, 1);
+        try {
+            assertTrue(timeout.claim("timeout"));
+            assertEquals("timed_out", timeout.execute("python.selftest", null).getString("state"));
+            assertTrue(timeout.claim("after-timeout"));
+            timeout.cancel("after-timeout");
+            assertEquals("cancelled", timeout.execute("python.selftest", null).getString("state"));
+        } finally { timeout.close(); }
+    }
 
     @Test public void cloneLauncherAliasMapsToCloneUidProfile() {
         Map<Integer, Integer> users = Collector.userIdsBySerial(
@@ -35,12 +102,39 @@ public class DeviceTest {
         assertNull(aliases.get("0:com.tencent.mobileqq"));
     }
 
+    @Test(timeout = 30000) public void backgroundActivityCancelsWorkbenchAndAllowsNewRun() throws Exception {
+        android.app.Instrumentation instrumentation = InstrumentationRegistry.getInstrumentation();
+        android.app.Activity activity = instrumentation.startActivitySync(new android.content.Intent(
+                context(), MainActivity.class).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK | android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK));
+        try {
+            java.lang.reflect.Field field = MainActivity.class.getDeclaredField("pythonRunner");
+            field.setAccessible(true);
+            PythonRunner runner = (PythonRunner) field.get(activity);
+            assertTrue(runner.claim("background"));
+            java.lang.reflect.Field cancelled = PythonRunner.class.getDeclaredField("cancelled");
+            cancelled.setAccessible(true);
+            instrumentation.runOnMainSync(() -> assertTrue(activity.moveTaskToBack(true)));
+            long deadline = SystemClock.elapsedRealtime() + 5000;
+            boolean stopped = false;
+            while (SystemClock.elapsedRealtime() < deadline) {
+                synchronized (runner) { stopped = cancelled.getBoolean(runner); }
+                if (stopped) break;
+                SystemClock.sleep(10);
+            }
+            assertTrue("Activity.onStop must cancel the pending workbench task", stopped);
+            assertEquals("cancelled", runner.execute("python.selftest", null).getString("state"));
+            assertTrue(runner.claim("after-background"));
+            assertEquals("completed", runner.execute("python.selftest", null).getString("state"));
+        } finally { instrumentation.runOnMainSync(activity::finish); }
+    }
+
     @Test(timeout = 45000) public void rootCountersAndConnections() throws Exception {
         JSONObject identity = Collector.authorizeRoot();
         assertEquals(identity.toString(), 0, identity.getInt("exit"));
         assertTrue(identity.getString("output").contains("uid=0("));
         JSONObject snapshot = Collector.interfaces(true);
         assertEquals(snapshot.toString(), 0, snapshot.getInt("exit"));
+        assertEquals("root / procfs + ip", snapshot.getString("source"));
         assertTrue(snapshot.getJSONArray("interfaces").length() > 0);
         ConnectivityManager connectivity = context().getSystemService(ConnectivityManager.class);
         LinkProperties link = connectivity.getLinkProperties(connectivity.getActiveNetwork());
@@ -89,13 +183,14 @@ public class DeviceTest {
         } catch (IllegalStateException expected) { }
     }
 
-    @Test(timeout = 30000) public void appAndRootPtyAreInteractive() throws Exception {
+    @Test(timeout = 45000) public void appAndRootPtyAreInteractive() throws Exception {
         verifyPty(false);
         verifyPty(true);
     }
 
     private void verifyPty(boolean root) throws Exception {
-        int[] process = Pty.start(root, 70, 20, context().getFilesDir().getAbsolutePath());
+        int[] process = Pty.start(root, 70, 20, context().getFilesDir().getAbsolutePath(),
+                new PortablePackages(context()).shellRc());
         try {
             // Magisk initializes a second PTY and flushes input before its first prompt.
             readUntil(process[0], root ? "# " : "$ ");
@@ -105,7 +200,11 @@ public class DeviceTest {
             assertTrue(output, output.contains(root ? "uid=0(" : "uid=" + android.os.Process.myUid() + "("));
             assertTrue(output, output.matches("(?s).*[/]pts[/][0-9]+.*"));
             assertTrue(output, output.contains("27 83"));
-            Pty.write(process[0], "sleep 30\n".getBytes(StandardCharsets.UTF_8));
+            Pty.write(process[0], "python3 --version; python3 -c 'import sqlite3, ssl, ctos_sdk; print(6*7)'; printf '\\nCTOS_PYTHON\\n'\n".getBytes(StandardCharsets.UTF_8));
+            String python = readUntil(process[0], "\r\nCTOS_PYTHON\r\n");
+            assertTrue(python, python.contains("Python 3.13.9"));
+            assertTrue(python, python.replace("\r", "").contains("\n42\n"));
+            Pty.write(process[0], "python3 -c 'import time; time.sleep(30)'\n".getBytes(StandardCharsets.UTF_8));
             SystemClock.sleep(300);
             Pty.write(process[0], new byte[]{3});
             readUntil(process[0], root ? "# " : "$ ");
@@ -129,26 +228,18 @@ public class DeviceTest {
         throw new AssertionError("PTY marker missing: " + new String(collected.toByteArray(), StandardCharsets.UTF_8));
     }
 
-    @Test public void vectorBridgeReturnsSystemIdentity() throws Exception {
-        CountDownLatch received = new CountDownLatch(1);
-        AtomicReference<JSONObject> result = new AtomicReference<>();
-        String nonce = UUID.randomUUID().toString();
-        BroadcastReceiver receiver = new BroadcastReceiver() {
-            @Override public void onReceive(Context context, Intent intent) {
-                if (!nonce.equals(intent.getStringExtra("nonce"))) return;
-                if (Build.VERSION.SDK_INT >= 34 && getSentFromUid() != 1000) return;
-                try { result.set(new JSONObject(intent.getStringExtra("snapshot"))); received.countDown(); }
-                catch (Exception error) { throw new AssertionError(error); }
-            }
-        };
-        ContextCompat.registerReceiver(context(), receiver, new IntentFilter("im.majo.ctos.RESULT"),
-                "android.permission.DUMP", null, ContextCompat.RECEIVER_EXPORTED);
-        try {
-            context().sendBroadcast(new Intent("im.majo.ctos.QUERY").setPackage("android").putExtra("nonce", nonce));
-            assertTrue("Vector bridge did not answer. Enable system scope and reboot.", received.await(8, TimeUnit.SECONDS));
-            assertEquals(1000, result.get().getInt("uid"));
-            assertEquals("Vector / system_server", result.get().getString("source"));
-            assertTrue(result.get().getJSONArray("networks").length() > 0);
-        } finally { context().unregisterReceiver(receiver); }
+    @Test public void appNetworkSnapshotWorksWithoutSystemBridge() throws Exception {
+        JSONObject snapshot = NetworkSnapshot.collect(context());
+        assertEquals(android.os.Process.myUid(), snapshot.getInt("uid"));
+        assertTrue(snapshot.getJSONArray("networks").length() > 0);
+        assertFalse(snapshot.has("module"));
+        assertFalse(snapshot.has("moduleActive"));
+        JSONObject interfaces = NetworkSnapshot.apiInterfaces(snapshot, "app / Android API");
+        assertEquals("app / Android API", interfaces.getString("source"));
+        assertTrue(interfaces.getJSONArray("interfaces").length() > 0);
+        ConnectivityManager connectivity = context().getSystemService(ConnectivityManager.class);
+        LinkProperties active = connectivity.getLinkProperties(connectivity.getActiveNetwork());
+        assertNotNull("No active network", active);
+        assertTrue(interfaces.toString(), interfaces.getString("routes").contains(active.getInterfaceName()));
     }
 }

@@ -1,5 +1,5 @@
 name: ctos
-description: Personal Android network observatory and terminal with Vector integration.
+description: Personal Android system observatory and terminal with Root collection.
 publish_to: none
 version: 0.1.0+1
 environment:

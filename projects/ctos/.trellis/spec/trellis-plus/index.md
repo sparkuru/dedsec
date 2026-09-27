@@ -35,11 +35,10 @@ accessibility, and device behavior against those decisions, then promote only
 stable project-authored rules here after verification. Do not create an
 unapproved second design-system authority.
 
-Current UI is native Android. There is no browser-accessible acceptance path
-or Playwright suite, so Playwright validation is not effective for current
-Flutter screens. Reassess if a future task introduces a web target or browser
-workflow. Use Flutter widget tests for automatable UI behavior and targeted
-device checks for the remaining native behavior.
+Flutter UI is native Android; use widget tests and targeted device checks for
+its acceptance. HFTP has a browser interface with the focused loopback
+Playwright smoke profile in [validation.md](validation.md). Keep that service check separate
+from native Flutter screens and Android foreground-service lifecycle checks.
 
 ## Docker development entry point
 

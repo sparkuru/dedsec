@@ -1,5 +1,64 @@
 # Verification
 
+## 2026-09-27 当前进度提交检查
+
+本轮按用户要求确认 ADB 连接并提交 ctOS 当前进度，没有重新安装、运行设备测试、申请权限或启动文件服务。
+
+- `adb connect 192.168.9.13:5555` 返回 `No route to host`，默认开发板本轮未连接成功。
+- `adb devices -l` 显示 `192.168.9.9:44553` 在线，product/model 为 PLR110、device 为 OP6117L1；显式指定该 serial 的 `get-state` 和 `getprop` 确认为 device / PLR110 / Android 16。
+- 现有 current APK 的 SHA-256 仍为 `f928af6611f014206597321b2f35a094aef53b11eeb404ea7bbf72e23ee8a73b`，其 13 份 Python 源码与当前工作树逐字节一致。此检查不代表重新构建或本轮设备安装哈希验证。
+- 本轮 `./hako flutter analyze` 无问题，`./hako flutter test` 31/31 通过；`./hako bash -lc 'cd android && ./gradlew :app:lintRelease --console=plain'` 构建成功，0 error / 5 个既有 warning。`hako-env.sh` 的 Bash 语法、ShellCheck、shfmt 检查及 13 份 Python 源码语法解析通过。
+- 根 README、design 和 spec 的本地 Markdown 链接检查无缺失目标，`git diff --check` 通过。本地代码复核与检查结果见 [提交检查](../.trellis/tasks/09-26-portable-tools/commit-check-2026-09-27.md)。
+
+下方 2026-09-26 的安装、SAF、通知、Root、PTY 及网络结果保留为历史实测；本轮不扩展设备验收范围。任务状态保留，未归档。
+
+## 2026-09-26 Portable 五项工具：最终 APK 与 PLR110 验收
+
+当前 APK `dist/ctos-current-arm64.apk`，26,106,495 bytes，SHA-256 `f928af6611f014206597321b2f35a094aef53b11eeb404ea7bbf72e23ee8a73b`，签名与 SHA256SUMS 通过，设备安装哈希一致。测试 APK SHA-256 `be024d92e5cc2a1d76c9d46ff8cf970dc04bb086304c2a2d4c57e2c59344c9c6`。用户明确授权本轮 APK/测试 APK 覆盖安装、通知授权及本机 HFTP/App与Root Python 验收；目标仅 PLR110 `192.168.9.9:44603` / Android16 / 页大小4096 / SELinux Enforcing。
+
+- Flutter analyze 无问题，31/31 测试通过；Android lint 0 error / 5 个既有 warning，最终测试 APK 编译通过。五项集成113项、编码核心142项、CLI12次调用、真实 Chromium HFTP上传/下载/特殊目录/不覆盖/CSP/375px均通过。依赖及构建环境仅 APK、项目 .devhome 和 /tmp。
+- 手机首轮 HFTP 上传400，新增 App Python 测试确认硬链接 EACCES。改为 SDK/CLI/HFTP 共用 `renameat2(RENAME_NOREPLACE)` 原子提交，已有文件/符号链接拒绝覆盖，失败清理临时文件；16个并发写入只有一个成功。不更改 Root 授权或 SELinux。
+- 最终指定七项组合 **OK (7 tests), 6.392 s**：加密/转换及源文件保留、认证篡改拒绝、终端文件输出不覆盖、HFTP后台通知/认证/上传下载/路径拒绝/停止监听、SDK目录及未知脚本拒绝、App与Root python3、运行中取消/超时/后台取消及重跑。先前合并运行的 Activity 等待超时已通过测试 CLEAR_TASK 隔离修正，失败日志仍保留。最终日志 `device-seven-api-final-results.txt`。
+- 真机 SAF：公开文本产物导出读回正确，重新选择该文件显示私有导入副本，取消选择及取消系统选择器后为空 token。HFTP 实际页面启动 loopback，切桌面通知保持；点通知“停止”后通知消失，服务列表为空。精确清理本轮三个私有测试文件、唯一 SAF 文件及临时 UI dump；未清空 App 或删除既有目录/文档。
+- 13个实际 APK Python 源文件逐字节匹配；最终 APK 解包后 ARM64 QEMU通过 SDK2/九项/原子不覆盖/AES-GCM，新动态库LOAD对齐16KiB。QEMU linkerconfig/tzdata提示仍属模拟环境，不能推定原生16KiB设备通过。
+
+- 09 原脚本接口已迁移，按官方文档改为 `https://free.freeipapi.com/api/v1/json`。宿主和实际手机工作台明确指定公共示例1.1.1.1的查询均通过，返回source/ipAddress正确；没有查询自身公网IP。固定目标/8秒超时/离线错误继续有mock证据。
+
+详细命令、失败→修复证据与临时日志见 [父 task 检查](../.trellis/tasks/09-26-portable-tools/check.md)。Android11、原生16KiB页设备、API28/29 syscall分支、全新通知拒绝及真实离线设备路径未验证。实现及本轮验收完成，保留 WIP 待审阅/提交，不自动归档。下方 Python工作台/Root-only 及末尾安装前预检均为历史阶段记录。
+
+## 2026-09-26 Portable Python 工作台：构建与 PLR110 验收
+
+本轮 current APK：`dist/ctos-current-arm64.apk`，SHA-256 `00c19e0ca2ecc84b1fea32fafaec29708b152710a3f5a3b8ece64717a26d97c6`，约 24.4 MB。原命令页改为工作台、原工作台改为概览；系统负载展示及 procfs 采集删除。加入 APK 内置 CPython 3.13.9、终端 python3、四项脚本二级页、SDK 和 portable 清单。框架契约见 [portable-workbench.md](portable-workbench.md)。
+
+- `./hako flutter analyze`：无问题。`./hako flutter test --reporter expanded`：**28/28 通过**，包含新工作台懒加载/失败重试、二级导航、Unicode 参数校验、取消/超时后重跑、小屏/横屏/2 倍文字与低动画布局，以及已有网络和 PTY 组件回归。
+- `./hako bash -lc 'cd android && ./gradlew :app:lintRelease :app:assembleReleaseAndroidTest --console=plain'`：最终原生实现通过 lint，设备测试 APK 构建成功。新增三项 Python SDK/非法脚本、取消/超时、Activity 后台回收检查，已有 App/Root PTY 测试追加 python3、标准库与 Python Ctrl-C 检查。
+- `./hako current`：arm64 release 构建、签名验证及 SHA256SUMS 通过。最终 APK 检查包含 PIE 启动器、libpython3.13、标准库、三份 SDK 源文件、portable 清单和三份版权声明；无宿主 pyc。merged manifest 确认为 `extractNativeLibs=true`；启动器为 ARM64 PIE、`/system/bin/linker64` interpreter、16 KiB LOAD 对齐。
+- 安装前通过显式 serial 的 getprop 确认 PLR110 / Android 16（`192.168.9.9:44603`），复制公共 Android 链接器及库到 `/tmp` 供 QEMU。用户随后明确授权覆盖安装 current APK 和测试 APK并验收。两个 APK 均安装成功，设备 base.apk SHA-256 与最终 current 一致。SELinux 为 Enforcing；未更改 Magisk/Vector 配置、重启或清除应用数据。
+- 本地 `qemu-aarch64` 执行构建期间 APK 提取的 ARM64 启动器、libpython 和 SDK，`--version` 返回 Python 3.13.9；四个内置脚本通过。自检为 OpenSSL 3.0.18、SQLite 3.50.4，SQLite 内存查询和 SHA-256 校验正常；CLI 导入 SSL/SQLite/SDK 成功。非法参数、未知脚本失败；主机 SDK 的有界日志/结果及 SystemExit 结果封装检查通过。固定 `-P -S` 路径在工作目录存在恶意同名模块时仍加载内置目录。
+- 真机首轮发现 Android 安装目录含 `=`，Toybox `env` 将启动器路径误当环境赋值；改为子 Shell 中 `export` 后直接执行路径，App/Root 均可调用 Python。Root PTY 返回额外 CR，测试断言沿用已有读取函数的 CR 规范化。最终完整 `DeviceTest` **OK 8/8，6.233 秒**，覆盖 SDK、自检/Unicode 文本/设备/内存、未知脚本后恢复、运行中真实进程取消和重跑、1 ms 超时回收、Activity 移到后台后取消待运行任务并释放槽位，以及 App/Root PTY 的 Python 3.13.9、SSL/SQLite/SDK 导入、Python sleep 的 Ctrl-C 与原有网络/Root 回归。日志：`/tmp/ctos-python-device-tests-20260926.log`。
+- 真机 UI：概览/信息/工作台/终端导航正确，设备页不再显示系统负载；工作台四个 item 和 Python 二级页正常。点击运行自检显示 App、已完成、75 ms、退出码 0，Python 3.13.9 / aarch64 / SDK 1、OpenSSL 3.0.18、SQLite 3.50.4 和内存查询成功。通过系统文件选择器另存 `Download/ctos-python-selftest-20260926.json`，拉回后 JSON 与屏幕结果一致，stdout/stderr 为空。截图：`/tmp/ctos-python-{overview,workbench,detail,selftest,device-info}-20260926.png`；读回文件 `/tmp/ctos-python-selftest-20260926.json`。以上均为本机临时证据。
+- Shell 模板通过语法、ShellCheck 和 shfmt 检查；最终生成函数在两种 Android PTY 中实测通过。`git diff --check` 通过。
+- 临时证据：`/tmp/ctos-sdk-validation/`（测试脚本与 Shell 模板）、`/tmp/ctos-python-qemu/`（公共 Android 库及提取的运行包）。QEMU 树没有设备 linkerconfig/tzdata，启动产生对应诊断；stderr 与 JSON stdout 分离，脚本协议检查不受影响。这些目录仅是本机临时证据。
+
+**边界**：Android 11、16 KiB 页面设备、其他 Root 管理器未测。参数表单的 Unicode/小屏/失败状态以组件及 SDK 检查为主，未逐项手操；后台检查验证真实 Activity.onStop 取消待运行任务，运行中进程销毁另有独立测试。curl 为扩展文档示例，未打包；外部 ZIP 导入、包缓存管理、运行时 pip、历史与后台调度未实现。
+
+以下记录属于各自历史 APK；其中“当前包”以该条记录日期和哈希为准。
+
+## 2026-09-26 Root-only：移除 Vector 并验收
+
+当前 APK SHA-256：`be800549c2ddf6509fe9ff0de23556d58b9401b67fee39f63fa5eb361752ab93`。设备重新由 `adb devices -l` 确认：`192.168.9.9:44603`，OnePlus PLR110 / OP6117L1，Android 16 / API 36，1272×2800，SELinux Enforcing。全部设备命令显式指定该 serial。本轮只覆盖安装 ctOS 和匹配测试 APK、执行固定只读采集/PTY 测试及页面检查；未修改 Vector/Magisk 配置、未重启、未完整卸载应用。
+
+- 原因核查：Root `id` 返回 uid=0，uptime 约 40.7 天。现存 Vector 日志只记录模块在 ctOS App 进程/UID 10497 中加载；系统广播列表只有 App 的 RESULT 接收器，没有系统 QUERY 接收器。旧模块只对 android / android 生效且在 AMS.systemReady 后注册服务，因此 App 加载或勾选作用域不等于 system_server 桥接在线。未读取 Vector 作用域数据库、未重启验证，不能将“未重启”认定为唯一原因。完整边界见 [决定](decisions/2026-09-26-root-only.md)。
+- `./hako bash -lc 'dart format test/observatory_test.dart && flutter analyze && flutter test --reporter expanded'`：分析无问题，**22/22 通过**。随后仅删除终端测试 fixture 的遗留 moduleActive 字段，`./hako flutter test test/terminal_interaction_test.dart --reporter expanded` **7/7 通过**。网络组件测试直接读取 App networks，Root 已连接、未连接和会话失败状态保持可见，Vector 文案消失。
+- `./hako bash -lc 'cd android && ./gradlew :app:lintRelease :app:assembleReleaseAndroidTest --console=plain'` 成功。lint 无错误，5 项 warning：包可见性、Gradle/测试 runner 可升级、缺 ChromeOS x86_64 ABI、旧系统 backup 配置提示；未通过修改规则隐藏警告。
+- `./hako current` 构建 arm64 release、验证签名、原子更新 current APK 与 SHA256SUMS。`aapt2 dump xmltree` 确认 APK 无 Xposed 元数据及旧 QUERY 权限；ZIP 列表无 xposed_init，源码无模块/桥接广播引用。AndroidX Core 仍由 Flutter 传递依赖，与移除直接接收器依赖不矛盾。
+- `adb -s 192.168.9.9:44603 install -r` 分别安装 current 和匹配的 `app-release-androidTest.apk` 成功；设备 base.apk 哈希与 current 相同。
+- 完整 `DeviceTest`：**OK 5/5，3.914 秒**，包含 App API 网络快照、Root 接口/连接、Root 采集会话复用/超时不自动重开、App/Root PTY 的 UID/TTY/尺寸/Ctrl-C，以及分身用户序列号/别名解析。日志：`/tmp/ctos-root-only-device-tests-20260926.log`。
+- 安装后启动自动恢复 Root，工作台显示 APP 可用、ROOT 在线、4 个网络、33 个接口、root / procfs + ip，只有 App/Root 能力。截图 `/tmp/ctos-root-only-workbench-20260926.png`。网络页语义和截图显示蜂窝、VPN/tun0 默认网络、Wi-Fi/wlan0 以及 IP/DNS/Private DNS 等字段，无 Vector 状态或重启提示；截图 `/tmp/ctos-root-only-network-20260926.png`。这些文件是本机临时证据。
+- 本轮没有在 Android 11 开发板、其他 ROM/Root 管理器上重测；未验证全新安装弹窗、真实 live 分身别名的界面筛选、全部终端 IME 操作或完整系统文件选择器导出。Root 失败回退和无 Root 部分连接状态由组件测试覆盖，未更改设备授权模拟拒绝。
+
+以下均为较早 APK 的历史记录；Vector 已移除，不再作为当前包待验收项。
+
 ## 2026-09-26 终端输入同步修正
 
 用户发现输入 `i` 后按 Tab，Shell 上方已有补全或候选文字，底部输入框却清空。原因是底部编辑值与 Shell 对当前行的重绘未同步；此前另观察到直接向这台设备的 App Shell 发送原始 ↑/↓ 时，长命令历史会被 Shell 截断重绘。当前实现保留底部已输入内容直到 Tab 返回，读取终端已渲染的可编辑行并同步到输入框；↑/↓改为浏览当前 PTY 会话通过底部提交的命令，再经同一 PTY 编辑路径恢复，不读取会话外的 Shell 历史。
@@ -208,3 +267,15 @@ GRADLE_USER_HOME=/tmp/dedsec-build/gradle-home \
 ```
 
 Run the above in `android/`. Native PTY compilation currently targets a Linux x86_64 build host.
+
+## 2026-09-26 Portable 五项工具本地预检（安装前历史）
+
+父 task：[portable-tools 检查](../.trellis/tasks/09-26-portable-tools/check.md)。具体行为见 [工具设计](portable-tools.md)。
+
+- Flutter analyze 无问题，完整 Flutter 测试 31/31；Android lintRelease 0 error / 5 已知 warning，含 PortableToolsTest 的 release 测试 APK 编译通过，尚未执行本轮 instrumentation。
+- /tmp uv：26 核心142项，五项集成113项，CLI12次调用，均通过。包括原08对照、原02实际CBC产物、新加密认证/篡改/源文件保留、token/二进制、09离线mock/有界响应/不跟随重定向、HFTP认证/上传下载/拒绝覆盖/穿越/符号链接。没有自动查询真实IP提供方。
+- HFTP 真实浏览器 loopback smoke：上传、特殊编码目录、嵌套上传、下载、409不覆盖、375px布局及无JS错误通过。截图 `/tmp/ctos-tools-check/hftp-browser-phone.png` 已查看；独立 Android 通知/后台生命周期不能由该结果推定。
+- 全新私有 Python bootstrap 在 /tmp 下载、官方固定SHA-256、解包/3.13.7启动、第二次复用通过；bash -n / ShellCheck / shfmt 均通过。
+- 最终 APK 26,105,995 bytes，SHA-256 `28a7fb5a2bb287b0aae5fb71fb37fce8167204cedebd52c3a51f916cadadcbe2`，构建/签名/SHA256SUMS通过。13个Python源码逐字节匹配；APK解出的 SDK2 九项目录、08/26/AES-GCM在ARM64 QEMU运行通过（cryptography OpenSSL3.0.18）；新动态库LOAD均16KiB对齐。QEMU linkerconfig/tzdata提示属于模拟环境。
+- 测试 APK SHA-256 `a51a6f4478a3b6ee5eee51c88565d1b9796659fc7b3b83aa7ef1a64bf1ae555f`。产物及复验入口见父 task 检查，所有包测试/浏览器运行器保存在 /tmp，没有全局依赖安装。
+- 当前只读确认 `192.168.9.9:44603` 在线、PLR110/Android16。本 task 尚未获安装/通知授权；SAF选择/取消/导出、通知拒绝/允许、FGS后台/返回/停止、App/Root终端以及IP实网/离线仍待本轮设备验收，不借用上一版结果。Android11/原生16KiB页设备未验证。

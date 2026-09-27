@@ -10,21 +10,30 @@
 | [改进机会](opportunities.md) | 基于当前证据的功能、体验、视觉与工程改进建议及优先顺序 |
 | [约束](constraints.md) | 工作范围、权限边界、采集与执行规则、质量要求 |
 | [当前架构](architecture.md) | 已实现的组件、数据流与执行边界 |
+| [Portable 五项工具与 HFTP](portable-tools.md) | 模块边界、SDK v2、文件能力、认证加密与后台文件服务 |
+| [Portable 工作台与 SDK](portable-workbench.md) | 内置 Python、终端工具、运行包清单和脚本扩展契约 |
 | [兼容性](compatibility.md) | 设备差异、已验证范围与未验证项 |
 | [验证记录](verification.md) | 检查结果、实机证据及复验方式 |
 | [依赖来源](dependencies.md) | 工具链、版本、来源和许可证 |
 | [变更历史](changelog.md) | 已实现变更与文档调整 |
+| [移除 Vector 的决定](decisions/2026-09-26-root-only.md) | 作用域与在线服务的差异，App/Root 能力和边界 |
 | [Trellis Plus 规则](../.trellis/spec/trellis-plus/index.md) | 开发流程增强及项目验证配置；任务结果仍以 Trellis 任务记录为准 |
 
 ## 当前状态
 
+- 2026-09-27 按用户要求提交当前项目进度并复核本地检查；ADB 在线目标为 PLR110 `192.168.9.9:44553`，默认开发板 `192.168.9.13:5555` 不可达。本轮没有安装或设备功能验收，详见 [验证记录](verification.md)。
+
+- 2026-09-26 `portable-tools` 五项已接入并完成 PLR110 安装验收：31 项 Flutter、7 项定向手机测试通过，SAF 导入/取消/导出读回及 HFTP 后台通知停止通过，09 指定公共 IP 的实际 HTTPS 查询通过。当前 APK 为 `f928af66…`，安装哈希一致；依赖随 APK、数据在 App 私有目录，没有全局安装。详见 [工具设计](portable-tools.md) 和 [验证记录](verification.md)。
+
+- 2026-09-26 本轮源码将原工作台改为概览、原命令改为工作台，移除系统负载采集；加入 APK 内置 CPython 3.13.9、终端 `python3`、四个脚本 item 及二级运行页。Portable 清单支持后续追加 Android 原生工具。构建、本地 QEMU 和实际设备结果分别见 [验证记录](verification.md)，旧包实机结论不自动适用于本版。
+
 - 2026-09-26 当前终端版已加入 App/Root 双入口、底部单一输入、Shell Tab 补全、五个控制键及可选择复制的输出页；同时收敛几个页面的重复说明。当前构建与设备验收以 [验证记录](verification.md) 为准，Android 11 开发板尚未重测本版。
 - 2026-09-23 旧包曾在 Android 11 开发板完成网络、PTY、Vector 桥接和导出验收；该包已由 current 包替换。
-- 当前 `dist/ctos-current-arm64.apk` 包含连接快照状态、逐条连接 item、应用图标/名称与 Oplus 分身别名检索、工作台能力状态，以及本轮终端和文案调整。Android 16 手机本轮完成终端定向验证；该手机的 Vector 桥接未响应。Android 11 开发板的完整设备测试及界面/终端/导出检查属于更早的 current APK；本版在该板、全新安装弹窗及重启后的模块加载仍待验收。
+- 当前 `dist/ctos-current-arm64.apk` 已去掉 Vector/Xposed 依赖，保留连接快照状态、应用与分身映射及终端功能。Android 16 当前包的 App API、Root 和 PTY 五项设备测试通过，工作台确认 Root 自动恢复。Android 11、全新安装授权弹窗与完整导出在当前包未重测；历史系统桥接记录不再作为当前验收条件。
 - 规划方向：手机本机的系统观测与操作终端，形成“查看信息 → 定位对象 → 执行命令 → 保存结果”的闭环。
 - 第一阶段已实现可信状态与工作台，本轮完成终端输入与输出选择优化；完整只读任务闭环和选择性导出仍在 Trellis 子任务中规划。
 - 开发板默认 ADB 入口：`192.168.9.13:5555`；本轮用户指定并实测 `192.168.9.14:5555`。历史验收与当前连接状态分别记录，不推定设备始终在线。
-- 当前版本在 Android 16 手机上的 Root 采集与 PTY 定向测试已通过；Vector 路径和全新安装弹窗尚未验收。
+- 当前版本的增强采集仅依赖 Root；普通 API 基础路径保留。完整结果及已知边界见 [验证记录](verification.md)。
 
 ## 维护规则
 

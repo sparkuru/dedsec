@@ -6,5 +6,4 @@
         <item name="android:windowActionModeOverlay">true</item>
         <item name="android:windowBackground">#0B1018</item>
     </style>
-    <string-array name="xposed_scope"><item>android</item></string-array>
 </resources>

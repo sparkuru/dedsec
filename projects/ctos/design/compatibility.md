@@ -1,6 +1,10 @@
 # Compatibility
 
+2026-09-26 Portable Python 当前包 SHA-256 为 `00c19e0ca2ecc84b1fea32fafaec29708b152710a3f5a3b8ece64717a26d97c6`。Flutter 28 项、Android lint/测试包构建和本地 ARM64 Android/QEMU 检查通过。已覆盖安装 PLR110 / Android 16 / SELinux Enforcing，设备哈希一致，真机 8 项通过：App/Root python3、标准库/SDK、运行中取消、超时、后台待运行任务回收及原有 Root/网络回归。工作台二级页自检和 JSON 保存读回通过。APK 仅 arm64，最低 API 28；Python 3.13.9 和 NDK 启动器具备 16 KiB 对齐，但 Android 11、16 KiB 页面设备及其他 Root 管理器未测。下方均为旧包历史；详情见 [verification.md](verification.md)。
+
 已验证设备包括 T-CHIP / Firefly AIO-3568J（Android 11 / API 30、arm64、SELinux Permissive）及 OnePlus PLR110（Android 16 / API 36、arm64、SELinux Enforcing）。
+
+2026-09-26 Root-only 当前包 SHA-256 为 `be800549c2ddf6509fe9ff0de23556d58b9401b67fee39f63fa5eb361752ab93`，在 PLR110 `192.168.9.9:44603` 覆盖安装与设备哈希核对成功。五项设备测试全部通过，覆盖 App 网络 API、Root 接口/连接、会话复用/超时不重开、App/Root PTY 和分身别名解析。工作台显示 ROOT 在线、33 个接口及 root / procfs + ip 数据源。ctOS 不再依赖 Vector，当前网络配置属于 App API 可见范围；Android 11、全新安装弹窗和完整导出对当前包未重测。以下是旧包历史记录。
 
 2026-09-26 终端版当前 APK SHA-256 为 `1a610e33fc018d20f4b99161d6eb5e91f4eb594930f0d0033e3eea5c873245ae`；在 PLR110 `192.168.9.9:45075` 覆盖安装并核对设备 `base.apk` 哈希。该包 App Shell 的 `ec`→Tab→`echo` 在终端和输入框同步显示；执行命令后 ↑ 恢复完整命令、↓ 恢复空草稿；“选择输出”子页显示当前快照。较早的 `da530c09…` 包在同机证实普通文本输入类型 `0x1`、发送动作、中文候选提交与退格、App/Root PTY 的 `id` 及选择输出复制；当前包未逐项重测这些操作。厂商键盘蓝色主题由输入法决定。Android 11 开发板及其他输入法对当前包未验收；更多检查与截图见 [verification.md](verification.md)。
 
@@ -27,3 +31,7 @@
 2026-09-23 在 OnePlus PLR110 上仅验证过初版安装与 Wi-Fi/VPN 界面；该历史结果由上方 2026-09-25 的 current APK 检查补充。开发板和此手机的结果均不能证明其他 ROM 的完整兼容性。当前 APK 仅提供 arm64，使用开发签名。
 
 详见 [verification.md](verification.md)。
+
+## 五项工具当前边界（2026-09-26）
+
+当前工具 APK SHA-256 `f928af6611f014206597321b2f35a094aef53b11eeb404ea7bbf72e23ee8a73b` 已按本 task 授权安装 PLR110 / Android16 / 4096 页 / SELinux Enforcing，设备哈希一致。七项定向 native 测试、SAF 导入/取消/产物导出读回、HFTP 本机后台通知与通知停止通过；App/Root 均可直接调用 Python。09 指定公共IP的实际HTTPS查询通过。宿主隔离测试、浏览器 loopback 与最终 APK ARM64 QEMU 另有证据。Android11、原生16KiB页设备、API28/29 no-replace syscall 分支、全新通知拒绝和真实离线网络未实测。新加密格式与旧 CBC 格式显式区分，08 无自动系统 UUID 盐，HFTP 仅保留核心文件操作，见 [工具设计](portable-tools.md)。

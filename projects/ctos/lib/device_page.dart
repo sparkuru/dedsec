@@ -44,13 +44,6 @@ class DevicePage extends StatelessWidget {
           ),
           _field('运行时间', (data) => deviceUptime(data['uptimeMs'] as num?)),
         ]),
-        _section('系统负载', 'cpu', [
-          _field('核心', (data) => '${data['cores']}'),
-          _field(
-            '1 / 5 / 15 分钟',
-            (data) => '${data['load1']} / ${data['load5']} / ${data['load15']}',
-          ),
-        ]),
         _section('内存', 'memory', [
           _field('总量', (data) => deviceBytes(data['totalBytes'] as num?)),
           _field('可用', (data) => deviceBytes(data['availableBytes'] as num?)),
@@ -114,29 +107,9 @@ class DevicePage extends StatelessWidget {
               '${section.capturedAt.minute.toString().padLeft(2, '0')}',
               style: const TextStyle(color: Colors.white54, fontSize: 11),
             ),
-            if (key == 'cpu')
-              const Padding(
-                padding: EdgeInsets.only(top: 8),
-                child: Text('系统负载反映排队任务量，不是 CPU 使用率。'),
-              ),
             if (section.available)
               ...fields.map((field) => field(section.data))
-            else if (key == 'cpu') ...[
-              Padding(
-                padding: const EdgeInsets.only(top: 10),
-                child: Text(
-                  section.state == 'permission_denied'
-                      ? '此设备限制读取系统负载；内存与电源信息仍可查看。'
-                      : '暂时无法读取系统负载；其他可用信息仍会显示。',
-                ),
-              ),
-              if (section.reason != null)
-                ExpansionTile(
-                  tilePadding: EdgeInsets.zero,
-                  title: const Text('技术详情'),
-                  children: [SelectableText(section.reason!)],
-                ),
-            ] else
+            else
               Padding(
                 padding: const EdgeInsets.only(top: 10),
                 child: SelectableText(section.reason ?? '当前设备未提供此项'),

@@ -35,7 +35,6 @@ void main() {
         case 'snapshot':
           return jsonEncode({
             'root': false,
-            'moduleActive': false,
             'networks': [],
             'kernel': {
               'source': 'app / TrafficStats',
@@ -132,14 +131,15 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     expect(autoRootCalls, 1);
     expect(find.text('● APP 可用'), findsOneWidget);
-    expect(find.text('● VECTOR 未响应'), findsOneWidget);
+    expect(find.text('● ROOT 未连接'), findsOneWidget);
+    expect(find.textContaining('VECTOR'), findsNothing);
     expect(tester.takeException(), isNull);
 
     await tester.tap(find.text('信息').last);
     await tester.pumpAndSettle();
     await tester.drag(find.byType(ListView).first, const Offset(0, -350));
     await tester.pumpAndSettle();
-    expect(find.text('此设备限制读取系统负载；内存与电源信息仍可查看。'), findsOneWidget);
+    expect(find.text('系统负载'), findsNothing);
     expect(find.text('EACCES from procfs'), findsNothing);
     await tester.tap(find.text('连接'));
     await tester.pumpAndSettle();
@@ -229,7 +229,6 @@ void main() {
           return jsonEncode({
             'root': false,
             'rootError': 'Root session ended; authorize Root again',
-            'moduleActive': false,
             'networks': [],
             'kernel': {
               'source': 'app / TrafficStats',
@@ -266,7 +265,8 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     expect(find.text('Root 采集会话已结束，请手动重新授权。'), findsOneWidget);
     expect(find.text('授权 Root'), findsOneWidget);
-    expect(find.text('● VECTOR 未响应'), findsOneWidget);
+    expect(find.text('● ROOT 未连接'), findsOneWidget);
+    expect(find.textContaining('VECTOR'), findsNothing);
     expect(autoRootCalls, 1);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox());

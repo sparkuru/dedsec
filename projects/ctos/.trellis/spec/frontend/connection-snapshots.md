@@ -40,7 +40,7 @@ Use this contract when changing “信息 → 连接”, `Collector.connections`
 - `test/connection_info_test.dart`: parse clone UID and alias; `search('tim')` excludes a `Runtime Helper` substring match; `search('qq')` still finds QQ.
 - `test/state_ui_test.dart`: lifecycle resume refreshes the snapshot and new QQ rows become searchable; a later failed refresh retains the row and shows an error.
 - `DeviceTest.cloneLauncherAliasMapsToCloneUidProfile`: serial 10 maps to user 999 and the `tim` launcher title maps to `999:com.tencent.mobileqq`.
-- After Java changes run Android lint and a release Android test APK build. On an authorized target, run applicable Root/PTY instrumentation tests and record any unavailable Vector result separately. On Oplus, verify a live clone UID with an explicit `adb -s` target; never treat a past device result as current acceptance.
+- After Java changes run Android lint and a release Android test APK build. On an authorized target, run applicable App API and Root/PTY instrumentation tests. ctOS no longer depends on Vector. On Oplus, verify a live clone UID with an explicit `adb -s` target; never treat a past device result as current acceptance.
 
 ## 7. Wrong vs Correct
 

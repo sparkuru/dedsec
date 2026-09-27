@@ -1,0 +1,27 @@
+{
+  "format": 1,
+  "id": "python",
+  "version": "3.13.9",
+  "abi": "arm64-v8a",
+  "license": "PSF-2.0; Chaquopy MIT; cryptography Apache-2.0/BSD-3-Clause",
+  "tools": {"python3": "libctos_python_exec.so"},
+  "archives": [
+    {"asset": "chaquopy/stdlib-common.imy", "target": "lib/python3.13"},
+    {"asset": "chaquopy/stdlib-arm64-v8a.imy", "target": "lib/python3.13/lib-dynload"},
+    {"asset": "chaquopy/app.imy", "target": "sdk"},
+    {"asset": "chaquopy/requirements-common.imy", "target": "site-packages"},
+    {"asset": "chaquopy/requirements-arm64-v8a.imy", "target": "site-packages"}
+  ],
+  "directories": [
+    {"asset": "chaquopy/bootstrap-native/arm64-v8a", "target": "lib/python3.13/lib-dynload"}
+  ],
+  "files": [{"asset": "chaquopy/cacert.pem", "target": "cacert.pem"}],
+  "environment": {
+    "PYTHONHOME": "${PACKAGE}",
+    "PYTHONPATH": "${PACKAGE}/sdk:${PACKAGE}/site-packages",
+    "PYTHONNOUSERSITE": "1",
+    "PYTHONDONTWRITEBYTECODE": "1",
+    "LD_LIBRARY_PATH": "${PACKAGE}/site-packages/chaquopy/lib",
+    "SSL_CERT_FILE": "${PACKAGE}/cacert.pem"
+  }
+}

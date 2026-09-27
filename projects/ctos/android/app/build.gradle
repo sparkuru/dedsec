@@ -1,6 +1,7 @@
 plugins {
     id 'com.android.application'
     id 'dev.flutter.flutter-gradle-plugin'
+    id 'com.chaquo.python'
 }
 android {
     namespace 'im.majo.ctos'
@@ -27,12 +28,24 @@ android {
         }
     }
     sourceSets.main.jniLibs.srcDirs += [layout.buildDirectory.dir('generated/jniLibs').get().asFile]
+    packaging { jniLibs { useLegacyPackaging = true } }
     testBuildType 'release'
+}
+chaquopy {
+    defaultConfig {
+        version = '3.13'
+        buildPython '/app/.devhome/python/cpython-3.13.7-linux-x86_64-gnu/bin/python3.13'
+        pip {
+            install 'cryptography==42.0.8'
+            install 'cffi==1.17.1'
+            install 'pycparser==3.0'
+            install 'chaquopy-libffi==3.3'
+        }
+        pyc { src = false }
+    }
 }
 flutter { source '../..' }
 dependencies {
-    compileOnly files('libs/xposed-api-82.jar')
-    implementation 'androidx.core:core:1.15.0'
     androidTestImplementation 'androidx.test:runner:1.6.2'
     androidTestImplementation 'junit:junit:4.13.2'
 }
@@ -49,3 +62,16 @@ tasks.register('compilePty', Exec) {
     }
 }
 tasks.named('preBuild').configure { dependsOn 'compilePty' }
+
+def pythonExecutable = layout.buildDirectory.file('generated/jniLibs/arm64-v8a/libctos_python_exec.so')
+tasks.register('compilePythonExecutable', Exec) {
+    inputs.file('src/main/cpp/python_exec.c')
+    outputs.file(pythonExecutable)
+    doFirst {
+        pythonExecutable.get().asFile.parentFile.mkdirs()
+        commandLine "${android.ndkDirectory}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android28-clang",
+            '-fPIE', '-pie', '-O2', '-Wall', '-Wextra', '-Werror', '-Wl,-z,max-page-size=16384',
+            'src/main/cpp/python_exec.c', '-ldl', '-o', pythonExecutable.get().asFile
+    }
+}
+tasks.named('preBuild').configure { dependsOn 'compilePythonExecutable' }

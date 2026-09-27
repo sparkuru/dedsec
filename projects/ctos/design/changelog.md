@@ -1,5 +1,28 @@
 # Changelog
 
+## 2026-09-27 当前项目进度提交
+
+按用户要求提交此前 Root-only、Python 工作台与五项 Portable 工具的源码、测试、设计和任务记录。README 的当前版本说明更新为最终五项工具包；本轮 ADB 连接和提交前本地检查见 [验证记录](verification.md)。保留任务状态，不归档；昨日设备验收记录仍按各自日期和包哈希解释。
+
+## 2026-09-26 Portable 工具手机验收与原子提交
+
+五项工具完成 PLR110 安装与七项组合回归；SAF 导入/取消/产物导出读回、HFTP 常驻通知及通知停止通过。修复 Android App 硬链接 EACCES：SDK 产物、CLI 与 HFTP 共用不覆盖的原子重命名。测试显式隔离 Activity，消除 singleTop 后台任务复用带来的等待。09按官方文档使用现行免费HTTPS接口，指定公共IP实际查询通过。当前 APK `f928af66…` 与安装包哈希一致，测试服务/文件已精确清理。完整证据见 [验证记录](verification.md)，保留既有 WIP，未提交/归档。
+
+## 2026-09-26 — Python 工作台与 Portable 包框架
+
+- 移除系统负载及 `/proc/loadavg` 采集；四入口改为概览、信息、工作台、终端。
+- APK 内置 CPython 3.13.9，工作台和 App/Root 终端共用原生启动器与标准库，提供 python3 的交互和文件执行入口。
+- 四个脚本 item 进入二级页，具备参数校验、运行/取消、退出码/耗时、输出、复制及单结果 JSON 保存；SDK 统一注册表、Context 和结果。
+- 新增 Portable v1 清单、APK ZIP/资源逻辑挂载、工具映射与环境生成，保留 curl 等 Android 原生工具的构建时接入方式。当前只内置 Python，不导入外部 ZIP。
+- 工作台单子进程、15 秒超时、有界输入输出、后台回收；固定 -P -S 避免工作目录覆盖 SDK。内置环境失败时仍保留系统 Shell。
+- Flutter 28 项、Android lint/测试包构建、本地 ARM64 QEMU 及 PLR110 真机 8 项检查通过；App/Root 终端 python3、取消/超时/后台回收和工作台自检 JSON 保存已验收。修正 Android 安装目录含 `=` 时的工具启动兼容问题。详见 [验证记录](verification.md)。
+
+## 2026-09-26 — 移除 Vector，使用 App/Root 采集
+
+- 删除系统模块、Xposed API jar/入口/元数据、查询权限与 App 广播客户端；快照与 JSON 导出不再包含 module 字段。
+- 删除 Vector 状态与启用/重启提示，保留 App/Root 能力、来源与失败恢复。网络配置由 App API 提供，增强接口/路由/连接及 PTY 通过已有 Root 会话工作。
+- 已构建并覆盖安装当前包，Flutter 22 项、Android lint 与五项设备测试通过；当前包范围见 [验证记录](verification.md)，原因及能力取舍见 [决定](decisions/2026-09-26-root-only.md)。
+
 ## 2026-09-26 — 终端输入与输出选择
 
 - 终端改为“应用 Shell”“Root PTY”两个会话入口；输出区只读，底部普通文本输入框显示当前输入并实时写入 PTY，键盘发送键执行回车。输入法组合文字提交后再发送，Tab 交给 Shell 自动补全并将补全结果同步到下方；↑/↓浏览本次会话从底部执行过的命令，选中命令通过同一 PTY 编辑路径显示在上下两处。
@@ -70,3 +93,11 @@
 - Flutter network observatory, searchable interfaces and connections, JSON export.
 - Vector system network snapshot bridge.
 - Built-in PTY with app and root shells, resize and interrupt support.
+
+## 2026-09-26 Portable 五项工具源码与本地预检
+
+- 建立 portable-tools 父 task 与六个子 task，仅接入 08、26、09、02、16-HFTP；核心、SDK adapters、终端 CLI 与 UI/原生宿主分层。
+- SDK v2 追加 choice/secret/file；独立私有文件导入/产物导出/空间清理，失败保留源和已有输出。
+- 02 加入固定 APK 加密依赖、新 AES-GCM 认证格式和明确旧 CBC 解密；08 去自动 UUID 盐，26 保留二进制转换/哈希，09 改为有界标准库 HTTPS。
+- HFTP 独立 Android 前台服务、常驻通知及停止入口，后台继续、默认本机、独立认证共享库及配额；保留浏览/建目录/上传/下载。
+- 构建 Python 限于 .devhome，离线/浏览器测试限于 /tmp；当前手机验收状态见 verification，不复用历史结果。

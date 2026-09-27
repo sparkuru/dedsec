@@ -293,7 +293,6 @@ void main() {
         case 'snapshot':
           return jsonEncode({
             'root': false,
-            'moduleActive': false,
             'networks': [],
             'kernel': {
               'source': 'test',

@@ -1,29 +1,29 @@
 # ctOS
 
-个人 Android 系统观测与操作终端。当前 arm64 包包含网络观测、终端、设备信息和只读查询入口；容器构建及 Android 11、Android 16 实机检查已有记录。Flutter 界面，Java 采集后端，Vector/Xposed 系统模块。
+个人 Android 系统观测与操作终端。当前 arm64 包包含网络观测、终端、设备信息和 Python 工作台。Flutter 界面，Java App/Root 采集后端；不依赖 Vector/Xposed。
 
 项目各种信息统一入口：[design/README.md](design/README.md)。产品规划、约束、架构及验证记录均在 `design/` 维护。
 
-状态：`incubating`。Android 11 开发板在较早包验证了 Vector 桥接和完整 4 项设备测试；Android 16 手机在当前包完成终端输入、输出选择及 App/Root PTY 定向检查，更早包验证过分身解析、启动及覆盖安装后自动恢复 Root。该手机的 Vector 桥接未响应；重启后的新模块加载尚未验收。
+状态：`incubating`。2026-09-26 五项 Portable 工具版已构建并在 PLR110 / Android 16 / SELinux Enforcing 下验收；Flutter 31 项及真机 7 项定向检查通过，包含 App/Root 终端 python3、文件产物、取消、超时及 HFTP 后台通知停止。跨设备边界与历史结果见设计文档。
 
 唯一 current 安装包：`dist/ctos-current-arm64.apk`，校验和见 `dist/SHA256SUMS`。完整的已验证/待验证项目见 [verification.md](design/verification.md)。
 
 ## 功能
 
-- 设备信息：系统、CPU 负载、内存、电池温度和存储快照，显示来源与可用状态。
-- 只读命令：`device.info`、`memory.snapshot`，在 App 权限下按需执行。
-- 网络配置：IP、DNS、路由、默认网络、VPN、Private DNS。
+- 设备信息：系统、内存、电池温度和存储快照，显示来源与可用状态。
+- 工作台：APK 内置离线 CPython 3.13.9；环境自检、设备摘要、内存快照、文本摘要四项 item，进入二级页配置、运行、取消、复制及保存结果。
+- Portable 运行包与 SDK：统一清单、参数和结果协议，可在构建时追加 Android 原生工具、ZIP 数据与基础脚本；见 [扩展契约](design/portable-workbench.md)。
+- 网络配置：App API 可见的 IP、DNS、路由、默认网络、VPN、Private DNS。
 - 接口：地址、MTU、收发字节和包数、错误、丢包；按接口计算实时速率。
 - 连接：TCP/UDP 快照，可按 IP、端口、状态、UID、应用名称、分身别名或包名检索；重新进入或从其他应用返回时刷新。
-- 系统模块：在 system_server 中采集系统可见网络，通过受签名权限保护的广播返回。
 - 终端：APK 内置原生 PTY，提供应用 Shell / Root PTY 双入口、普通键盘输入、Tab 补全、Ctrl-C 与输出选择复制；xterm 渲染 ANSI 并随界面调整尺寸。
 - JSON 导出：通过系统文件选择器保存，不上传数据。
 
 ## 安装
 
-安装 APK 并首次启动时，ctOS 会向 Magisk 申请一次 Root 授权。允许后，后续启动和覆盖安装会自动恢复 Root 采集；拒绝或会话失败后不会反复弹窗，可在工作台点击“授权 Root”重试。完整卸载会清除 ctOS 的本地偏好；重新安装仍会主动申请 Root，是否免弹窗取决于 Magisk 是否保留该应用的授权。在 Vector 中启用 ctOS，作用域选择系统框架。首次加载系统模块需要重启设备。模块真正返回 UID 1000 的快照后，界面才显示 VECTOR 在线。
+安装 APK 并首次启动时，ctOS 会向设备的 Root 管理器申请一次授权。允许后，后续启动和覆盖安装会自动恢复 Root 采集；拒绝或会话失败后不会反复弹窗，可在概览点击“授权 Root”重试。完整卸载会清除 ctOS 的本地偏好；重新安装仍会主动申请 Root，是否免弹窗取决于 Root 管理器是否保留授权。无需配置 Vector 作用域或重启系统。
 
-模块未启用时，普通 API 和已授权 root 采集仍可工作；界面明确显示来源。关闭 ctOS 会关闭终端会话，当前版本不提供后台常驻终端。
+未授权 Root 时，普通 API 基础信息仍可工作，连接结果标明权限限制；界面明确显示来源。关闭 ctOS 会关闭终端会话，当前版本不提供后台常驻终端。
 
 ## 构建
 
@@ -57,10 +57,12 @@ flutter build apk --release --target-platform android-arm64
 
 ## 已知边界
 
-- 系统模块不是通用 root 授权器；APK、系统模块和终端是不同执行环境。
+- Root 采集与 Root PTY 是不同会话，均通过设备已有的 `su` 工作。
 - 连接列表来自采样瞬间的内核 socket 信息，不是完整网络历史或抓包，也不承诺每条连接都有应用映射。
 - 接口累计值不是“今日流量”；接口重置时重新建立速率基线。Wi-Fi、蜂窝、VPN、回环不直接求和。
-- 终端提供 Android 系统已有命令，不包含 Linux 发行版、软件包管理器或 SSH 服务。Root 会话需要可用的 `su`。
-- 系统模块只注册查询入口，不更改网络策略、不拦截或修改数据包、不占用 VPN。
+- 终端提供 Android 系统已有命令及内置 `python3`，可运行交互解释器和 `.py` 文件；不包含 Linux 发行版、运行时 pip 或 SSH 服务。Root 会话需要可用的 `su`。
+- 网络观测使用固定只读查询，不更改网络策略、不拦截或修改数据包、不占用 VPN；网络 API 视图不承诺跨用户可见范围。
 
 设计见 [architecture.md](design/architecture.md)，兼容性见 [compatibility.md](design/compatibility.md)，依赖来源见 [dependencies.md](design/dependencies.md)，变更历史见 [changelog.md](design/changelog.md)。
+
+五项 Portable 工具（08 / 26 / 09 / 02 / 16-HFTP）的入口、文件边界与后台服务说明见 [工具设计](design/portable-tools.md)；本轮验证状态见 [verification](design/verification.md)。

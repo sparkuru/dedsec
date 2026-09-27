@@ -2,7 +2,7 @@
 
 ## 1. Scope / Trigger
 
-Use this contract when changing the Flutter terminal page, its IME input, PTY shortcuts, output selection, or the `ctos/native` terminal method calls. App and Root PTYs remain separate from the persistent Root collector and Vector bridge.
+Use this contract when changing the Flutter terminal page, its IME input, PTY shortcuts, output selection, or the `ctos/native` terminal method calls. App and Root PTYs remain separate from the persistent Root collector. ctOS no longer has a Vector bridge.
 
 ## 2. Signatures
 

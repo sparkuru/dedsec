@@ -1,0 +1,3 @@
+{"file":"design/decisions/2026-09-26-root-only.md","reason":"确认无系统桥接依赖，明确 App 网络可见范围"}
+{"file":".trellis/spec/trellis-plus/validation.md","reason":"必要检查与设备边界"}
+{"file":".trellis/spec/frontend/connection-snapshots.md","reason":"连接数据与权限状态不可回退"}

@@ -10,6 +10,7 @@ import 'device_info.dart';
 import 'device_page.dart';
 import 'terminal_interaction.dart';
 import 'traffic.dart';
+import 'workbench.dart';
 
 const native = MethodChannel('ctos/native');
 const mint = Color(0xff65efb4);
@@ -73,8 +74,6 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
   DeviceSnapshot? deviceSnapshot;
   bool deviceLoading = false;
   String deviceError = '';
-  Map<String, dynamic>? commandResult;
-  bool commandRunning = false;
   bool loading = false, granting = true, foreground = true;
   bool session = false;
   bool terminalBusy = false;
@@ -103,10 +102,8 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
       ((snapshot['kernel']?['interfaces'] ?? []) as List)
           .cast<Map<String, dynamic>>();
   bool get root => snapshot['root'] == true;
-  bool get module => snapshot['moduleActive'] == true;
   Map<String, dynamic> get connectionData => connectionState.data ?? {};
-  List<dynamic> get networks =>
-      (module ? snapshot['module']['networks'] : snapshot['networks']) ?? [];
+  List<dynamic> get networks => snapshot['networks'] ?? [];
 
   @override
   void initState() {
@@ -286,44 +283,6 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
       if (mounted) setState(() => deviceError = e.toString());
     } finally {
       if (mounted) setState(() => deviceLoading = false);
-    }
-  }
-
-  Future<void> runCommand(String id, String sectionName) async {
-    if (commandRunning) return;
-    setState(() => commandRunning = true);
-    final started = DateTime.now();
-    try {
-      final raw = await native.invokeMethod<String>('deviceSnapshot');
-      final section = DeviceSnapshot.fromJson(raw!)[sectionName];
-      if (mounted)
-        setState(
-          () => commandResult = {
-            'command': id,
-            'environment': 'App',
-            'startedAt': started.toIso8601String(),
-            'durationMs': DateTime.now().difference(started).inMilliseconds,
-            'state': section?.state ?? 'unavailable',
-            'source': section?.source,
-            'output': section?.available == true
-                ? const JsonEncoder.withIndent('  ').convert(section!.data)
-                : section?.reason ?? '没有结果',
-          },
-        );
-    } catch (e) {
-      if (mounted)
-        setState(
-          () => commandResult = {
-            'command': id,
-            'environment': 'App',
-            'startedAt': started.toIso8601String(),
-            'durationMs': DateTime.now().difference(started).inMilliseconds,
-            'state': 'failed',
-            'output': e.toString(),
-          },
-        );
-    } finally {
-      if (mounted) setState(() => commandRunning = false);
     }
   }
 
@@ -584,7 +543,6 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
           ),
           'connections': Map<String, dynamic>.from(connectionData)
             ..remove('apps'),
-          'lastCommand': commandResult,
           'exportedAt': DateTime.now().toIso8601String(),
         }),
       });
@@ -643,7 +601,6 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
                   children: [
                     status('APP 可用', true),
                     status(root ? 'ROOT 在线' : 'ROOT 未连接', root),
-                    status(module ? 'VECTOR 在线' : 'VECTOR 未响应', module),
                   ],
                 ),
               ),
@@ -659,7 +616,7 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
               children: [
                 workbench(),
                 informationPage(),
-                commandsPage(),
+                WorkbenchPage(active: tab == 2),
                 terminalPage(),
               ],
             ),
@@ -677,12 +634,12 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
       destinations: const [
         NavigationDestination(
           icon: Icon(Icons.dashboard_outlined),
-          label: '工作台',
+          label: '概览',
         ),
         NavigationDestination(icon: Icon(Icons.info_outline), label: '信息'),
         NavigationDestination(
-          icon: Icon(Icons.play_circle_outline),
-          label: '命令',
+          icon: Icon(Icons.grid_view_outlined),
+          label: '工作台',
         ),
         NavigationDestination(icon: Icon(Icons.terminal), label: '终端'),
       ],
@@ -800,10 +757,6 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
                       rootProblem,
                       style: const TextStyle(color: Colors.orange),
                     ),
-                  const SizedBox(height: 4),
-                  Text(
-                    module ? 'Vector 桥接：在线' : 'Vector 桥接：未响应；请检查模块及作用域，基础信息仍可用',
-                  ),
                   if (!root) ...[
                     const SizedBox(height: 10),
                     FilledButton.icon(
@@ -904,77 +857,6 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
     ],
   );
 
-  Widget commandsPage() => ListView(
-    padding: const EdgeInsets.all(20),
-    children: [
-      heading('只读命令', 'App 权限'),
-      card(
-        Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'device.info',
-              style: TextStyle(fontWeight: FontWeight.bold),
-            ),
-            const Text('型号 · Android 版本 · 架构 · 运行时间'),
-            Align(
-              alignment: Alignment.centerRight,
-              child: FilledButton(
-                onPressed: commandRunning
-                    ? null
-                    : () => runCommand('device.info', 'system'),
-                child: const Text('执行'),
-              ),
-            ),
-          ],
-        ),
-      ),
-      card(
-        Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'memory.snapshot',
-              style: TextStyle(fontWeight: FontWeight.bold),
-            ),
-            const Text('内存总量 · 可用量 · 低内存状态'),
-            Align(
-              alignment: Alignment.centerRight,
-              child: FilledButton(
-                onPressed: commandRunning
-                    ? null
-                    : () => runCommand('memory.snapshot', 'memory'),
-                child: const Text('执行'),
-              ),
-            ),
-          ],
-        ),
-      ),
-      if (commandRunning) const LinearProgressIndicator(),
-      if (commandResult != null)
-        card(
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                '${commandResult!['command']} · ${commandResult!['state']}',
-                style: const TextStyle(fontWeight: FontWeight.bold),
-              ),
-              Text(
-                'App · ${commandResult!['durationMs']} ms · ${commandResult!['source'] ?? '—'}',
-                style: const TextStyle(color: Colors.white54, fontSize: 11),
-              ),
-              const SizedBox(height: 10),
-              SelectableText(
-                '${commandResult!['output']}',
-                style: const TextStyle(fontFamily: 'monospace', fontSize: 11),
-              ),
-            ],
-          ),
-        ),
-    ],
-  );
-
   Widget networkOverview() {
     final names = interfaces.map((i) => i['name'] as String).toList();
     final active = networks
@@ -1006,7 +888,7 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
                   ),
                   const SizedBox(height: 6),
                   const Text(
-                    '授权后读取各接口流量和连接信息。系统模块单独在 Vector 中启用。',
+                    '授权后读取各接口流量和连接信息。',
                     style: TextStyle(color: Colors.white60, fontSize: 12),
                   ),
                   const SizedBox(height: 12),
@@ -1091,27 +973,6 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
           ),
           for (final network in networks)
             networkCard(Map<String, dynamic>.from(network)),
-          card(
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    const Icon(Icons.extension_outlined, color: mint, size: 18),
-                    const SizedBox(width: 8),
-                    Text(module ? 'Vector 系统桥接在线' : 'Vector 系统桥接尚未连接'),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  module
-                      ? 'system_server · UID ${snapshot['module']['uid']} · PID ${snapshot['module']['pid']}\n系统快照 ${snapshot['moduleAgeMs']} ms 前更新'
-                      : '在 Vector 中启用 ctOS，作用域选择系统框架。首次加载系统进程模块需要重启。当前显示普通 API 数据。',
-                  style: const TextStyle(color: Colors.white60, fontSize: 12),
-                ),
-              ],
-            ),
-          ),
         ],
       ),
     );

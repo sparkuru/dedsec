@@ -12,6 +12,9 @@ readonly XDG_CACHE_HOME="${DEVHOME}/cache"
 readonly ANDROID_USER_HOME="${DEVHOME}/android-user"
 readonly NDK_VERSION=27.0.12077973
 readonly SDKMANAGER="${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager"
+readonly BUILD_PYTHON_DIR="${DEVHOME}/python/cpython-3.13.7-linux-x86_64-gnu"
+readonly BUILD_PYTHON_URL='https://github.com/astral-sh/python-build-standalone/releases/download/20250902/cpython-3.13.7%2B20250902-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz'
+readonly BUILD_PYTHON_SHA256=6a8280f4b08d75428eea83955678c51da00c585bb411562cd53f510680becf00
 export FLUTTER_ROOT ANDROID_HOME ANDROID_SDK_ROOT GRADLE_USER_HOME
 export PUB_CACHE XDG_CACHE_HOME ANDROID_USER_HOME
 export FLUTTER_SUPPRESS_ANALYTICS=true DART_SUPPRESS_ANALYTICS=true
@@ -55,6 +58,37 @@ bootstrap_copy() {
 	run_step setup touch "$marker"
 }
 
+bootstrap_python() (
+	[[ -x "${BUILD_PYTHON_DIR}/bin/python3.13" ]] && return 0
+	local temporary command_name
+	for command_name in curl tar sha256sum mktemp mkdir mv rm flock; do
+		command -v "$command_name" >/dev/null || {
+			printf '[hako] missing bootstrap command: %s\n' "$command_name" >&2
+			return 1
+		}
+	done
+	exec 9>"${DEVHOME}/.build-python.lock"
+	run_step setup flock --timeout 180 9
+	[[ -x "${BUILD_PYTHON_DIR}/bin/python3.13" ]] && return 0
+	[[ ! -e "$BUILD_PYTHON_DIR" ]] || {
+		printf '[hako] incomplete build Python exists; inspect %s before retrying\n' "$BUILD_PYTHON_DIR" >&2
+		return 1
+	}
+	temporary=$(mktemp -d /tmp/ctos-build-python.XXXXXXXX)
+	trap 'rm -rf -- "$temporary"' EXIT
+	run_step setup curl --fail --location --retry 2 --max-time 180 \
+		--output "${temporary}/python.tar.gz" "$BUILD_PYTHON_URL"
+	printf '%s  %s\n' "$BUILD_PYTHON_SHA256" "${temporary}/python.tar.gz" | sha256sum --check --status
+	run_step setup tar -C "$temporary" --no-same-owner -xf "${temporary}/python.tar.gz"
+	run_step setup mkdir -p "${DEVHOME}/python"
+	[[ ! -e "$BUILD_PYTHON_DIR" ]] || {
+		printf '[hako] incomplete build Python exists; inspect %s before retrying\n' "$BUILD_PYTHON_DIR" >&2
+		return 1
+	}
+	run_step setup mv -- "${temporary}/python" "$BUILD_PYTHON_DIR"
+	run_step setup "${BUILD_PYTHON_DIR}/bin/python3.13" --version
+)
+
 main() {
 	[[ $# -gt 0 ]] || {
 		printf '[hako] missing container command\n' >&2
@@ -64,6 +98,7 @@ main() {
 	run_step setup mkdir -p "$GRADLE_USER_HOME" "$PUB_CACHE" "$XDG_CACHE_HOME" "$ANDROID_USER_HOME"
 	bootstrap_copy /sdks/flutter "$FLUTTER_ROOT" "${DEVHOME}/.flutter-ready"
 	bootstrap_copy /opt/android-sdk-linux "$ANDROID_HOME" "${DEVHOME}/.android-sdk-ready"
+	bootstrap_python
 
 	if [[ ! -f "${ANDROID_HOME}/platforms/android-36/android.jar" || ! -x "${ANDROID_HOME}/build-tools/36.0.0/aapt2" ]]; then
 		run_step setup "$SDKMANAGER" --sdk_root="$ANDROID_HOME" \

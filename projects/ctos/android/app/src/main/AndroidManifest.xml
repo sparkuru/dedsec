@@ -1,21 +1,19 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <queries>
         <intent>
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.LAUNCHER" />
         </intent>
     </queries>
-    <permission android:name="im.majo.ctos.permission.QUERY" android:protectionLevel="signature" />
-    <uses-permission android:name="im.majo.ctos.permission.QUERY" />
     <application android:label="ctOS" android:icon="@drawable/ic_launcher" android:allowBackup="false"
         android:dataExtractionRules="@xml/data_extraction_rules" android:theme="@style/AppTheme">
         <meta-data android:name="flutterEmbedding" android:value="2" />
-        <meta-data android:name="xposedmodule" android:value="true" />
-        <meta-data android:name="xposeddescription" android:value="ctOS network observatory: authenticated system snapshots, interface traffic and terminal" />
-        <meta-data android:name="xposedminversion" android:value="82" />
-        <meta-data android:name="xposedscope" android:resource="@array/xposed_scope" />
+        <service android:name=".HftpService" android:exported="false" android:foregroundServiceType="dataSync" />
         <activity android:name=".MainActivity" android:exported="true" android:launchMode="singleTop"
             android:hardwareAccelerated="true" android:windowSoftInputMode="adjustResize"
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode">

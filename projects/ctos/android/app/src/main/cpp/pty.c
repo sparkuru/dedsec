@@ -5,6 +5,7 @@
 #include <signal.h>
 #include <poll.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/wait.h>
@@ -16,7 +17,7 @@ static void fail(JNIEnv *env, const char *message) {
 }
 
 JNIEXPORT jintArray JNICALL Java_im_majo_ctos_Pty_start(
-        JNIEnv *env, jclass type, jboolean root, jint columns, jint rows, jstring directory) {
+        JNIEnv *env, jclass type, jboolean root, jint columns, jint rows, jstring directory, jstring shell_rc) {
     (void) type;
     int master = posix_openpt(O_RDWR | O_NOCTTY | O_CLOEXEC);
     if (master < 0) { fail(env, strerror(errno)); return NULL; }
@@ -35,11 +36,16 @@ JNIEXPORT jintArray JNICALL Java_im_majo_ctos_Pty_start(
     char *cwd = strdup(cwd_utf);
     (*env)->ReleaseStringUTFChars(env, directory, cwd_utf);
     if (!cwd) { close(slave); close(master); fail(env, "Out of memory"); return NULL; }
+    const char *rc_utf = (*env)->GetStringUTFChars(env, shell_rc, NULL);
+    char *rc_env = NULL;
+    int rc_size = asprintf(&rc_env, "ENV=%s", rc_utf);
+    (*env)->ReleaseStringUTFChars(env, shell_rc, rc_utf);
+    if (rc_size < 0) { free(cwd); close(slave); close(master); fail(env, "Out of memory"); return NULL; }
     // Prepare all strings before fork; the child must not re-enter the Java VM.
     char *const app_args[] = {"/system/bin/sh", "-i", NULL};
     // Interactive su allocates its controlling TTY; -c would bypass job control.
-    char *const root_args[] = {"su", NULL};
-    char *const environment[] = {"TERM=xterm-256color", "PATH=/product/bin:/system/bin:/system/xbin:/vendor/bin", "LANG=C.UTF-8", NULL};
+    char *const root_args[] = {"su", "-p", NULL};
+    char *const environment[] = {"TERM=xterm-256color", "PATH=/product/bin:/system/bin:/system/xbin:/vendor/bin", "LANG=C.UTF-8", rc_env, NULL};
     pid_t pid = fork();
     if (pid == 0) {
         close(master);
@@ -57,6 +63,7 @@ JNIEXPORT jintArray JNICALL Java_im_majo_ctos_Pty_start(
         _exit(127);
     }
     free(cwd);
+    free(rc_env);
     close(slave);
     if (pid < 0) { close(master); fail(env, strerror(errno)); return NULL; }
     jint values[] = {master, pid};
