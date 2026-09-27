@@ -1,10 +1,10 @@
 import 'dart:async';
-import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'api.dart';
+import 'controls.dart';
 import 'models.dart';
 import 'parameter_field.dart';
+import 'result_card.dart';
 
 class ScriptPage extends StatefulWidget {
   const ScriptPage({
@@ -26,7 +26,8 @@ class _ScriptPageState extends State<ScriptPage> {
   final controllers = <String, TextEditingController>{};
   Map<String, dynamic>? result;
   String? taskId;
-  bool cancelling = false, reveal = false;
+  bool cancelling = false, advanced = false;
+  String source = 'text';
 
   bool get running => taskId != null;
 
@@ -55,21 +56,31 @@ class _ScriptPageState extends State<ScriptPage> {
   }
 
   Future<void> run() async {
-    if (running || !form.currentState!.validate()) return;
+    if (running) return;
+    if (!form.currentState!.validate()) {
+      if (widget.script.id == 'tools.password' &&
+          widget.script.parameters.any(
+            (p) =>
+                p.name != 'seed' &&
+                p.name != 'length' &&
+                ParameterPresentation(
+                      widget.script.id,
+                      p,
+                    ).validate(controllers[p.name]!.text) !=
+                    null,
+          ))
+        setState(() => advanced = true);
+      return;
+    }
     final id = 'task-${DateTime.now().microsecondsSinceEpoch}';
     final started = DateTime.now();
     setState(() {
       taskId = id;
       cancelling = false;
       result = null;
-      reveal = false;
     });
     try {
-      final value = await widget.api.run(
-        widget.script,
-        controllers.map((key, controller) => MapEntry(key, controller.text)),
-        id,
-      );
+      final value = await widget.api.run(widget.script, submission(), id);
       if (mounted) setState(() => result = value);
     } catch (error) {
       if (mounted)
@@ -110,13 +121,101 @@ class _ScriptPageState extends State<ScriptPage> {
   void notice(String text) =>
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
 
-  Future<void> export() async {
-    try {
-      final saved = await widget.api.export(result!);
-      if (mounted && saved) notice('结果已保存');
-    } catch (error) {
-      if (mounted) notice('保存失败：$error');
+  Map<String, String> submission() {
+    final values = controllers.map(
+      (key, controller) => MapEntry(key, controller.text),
+    );
+    if (widget.script.id == 'tools.encoder') {
+      if (values.containsKey(source == 'text' ? 'file' : 'text'))
+        values[source == 'text' ? 'file' : 'text'] = '';
     }
+    return values;
+  }
+
+  Widget parameter(ScriptParameter parameter, {bool active = true}) => Padding(
+    padding: const EdgeInsets.only(bottom: 16),
+    child: ParameterField(
+      key: ValueKey(parameter.name),
+      parameter: parameter,
+      scriptId: widget.script.id,
+      controller: controllers[parameter.name]!,
+      api: widget.api,
+      enabled: !running && active,
+      active: active,
+      onChanged: () => setState(() {}),
+    ),
+  );
+
+  Widget parameters() {
+    final fields = widget.script.parameters;
+    final password = widget.script.id == 'tools.password';
+    final encoder = widget.script.id == 'tools.encoder';
+    bool basic(ScriptParameter p) => p.name == 'seed' || p.name == 'length';
+    bool show(ScriptParameter p) =>
+        !encoder ||
+        switch (p.name) {
+          'text' => source == 'text',
+          'file' => source == 'file',
+          'direction' => controllers['operation']?.text != 'hash',
+          _ => true,
+        };
+    return Form(
+      key: form,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (encoder) ...[
+            WorkbenchDropdown(
+              child: DropdownButtonFormField<String>(
+                initialValue: source,
+                isExpanded: true,
+                itemHeight: null,
+                decoration: const InputDecoration(labelText: '输入来源'),
+                items: const [
+                  DropdownMenuItem(value: 'text', child: Text('文本')),
+                  DropdownMenuItem(value: 'file', child: Text('文件')),
+                ],
+                onChanged: running
+                    ? null
+                    : (value) => setState(() => source = value!),
+              ),
+            ),
+            const SizedBox(height: 16),
+          ],
+          for (final p in fields.where((p) => !password || basic(p)))
+            if (encoder)
+              Offstage(
+                offstage: !show(p),
+                child: parameter(p, active: show(p)),
+              )
+            else
+              parameter(p),
+          if (password && fields.any((p) => !basic(p))) ...[
+            WorkbenchActions(
+              children: [
+                TextButton.icon(
+                  onPressed: running
+                      ? null
+                      : () => setState(() => advanced = !advanced),
+                  icon: Icon(advanced ? Icons.expand_less : Icons.expand_more),
+                  label: Text(advanced ? '收起高级选项' : '高级选项'),
+                ),
+              ],
+            ),
+            // Keep the fields mounted so picker filenames and validation survive.
+            Offstage(
+              offstage: !advanced,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  for (final p in fields.where((p) => !basic(p))) parameter(p),
+                ],
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
   }
 
   @override
@@ -130,31 +229,13 @@ class _ScriptPageState extends State<ScriptPage> {
             Text(widget.script.description),
             const SizedBox(height: 8),
             Text(
-              'App 权限 · ${widget.script.id}',
+              'App 权限 · 本机工作台',
               style: Theme.of(context).textTheme.bodySmall,
             ),
             const SizedBox(height: 16),
             if (widget.runtime != null) _runtime(widget.runtime!),
-            Form(
-              key: form,
-              child: Column(
-                children: [
-                  for (final parameter in widget.script.parameters)
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 16),
-                      child: ParameterField(
-                        parameter: parameter,
-                        controller: controllers[parameter.name]!,
-                        api: widget.api,
-                        enabled: !running,
-                      ),
-                    ),
-                ],
-              ),
-            ),
-            Wrap(
-              spacing: 12,
-              runSpacing: 8,
+            parameters(),
+            WorkbenchActions(
               children: [
                 FilledButton.icon(
                   onPressed: running ? null : run,
@@ -179,7 +260,13 @@ class _ScriptPageState extends State<ScriptPage> {
                 padding: EdgeInsets.only(top: 16),
                 child: LinearProgressIndicator(),
               ),
-            if (result != null) _result(result!),
+            if (result != null)
+              ResultCard(
+                key: ValueKey(result),
+                scriptId: widget.script.id,
+                value: result!,
+                api: widget.api,
+              ),
           ],
         ),
       ),
@@ -220,120 +307,6 @@ class _ScriptPageState extends State<ScriptPage> {
       ),
     ),
   );
-
-  Widget _result(Map<String, dynamic> value) {
-    final state = switch (value['state']) {
-      'completed' => '已完成',
-      'failed' => '失败',
-      'cancelled' => '已取消',
-      'timed_out' => '超时',
-      _ => '未知状态',
-    };
-    final successful = value['state'] == 'completed';
-    final capturedAt = value['startedAt'] is int
-        ? DateTime.fromMillisecondsSinceEpoch(
-            value['startedAt'] as int,
-          ).toLocal()
-        : null;
-    final data = value['data'];
-    return Card(
-      margin: const EdgeInsets.only(top: 20),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              state,
-              style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                color: successful
-                    ? Theme.of(context).colorScheme.primary
-                    : Theme.of(context).colorScheme.error,
-              ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'App · ${value['durationMs']} ms · 退出码 ${value['exitCode'] ?? '—'}',
-            ),
-            if (capturedAt != null)
-              Text(
-                '开始于 $capturedAt',
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
-            if (value['truncated'] == true) const Text('日志已达到上限，部分内容已截断。'),
-            if (value['state'] == 'timed_out')
-              const Text('超过 15 秒，进程已回收；可重新运行。'),
-            const SizedBox(height: 12),
-            if (data is Map && data['sensitive'] == true)
-              TextButton.icon(
-                onPressed: () => setState(() => reveal = !reveal),
-                icon: Icon(
-                  reveal
-                      ? Icons.visibility_off_outlined
-                      : Icons.visibility_outlined,
-                ),
-                label: Text(reveal ? '隐藏密码' : '显示密码'),
-              ),
-            if (data != null)
-              SelectableText(
-                data is Map && data['sensitive'] == true && !reveal
-                    ? '••••••••'
-                    : const JsonEncoder.withIndent('  ').convert(data),
-                style: const TextStyle(fontFamily: 'monospace'),
-              ),
-            for (final key in ['stdout', 'stderr'])
-              if ((value[key] as String? ?? '').isNotEmpty) ...[
-                const SizedBox(height: 12),
-                Text(key == 'stdout' ? '输出' : '错误'),
-                SelectableText(
-                  value[key] as String,
-                  style: const TextStyle(fontFamily: 'monospace'),
-                ),
-              ],
-            const SizedBox(height: 12),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                OutlinedButton.icon(
-                  onPressed: () async {
-                    await Clipboard.setData(
-                      ClipboardData(
-                        text: const JsonEncoder.withIndent('  ').convert(value),
-                      ),
-                    );
-                    if (mounted) notice('已复制结果');
-                  },
-                  icon: const Icon(Icons.copy_outlined),
-                  label: const Text('复制结果'),
-                ),
-                if (data is Map && data['artifact'] is Map)
-                  OutlinedButton.icon(
-                    onPressed: () async {
-                      try {
-                        final saved = await widget.api.exportFile(
-                          Map<String, dynamic>.from(data['artifact'] as Map),
-                        );
-                        if (mounted && saved) notice('文件已保存');
-                      } catch (error) {
-                        if (mounted) notice('保存失败：$error');
-                      }
-                    },
-                    icon: const Icon(Icons.file_download_outlined),
-                    label: const Text('保存输出文件'),
-                  ),
-                OutlinedButton.icon(
-                  onPressed: export,
-                  icon: const Icon(Icons.save_alt),
-                  label: const Text('保存 JSON'),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
 }
 
 EdgeInsets _padding(double width) => EdgeInsets.symmetric(

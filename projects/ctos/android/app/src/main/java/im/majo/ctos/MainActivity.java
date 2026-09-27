@@ -240,6 +240,7 @@ public final class MainActivity extends FlutterActivity {
 
     @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+        if (hftpBridge != null && hftpBridge.onActivityResult(requestCode, resultCode, data)) return;
         if (toolFiles != null && toolFiles.onActivityResult(requestCode, resultCode, data)) return;
         if (requestCode != 81 || exportResult == null) return;
         try {

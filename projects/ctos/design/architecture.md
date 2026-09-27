@@ -20,4 +20,16 @@ Kernel 计数使用单调时钟计算 delta。计数回退、接口消失或新�
 
 ## Portable 五项工具扩展（2026-09-26）
 
-`ctos_tools` 分离核心算法、SDK adapters 和 CLI，Flutter 工作台拆成目录/模型/表单/脚本/服务模块。`ToolFiles` 管理私有文件 token；`HftpBridge` 只处理 Activity 权限请求，`HftpService` 独立拥有前台通知和长期 Python 进程。短任务后台取消与 HFTP 后台运行分开。完整边界见 [portable-tools.md](portable-tools.md)。
+`ctos_tools` 分离核心算法、SDK adapters 和 CLI，Flutter 工作台拆成目录/模型/表单/脚本/服务模块。`ToolFiles` 管理私有文件 token；`HftpBridge` 处理 Activity 配置与权限请求，`HftpService` 独立拥有前台通知、长期 Python 进程及目录 broker。短任务后台取消与 HFTP 后台运行分开。完整边界见 [portable-tools.md](portable-tools.md)。
+
+## 工作台展示与输入投影（2026-09-27）
+
+当前目录为九项，常用工具优先。`ParameterPresentation` 集中处理已知字段的中文标签、枚举与辅助说明；`ScriptPage.submission()` 从保留的表单控制器生成请求，仅对编码页将非活动输入来源置空。两者只负责 UI 投影，执行白名单仍来自 Python 注册表。`ResultCard` 负责有用结果、直接复制、原 token 产物导出和次级原始 JSON，保持完整结果 envelope。追加图片反馈后以共享控件统一按钮/弹窗宽度，秘密输入在 Flutter 呈现层遮挡并使用普通 IME。HFTP 增加持久配置/上传限额和 SAF 目录后端：HTTP 和工具算法继续是 Python，Java 负责 Android 权限、通知、进程及 DocumentsContract 流式读写桥接。SDK、Root、终端及运行依赖不变；交互和服务边界见 [工具设计](portable-tools.md)。
+
+## 工具Root能力代理（2026-09-27，本轮源码）
+
+用户追加要求后，host-owned `ToolExecutionContext.declare(id, requirement)`以固定操作白名单声明APP/ROOT需求。声明不授予权限；`RootOperationAdapter`在效果边界检查声明、固定APK程序与参数，独立拥有授权请求和子进程资源。首个接入是可选`hftp.networkRelay`，只代理网络；`hftp`与Python SDK Context仍为App权限，默认路径不探测或启动中继。缺少Root/拒绝只令中继失败，保留普通工具使用。既有collector与PTY仍使用各自边界，不宣称已全部迁移到此adapter。
+
+Root模式下App Python先在127.0.0.1随机端口就绪；UID0 native helper通过公开Network handle绑定实际Wi-Fi监听，限制同子网并转发到唯一App backend。生产helper拒绝非UID0执行，adapter复核ready的UID/地址/端口；它不处理HTTP或文件，不提供任意Shell/目标。专用控制pipe/心跳/限时与Service停止负责精确资源回收；不修改VPN或系统网络规则。HFTP日志由Python结构化事件和Java有界会话缓存提供，UI可复制/清空且停止后保留。接口、限制与实际验收分别见[工具设计](portable-tools.md)、[后端spec](../.trellis/spec/backend/python-workbench.md)及[验证记录](verification.md)。
+
+2026-09-28：Root adapter追加App PARTIAL_WAKE_LOCK，仅当前Root会话持有、最多5h无续期、构造/就绪/回调失败及停止释放。它不扩大Root电源权限，普通App路径不取锁。TARGET-PHONE锁归属和回收通过，但熄屏仍断连，不能据此声明idle保活；用户已选择暂不扩大Root范围，独立Root电源候选未实现。

@@ -115,7 +115,7 @@ void main() {
     expect(submitted?['params'], {'text': '🙂中文'});
     expect(submitted?['script'], 'text.digest');
     expect(find.text('已完成'), findsOneWidget);
-    expect(find.textContaining('"sha256": "digest"'), findsOneWidget);
+    expect(find.text('digest'), findsOneWidget);
   });
 
   testWidgets(

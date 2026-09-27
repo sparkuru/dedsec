@@ -19,7 +19,7 @@ This directory contains guidelines for backend development. Fill in each file wi
 | [Error Handling](./error-handling.md) | Error types, handling strategies | To fill |
 | [Quality Guidelines](./quality-guidelines.md) | Code standards, forbidden patterns | To fill |
 | [Logging Guidelines](./logging-guidelines.md) | Structured logging, log levels | To fill |
-| [Python Workbench](./python-workbench.md) | Bundled packages, Python subprocesses, limits and SDK | Current |
+| [Python Workbench](./python-workbench.md) | Bundled packages, App subprocesses, limits, SDK and HFTP host capability boundary | Current |
 
 ---
 

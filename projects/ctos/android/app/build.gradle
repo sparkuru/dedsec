@@ -75,3 +75,16 @@ tasks.register('compilePythonExecutable', Exec) {
     }
 }
 tasks.named('preBuild').configure { dependsOn 'compilePythonExecutable' }
+
+def hftpRelay = layout.buildDirectory.file('generated/jniLibs/arm64-v8a/libctos_hftp_relay.so')
+tasks.register('compileHftpRelay', Exec) {
+    inputs.file('src/main/cpp/hftp_relay.c')
+    outputs.file(hftpRelay)
+    doFirst {
+        hftpRelay.get().asFile.parentFile.mkdirs()
+        commandLine "${android.ndkDirectory}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android28-clang",
+            '-fPIE', '-pie', '-O2', '-Wall', '-Wextra', '-Werror', '-Wl,-z,max-page-size=16384',
+            'src/main/cpp/hftp_relay.c', '-landroid', '-o', hftpRelay.get().asFile
+    }
+}
+tasks.named('preBuild').configure { dependsOn 'compileHftpRelay' }

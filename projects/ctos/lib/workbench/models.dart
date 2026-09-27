@@ -40,11 +40,11 @@ class WorkbenchScript {
     'device.info' => '设备摘要',
     'memory.snapshot' => '内存快照',
     'text.digest' => '文本摘要',
-    'tools.password' => '08 · 密码生成',
-    'tools.encoder' => '26 · 编码与哈希',
-    'tools.ip' => '09 · IP 查询',
-    'tools.crypto' => '02 · 文件加解密',
-    'tools.hftp' => '16 · HFTP 文件服务',
+    'tools.password' => '密码生成',
+    'tools.encoder' => '编码与哈希',
+    'tools.ip' => 'IP 查询',
+    'tools.crypto' => '文件加解密',
+    'tools.hftp' => 'HFTP 文件服务',
     _ => fallbackTitle,
   };
 
@@ -57,7 +57,7 @@ class WorkbenchScript {
     'tools.encoder' => 'Base64、URL、Unicode · 文本或文件',
     'tools.ip' => '手动发起 HTTPS 查询 · IP 或域名',
     'tools.crypto' => '认证加密 · 旧格式解密 · 保留源文件',
-    'tools.hftp' => '独立共享库 · 后台运行 · 常驻通知',
+    'tools.hftp' => '目录共享 · 后台运行 · 常驻通知',
     _ => fallbackDescription,
   };
 
@@ -73,4 +73,80 @@ class WorkbenchScript {
     'tools.hftp' => Icons.folder_shared_outlined,
     _ => Icons.play_circle_outline,
   };
+}
+
+// Display projection only: catalogue keys and wire values stay unchanged.
+class ParameterPresentation {
+  const ParameterPresentation(this.scriptId, this.parameter);
+  final String scriptId;
+  final ScriptParameter parameter;
+
+  bool get passwordLength =>
+      scriptId == 'tools.password' && parameter.name == 'length';
+
+  String get label => switch ((scriptId, parameter.name)) {
+    ('tools.password', 'seed') => '种子',
+    ('tools.password', 'length') => '密码长度',
+    ('tools.password', 'salt') => '盐值（可选）',
+    ('tools.password', 'salt_file') => '盐文件（可选）',
+    ('tools.password', 'charset') => '字符集（可选）',
+    ('tools.password', 'must') => '必含字符（可选）',
+    ('tools.encoder', 'operation') => '转换方式',
+    ('tools.encoder', 'direction') => '转换方向',
+    ('tools.encoder', 'text') || ('text.digest', 'text') => '文本',
+    ('tools.encoder', 'file') || ('tools.crypto', 'file') => '输入文件',
+    ('tools.ip', 'target') => 'IP 或域名（可选）',
+    ('tools.crypto', 'operation') => '操作',
+    ('tools.crypto', 'password') => '密码',
+    _ => parameter.label,
+  };
+
+  String? get helper => switch ((scriptId, parameter.name)) {
+    ('tools.password', 'seed') => '相同种子、盐值和参数会生成相同密码',
+    ('tools.password', 'length') => '1–128 个字符',
+    ('tools.password', 'salt') => '额外参与计算；选择盐文件后优先使用文件内容',
+    ('tools.password', 'charset') => '留空使用默认字符集',
+    ('tools.password', 'must') => '生成结果必须包含的字符',
+    ('tools.ip', 'target') => '留空查询当前公网 IP；运行时发起 HTTPS 请求',
+    ('tools.crypto', 'password') => '解密需使用加密时的密码',
+    _ => null,
+  };
+
+  String? validate(String value, {bool active = true}) {
+    if (!active) return null;
+    final needsValue =
+        parameter.required ||
+        (scriptId == 'tools.encoder' && parameter.name == 'file');
+    if (needsValue && value.trim().isEmpty)
+      return parameter.kind == 'file' ? '请选择$label' : '请填写$label';
+    if (value.runes.length > parameter.maxLength)
+      return '最多 ${parameter.maxLength} 个字符';
+    if (passwordLength) {
+      final length = int.tryParse(value);
+      if (length == null || length < 1 || length > 128)
+        return '请输入 1–128 之间的整数';
+    }
+    return null;
+  }
+
+  String choice(String value) => switch ((scriptId, parameter.name, value)) {
+    ('tools.encoder', 'operation', 'base64') => 'Base64',
+    ('tools.encoder', 'operation', 'url') => 'URL 编码',
+    ('tools.encoder', 'operation', 'unicode') => 'Unicode 转义',
+    ('tools.encoder', 'operation', 'hash') => '哈希摘要',
+    ('tools.encoder', 'direction', 'encode') => '编码',
+    ('tools.encoder', 'direction', 'decode') => '解码',
+    ('tools.encoder', 'direction', 'auto') => '自动识别',
+    ('tools.crypto', 'operation', 'encrypt') => '加密',
+    ('tools.crypto', 'operation', 'decrypt') => '解密',
+    ('tools.crypto', 'operation', 'legacy-decrypt') => '旧格式解密（未认证）',
+    _ => value,
+  };
+}
+
+String formatFileSize(Object? bytes) {
+  if (bytes is! num) return '大小未知';
+  if (bytes < 1024) return '$bytes B';
+  if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KiB';
+  return '${(bytes / 1024 / 1024).toStringAsFixed(1)} MiB';
 }

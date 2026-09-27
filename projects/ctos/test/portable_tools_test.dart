@@ -82,7 +82,7 @@ void main() {
       await tester.pumpWidget(MaterialApp(home: ScriptPage(script: tool())));
       expect(
         tester.widget<EditableText>(find.byType(EditableText)).obscureText,
-        isTrue,
+        isFalse,
       );
       await tester.enterText(find.byType(TextFormField), 'private-password');
       await tester.tap(find.text('选择文件'));
@@ -149,15 +149,22 @@ void main() {
     var stops = 0;
     var running = true;
     messenger.setMockMethodCallHandler(channel, (call) async {
+      if (call.method == 'hftpConfig')
+        return jsonEncode({
+          'host': '0.0.0.0',
+          'port': '7888',
+          'maxUploadMiB': '32',
+          'directoryName': '默认共享目录',
+          'treeUri': '',
+        });
       if (call.method == 'hftpStatus')
         return jsonEncode(
           running
               ? {
                   'state': 'running',
-                  'host': '127.0.0.1',
-                  'port': 8080,
-                  'password': 'service-secret',
-                  'urls': ['http://127.0.0.1:8080/'],
+                  'host': '0.0.0.0',
+                  'port': 7888,
+                  'urls': ['http://127.0.0.1:7888/'],
                 }
               : {'state': 'stopped'},
         );
@@ -172,9 +179,11 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(find.text('运行中 · 后台继续'), findsOneWidget);
-    expect(find.text('service-secret'), findsNothing);
-    final start = tester.widget<FilledButton>(find.byWidgetPredicate((widget) => widget is FilledButton));
-    expect(start.onPressed, isNull);
+    final start = tester.widget<FilledButton>(
+      find.byWidgetPredicate((widget) => widget is FilledButton),
+    );
+    expect(start.onPressed, isNotNull);
+    expect(find.text('启动服务'), findsNothing);
     await tester.pumpWidget(const SizedBox());
     await tester.pump();
     expect(stops, 0);
@@ -186,6 +195,11 @@ void main() {
     await tester.tap(find.text('停止'));
     await tester.pumpAndSettle();
     expect(stops, 1);
+    await tester.scrollUntilVisible(
+      find.text('已停止'),
+      -150,
+      scrollable: find.byType(Scrollable).first,
+    );
     expect(find.text('已停止'), findsOneWidget);
     await tester.pumpWidget(const SizedBox());
   });

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'api.dart';
+import 'controls.dart';
 
 class FileStoreCard extends StatelessWidget {
   const FileStoreCard({super.key, required this.api});
@@ -17,13 +18,17 @@ class FileStoreCard extends StatelessWidget {
             '已用 ${((info['bytes'] as num) / 1024 / 1024).toStringAsFixed(1)} / 128 MiB。\n清理会删除 App 内的导入副本和工具输出；已保存到外部的文件及 HFTP 共享库不受影响。',
           ),
           actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('返回'),
-            ),
-            TextButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: const Text('清理'),
+            WorkbenchActions(
+              children: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context, false),
+                  child: const Text('返回'),
+                ),
+                TextButton(
+                  onPressed: () => Navigator.pop(context, true),
+                  child: const Text('清理'),
+                ),
+              ],
             ),
           ],
         ),

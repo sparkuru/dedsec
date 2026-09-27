@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/frontend/workbench.md", "reason": "界面、参数、结果和生命周期"}
+{"file": ".trellis/spec/backend/python-workbench.md", "reason": "SDK/文件/Python/服务边界"}
+{"file": ".trellis/spec/trellis-plus/validation.md", "reason": "验证与设备授权"}
+{"file": ".trellis/spec/trellis-plus/index.md", "reason": "UUPM与review gate"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "目录授权和配置跨 Dart/Java/Python 边界"}

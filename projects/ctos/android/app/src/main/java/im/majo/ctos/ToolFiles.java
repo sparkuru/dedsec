@@ -52,7 +52,8 @@ public final class ToolFiles {
     public boolean handle(MethodCall call, MethodChannel.Result result) {
         try {
             if (call.method.equals("hftpClearShare")) {
-                if (HftpService.active() || pending != null) throw new IllegalStateException("Stop HFTP and close the document picker first");
+                if (HftpService.active() || HftpBridge.preparing() || pending != null)
+                    throw new IllegalStateException("Stop HFTP and close the document picker first");
                 File root = library(activity);
                 try (java.util.stream.Stream<java.nio.file.Path> paths = Files.walk(root.toPath())) {
                     java.util.List<java.nio.file.Path> owned = paths.filter(path -> !path.equals(root.toPath()))
@@ -79,7 +80,7 @@ public final class ToolFiles {
             }
             if (!call.method.equals("toolFilePick") && !call.method.equals("toolFileExport")
                     && !call.method.equals("hftpImport")) return false;
-            if (call.method.equals("hftpImport") && HftpService.active())
+            if (call.method.equals("hftpImport") && (HftpService.active() || HftpBridge.preparing()))
                 throw new IllegalStateException("Stop HFTP before importing library files");
             if (pending != null) throw new IllegalStateException("A document operation is already open");
             if (call.method.equals("toolFileExport")) {
@@ -98,8 +99,10 @@ public final class ToolFiles {
                         .addCategory(Intent.CATEGORY_OPENABLE), call.method.equals("hftpImport") ? SHARE : PICK);
             }
         } catch (Exception error) {
-            pending = null;
-            exportFile = null;
+            if (pending == result) {
+                pending = null;
+                exportFile = null;
+            }
             result.error("FILES", error.getMessage(), null);
         }
         return true;

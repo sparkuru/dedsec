@@ -5,6 +5,7 @@ import 'workbench/models.dart';
 import 'workbench/script_page.dart';
 import 'workbench/hftp_page.dart';
 import 'workbench/file_store_card.dart';
+import 'workbench/controls.dart';
 export 'workbench/api.dart';
 export 'workbench/models.dart';
 export 'workbench/script_page.dart';
@@ -95,9 +96,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
             ).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.bold),
           ),
           const SizedBox(height: 8),
-          const Text('运行环境与常用脚本'),
-          const SizedBox(height: 24),
-          if (catalog != null) FileStoreCard(api: widget.api),
+          const Text('在手机上完成常用任务'),
+          const SizedBox(height: 16),
           if (loading) ...[
             const LinearProgressIndicator(),
             const Padding(
@@ -116,58 +116,63 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                     const SizedBox(height: 8),
                     SelectableText(error!),
                     const SizedBox(height: 8),
-                    OutlinedButton(
-                      onPressed: loading ? null : load,
-                      child: const Text('重试'),
+                    WorkbenchActions(
+                      children: [
+                        OutlinedButton(
+                          onPressed: loading ? null : load,
+                          child: const Text('重试'),
+                        ),
+                      ],
                     ),
                   ],
                 ),
               ),
             ),
-          for (final category
-              in scripts.map((script) => script.category).toSet()) ...[
-            Padding(
-              padding: const EdgeInsets.only(top: 8, bottom: 8),
-              child: Text(switch (category) {
-                'runtime' => '运行环境',
-                'system' => '系统脚本',
-                'text' => '文本工具',
-                'tools' => 'Portable 工具',
-                _ => category,
-              }, style: Theme.of(context).textTheme.titleSmall),
-            ),
+          if (scripts.any((script) => script.category == 'tools')) ...[
+            _heading(context, '常用工具'),
             for (final script in scripts.where(
-              (script) => script.category == category,
+              (script) => script.category == 'tools',
             ))
-              Card(
-                margin: const EdgeInsets.only(bottom: 12),
-                child: ListTile(
-                  contentPadding: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 8,
-                  ),
-                  leading: Icon(
-                    script.icon,
-                    color: Theme.of(context).colorScheme.primary,
-                  ),
-                  title: Text(script.title),
-                  subtitle: Text(script.description),
-                  trailing: const Icon(Icons.chevron_right),
-                  onTap: () => Navigator.of(context).push(
-                    MaterialPageRoute<void>(
-                      builder: (_) => script.id == 'tools.hftp'
-                          ? HftpPage(api: widget.api)
-                          : ScriptPage(
-                              script: script,
-                              api: widget.api,
-                              runtime: category == 'runtime' ? catalog : null,
-                            ),
-                    ),
-                  ),
-                ),
-              ),
+              _item(context, script),
+          ],
+          if (scripts.any((script) => script.category != 'tools')) ...[
+            _heading(context, '其他脚本与环境'),
+            for (final script in scripts.where(
+              (script) => script.category != 'tools',
+            ))
+              _item(context, script),
+          ],
+          if (catalog != null) ...[
+            _heading(context, '文件管理'),
+            FileStoreCard(api: widget.api),
           ],
         ],
+      ),
+    ),
+  );
+  Widget _heading(BuildContext context, String title) => Padding(
+    padding: const EdgeInsets.only(top: 12, bottom: 8),
+    child: Text(title, style: Theme.of(context).textTheme.titleSmall),
+  );
+
+  Widget _item(BuildContext context, WorkbenchScript script) => Card(
+    margin: const EdgeInsets.only(bottom: 8),
+    child: ListTile(
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      leading: Icon(script.icon, color: Theme.of(context).colorScheme.primary),
+      title: Text(script.title),
+      subtitle: Text(script.description),
+      trailing: const Icon(Icons.chevron_right),
+      onTap: () => Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => script.id == 'tools.hftp'
+              ? HftpPage(api: widget.api)
+              : ScriptPage(
+                  script: script,
+                  api: widget.api,
+                  runtime: script.category == 'runtime' ? catalog : null,
+                ),
+        ),
       ),
     ),
   );

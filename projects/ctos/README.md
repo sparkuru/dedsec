@@ -4,14 +4,15 @@
 
 项目各种信息统一入口：[design/README.md](design/README.md)。产品规划、约束、架构及验证记录均在 `design/` 维护。
 
-状态：`incubating`。2026-09-26 五项 Portable 工具版已构建并在 PLR110 / Android 16 / SELinux Enforcing 下验收；Flutter 31 项及真机 7 项定向检查通过，包含 App/Root 终端 python3、文件产物、取消、超时及 HFTP 后台通知停止。跨设备边界与历史结果见设计文档。
+状态：`incubating`。2026-09-27 工作台优化、HFTP日志与可选Root网络中继已安装TARGET-PHONE；保持原VPN限制时Windows可访问，33MiB LAN读写及停止回收通过。普通工具/文件仍App权限，无Root基础路径保留；各版本检查和未测范围见[验证记录](design/verification.md)。
 
 唯一 current 安装包：`dist/ctos-current-arm64.apk`，校验和见 `dist/SHA256SUMS`。完整的已验证/待验证项目见 [verification.md](design/verification.md)。
 
 ## 功能
 
 - 设备信息：系统、内存、电池温度和存储快照，显示来源与可用状态。
-- 工作台：APK 内置离线 CPython 3.13.9；环境自检、设备摘要、内存快照、文本摘要四项 item，进入二级页配置、运行、取消、复制及保存结果。
+- 工作台：APK内置离线CPython 3.13.9；密码、编解码/哈希、IP、文件加解密及HFTP工具，另有环境与设备等脚本，进入二级页配置、运行及保存结果。
+- HFTP：手动启动，选择本机目录、上传限额及App/可选Root网络中继，查看和复制服务日志；操作与权限边界见[工具设计](design/portable-tools.md)。
 - Portable 运行包与 SDK：统一清单、参数和结果协议，可在构建时追加 Android 原生工具、ZIP 数据与基础脚本；见 [扩展契约](design/portable-workbench.md)。
 - 网络配置：App API 可见的 IP、DNS、路由、默认网络、VPN、Private DNS。
 - 接口：地址、MTU、收发字节和包数、错误、丢包；按接口计算实时速率。

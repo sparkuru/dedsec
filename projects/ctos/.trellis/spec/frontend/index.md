@@ -20,7 +20,7 @@ This directory contains guidelines for frontend development. Fill in each file w
 | [State Management](./state-management.md) | Local state, global state, server state | To fill |
 | [Connection Snapshots](./connection-snapshots.md) | Native payload, freshness, clone alias and search contracts | Current |
 | [Terminal Interaction](./terminal-interaction.md) | PTY input, IME, shortcuts, output selection, and device checks | Current |
-| [Workbench](./workbench.md) | Portable environment, script forms, detail routes and task results | Current |
+| [Workbench](./workbench.md) | Catalogue/forms, masked results, task/service lifecycle and concise product copy (no demo descriptions) | Current |
 | [Quality Guidelines](./quality-guidelines.md) | Code standards, forbidden patterns | To fill |
 | [Type Safety](./type-safety.md) | Type patterns, validation | To fill |
 

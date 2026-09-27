@@ -2,6 +2,36 @@ import 'dart:convert';
 import 'package:flutter/services.dart';
 import 'models.dart';
 
+List<String> hftpLogLines(Map<String, dynamic> status) {
+  final lines = status['logs'];
+  return lines is List
+      ? lines.whereType<String>().toList(growable: false)
+      : const [];
+}
+
+class HftpSettings {
+  const HftpSettings({
+    this.host = '0.0.0.0',
+    this.port = '7888',
+    this.maxUploadMiB = '32',
+    this.directoryName = '默认共享目录',
+    this.treeUri = '',
+    this.rootRelay = false,
+  });
+
+  factory HftpSettings.fromJson(Map<String, dynamic> value) => HftpSettings(
+    host: value['host']?.toString() ?? '0.0.0.0',
+    port: value['port']?.toString() ?? '7888',
+    maxUploadMiB: value['maxUploadMiB']?.toString() ?? '32',
+    directoryName: value['directoryName']?.toString() ?? '默认共享目录',
+    treeUri: value['treeUri']?.toString() ?? '',
+    rootRelay: value['rootRelay'] == true,
+  );
+
+  final String host, port, maxUploadMiB, directoryName, treeUri;
+  final bool rootRelay;
+}
+
 class WorkbenchApi {
   const WorkbenchApi({this.channel = const MethodChannel('ctos/native')});
   final MethodChannel channel;
@@ -42,13 +72,37 @@ class WorkbenchApi {
   Future<Map<String, dynamic>> hftpStatus() async =>
       _decode(await channel.invokeMethod<String>('hftpStatus'));
 
-  Future<Map<String, dynamic>> hftpStart(String host, String port) async =>
-      _decode(
-        await channel.invokeMethod<String>('hftpStart', {
-          'host': host,
-          'port': port,
-        }),
-      );
+  Future<Map<String, dynamic>> hftpClearLogs() async =>
+      _decode(await channel.invokeMethod<String>('hftpClearLogs'));
+
+  Future<HftpSettings> hftpConfig() async => HftpSettings.fromJson(
+    _decode(await channel.invokeMethod<String>('hftpConfig')),
+  );
+
+  Future<HftpSettings?> hftpPickDirectory() async {
+    final raw = await channel.invokeMethod<String>('hftpPickDirectory');
+    return raw == null ? null : HftpSettings.fromJson(_decode(raw));
+  }
+
+  Future<HftpSettings> hftpUseDefaultDirectory() async => HftpSettings.fromJson(
+    _decode(await channel.invokeMethod<String>('hftpUseDefaultDirectory')),
+  );
+
+  Future<Map<String, dynamic>> hftpStart(
+    String host,
+    String port, {
+    required String maxUploadMiB,
+    required String treeUri,
+    bool rootRelay = false,
+  }) async => _decode(
+    await channel.invokeMethod<String>('hftpStart', {
+      'host': host,
+      'port': port,
+      'maxUploadMiB': maxUploadMiB,
+      'treeUri': treeUri,
+      'rootRelay': rootRelay,
+    }),
+  );
 
   Future<void> hftpStop() => channel.invokeMethod<void>('hftpStop');
 

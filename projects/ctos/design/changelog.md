@@ -1,12 +1,45 @@
 # Changelog
 
+2026-09-28：用户明确要求提交当前工作台/HFTP 保留成果并脱敏；停止/亮屏传输/同端口重启修复已有实测，熄屏失败作为已知限制保留，Root 电源候选未实现。脱敏仅整理本次提交的设备、网络及本机环境标识，不改变协议或实现行为。以下未提交描述为对应历史阶段状态，最终结果见 [验证记录](verification.md)。
+
+## 2026-09-27至28 HFTP停止与连续重启反馈（停止通过，熄屏未解决）
+
+- 显式stop-request边界和stopping/closing状态，回调失效与后台精确关闭；失败清理期间保留owner，阻止新实例覆盖资源。
+- 监听器使用checked SO_REUSEADDR，支持修正版传输后立即同端口重启，保留活跃端口独占，不改系统/VPN策略。
+- 修复日志折叠bool/滚动double共用PageStorage的类型冲突，追加保留bucket的滚动/折叠/清空/重建回归。
+- 修复先处理queued PING再检查原10s期限的竞态，closed日志增加固定原因；Root adapter持有有界App CPU锁，所有失败/停止路径释放，普通App不依赖它。错误标题改为服务异常，Root选项提示实际耗电。
+- 9ca71e…包安装一致，73项Flutter、25项既有Python、24轮native传输+9项控制、10项最终手机检查通过；三轮实际LAN读写/停止/同端口重启含31MiB及日志操作通过。App锁仍未解决熄屏断连；用户选择暂不扩大Root范围，Root电源候选未实现。默认配置恢复、临时文件精确清理；不提交/归档。见[验证记录](verification.md)。
+
+## 2026-09-27 HFTP日志与Root能力分离
+
+- ToolExecutionContext显式声明APP/ROOT需求；ctOS RootOperationAdapter只承载已登记网络中继，缺失/未知/不匹配在效果前拒绝，普通App路径不依赖Root。Python HTTP/文件/SAF不提权；collector/PTY保留既有入口。
+- HFTP可选Root LAN中继，UID0 helper只转发指定Wi-Fi同子网到App loopback后端；有界并发、心跳、生命周期与精确回收，不修改VPN/Clash/系统网络规则。启动必须显式Root true，缺省false。
+- 实时有界服务日志、复制/清空/停止保留/旧会话保护；spec追加页面只保留必要操作说明、避免demo和实现细节堆叠。
+- 最终0575e00d…包安装哈希一致；Windows与LAN33MiB读写、无覆盖/限额/后台/停止验收通过，App UID及Root UID实测。恢复默认配置并清理隔离夹具；未提交/归档。完整证据和未测范围见[验证记录](verification.md)。
+
+## 2026-09-27 九张工作台图片反馈
+
+- 工具标题去编号，删除script ID技术详情，文本操作与文件按钮全宽，下拉弹窗对齐；普通秘密输入保持遮挡并使用原有IME。
+- App HFTP默认LAN/7888/免登录，上传1–1024MiB（默认32），恢复配置与SAF本机目录选择；保留原私有库。用户目录不提供清理，停止回收Python进程与原生目录broker，普通工具/SDK/CLI认证兼容保持。
+- 修正TARGET-PHONE安全键盘触发条件，兼容Downloads本机provider；加强写入目标屏蔽、流式错误边界与请求owner保护。工具/HTTP仍是Python，Java只承担Android桥接。
+- 最终d43f52ed…安装及普通IME、两个provider授权、33MiB精确传输、无覆盖/限额/后台/停止通过；电脑LAN直连仍超时，未宣称已修复原Firefox故障。服务停止与临时文件清理完成，未提交或归档；见 [验证记录](verification.md)。
+
+## 2026-09-27 工作台体验优化
+
+- 五项常用工具前置，其他脚本、环境和临时文件管理降为次级；保留深色/薄荷绿与全部九项入口。
+- 中文参数、密码高级项折叠、长度数字校验、编码文本/文件来源及草稿保留、哈希方向隐藏、文件左对齐。
+- 密码/哈希直接复制，IP 与设备摘要、文件预览及产物保存；密码默认遮挡涵盖原始详情和日志，完整 JSON 导出保持原协议。
+- HFTP 状态和启动/停止主操作前置，共享库清理区分并保留确认；未改变服务生命周期、算法、SDK 或依赖。
+- Flutter analyze、43 项测试及组件预览通过；Android lint、最终 APK 和新版设备验证范围见 [验证记录](verification.md)。本轮实现尚未提交或归档。
+- 用户随后明确允许安装，TARGET-PHONE 新版安装哈希一致；界面、数字键盘、密码复制/遮挡、来源投影、SAF 导出28B读回/导入/取消及横屏定向验收通过。恢复旋转并精确删除外部测试文件，未运行 HFTP 或改权限。
+
 ## 2026-09-27 当前项目进度提交
 
 按用户要求提交此前 Root-only、Python 工作台与五项 Portable 工具的源码、测试、设计和任务记录。README 的当前版本说明更新为最终五项工具包；本轮 ADB 连接和提交前本地检查见 [验证记录](verification.md)。保留任务状态，不归档；昨日设备验收记录仍按各自日期和包哈希解释。
 
 ## 2026-09-26 Portable 工具手机验收与原子提交
 
-五项工具完成 PLR110 安装与七项组合回归；SAF 导入/取消/产物导出读回、HFTP 常驻通知及通知停止通过。修复 Android App 硬链接 EACCES：SDK 产物、CLI 与 HFTP 共用不覆盖的原子重命名。测试显式隔离 Activity，消除 singleTop 后台任务复用带来的等待。09按官方文档使用现行免费HTTPS接口，指定公共IP实际查询通过。当前 APK `f928af66…` 与安装包哈希一致，测试服务/文件已精确清理。完整证据见 [验证记录](verification.md)，保留既有 WIP，未提交/归档。
+五项工具完成 TARGET-PHONE 安装与七项组合回归；SAF 导入/取消/产物导出读回、HFTP 常驻通知及通知停止通过。修复 Android App 硬链接 EACCES：SDK 产物、CLI 与 HFTP 共用不覆盖的原子重命名。测试显式隔离 Activity，消除 singleTop 后台任务复用带来的等待。09按官方文档使用现行免费HTTPS接口，指定公共IP实际查询通过。当前 APK `f928af66…` 与安装包哈希一致，测试服务/文件已精确清理。完整证据见 [验证记录](verification.md)，保留既有 WIP，未提交/归档。
 
 ## 2026-09-26 — Python 工作台与 Portable 包框架
 
@@ -15,7 +48,7 @@
 - 四个脚本 item 进入二级页，具备参数校验、运行/取消、退出码/耗时、输出、复制及单结果 JSON 保存；SDK 统一注册表、Context 和结果。
 - 新增 Portable v1 清单、APK ZIP/资源逻辑挂载、工具映射与环境生成，保留 curl 等 Android 原生工具的构建时接入方式。当前只内置 Python，不导入外部 ZIP。
 - 工作台单子进程、15 秒超时、有界输入输出、后台回收；固定 -P -S 避免工作目录覆盖 SDK。内置环境失败时仍保留系统 Shell。
-- Flutter 28 项、Android lint/测试包构建、本地 ARM64 QEMU 及 PLR110 真机 8 项检查通过；App/Root 终端 python3、取消/超时/后台回收和工作台自检 JSON 保存已验收。修正 Android 安装目录含 `=` 时的工具启动兼容问题。详见 [验证记录](verification.md)。
+- Flutter 28 项、Android lint/测试包构建、本地 ARM64 QEMU 及 TARGET-PHONE 真机 8 项检查通过；App/Root 终端 python3、取消/超时/后台回收和工作台自检 JSON 保存已验收。修正 Android 安装目录含 `=` 时的工具启动兼容问题。详见 [验证记录](verification.md)。
 
 ## 2026-09-26 — 移除 Vector，使用 App/Root 采集
 
@@ -37,7 +70,7 @@
 - 修正连接检索标题和说明居中的排版，使其与搜索框左缘对齐，并增加窄屏组件断言。
 - 连接 item 加入可访问应用的真实图标、显示名与包名；按显示名、应用自身名称、进程名和包名检索，同 UID 多包可展开查看。未取得图标时显示占位图标。
 - 打开 QQ 后返回 ctOS 或重新进入连接页会更新连接快照；无匹配时提示可刷新。按完整应用名、别名和包名筛选时优先精确匹配，避免短名称命中过多其他应用。
-- 识别应用分身的独立 UID；在已验证的 Oplus 设备上读取桌面自定义别名，连接卡片可区分主 QQ 与名为 `tim` 的分身。别名不可取得时保留原名、包名和用户 ID。
+- 识别应用分身的独立 UID；在已验证的 Oplus 设备上读取桌面自定义别名，连接卡片可区分主 QQ 与名为 `CLONE-ALIAS` 的分身。别名不可取得时保留原名、包名和用户 ID。
 - 图标 Base64 数据只用于界面，不写入 JSON 导出；保留导出中原有的连接文本与状态。
 - 工作台分别呈现 App、Root、Vector 状态及手动恢复入口，按设备摘要、能力与恢复、常用操作排列；系统负载注明不是 CPU 使用率，权限受限时提供简明说明与可展开详情。
 - 当前 APK 已在 Android 16 手机上覆盖安装并定向检查；Flutter 分析及 15 项测试、Android lint、四项适用设备测试通过。该手机的 Vector 桥接仍未响应；实机范围和一次未复现的旧包设备测试波动见 [verification.md](verification.md)。
@@ -51,11 +84,11 @@
 ## 2026-09-25 — startup Root authorization and Android 16 check
 
 - Request Root once on app startup, retain automatic startup after a successful grant, and restore the collector session after later launches or in-place installs. Failed grants or broken sessions require a manual retry; polling never reopens `su`.
-- Rebuild the single current APK through `hako`, verify its signature, and install it on the user-selected OnePlus PLR110. Automatic restoration worked after a force-stop and an in-place reinstall; all three Root device tests passed. Vector bridge remained inactive on this phone.
+- Rebuild the single current APK through `hako`, verify its signature, and install it on the user-selected TARGET-PHONE. Automatic restoration worked after a force-stop and an in-place reinstall; all three Root device tests passed. Vector bridge remained inactive on this phone.
 
 ## 2026-09-24 — Android 11 current APK check
 
-- Install the current APK and matching Android test APK on the user-selected `192.168.9.14:5555` development board after replacing incompatible, differently signed ctOS packages.
+- Install the current APK and matching Android test APK on the user-selected `TEST-BOARD-ADB-SERIAL` development board after replacing incompatible, differently signed ctOS packages.
 - Verify the installed APK hash, all four Android instrumented tests, device information and navigation pages, both read-only commands, JSON export, and the App-permission terminal. Restore ctOS's Magisk Root switch to off after testing. Record pending Android 16 and fresh module-load checks in [verification.md](verification.md).
 
 ## 2026-09-24 — single current APK
@@ -100,4 +133,4 @@
 - SDK v2 追加 choice/secret/file；独立私有文件导入/产物导出/空间清理，失败保留源和已有输出。
 - 02 加入固定 APK 加密依赖、新 AES-GCM 认证格式和明确旧 CBC 解密；08 去自动 UUID 盐，26 保留二进制转换/哈希，09 改为有界标准库 HTTPS。
 - HFTP 独立 Android 前台服务、常驻通知及停止入口，后台继续、默认本机、独立认证共享库及配额；保留浏览/建目录/上传/下载。
-- 构建 Python 限于 .devhome，离线/浏览器测试限于 /tmp；当前手机验收状态见 verification，不复用历史结果。
+- 构建 Python 限于 .devhome，离线/浏览器测试限于 ${EVIDENCE_DIR}；当前手机验收状态见 verification，不复用历史结果。
