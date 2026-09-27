@@ -1,6 +1,6 @@
 # Verification
 
-2026-09-28 提交决定：用户已在当前实测结果和已知熄屏限制基础上要求提交，并要求本轮内容脱敏。先复核脱敏清单，再提交、归档当前专项任务并记录 journal；无新增设备操作或 Root 电源授权。下文各阶段“未提交/待测”保留为历史状态，以首项最终记录为当前结果。
+2026-09-28 提交决定：用户已在当前实测结果和已知熄屏限制基础上要求提交，并要求本轮内容脱敏。脱敏复核与工作提交已完成，当前专项任务按收敛范围归档并记录 journal；无新增设备操作或 Root 电源授权。下文各阶段“未提交/待测”保留为历史状态，以首项最终记录为当前结果。
 
 ## 证据脱敏约定
 
@@ -12,19 +12,19 @@
 
 ## 2026-09-27 HFTP 停止错误追加回归（进行中）
 
-2026-09-28最终记录：当前9ca71e…APK安装哈希一致、14份Python/native来源核对、73项Flutter/analyze、Androidlint0errors/5既有warnings通过；修正后十项TARGET-PHONE定向检查9.077s全部通过。三轮LAN PUT201/GET200精确（两轮1,376,257B、一轮31MiB）、真实App停止/进程端口CPU锁回收及同7888重启通过，清空日志后31MiB再读回/返回重进正常。默认私有目录/LAN7888/32MiB/Roottrue恢复，五个owned文件及空隔离目录精确删除，服务停止，VPN lockdown1/Clash bypassablefalse保持。**熄屏仍拒绝连接**：登记App锁不等同于有效保活，ROM记录REL/后续lightIdle；候选的具体退出日志因锁屏未取得，不写成已直接证明的Root退出原因。Root临时CPU租约候选另见任务design，用户已选择暂不扩大Root范围，候选未实现/未触发，熄屏问题作为已知限制保留；暂不提交/归档。完整实测与初次测试误报保留在[实机记录](../.trellis/tasks/09-27-workbench-usability/restart-device-check.md)。
+2026-09-28最终记录：当前9ca71e…APK安装哈希一致、14份Python/native来源核对、73项Flutter/analyze、Androidlint0errors/5既有warnings通过；修正后十项TARGET-PHONE定向检查9.077s全部通过。三轮LAN PUT201/GET200精确（两轮1,376,257B、一轮31MiB）、真实App停止/进程端口CPU锁回收及同7888重启通过，清空日志后31MiB再读回/返回重进正常。默认私有目录/LAN7888/32MiB/Roottrue恢复，五个owned文件及空隔离目录精确删除，服务停止，VPN lockdown1/Clash bypassablefalse保持。**熄屏仍拒绝连接**：登记App锁不等同于有效保活，ROM记录REL/后续lightIdle；候选的具体退出日志因锁屏未取得，不写成已直接证明的Root退出原因。Root临时CPU租约候选另见任务design，用户已选择暂不扩大Root范围，候选未实现/未触发，熄屏问题作为已知限制保留；暂不提交/归档。完整实测与初次测试误报保留在[实机记录](../.trellis/tasks/archive/2026-09/09-27-workbench-usability/restart-device-check.md)。
 
-同设备ADB已改为PHONE-ADB-SERIAL。最终Service修复候选5d4e5c…安装哈希一致，七项定向手机测试通过（7.135s）；第一Root LAN1,376,257B精确读写/停止/三个owned PID与端口回收/7888重启通过。第二轮上传201但下载读回超时；同文件醒屏后两种读取方式均精确成功。屏幕关闭后GET拒绝，Root日志heartbeat_timeout；追加控制队列/期限竞态与closed原因诊断回归，新版休眠及连续流程待测。见[追加实机记录](../.trellis/tasks/09-27-workbench-usability/restart-device-check.md)。
+同设备ADB已改为PHONE-ADB-SERIAL。最终Service修复候选5d4e5c…安装哈希一致，七项定向手机测试通过（7.135s）；第一Root LAN1,376,257B精确读写/停止/三个owned PID与端口回收/7888重启通过。第二轮上传201但下载读回超时；同文件醒屏后两种读取方式均精确成功。屏幕关闭后GET拒绝，Root日志heartbeat_timeout；追加控制队列/期限竞态与closed原因诊断回归，新版休眠及连续流程待测。见[追加实机记录](../.trellis/tasks/archive/2026-09/09-27-workbench-usability/restart-device-check.md)。
 
-控制队列修复本地24轮精确传输/重启、queuedPING存活与9项控制/独占检查、严格host/NDK和Androidlint/testAPK通过，独立复核通过。168cedec…安装哈希一致、亮屏GET精确且closed reason=complete；熄屏仍两次拒绝/heartbeat_timeout，实际前台服务已确认。正在追加Root adapter App CPU锁R25，不能把上述局部通过写成最终验收。参见[传输复核](../.trellis/tasks/09-27-workbench-usability/transfer-review.md)。
+控制队列修复本地24轮精确传输/重启、queuedPING存活与9项控制/独占检查、严格host/NDK和Androidlint/testAPK通过，独立复核通过。168cedec…安装哈希一致、亮屏GET精确且closed reason=complete；熄屏仍两次拒绝/heartbeat_timeout，实际前台服务已确认。正在追加Root adapter App CPU锁R25，不能把上述局部通过写成最终验收。参见[传输复核](../.trellis/tasks/archive/2026-09/09-27-workbench-usability/transfer-review.md)。
 
 用户确认点击 App「停止」后立即报错。TARGET-PHONE 当前无存活 HFTP Service/owned 子进程；重新进入页面后保留六条日志显示 18:46:52 一次 Root 启动在 Python ready 后 `listener_bind (errno 98)`，随后精确关闭。该证据不能证明用户停止操作主动重启了服务。原页面日志/config 区有灰色 ErrorWidget，ctOS PID OWNED-PID 每两秒报 Flutter DiagnosticsProperty 异常，首次栈已不在缓冲区；同 PID 返回再进入恢复日志。追加 R21–R23 回归正在处理，不将此前单周期通过视作本次通过。
 
-本地 native 已复现真实 TCP TIME_WAIT 后同端口重启 errno98；checked SO_REUSEADDR 后 20 轮实际传输/STOP/即时重启通过，活跃监听器仍拒绝第二 owner，原15项回归/严格 NDK 编译通过。旧无 reuse 版本遗留 TIME_WAIT 的复用边界另记，未改系统 TCP/VPN/路由；新最终包实机连续重启待测。见[本地记录](../.trellis/tasks/09-27-workbench-usability/restart-native-check.md)。
+本地 native 已复现真实 TCP TIME_WAIT 后同端口重启 errno98；checked SO_REUSEADDR 后 20 轮实际传输/STOP/即时重启通过，活跃监听器仍拒绝第二 owner，原15项回归/严格 NDK 编译通过。旧无 reuse 版本遗留 TIME_WAIT 的复用边界另记，未改系统 TCP/VPN/路由；新最终包实机连续重启待测。见[本地记录](../.trellis/tasks/archive/2026-09/09-27-workbench-usability/restart-native-check.md)。
 
 ## 2026-09-27 HFTP Root分离与日志最终验收
 
-记录：[Root实机检查](../.trellis/tasks/09-27-workbench-usability/root-device-check.md)、[全范围审查](../.trellis/tasks/09-27-workbench-usability/root-log-check.md)。用户明确授权Root网络中继，仅TARGET-PHONE `PHONE-ADB-SERIAL`、Android16。
+记录：[Root实机检查](../.trellis/tasks/archive/2026-09/09-27-workbench-usability/root-device-check.md)、[全范围审查](../.trellis/tasks/archive/2026-09/09-27-workbench-usability/root-log-check.md)。用户明确授权Root网络中继，仅TARGET-PHONE `PHONE-ADB-SERIAL`、Android16。
 
 - 最终APK SHA256 `0575e00d5d7fb732d02ec4923563e4dfd68e0008eae17480791e753ad29eaf1b`，26,189,072 bytes；构建/签名/校验和及安装base.apk逐字节一致。14份Python源码与packaged relay来源核对通过。
 - Flutter68/68、analyze无问题；Python25/25；Android lint0 errors/5既有warnings/testAPK通过；native15项本机网络夹具+最终3项定向复验/NDK API28严格编译及16KiB ELF对齐通过。Browser loopback九项复验通过。
@@ -37,7 +37,7 @@
 
 ## 2026-09-27 九张图片反馈：最终源码与 TARGET-PHONE
 
-最终 `d43f52edb9f90b083079579ef6b14cf99ce5dccd70c132a858ddb6f276288e4c` APK（26,135,519 bytes）构建/签名/发布校验通过，覆盖安装 TARGET-PHONE `PHONE-ADB-SERIAL` 后 base.apk 哈希一致；APK 内14份 Python 源码逐字节匹配。没有转换成 Java：工具与HTTP仍为Python，Java承担Android权限/生命周期/SAF流式访问。详见 [反馈源码复核](../.trellis/tasks/09-27-workbench-usability/feedback-check.md)、[反馈实机记录](../.trellis/tasks/09-27-workbench-usability/feedback-device-check.md)。
+最终 `d43f52edb9f90b083079579ef6b14cf99ce5dccd70c132a858ddb6f276288e4c` APK（26,135,519 bytes）构建/签名/发布校验通过，覆盖安装 TARGET-PHONE `PHONE-ADB-SERIAL` 后 base.apk 哈希一致；APK 内14份 Python 源码逐字节匹配。没有转换成 Java：工具与HTTP仍为Python，Java承担Android权限/生命周期/SAF流式访问。详见 [反馈源码复核](../.trellis/tasks/archive/2026-09/09-27-workbench-usability/feedback-check.md)、[反馈实机记录](../.trellis/tasks/archive/2026-09/09-27-workbench-usability/feedback-device-check.md)。
 
 - analyze 无问题、Flutter **52/52**、隔离 Python **21/21**、Android lint **0 errors/5既有warnings**、测试APK编译、隔离loopback浏览器9项通过。检查服务协议、CLI认证兼容、大文件/短写/中断/无覆盖/路径边界，以及UI准确参数、宽度、普通IME配置及过期轮询保护。
 - 最终手机公开seed输入圆点遮挡、EditorInfo **inputType=0x1**、原有普通键盘生效；没有调整系统键盘。首次中间包 false suggestions 被引擎转为VISIBLE_PASSWORD，已修为 enableSuggestions=true；普通键盘可能显示建议。
@@ -50,7 +50,7 @@
 
 ## 2026-09-27 工作台新版 TARGET-PHONE 定向验收
 
-用户在具体 APK 与安装/临时文件验收请求后回复“允许”。重新确认 TARGET-PHONE / Android16、`PHONE-ADB-SERIAL` 后覆盖安装成功，实际安装哈希与 **`98f44069c9fc6da80d082dd591b161cb9c1d43b34e88d522879af75e6148bab7`** 完全一致。数据保留，既有 Root 自动会话恢复，没有手动授权或改配置。详见 [手机验收记录](../.trellis/tasks/09-27-workbench-usability/device-check.md)。
+用户在具体 APK 与安装/临时文件验收请求后回复“允许”。重新确认 TARGET-PHONE / Android16、`PHONE-ADB-SERIAL` 后覆盖安装成功，实际安装哈希与 **`98f44069c9fc6da80d082dd591b161cb9c1d43b34e88d522879af75e6148bab7`** 完全一致。数据保留，既有 Root 自动会话恢复，没有手动授权或改配置。详见 [手机验收记录](../.trellis/tasks/archive/2026-09/09-27-workbench-usability/device-check.md)。
 
 - 五项工具在首屏完整可见，其他四项及文件管理可达。密码中文基础/高级表单、长度数字键盘、折叠盐值参与计算通过；主结果和展开原始 JSON 默认遮挡，直接复制后粘贴核对为密码本身。
 - 编码文本/文件切换保留草稿，文件为空阻止运行，实际系统选择器取消后保持空选择。公开20B文本 `ctos-ui-saf-20260927` 的 Base64 预览正确；唯一临时产物通过 SAF 导出读回，**28 bytes 逐字节正确**，重新导入后名称/大小显示正确。
@@ -61,7 +61,7 @@
 
 ## 2026-09-27 工作台体验优化：源码、本地预览与最终 APK
 
-用户批准 TARGET-PHONE 界面审阅的六项建议并要求规划/实现。九项入口、中文与分层参数、编码来源投影、专用结果和 HFTP 状态分区已实现；未改 Python、SDK、原生或依赖。详见 [实现证据](../.trellis/tasks/09-27-workbench-usability/implementation-check.md)、[复核](../.trellis/tasks/09-27-workbench-usability/check.md) 和 [构建/审阅计划](../.trellis/tasks/09-27-workbench-usability/build-review.md)。
+用户批准 TARGET-PHONE 界面审阅的六项建议并要求规划/实现。九项入口、中文与分层参数、编码来源投影、专用结果和 HFTP 状态分区已实现；未改 Python、SDK、原生或依赖。详见 [实现证据](../.trellis/tasks/archive/2026-09/09-27-workbench-usability/implementation-check.md)、[复核](../.trellis/tasks/archive/2026-09/09-27-workbench-usability/check.md) 和 [构建/审阅计划](../.trellis/tasks/archive/2026-09/09-27-workbench-usability/build-review.md)。
 
 - `./hako flutter analyze` 无问题；`./hako flutter test --reporter expanded` **43/43** 通过，含 12 项新增体验测试。覆盖准确参数/枚举、隐藏值、文本/文件草稿、文件必选、目标复制/完整 JSON 与原 token 导出、密码及转义日志遮挡、HFTP 显式启动停止/退出页面/清理确认、375dp/横屏/2倍字号/减少动画。日志在 `${EVIDENCE_DIR}/ctos-workbench-{analyze,full-tests}.log`，属本机临时证据。
 - `./hako bash -lc 'cd android && ./gradlew :app:lintRelease --console=plain'` 成功，**0 errors / 5 既有 warnings**；报告 `build/app/reports/lint-results-release.{txt,xml}`。

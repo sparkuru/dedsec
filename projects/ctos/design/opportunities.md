@@ -1,12 +1,12 @@
 # ctOS 产品与体验改进机会
 
-2026-09-28：本轮专项成果已获用户提交决定，要求先脱敏。当前停止/重启回归完成，熄屏断连继续保留为已知限制，Root 电源扩展暂缓；其他 ROM、物理无 Root 设备及未执行的人工场景仍属后续验证机会。以下产品审阅待办描述为先前阶段状态，不扩大本轮归档范围。
+2026-09-28：本轮专项成果已按用户要求脱敏提交，按收敛范围归档。当前停止/重启回归完成，熄屏断连继续保留为已知限制，Root 电源扩展暂缓；其他 ROM、物理无 Root 设备及未执行的人工场景仍属后续验证机会。以下产品审阅待办描述为先前阶段状态，不扩大本轮归档范围。
 
 ## 2026-09-27 工作台专项审阅与实施
 
-追加图片反馈已落实普通IME、无编号/技术详情、按钮及popup全宽、App HFTP默认LAN/7888/免登录和可配置上传/目录。用户后续确认严格VPN限制后，已授权并实现显式Root网络中继、服务日志与能力adapter；TARGET-PHONE保持原策略时Windows可访问、实际33MiB LAN读写及停止回收通过。页面spec禁止demo式说明；剩余为产品审阅与非Root/其他ROM完整验收，不再将本版Root模式列为LAN未解决。见[Root实机记录](../.trellis/tasks/09-27-workbench-usability/root-device-check.md)，旧普通App结果见[反馈实机记录](../.trellis/tasks/09-27-workbench-usability/feedback-device-check.md)。
+追加图片反馈已落实普通IME、无编号/技术详情、按钮及popup全宽、App HFTP默认LAN/7888/免登录和可配置上传/目录。用户后续确认严格VPN限制后，已授权并实现显式Root网络中继、服务日志与能力adapter；TARGET-PHONE保持原策略时Windows可访问、实际33MiB LAN读写及停止回收通过。页面spec禁止demo式说明；剩余为产品审阅与非Root/其他ROM完整验收，不再将本版Root模式列为LAN未解决。见[Root实机记录](../.trellis/tasks/archive/2026-09/09-27-workbench-usability/root-device-check.md)，旧普通App结果见[反馈实机记录](../.trellis/tasks/archive/2026-09/09-27-workbench-usability/feedback-device-check.md)。
 
-在用户指定的 TARGET-PHONE 上查看既有包的列表、密码、编码及 HFTP 页面后，确认常用工具靠后、参数混用英文、文件区域居中及结果过度依赖 JSON。用户批准六项建议并要求规划与实施，本轮已完成工具前置、中文分层参数、明确编码输入来源、目标值复制/文件预览、左对齐与 HFTP 状态分区。深色/薄荷绿及原工具能力保留。新版源码、本地检查和用户授权后的 TARGET-PHONE 界面/键盘/SAF 定向验收通过；见 [任务](../.trellis/tasks/09-27-workbench-usability/prd.md)、[当前实现](portable-tools.md#工作台体验2026-09-27) 和 [验证记录](verification.md)。下文为此前较广的产品机会，不因本次专项迭代全部完成。
+在用户指定的 TARGET-PHONE 上查看既有包的列表、密码、编码及 HFTP 页面后，确认常用工具靠后、参数混用英文、文件区域居中及结果过度依赖 JSON。用户批准六项建议并要求规划与实施，本轮已完成工具前置、中文分层参数、明确编码输入来源、目标值复制/文件预览、左对齐与 HFTP 状态分区。深色/薄荷绿及原工具能力保留。新版源码、本地检查和用户授权后的 TARGET-PHONE 界面/键盘/SAF 定向验收通过；见 [任务](../.trellis/tasks/archive/2026-09/09-27-workbench-usability/prd.md)、[当前实现](portable-tools.md#工作台体验2026-09-27) 和 [验证记录](verification.md)。下文为此前较广的产品机会，不因本次专项迭代全部完成。
 
 2026-09-26：按用户要求移除 Vector，当前能力与验收限于 App API、Root 采集和 PTY。下表 Vector 相关证据与建议是创建时的历史状态，已由 [Root-only 决定](decisions/2026-09-26-root-only.md) 取代。
 

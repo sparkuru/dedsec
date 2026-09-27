@@ -1,0 +1,32 @@
+{
+  "id": "workbench-usability",
+  "name": "workbench-usability",
+  "title": "工作台体验优化与HFTP日志、Root能力分离",
+  "description": "按TARGET-PHONE反馈优化工作台，增加HFTP日志及显式可选Root网络中继，执行上下文声明能力、ctOS adapter代理，Python/SAF保持App权限",
+  "status": "completed",
+  "dev_type": "frontend",
+  "scope": "workbench",
+  "package": null,
+  "priority": "P2",
+  "creator": "ctos",
+  "assignee": "ctos",
+  "createdAt": "2026-09-27",
+  "completedAt": "2026-09-28",
+  "branch": null,
+  "base_branch": null,
+  "worktree_path": null,
+  "commit": "d0aeb019ce6bc4c0a547e8534e0f1bbc631b0092",
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [
+    "lib/workbench.dart",
+    "lib/workbench/",
+    "test/workbench_usability_test.dart",
+    "design/portable-tools.md",
+    "design/verification.md"
+  ],
+  "notes": "R1–R24 implemented;9ca71e316525e5b5ba6a771f855f3df2d3b52342eb75162594e7972c3518c2e3 APK installedhashverifiedTARGET-PHONEPHONE-ADB-SERIAL. Fresh73Flutter/analyze,Androidlint0errors5existingwarnings;25Pythonunchanged;native24exacttransfers+9controls. R25AppCPUleaseownership/cleanupimplemented;final10phonechecks9.077s allpassed aftercorrectingUiAutomationpipe-testfalsepositive. Three awakeLAN PUT/GET/AppStop/same7888restart rounds passed(two1376257B,one31MiB), logs clear/refill31MiB/route reentrypassed. SCREENOFFstillrefusedwithApplease registered(noACQ),ROMREL/lightIdle;effectivepowergoalnotachieved. SeparateRoot hftp.powerLease candidate explicitly deferred by user2026-09-28:keepstopfix/noRootscopeexpansion,notimplemented/triggered. Originaldefaultprivate/LAN7888/32MiB/Roottrue restored;5ownedfiles+emptyfixturepreciselyremoved;service stopped;VPNlockdown1,bypassablefalseunchanged. Screen-off limitation accepted for retained stop fix; user explicitly requested commit and generalize-content sanitization on 2026-09-28. Commit exact candidate paths after privacy review, then archive only this task and record journal. No additional Root power scope or device operations authorized by this closeout. Work commit and bounded privacy review complete. Archive covers the retained scope only; screen-off connectivity remains a documented limitation and Root power remains deferred. Other tasks are left active.",
+  "meta": {}
+}

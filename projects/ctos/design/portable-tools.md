@@ -26,7 +26,7 @@ Flutter 分为 `workbench.dart`（目录）和 `workbench/` 下的模型、API�
 
 秘密参数使用普通文字 IME；Flutter 的 MaskedTextController 在呈现层按 UTF-16 长度显示圆点，原始值、选区和组合输入保留。遮挡时可访问性值也遮挡，显示切换为显式操作。保留 enableSuggestions=true：Flutter 在 Android 上将 false 转为 VISIBLE_PASSWORD，会触发 TARGET-PHONE 的安全键盘；普通键盘仍可能显示建议。关闭自动更正、IME 个性化学习和智能引号/破折号，不改变系统键盘配置。
 
-HFTP 页面将状态和随状态变化的启动/停止按钮前置，配置与共享目录管理分区，清理采用独立警示样式且仍需确认，并且只用于默认私有库。新增上传上限和本机目录选择；用户目录没有清理/导入副本按钮。进入/退出页面只影响状态轮询，服务仍按原生命周期由用户显式启动、停止。配置恢复完成前不可启动；旧状态轮询不能覆盖后续明确操作。实现及检查见 [体验优化任务](../.trellis/tasks/09-27-workbench-usability/prd.md) 与 [验证记录](verification.md)。首轮 `98f44069…` 曾完成 TARGET-PHONE 界面/键盘/SAF/输入来源定向验收，追加反馈的新版本检查单独记录。
+HFTP 页面将状态和随状态变化的启动/停止按钮前置，配置与共享目录管理分区，清理采用独立警示样式且仍需确认，并且只用于默认私有库。新增上传上限和本机目录选择；用户目录没有清理/导入副本按钮。进入/退出页面只影响状态轮询，服务仍按原生命周期由用户显式启动、停止。配置恢复完成前不可启动；旧状态轮询不能覆盖后续明确操作。实现及检查见 [体验优化任务](../.trellis/tasks/archive/2026-09/09-27-workbench-usability/prd.md) 与 [验证记录](verification.md)。首轮 `98f44069…` 曾完成 TARGET-PHONE 界面/键盘/SAF/输入来源定向验收，追加反馈的新版本检查单独记录。
 
 示例：
 
@@ -71,7 +71,7 @@ SDK 产物、CLI 输出和 HFTP 上传共用 `files.commit_exclusive`。Android/
 
 2026-09-27 实时服务日志已实现并完成TARGET-PHONE验收：Python请求事件通过有界stdout协议汇入Java内存缓存，页面可展开/选择/复制/清空；停止保留，新会话重置，不落盘。最多200条/32KiB、单条512字符；排除认证头、body、密码、query、完整SAF URI和原始私有路径，处理控制字符，旧会话不能污染新状态。`hftpStatus`和`hftpClearLogs`返回完整状态及logs字符串数组；清空仅清缓存，不停止服务。
 
-普通LAN已监听0.0.0.0；用户WindowsWINDOWS-LAN-IP访问手机PHONE-LAN-IP仍受禁止非VPN连接/Clash不可bypass约束，扩大监听不能授予网络豁免。研究见 [VPN边界研究](../.trellis/tasks/09-27-workbench-usability/research/vpn-lockdown.md)。用户明确授权后的可选Root中继已实现并在TARGET-PHONE验证，保持VPN/系统规则不变，Windows已确认可打开；实际33MiB LAN上传/下载、无覆盖/限额/后台/停止回收通过。最终包0575e00d…，具体证据及未测范围见[Root实机记录](../.trellis/tasks/09-27-workbench-usability/root-device-check.md)。
+普通LAN已监听0.0.0.0；用户WindowsWINDOWS-LAN-IP访问手机PHONE-LAN-IP仍受禁止非VPN连接/Clash不可bypass约束，扩大监听不能授予网络豁免。研究见 [VPN边界研究](../.trellis/tasks/archive/2026-09/09-27-workbench-usability/research/vpn-lockdown.md)。用户明确授权后的可选Root中继已实现并在TARGET-PHONE验证，保持VPN/系统规则不变，Windows已确认可打开；实际33MiB LAN上传/下载、无覆盖/限额/后台/停止回收通过。最终包0575e00d…，具体证据及未测范围见[Root实机记录](../.trellis/tasks/archive/2026-09/09-27-workbench-usability/root-device-check.md)。
 
 host-owned `ToolExecutionContext.declare(id, requirement)`只允许`hftp`/APP与`hftp.networkRelay`/ROOT，声明不代表授权。`RootOperationAdapter`在效果边界检查能力、固定APK helper与参数，并独立拥有专用su代理；不复用采集RootSession，不向Python SDK提供Root句柄或任意Shell接口。普通App路径不调用该adapter；缺少Root/拒绝只限制中继，仍可选择普通模式。后续Root工具需登记具体操作、类型化adapter入口及无Root/拒绝/资源回收测试，不扩大为任意代理接口。collector/PTY尚未迁移到此新机制。
 

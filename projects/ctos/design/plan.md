@@ -1,6 +1,6 @@
 # ctOS 产品与实施规划
 
-2026-09-28 工作台专项范围收敛：用户保留已验证的 HFTP 停止/同端口重启修复，暂缓 Root 电源扩展，并明确要求当前成果脱敏后提交。熄屏有效保活未通过，继续作为已知限制；归档仅覆盖该专项任务的保留范围，不代表 P0/P1 或其他活跃任务验收完成。下文各轮未提交/待测描述为当时状态，最终结果见 [验证记录](verification.md)。
+2026-09-28 工作台专项范围收敛：用户保留已验证的 HFTP 停止/同端口重启修复，暂缓 Root 电源扩展，并明确要求当前成果脱敏后提交；本次工作提交已完成，专项任务按该范围归档。熄屏有效保活未通过，继续作为已知限制；归档仅覆盖该专项任务的保留范围，不代表 P0/P1 或其他活跃任务验收完成。下文各轮未提交/待测描述为当时状态，最终结果见 [验证记录](verification.md)。
 
 日期：2026-09-24。状态：规划基线，功能实现以当前架构和验证记录为准。
 
@@ -86,8 +86,8 @@
 
 ## 工作台体验优化（2026-09-27，已实现并完成 TARGET-PHONE 定向验收）
 
-后续日志/Root分离已实现并经TARGET-PHONE实际LAN验收：工具声明能力，由ctOS adapter承载可选网络中继，文件/Python仍App权限，普通无Root基础路径保留。保持VPN/lockdown不可bypass条件下Windows已确认打开，33MiB读写及停止回收通过；源码未提交，页面产品审阅仍待确认。见[Root实机记录](../.trellis/tasks/09-27-workbench-usability/root-device-check.md)。
+后续日志/Root分离已实现并经TARGET-PHONE实际LAN验收：工具声明能力，由ctOS adapter承载可选网络中继，文件/Python仍App权限，普通无Root基础路径保留。保持VPN/lockdown不可bypass条件下Windows已确认打开，33MiB读写及停止回收通过；源码未提交，页面产品审阅仍待确认。见[Root实机记录](../.trellis/tasks/archive/2026-09/09-27-workbench-usability/root-device-check.md)。
 
 追加九张图片反馈的UI及App HFTP LAN/7888/免登录、上传限额、本机目录授权已实现并安装最终d43f52ed…版本；本地检查与TARGET-PHONE普通键盘、两种目录provider、33MiB读写/无覆盖/后台/停止通过。电脑直连LAN仍超时，跨设备可达性未通过，保留任务in_progress及未提交状态。详细结果见 [验证记录](verification.md)，不把源码实现等同于完整LAN验收。
 
-基于 TARGET-PHONE 的实际界面审阅，用户批准的工具前置、中文分层表单、专用结果展示、布局对齐及 HFTP 状态/操作分区已实现，43 项 Flutter 测试通过。新版 `98f44069…` 经本任务“允许”授权覆盖安装，完成界面、键盘、SAF 导入/取消/导出读回与来源哈希定向验收。任务与验收标准见 [workbench-usability](../.trellis/tasks/09-27-workbench-usability/prd.md)。沿用现有工具算法、SDK 与权限边界；本轮不增加搜索、历史或新工具。实际范围和未验证项见 [验证记录](verification.md)，源码未提交/任务未归档；不据此将 P0/P1 或命令历史阶段标为完成。
+基于 TARGET-PHONE 的实际界面审阅，用户批准的工具前置、中文分层表单、专用结果展示、布局对齐及 HFTP 状态/操作分区已实现，43 项 Flutter 测试通过。新版 `98f44069…` 经本任务“允许”授权覆盖安装，完成界面、键盘、SAF 导入/取消/导出读回与来源哈希定向验收。任务与验收标准见 [workbench-usability](../.trellis/tasks/archive/2026-09/09-27-workbench-usability/prd.md)。沿用现有工具算法、SDK 与权限边界；本轮不增加搜索、历史或新工具。实际范围和未验证项见 [验证记录](verification.md)，源码未提交/任务未归档；不据此将 P0/P1 或命令历史阶段标为完成。
