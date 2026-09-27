@@ -55,3 +55,38 @@
 ### Status
 
 [OK] **Completed**
+
+
+## Session 3: ctOS 当前项目进度提交
+
+**Date**: 2026-09-27
+**Task**: ctOS 当前项目进度提交
+**Branch**: `antitrust`
+
+### Summary
+
+按用户要求提交 Root-only、Python 工作台及五项 Portable 工具进度；本地检查通过，保留任务状态且未归档。
+
+### Main Changes
+
+- 主提交 6556918 包含源码、测试、design 及 task/spec 记录；README 更新为最终五项工具版。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `6556918` | (see git log) |
+
+### Testing
+
+- [OK] Flutter analyze 无问题，Flutter 31/31，Android lintRelease 0 error / 5 既有 warning；Shell、Python 语法、文档链接、暂存 diff 检查通过。
+- [OK] 现有 APK f928af66 及 13 份内置 Python 源码一致；未重新构建、安装或运行设备测试。
+- [OK] ADB PLR110 / Android16 / 192.168.9.9:44553 在线；默认开发板 192.168.9.13:5555 No route to host。
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 保留现有任务状态；后续功能或跨设备验证由用户另行指定。
