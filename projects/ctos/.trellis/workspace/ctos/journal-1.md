@@ -195,3 +195,38 @@
 ### Next Steps
 
 - 按授权的 serial mainline 开始 09-25-interface-terminal-polish，完成后再做 parent integration；新 task 的设备验收需独立授权。
+
+
+## Session 7: 界面与终端可用性整理及归档
+
+**Date**: 2026-09-28
+**Task**: 界面与终端可用性整理及归档
+**Branch**: `antitrust`
+
+### Summary
+
+完成界面与终端可用性整理，79 项 Flutter 测试、analyze、release 构建及授权 Firefly Android 11 UI/PTY 验收通过；任务已归档。
+
+### Main Changes
+
+- 统一 Material 3 卡片与内容宽度，改进终端快捷栏和输出搜索/复制。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `ca04b04` | (see git log) |
+| `949a0f6` | (see git log) |
+
+### Testing
+
+- [OK] Flutter analyze、79 项 Flutter 测试、release APK 签名与 SHA-256 校验通过。
+- [OK] 授权 Firefly Android 11 实测快捷栏、普通键盘、Ctrl-C、输出搜索/复制、返回后 PTY 存活及只读 Root id。
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 进入 09-25-product-experience-opportunities 父任务 Phase 1 集成规划；三个子任务均已归档。
