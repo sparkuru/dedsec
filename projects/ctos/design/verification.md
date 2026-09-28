@@ -1,5 +1,16 @@
 # Verification
 
+## 2026-09-28 界面与终端可用性整理（P2）
+
+本 task 在用户另行授权后，向 `TARGET-BOARD`（AIO-3568J、Android 11 / API 30）安装 release 包 `im.majo.ctos`。本地产物 `dist/ctos-current-arm64.apk` SHA-256 `ab13ceac96a7a8958659cb9bb12ab298dd65d9fa22b3ec729d2f5d26e30e014f` 与安装前核验值一致，`adb install -r` 返回 Success；未卸载既有包或清除 App 数据。ADB serial 依本文件的证据脱敏约定不记录。
+
+- `./hako dart format` 完成；`./hako flutter analyze` 无问题。定向测试 `test/terminal_interaction_test.dart test/state_ui_test.dart` **12 项通过**；全量 `./hako flutter test` **79 项通过**。`./hako current` arm64 release 构建和签名校验成功，`dist/SHA256SUMS` 校验通过。
+- 启动 ctOS 时运行了既有 Root 自动恢复流程，App 报告 Root 在线；没有单独读取 `auto_start` 偏好值。
+- 实机 App Shell 输入框可唤起 Android 普通软键盘。快捷栏折叠后五个按钮从 UI 控件树移除，重新展开后恢复。执行只读 `id` 返回非 Root 应用身份；执行 `sleep 60` 后使用快捷栏 Ctrl-C，终端出现 `^C` 并回到 `$` 提示符。
+- 从当前终端打开输出选择页，搜索 `sleep` 显示 **找到 2 处**并高亮两处，点击“复制全部输出”显示**已复制全部输出**。返回后原 App Shell 的历史输出与提示符仍在，PTY 未重启。
+- 用户另行授权 Root PTY 的只读身份检查，输出 `uid=0(root)`。随后关闭 Root PTY；后续复核用 App Shell 会话也已关闭。未运行 Root instrumentation tests，没有改系统/VPN 配置、清除 App 数据或重启。
+- 屏幕空闲进入休眠时，截图会显示时钟而非应用；触屏唤醒后前台 Activity 和完整终端输出恢复。没有修改设备休眠设置。截图与 UI hierarchy dump 仅用于本轮即时检查，没有作为项目产物保留。
+
 ## 2026-09-28 只读任务闭环验收
 
 在用户指定并授权的 `TARGET-BOARD`（Android 11 / API 30、arm64-v8a）完成本任务验收。通过 `adb install -r` 覆盖安装 release APK 和匹配的 release test APK，保留原 App 数据；设备上两个 APK 的哈希分别与本地产物 `56b3ca3c580c5df97fdd5d5502782f2fad90bd53e89730ef38209947e82963d2` 和 `aee3475d38d2948128c488fb3fd3934bcaeb0be84df2776d4acd504bbe00239f` 一致。

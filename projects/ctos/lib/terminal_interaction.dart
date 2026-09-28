@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:xterm/xterm.dart';
 
 /// The IME keeps a small invisible prefix so deleting on an otherwise empty
@@ -317,27 +318,187 @@ String terminalOutputSnapshot(Terminal terminal) {
   return lines.join('\n');
 }
 
-class TerminalOutputPage extends StatelessWidget {
+class TerminalOutputPage extends StatefulWidget {
   const TerminalOutputPage({super.key, required this.output});
 
   final String output;
 
   @override
-  Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('当前输出')),
-    body: output.isEmpty
-        ? const Center(child: Text('暂无可选择的输出'))
-        : SelectionArea(
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.all(16),
-              child: SizedBox(
-                width: double.infinity,
-                child: Text(
-                  output,
-                  style: const TextStyle(fontFamily: 'monospace', fontSize: 13),
-                ),
+  State<TerminalOutputPage> createState() => _TerminalOutputPageState();
+}
+
+class _TerminalOutputPageState extends State<TerminalOutputPage> {
+  final _searchController = TextEditingController();
+  bool _searchVisible = false;
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  void _toggleSearch() {
+    final closing = _searchVisible;
+    setState(() {
+      _searchVisible = !_searchVisible;
+      if (closing) _searchController.clear();
+    });
+    if (closing) FocusManager.instance.primaryFocus?.unfocus();
+  }
+
+  void _clearSearch() {
+    _searchController.clear();
+    setState(() {});
+  }
+
+  int _matchCount(String query) {
+    if (query.isEmpty) return 0;
+    return RegExp(
+      RegExp.escape(query),
+      caseSensitive: false,
+    ).allMatches(widget.output).length;
+  }
+
+  TextSpan _outputSpan(ThemeData theme) {
+    final query = _searchController.text;
+    if (query.isEmpty) return TextSpan(text: widget.output);
+
+    final spans = <InlineSpan>[];
+    final expression = RegExp(RegExp.escape(query), caseSensitive: false);
+    var offset = 0;
+    for (final match in expression.allMatches(widget.output)) {
+      if (match.start > offset) {
+        spans.add(TextSpan(text: widget.output.substring(offset, match.start)));
+      }
+      spans.add(
+        TextSpan(
+          text: match.group(0),
+          style: TextStyle(
+            backgroundColor: theme.colorScheme.primary.withValues(alpha: .30),
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+      );
+      offset = match.end;
+    }
+    if (spans.isEmpty) return TextSpan(text: widget.output);
+    if (offset < widget.output.length) {
+      spans.add(TextSpan(text: widget.output.substring(offset)));
+    }
+    return TextSpan(children: spans);
+  }
+
+  Future<void> _copyAll() async {
+    try {
+      await Clipboard.setData(ClipboardData(text: widget.output));
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('复制输出失败')));
+      return;
+    }
+    if (!mounted) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('已复制全部输出')));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final query = _searchController.text;
+    final count = _matchCount(query);
+    final theme = Theme.of(context);
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('当前输出'),
+        actions: [
+          IconButton(
+            onPressed: widget.output.isEmpty ? null : _toggleSearch,
+            tooltip: _searchVisible ? '关闭搜索' : '搜索输出',
+            icon: Icon(_searchVisible ? Icons.close : Icons.search),
+          ),
+          IconButton(
+            onPressed: widget.output.isEmpty ? null : _copyAll,
+            tooltip: '复制全部输出',
+            icon: const Icon(Icons.copy_outlined),
+          ),
+        ],
+      ),
+      body: SafeArea(
+        child: Align(
+          alignment: Alignment.topCenter,
+          child: ConstrainedBox(
+            key: const Key('terminal-output-content'),
+            constraints: const BoxConstraints(maxWidth: 840),
+            child: SizedBox(
+              width: double.infinity,
+              child: Column(
+                children: [
+                  if (_searchVisible) ...[
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                      child: TextField(
+                        key: const Key('terminal-output-search'),
+                        controller: _searchController,
+                        autofocus: true,
+                        onChanged: (_) => setState(() {}),
+                        decoration: InputDecoration(
+                          labelText: '搜索输出',
+                          hintText: '搜索当前快照',
+                          prefixIcon: const Icon(Icons.search),
+                          suffixIcon: query.isEmpty
+                              ? null
+                              : IconButton(
+                                  onPressed: _clearSearch,
+                                  tooltip: '清除搜索',
+                                  icon: const Icon(Icons.clear),
+                                ),
+                        ),
+                      ),
+                    ),
+                    if (query.isNotEmpty)
+                      Semantics(
+                        liveRegion: true,
+                        child: Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                          child: Align(
+                            alignment: Alignment.centerLeft,
+                            child: Text(
+                              count == 0 ? '未找到匹配' : '找到 $count 处',
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                color: theme.colorScheme.onSurfaceVariant,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                  ],
+                  Expanded(
+                    child: widget.output.isEmpty
+                        ? const Center(child: Text('暂无可选择的输出'))
+                        : SelectionArea(
+                            child: SingleChildScrollView(
+                              padding: const EdgeInsets.all(16),
+                              child: SizedBox(
+                                width: double.infinity,
+                                child: Text.rich(
+                                  _outputSpan(theme),
+                                  style: const TextStyle(
+                                    fontFamily: 'monospace',
+                                    fontSize: 13,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                  ),
+                ],
               ),
             ),
           ),
-  );
+        ),
+      ),
+    );
+  }
 }

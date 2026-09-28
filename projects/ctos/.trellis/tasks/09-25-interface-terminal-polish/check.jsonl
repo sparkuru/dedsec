@@ -1,1 +1,9 @@
-{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/tasks/09-25-interface-terminal-polish/design.md", "reason": "Approved UI and interaction design decisions for implementation and review."}
+{"file": ".trellis/tasks/09-25-interface-terminal-polish/research/ui-ux-pro-max.md", "reason": "UUPM query disposition and adopted accessibility/layout constraints."}
+{"file": ".trellis/spec/frontend/index.md", "reason": "Flutter frontend spec index for affected native UI."}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "Theme, surfaces, layout width, semantics, touch-target and large-text conventions."}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "Local UI state ownership and async lifecycle boundaries."}
+{"file": ".trellis/spec/frontend/connection-snapshots.md", "reason": "Preserve structured/raw snapshot search and stale/partial connection behavior."}
+{"file": ".trellis/spec/frontend/terminal-interaction.md", "reason": "PTY, input focus, shortcut payloads, output snapshot and device acceptance contract."}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "Focused widget and Flutter validation expectations."}
+{"file": ".trellis/spec/trellis-plus/validation.md", "reason": "Exact project validation commands and task-specific device authorization boundaries."}

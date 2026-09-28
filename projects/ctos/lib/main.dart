@@ -36,6 +36,13 @@ class CtosApp extends StatelessWidget {
         primary: mint,
       ),
       useMaterial3: true,
+      cardTheme: CardThemeData(
+        color: panel,
+        surfaceTintColor: Colors.transparent,
+        elevation: 0,
+        margin: const EdgeInsets.only(bottom: 12),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+      ),
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
         fillColor: panel,
@@ -78,6 +85,7 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
   bool loading = false, granting = true, foreground = true;
   bool session = false;
   bool terminalBusy = false;
+  bool terminalShortcutsExpanded = true;
   bool terminalExitedDuringStart = false;
   int terminalGeneration = 0;
   int terminalLineSyncGeneration = 0;
@@ -293,6 +301,7 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
     terminalHistory.reset();
     setState(() {
       terminalBusy = true;
+      terminalShortcutsExpanded = true;
       terminalExitedDuringStart = false;
     });
     try {
@@ -670,8 +679,14 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
             child: IndexedStack(
               index: tab,
               children: [
-                workbench(),
-                informationPage(),
+                readingColumn(
+                  workbench(),
+                  key: const Key('overview-reading-column'),
+                ),
+                readingColumn(
+                  informationPage(),
+                  key: const Key('information-reading-column'),
+                ),
                 WorkbenchPage(
                   active: tab == 2,
                   onExportHistory: (records) => openExport(history: records),
@@ -716,20 +731,22 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
       '● $label',
       style: TextStyle(
         color: live ? mint : Colors.orange,
-        fontSize: 10,
+        fontSize: 12,
         fontWeight: FontWeight.bold,
       ),
     ),
   );
 
-  Widget card(Widget child) => Container(
-    margin: const EdgeInsets.only(bottom: 14),
-    padding: const EdgeInsets.all(18),
-    decoration: BoxDecoration(
-      color: panel,
-      borderRadius: BorderRadius.circular(18),
+  Widget readingColumn(Widget child, {required Key key}) => Center(
+    child: ConstrainedBox(
+      key: key,
+      constraints: const BoxConstraints(maxWidth: 840),
+      child: child,
     ),
-    child: child,
+  );
+
+  Widget card(Widget child) => Card(
+    child: Padding(padding: const EdgeInsets.all(18), child: child),
   );
 
   Widget heading(String title, String subtitle) => Padding(
@@ -739,7 +756,9 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
       children: [
         Text(
           title,
-          style: const TextStyle(fontSize: 28, fontWeight: FontWeight.w700),
+          style: Theme.of(
+            context,
+          ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w700),
         ),
         const SizedBox(height: 4),
         Text(
@@ -1501,6 +1520,18 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
                   style: const TextStyle(color: mint, fontSize: 12),
                 ),
               ),
+              IconButton(
+                key: const Key('terminal-shortcuts-toggle'),
+                onPressed: () => setState(
+                  () => terminalShortcutsExpanded = !terminalShortcutsExpanded,
+                ),
+                tooltip: terminalShortcutsExpanded ? '收起快捷键' : '展开快捷键',
+                icon: Icon(
+                  terminalShortcutsExpanded
+                      ? Icons.keyboard_arrow_down
+                      : Icons.keyboard_alt_outlined,
+                ),
+              ),
               TextButton(
                 onPressed: terminalBusy ? null : stopTerminal,
                 child: const Text('换用'),
@@ -1541,26 +1572,33 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
             ),
           ),
         ),
-        SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          child: Row(
-            children: [
-              for (final entry in {
-                'Ctrl-C': '\x03',
-                'Tab': '\t',
-                'Esc': '\x1b',
-                '↑': '\x1b[A',
-                '↓': '\x1b[B',
-              }.entries)
-                TextButton(
-                  onPressed: terminalBusy
-                      ? null
-                      : () => sendTerminalControl(entry.key, entry.value),
-                  child: Text(entry.key, style: const TextStyle(fontSize: 11)),
-                ),
-            ],
+        if (terminalShortcutsExpanded)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            child: Wrap(
+              spacing: 4,
+              children: [
+                for (final entry in {
+                  'Ctrl-C': '\x03',
+                  'Tab': '\t',
+                  'Esc': '\x1b',
+                  '↑': '\x1b[A',
+                  '↓': '\x1b[B',
+                }.entries)
+                  TextButton(
+                    key: Key('terminal-shortcut-${entry.key}'),
+                    style: TextButton.styleFrom(
+                      minimumSize: const Size(48, 48),
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                    ),
+                    onPressed: terminalBusy
+                        ? null
+                        : () => sendTerminalControl(entry.key, entry.value),
+                    child: Text(entry.key),
+                  ),
+              ],
+            ),
           ),
-        ),
         Padding(
           padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
           child: TerminalCommandInput(

@@ -72,6 +72,109 @@ void main() {
     expect(writes.last, '\r');
   });
 
+  testWidgets('output snapshot supports search and exact full copy', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1200, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    const output = 'echo Hello\nEcho world\n';
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    String? copiedText;
+    messenger.setMockMethodCallHandler(SystemChannels.platform, (call) async {
+      if (call.method == 'Clipboard.setData') {
+        copiedText = (call.arguments as Map)['text'] as String;
+      }
+      return null;
+    });
+    addTearDown(
+      () => messenger.setMockMethodCallHandler(SystemChannels.platform, null),
+    );
+
+    await tester.pumpWidget(
+      const MaterialApp(home: TerminalOutputPage(output: output)),
+    );
+    expect(
+      tester.getSize(find.byKey(const Key('terminal-output-content'))).width,
+      840,
+    );
+    expect(find.byType(SelectionArea), findsOneWidget);
+    await tester.tap(find.byTooltip('搜索输出'));
+    await tester.pump();
+    await tester.enterText(
+      find.byKey(const Key('terminal-output-search')),
+      'ECHO',
+    );
+    await tester.pump();
+    expect(find.text('找到 2 处'), findsOneWidget);
+    final outputText = tester.widget<Text>(
+      find
+          .descendant(
+            of: find.byType(SelectionArea),
+            matching: find.byType(Text),
+          )
+          .first,
+    );
+    expect(outputText.textSpan?.toPlainText(), output);
+    expect(
+      (outputText.textSpan! as TextSpan).children!
+          .whereType<TextSpan>()
+          .where((span) => span.style?.backgroundColor != null)
+          .length,
+      2,
+    );
+
+    await tester.tap(find.byTooltip('复制全部输出'));
+    await tester.pumpAndSettle();
+    expect(copiedText, output);
+    expect(find.text('已复制全部输出'), findsOneWidget);
+
+    await tester.enterText(
+      find.byKey(const Key('terminal-output-search')),
+      'no-such-line',
+    );
+    await tester.pump();
+    expect(find.text('未找到匹配'), findsOneWidget);
+    await tester.tap(find.byTooltip('清除搜索'));
+    await tester.pump();
+    expect(find.text('未找到匹配'), findsNothing);
+  });
+
+  testWidgets('empty output disables search and copy actions', (tester) async {
+    await tester.pumpWidget(
+      const MaterialApp(home: TerminalOutputPage(output: '')),
+    );
+    expect(find.text('暂无可选择的输出'), findsOneWidget);
+    expect(
+      tester
+          .widget<IconButton>(
+            find
+                .ancestor(
+                  of: find.byIcon(Icons.search),
+                  matching: find.byType(IconButton),
+                )
+                .first,
+          )
+          .onPressed,
+      isNull,
+    );
+    expect(
+      tester
+          .widget<IconButton>(
+            find
+                .ancestor(
+                  of: find.byIcon(Icons.copy_outlined),
+                  matching: find.byType(IconButton),
+                )
+                .first,
+          )
+          .onPressed,
+      isNull,
+    );
+  });
+
   testWidgets(
     'IME candidate replaces already echoed pinyin without losing focus',
     (tester) async {
@@ -361,8 +464,16 @@ void main() {
     tester.view.viewInsets = const FakeViewPadding(bottom: 300);
     await tester.pump();
     expect(tester.takeException(), isNull);
+    await tester.tap(find.byTooltip('收起快捷键'));
+    await tester.pump();
+    for (final label in ['Ctrl-C', 'Tab', 'Esc', '↑', '↓']) {
+      expect(find.text(label), findsNothing);
+    }
+    expect(tester.takeException(), isNull);
     tester.view.viewInsets = FakeViewPadding.zero;
     tester.view.physicalSize = const Size(412, 915);
+    await tester.pump();
+    await tester.tap(find.byTooltip('展开快捷键'));
     await tester.pump();
     for (final label in ['Ctrl-C', 'Tab', 'Esc', '↑', '↓']) {
       expect(find.text(label), findsOneWidget);
@@ -407,7 +518,10 @@ void main() {
     await tester.tap(find.text('↑'));
     await tester.pump();
     expect(writes, hasLength(writesBeforeEmptyHistory));
-    expect(input.controller!.value.composing, const TextRange(start: 2, end: 4));
+    expect(
+      input.controller!.value.composing,
+      const TextRange(start: 2, end: 4),
+    );
     await tester.tap(find.text('Ctrl-C'));
     await tester.pump();
 

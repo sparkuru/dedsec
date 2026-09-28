@@ -21,9 +21,11 @@ class DevicePage extends StatelessWidget {
     child: ListView(
       padding: const EdgeInsets.all(20),
       children: [
-        const Text(
+        Text(
           '设备信息',
-          style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold),
+          style: Theme.of(
+            context,
+          ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.bold),
         ),
         const SizedBox(height: 16),
         if (loading) const LinearProgressIndicator(),

@@ -9,6 +9,67 @@ import 'package:flutter_test/flutter_test.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
+  testWidgets('readable pages cap content width on wide screens', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1200, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(
+      const MethodChannel('ctos/terminal'),
+      (_) async => null,
+    );
+    messenger.setMockMethodCallHandler(native, (call) async {
+      switch (call.method) {
+        case 'rootAuto':
+          return jsonEncode({'root': false, 'attempted': false});
+        case 'snapshot':
+          return jsonEncode({
+            'root': false,
+            'networks': [],
+            'kernel': {
+              'source': 'test',
+              'elapsed': 1000,
+              'interfaces': [],
+              'routes': '',
+            },
+          });
+        case 'deviceSnapshot':
+          return jsonEncode({});
+      }
+      return null;
+    });
+    addTearDown(() {
+      messenger.setMockMethodCallHandler(native, null);
+      messenger.setMockMethodCallHandler(
+        const MethodChannel('ctos/terminal'),
+        null,
+      );
+    });
+
+    await tester.pumpWidget(const CtosApp());
+    await tester.pump(const Duration(milliseconds: 100));
+    final appTheme = tester
+        .widget<MaterialApp>(find.byType(MaterialApp))
+        .theme!;
+    expect(appTheme.cardTheme.color, panel);
+    expect(
+      tester.getSize(find.byKey(const Key('overview-reading-column'))).width,
+      840,
+    );
+    await tester.tap(find.text('信息').last);
+    await tester.pumpAndSettle();
+    expect(
+      tester.getSize(find.byKey(const Key('information-reading-column'))).width,
+      840,
+    );
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+  });
+
   testWidgets('connection refresh failure keeps the dated partial result', (
     tester,
   ) async {
