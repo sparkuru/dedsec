@@ -1,6 +1,6 @@
 # 本轮检查（2026-09-26）
 
-2026-09-28 Firefly 追加验收：AIO-3568J / Android 11 / API 30 / arm64 的旧包原为 `22ab383f…`；经本轮授权覆盖安装 `9ca71e31…` 当前包与 `3cc68b08…` 测试包，设备哈希均匹配。七项非 Root 定向测试 **OK (7 tests), 30.17 s**；HFTP 仅 loopback，结束服务为空。Root、LAN/熄屏与 SAF 手操未在该板复验，详见 [统一验证记录](../../../design/verification.md)。
+2026-09-28 Firefly 追加验收：AIO-3568J / Android 11 / API 30 / arm64 的旧包原为 `22ab383f…`；经本轮授权覆盖安装 `9ca71e31…` 当前包与 `3cc68b08…` 测试包，设备哈希均匹配。七项非 Root 定向测试 **OK (7 tests), 30.17 s**；HFTP 仅 loopback，结束服务为空。Root、LAN/熄屏与 SAF 手操未在该板复验，详见 [统一验证记录](../../../../../design/verification.md)。
 
 当前阶段：五项实现及本地检查完成，用户已授权并完成 PLR110 安装与定向验收；结果见末尾。本文件前面的表格和预检是安装前记录。父/子 task 保持 in_progress，仅待 WIP 审阅/提交流程；保留之前 Root-only / Python-workbench 修改，未提交或归档。
 

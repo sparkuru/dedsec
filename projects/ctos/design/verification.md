@@ -89,7 +89,7 @@
 - `adb devices -l` 显示 `PHONE-ADB-SERIAL` 在线，product/model 为 TARGET-PHONE、device 为 PHONE-PRODUCT-ID；显式指定该 serial 的 `get-state` 和 `getprop` 确认为 device / TARGET-PHONE / Android 16。
 - 现有 current APK 的 SHA-256 仍为 `f928af6611f014206597321b2f35a094aef53b11eeb404ea7bbf72e23ee8a73b`，其 13 份 Python 源码与当前工作树逐字节一致。此检查不代表重新构建或本轮设备安装哈希验证。
 - 本轮 `./hako flutter analyze` 无问题，`./hako flutter test` 31/31 通过；`./hako bash -lc 'cd android && ./gradlew :app:lintRelease --console=plain'` 构建成功，0 error / 5 个既有 warning。`hako-env.sh` 的 Bash 语法、ShellCheck、shfmt 检查及 13 份 Python 源码语法解析通过。
-- 根 README、design 和 spec 的本地 Markdown 链接检查无缺失目标，`git diff --check` 通过。本地代码复核与检查结果见 [提交检查](../.trellis/tasks/09-26-portable-tools/commit-check-2026-09-27.md)。
+- 根 README、design 和 spec 的本地 Markdown 链接检查无缺失目标，`git diff --check` 通过。本地代码复核与检查结果见 [提交检查](../.trellis/tasks/archive/2026-09/09-26-portable-tools/commit-check-2026-09-27.md)。
 
 下方 2026-09-26 的安装、SAF、通知、Root、PTY 及网络结果保留为历史实测；本轮不扩展设备验收范围。任务状态保留，未归档。
 
@@ -105,7 +105,7 @@
 
 - 09 原脚本接口已迁移，按官方文档改为 `https://free.freeipapi.com/api/v1/json`。宿主和实际手机工作台明确指定公共示例1.1.1.1的查询均通过，返回source/ipAddress正确；没有查询自身公网IP。固定目标/8秒超时/离线错误继续有mock证据。
 
-详细命令、失败→修复证据与临时日志见 [父 task 检查](../.trellis/tasks/09-26-portable-tools/check.md)。Android11、原生16KiB页设备、API28/29 syscall分支、全新通知拒绝及真实离线设备路径未验证。实现及本轮验收完成，保留 WIP 待审阅/提交，不自动归档。下方 Python工作台/Root-only 及末尾安装前预检均为历史阶段记录。
+详细命令、失败→修复证据与临时日志见 [父 task 检查](../.trellis/tasks/archive/2026-09/09-26-portable-tools/check.md)。Android11、原生16KiB页设备、API28/29 syscall分支、全新通知拒绝及真实离线设备路径未验证。实现及本轮验收完成，保留 WIP 待审阅/提交，不自动归档。下方 Python工作台/Root-only 及末尾安装前预检均为历史阶段记录。
 
 ## 2026-09-26 Portable Python 工作台：构建与 TARGET-PHONE 验收
 
@@ -351,7 +351,7 @@ Run the above in `android/`. Native PTY compilation currently targets a Linux x8
 
 ## 2026-09-26 Portable 五项工具本地预检（安装前历史）
 
-父 task：[portable-tools 检查](../.trellis/tasks/09-26-portable-tools/check.md)。具体行为见 [工具设计](portable-tools.md)。
+父 task：[portable-tools 检查](../.trellis/tasks/archive/2026-09/09-26-portable-tools/check.md)。具体行为见 [工具设计](portable-tools.md)。
 
 - Flutter analyze 无问题，完整 Flutter 测试 31/31；Android lintRelease 0 error / 5 已知 warning，含 PortableToolsTest 的 release 测试 APK 编译通过，尚未执行本轮 instrumentation。
 - ${EVIDENCE_DIR} uv：26 核心142项，五项集成113项，CLI12次调用，均通过。包括原08对照、原02实际CBC产物、新加密认证/篡改/源文件保留、token/二进制、09离线mock/有界响应/不跟随重定向、HFTP认证/上传下载/拒绝覆盖/穿越/符号链接。没有自动查询真实IP提供方。

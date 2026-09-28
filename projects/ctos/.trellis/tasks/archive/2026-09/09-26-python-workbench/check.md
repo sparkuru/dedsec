@@ -1,10 +1,10 @@
 # 检查结果
 
-2026-09-28 Firefly 追加范围：当前 `9ca71e31…` 包在 Android 11 开发板覆盖安装且哈希匹配；内置 Python/SDK、未知脚本拒绝、取消/超时/后台回收与 App 网络快照属于七项非 Root 合跑通过的部分。该板的 Root PTY、SAF 手操及其他边界未随此结果验收，完整设备记录见 [统一验证](../../../design/verification.md)。
+2026-09-28 Firefly 追加范围：当前 `9ca71e31…` 包在 Android 11 开发板覆盖安装且哈希匹配；内置 Python/SDK、未知脚本拒绝、取消/超时/后台回收与 App 网络快照属于七项非 Root 合跑通过的部分。该板的 Root PTY、SAF 手操及其他边界未随此结果验收，完整设备记录见 [统一验证](../../../../../design/verification.md)。
 
 ## 2026-09-26 Portable Python 工作台：构建与 PLR110 验收
 
-本轮 current APK：`dist/ctos-current-arm64.apk`，SHA-256 `00c19e0ca2ecc84b1fea32fafaec29708b152710a3f5a3b8ece64717a26d97c6`，约 24.4 MB。原命令页改为工作台、原工作台改为概览；系统负载展示及 procfs 采集删除。加入 APK 内置 CPython 3.13.9、终端 python3、四项脚本二级页、SDK 和 portable 清单。框架契约见 [portable-workbench.md](../../../design/portable-workbench.md)。
+本轮 current APK：`dist/ctos-current-arm64.apk`，SHA-256 `00c19e0ca2ecc84b1fea32fafaec29708b152710a3f5a3b8ece64717a26d97c6`，约 24.4 MB。原命令页改为工作台、原工作台改为概览；系统负载展示及 procfs 采集删除。加入 APK 内置 CPython 3.13.9、终端 python3、四项脚本二级页、SDK 和 portable 清单。框架契约见 [portable-workbench.md](../../../../../design/portable-workbench.md)。
 
 - `./hako flutter analyze`：无问题。`./hako flutter test --reporter expanded`：**28/28 通过**，包含新工作台懒加载/失败重试、二级导航、Unicode 参数校验、取消/超时后重跑、小屏/横屏/2 倍文字与低动画布局，以及已有网络和 PTY 组件回归。
 - `./hako bash -lc 'cd android && ./gradlew :app:lintRelease :app:assembleReleaseAndroidTest --console=plain'`：最终原生实现通过 lint，设备测试 APK 构建成功。新增三项 Python SDK/非法脚本、取消/超时、Activity 后台回收检查，已有 App/Root PTY 测试追加 python3、标准库与 Python Ctrl-C 检查。

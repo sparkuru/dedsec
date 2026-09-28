@@ -1,6 +1,6 @@
 # Portable 工具集与独立文件服务
 
-2026-09-26，任务为 [portable-tools](../.trellis/tasks/09-26-portable-tools/prd.md)。本轮只接入用户指定的 08、26、09、02、16-HFTP；源码和本地预检已实现，手机验收结果单独记录在 [verification.md](verification.md)。
+2026-09-26，任务为 [portable-tools](../.trellis/tasks/archive/2026-09/09-26-portable-tools/prd.md)。本轮只接入用户指定的 08、26、09、02、16-HFTP；源码和本地预检已实现，手机验收结果单独记录在 [verification.md](verification.md)。
 
 ## 模块与入口
 
