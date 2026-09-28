@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 5
+- **Total Sessions**: 6
 - **Last Active**: 2026-09-28
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~160 | Active |
+| `journal-1.md` | ~197 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 6 | 2026-09-28 | 只读任务闭环与开发板验收 | `fc254a4`, `9c78cfe` | `antitrust` |
 | 5 | 2026-09-28 | Firefly Android 11 定向验收与任务归档 | `0e3a312`, `5675042` | `antitrust` |
 | 4 | 2026-09-28 | Workbench and HFTP fixes: sanitized closeout | `d0aeb01` | `WORK-BRANCH` |
 | 3 | 2026-09-27 | ctOS 当前项目进度提交 | `6556918` | `antitrust` |

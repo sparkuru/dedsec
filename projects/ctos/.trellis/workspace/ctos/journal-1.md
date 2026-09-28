@@ -158,3 +158,40 @@
 ### Next Steps
 
 - 如需扩展设备兼容结论，另行明确授权并验证 Firefly Root、LAN/熄屏、SAF 手操等边界。
+
+
+## Session 6: 只读任务闭环与开发板验收
+
+**Date**: 2026-09-28
+**Task**: 只读任务闭环与开发板验收
+**Branch**: `antitrust`
+
+### Summary
+
+完成并归档只读任务与选择性导出闭环，授权 Android 11 目标上的定向仪器和 SAF 流程验收通过。
+
+### Main Changes
+
+- 增加 App-only 接口诊断、限定三类只读任务的本地有界历史，以及逐项选择的 SAF 导出。
+- 完成强制停止后重启的历史恢复、成功/失败记录、单记录导出读回、取消不写文件和手动清理实测。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `fc254a4` | (see git log) |
+| `9c78cfe` | (see git log) |
+
+### Testing
+
+- [OK] Flutter analyze、76 项测试、Python fake Context 边界检查、Android release lint/build 通过。
+- [OK] TaskHistoryStoreTest 3 项与 DeviceTest 接口投影 1 项通过；未运行 Root 测试。
+- [OK] 测试期间按用户授权走既有 Root 自动恢复启动；未修改系统或 VPN 配置，未清除 App 数据。
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 按授权的 serial mainline 开始 09-25-interface-terminal-polish，完成后再做 parent integration；新 task 的设备验收需独立授权。
