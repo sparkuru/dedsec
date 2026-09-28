@@ -1,51 +1,26 @@
-# Quality Guidelines
+# Flutter Quality Checks
 
-> Code quality standards for frontend development.
+Use the repository wrapper from `projects/ctos`; it provides the pinned
+Flutter/Android toolchain inside Docker without publishing service ports.
 
----
+```sh
+./hako flutter analyze
+./hako flutter test
+```
 
-## Overview
+- Add parser and state-transition tests beside the pure model; add widget
+  tests for visible state, interaction, and exact channel payloads.
+- Mock `ctos/native` with Flutter's test messenger. Keep mock handlers scoped
+  to each test and remove them in teardown.
+- Cover loading, unavailable, partial, stale, failed, cancellation, and
+  recovery states when the screen exposes them. A blank/empty widget alone
+  does not prove a permission or service path.
+- For visible layout changes, exercise narrow width, landscape, large text, and
+  reduced animations. Use exact layout assertions only for the contract being
+  changed; avoid snapshots of incidental widget structure.
+- `flutter test` does not prove Android IME, SAF, Root, HFTP service, or ROM
+  behavior. Record those checks separately and only for an explicitly
+  authorized current device.
 
-<!--
-Document your project's quality standards here.
-
-Questions to answer:
-- What patterns are forbidden?
-- What linting rules do you enforce?
-- What are your testing requirements?
-- What code review standards apply?
--->
-
-(To be filled by the team)
-
----
-
-## Forbidden Patterns
-
-<!-- Patterns that should never be used and why -->
-
-(To be filled by the team)
-
----
-
-## Required Patterns
-
-<!-- Patterns that must always be used -->
-
-(To be filled by the team)
-
----
-
-## Testing Requirements
-
-<!-- What level of testing is expected -->
-
-(To be filled by the team)
-
----
-
-## Code Review Checklist
-
-<!-- What reviewers should check -->
-
-(To be filled by the team)
+Examples: `test/state_ui_test.dart`, `test/connection_info_test.dart`,
+`test/workbench_usability_test.dart`, and `test/terminal_interaction_test.dart`.

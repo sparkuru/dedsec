@@ -1,54 +1,27 @@
-# Directory Structure
+# Runtime Directory Structure
 
-> How backend code is organized in this project.
+Use the existing layer that owns the behavior. Flutter owns presentation and
+interaction; Android Java owns platform APIs, permissions, and long-lived
+service lifecycle; Python owns portable tool cores and its HTTP implementation;
+C is limited to the JNI PTY and the two bundled native executables.
 
----
+| Path | Ownership |
+| --- | --- |
+| `lib/` | Flutter application, view models, and UI-facing APIs; see the [frontend index](../frontend/index.md) |
+| `android/app/src/main/java/im/majo/ctos/` | Android host, MethodChannel routing, snapshots, Root adapter, file broker, and HFTP service |
+| `android/app/src/main/cpp/` | `pty.c`, `python_exec.c`, and `hftp_relay.c`; do not move service policy here |
+| `android/app/src/main/python/` | Workbench protocol, SDK, portable cores, CLI, and HFTP server |
+| `android/app/src/main/assets/portable/` | APK-bundled package manifest and runtime data, not user-installed plugins |
+| `test/` | Flutter unit and widget tests |
+| `android/app/src/androidTest/` | Android host and device instrumentation tests |
 
-## Overview
+Keep a cross-layer feature's public contract close to its owning layer and
+document the shared wire shape in the relevant design/spec guide. Do not add a
+second catalogue or copy a core implementation into another layer.
 
-<!--
-Document your project's backend directory structure here.
+Reference files:
 
-Questions to answer:
-- How are modules/packages organized?
-- Where does business logic live?
-- Where are API endpoints defined?
-- How are utilities and helpers organized?
--->
-
-(To be filled by the team)
-
----
-
-## Directory Layout
-
-```
-<!-- Replace with your actual structure -->
-src/
-├── ...
-└── ...
-```
-
----
-
-## Module Organization
-
-<!-- How should new features/modules be organized? -->
-
-(To be filled by the team)
-
----
-
-## Naming Conventions
-
-<!-- File and folder naming rules -->
-
-(To be filled by the team)
-
----
-
-## Examples
-
-<!-- Link to well-organized modules as examples -->
-
-(To be filled by the team)
+- `lib/workbench.dart`, `lib/workbench/api.dart`
+- `android/app/src/main/java/im/majo/ctos/MainActivity.java`
+- `android/app/src/main/python/ctos_workbench.py`, `android/app/src/main/python/ctos_tools/`
+- `design/architecture.md`, `design/portable-workbench.md`, `design/portable-tools.md`

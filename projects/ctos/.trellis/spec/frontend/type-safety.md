@@ -1,51 +1,26 @@
-# Type Safety
+# Dart Types and Platform Data
 
-> Type safety patterns in this project.
+The Dart code is null-safe and the platform boundary is dynamic JSON. Keep
+untyped values at that boundary and project them into small domain models
+before UI code depends on them.
 
----
+- Use immutable `final` model classes for parsed snapshots and entries.
+  Examples include `DeviceSection`, `DeviceSnapshot`, `AppIdentity`, and
+  `ConnectionEntry`.
+- Parse native JSON in the API/model layer. Check optional fields and preserve
+  unknown/unavailable values deliberately; do not let a UI widget repeatedly
+  cast the same raw `Map`.
+- MethodChannel method names, argument keys, enum strings, and Python SDK
+  values are wire contracts. Localized labels may change, but the submitted
+  value must remain the protocol value.
+- Treat nullable platform results as nullable: picker cancellation is `null`,
+  not an empty selected file. Do not use `!` for a value that can be absent
+  because of cancellation, plugin failure, or an older device response.
+- For tolerant display fallbacks, preserve provenance and report parsing
+  failure. Do not silently substitute zero, an empty string, or a fabricated
+  success state for invalid required data.
 
-## Overview
-
-<!--
-Document your project's type safety conventions here.
-
-Questions to answer:
-- What type system do you use?
-- How are types organized?
-- What validation library do you use?
-- How do you handle type inference?
--->
-
-(To be filled by the team)
-
----
-
-## Type Organization
-
-<!-- Where types are defined, shared types vs local types -->
-
-(To be filled by the team)
-
----
-
-## Validation
-
-<!-- Runtime validation patterns (Zod, Yup, io-ts, etc.) -->
-
-(To be filled by the team)
-
----
-
-## Common Patterns
-
-<!-- Type utilities, generics, type guards -->
-
-(To be filled by the team)
-
----
-
-## Forbidden Patterns
-
-<!-- any, type assertions, etc. -->
-
-(To be filled by the team)
+Reference examples: `HftpSettings.fromJson` and `_decode` in
+`lib/workbench/api.dart`, `DeviceSnapshot.fromJson` in
+`lib/device_info.dart`, and `ConnectionReport.parse` in
+`lib/connection_info.dart`.

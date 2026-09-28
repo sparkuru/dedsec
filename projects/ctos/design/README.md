@@ -20,6 +20,7 @@
 | [变更历史](changelog.md) | 已实现变更与文档调整 |
 | [移除 Vector 的决定](decisions/2026-09-26-root-only.md) | 作用域与在线服务的差异，App/Root 能力和边界 |
 | [Trellis Plus 规则](../.trellis/spec/trellis-plus/index.md) | 开发流程增强及项目验证配置；任务结果仍以 Trellis 任务记录为准 |
+| [Trellis 编码规范](../.trellis/spec/frontend/index.md) | Flutter 与 Android/Python 宿主代码约定；后端及原生层索引见 [Runtime 规范](../.trellis/spec/backend/index.md) |
 
 ## 当前状态
 

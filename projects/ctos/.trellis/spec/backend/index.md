@@ -1,39 +1,15 @@
-# Backend Development Guidelines
+# Runtime and Android Host Guidelines
 
-> Best practices for backend development in this project.
+ctOS is an Android application with a Flutter UI, a Java host, a small JNI/C
+layer, and an APK-bundled Python runtime. There is no off-device backend or
+general database. Use these guides for work below the Flutter presentation layer.
 
----
-
-## Overview
-
-This directory contains guidelines for backend development. Fill in each file with your project's specific conventions.
-
----
-
-## Guidelines Index
-
-| Guide | Description | Status |
-|-------|-------------|--------|
-| [Directory Structure](./directory-structure.md) | Module organization and file layout | To fill |
-| [Database Guidelines](./database-guidelines.md) | ORM patterns, queries, migrations | To fill |
-| [Error Handling](./error-handling.md) | Error types, handling strategies | To fill |
-| [Quality Guidelines](./quality-guidelines.md) | Code standards, forbidden patterns | To fill |
-| [Logging Guidelines](./logging-guidelines.md) | Structured logging, log levels | To fill |
-| [Python Workbench](./python-workbench.md) | Bundled packages, App subprocesses, limits, SDK and HFTP host capability boundary | Current |
-
----
-
-## How to Fill These Guidelines
-
-For each guideline file:
-
-1. Document your project's **actual conventions** (not ideals)
-2. Include **code examples** from your codebase
-3. List **forbidden patterns** and why
-4. Add **common mistakes** your team has made
-
-The goal is to help AI assistants and new team members understand how YOUR project works.
-
----
-
-**Language**: All documentation should be written in **English**.
+| Guide | Scope |
+| --- | --- |
+| [Directory Structure](./directory-structure.md) | Ownership of Dart, Java, C, Python, and tests |
+| [Host Bridge](./host-bridge.md) | MethodChannel, capability declarations, workers, and native ownership |
+| [Persistence](./persistence.md) | Current preferences/files and limits on adding durable state |
+| [Error Handling](./error-handling.md) | Typed snapshot states, channel errors, and runtime failures |
+| [Logging](./logging-guidelines.md) | Protocol stdout, bounded HFTP diagnostics, and secret-safe logs |
+| [Quality](./quality-guidelines.md) | Layer-specific checks and tests |
+| [Python Workbench](./python-workbench.md) | SDK, bundled tools, subprocess, file, and HFTP contracts |

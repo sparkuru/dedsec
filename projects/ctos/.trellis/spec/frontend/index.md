@@ -1,42 +1,16 @@
-# Frontend Development Guidelines
+# Flutter UI Guidelines
 
-> Best practices for frontend development in this project.
+The client is a Flutter/Dart Android application. It has no React runtime,
+custom-hook package, or web server. Keep presentation in Dart and send platform
+work through the Android host APIs.
 
----
-
-## Overview
-
-This directory contains guidelines for frontend development. Fill in each file with your project's specific conventions.
-
----
-
-## Guidelines Index
-
-| Guide | Description | Status |
-|-------|-------------|--------|
-| [Directory Structure](./directory-structure.md) | Module organization and file layout | To fill |
-| [Component Guidelines](./component-guidelines.md) | Component patterns, props, composition | To fill |
-| [Hook Guidelines](./hook-guidelines.md) | Custom hooks, data fetching patterns | To fill |
-| [State Management](./state-management.md) | Local state, global state, server state | To fill |
-| [Connection Snapshots](./connection-snapshots.md) | Native payload, freshness, clone alias and search contracts | Current |
-| [Terminal Interaction](./terminal-interaction.md) | PTY input, IME, shortcuts, output selection, and device checks | Current |
-| [Workbench](./workbench.md) | Catalogue/forms, masked results, task/service lifecycle and concise product copy (no demo descriptions) | Current |
-| [Quality Guidelines](./quality-guidelines.md) | Code standards, forbidden patterns | To fill |
-| [Type Safety](./type-safety.md) | Type patterns, validation | To fill |
-
----
-
-## How to Fill These Guidelines
-
-For each guideline file:
-
-1. Document your project's **actual conventions** (not ideals)
-2. Include **code examples** from your codebase
-3. List **forbidden patterns** and why
-4. Add **common mistakes** your team has made
-
-The goal is to help AI assistants and new team members understand how YOUR project works.
-
----
-
-**Language**: All documentation should be written in **English**.
+| Guide | Scope |
+| --- | --- |
+| [Directory Structure](./directory-structure.md) | Where screens, models, APIs, and tests live |
+| [Components](./component-guidelines.md) | Widget composition, theme, layout, and accessible actions |
+| [State Management](./state-management.md) | Widget-owned state and async lifecycle |
+| [Type Safety](./type-safety.md) | Dart models and MethodChannel JSON boundaries |
+| [Quality](./quality-guidelines.md) | Flutter checks and representative tests |
+| [Connection Snapshots](./connection-snapshots.md) | Native payload, freshness, clone alias, and search contracts |
+| [Terminal Interaction](./terminal-interaction.md) | PTY input, IME, shortcuts, output selection, and device checks |
+| [Workbench](./workbench.md) | Catalogue/forms, masked results, task/service lifecycle, and concise product copy |

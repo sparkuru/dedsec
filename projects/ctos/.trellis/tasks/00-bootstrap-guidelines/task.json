@@ -21,9 +21,10 @@
   "children": [],
   "parent": null,
   "relatedFiles": [
-    ".trellis/spec/backend/",
-    ".trellis/spec/frontend/"
+    ".trellis/spec/backend/index.md",
+    ".trellis/spec/frontend/index.md",
+    ".trellis/tasks/00-bootstrap-guidelines/check.md"
   ],
-  "notes": "First-time setup task created by trellis init (fullstack project)",
+  "notes": "2026-09-28: Replaced generic backend/frontend templates with source-backed Flutter, Android host, JNI/C, and Python guidance. See check.md. No product behavior or device validation changed.",
   "meta": {}
 }

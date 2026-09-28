@@ -2,6 +2,8 @@
 
 2026-09-28：用户要求的当前工作台/HFTP 保留成果脱敏提交已完成，专项任务按收敛范围归档；停止/亮屏传输/同端口重启修复已有实测，熄屏失败作为已知限制保留，Root 电源候选未实现。脱敏仅整理本次提交的设备、网络及本机环境标识，不改变协议或实现行为。以下未提交描述为对应历史阶段状态，最终结果见 [验证记录](verification.md)。
 
+2026-09-28：完成 Trellis bootstrap 规范整理：按实际 Flutter、Android 宿主、JNI/C 与 Python 运行层重写指南，移除不适用的 React hooks 与 ORM 模板，并补充持久化、宿主桥接及状态生命周期约定。文档检查结果见 [bootstrap task](../.trellis/tasks/00-bootstrap-guidelines/check.md)。
+
 ## 2026-09-27至28 HFTP停止与连续重启反馈（停止通过，熄屏未解决）
 
 - 显式stop-request边界和stopping/closing状态，回调失效与后台精确关闭；失败清理期间保留owner，阻止新实例覆盖资源。
