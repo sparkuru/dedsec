@@ -122,3 +122,39 @@
 ### Status
 
 [OK] **Completed**
+
+
+## Session 5: Firefly Android 11 定向验收与任务归档
+
+**Date**: 2026-09-28
+**Task**: Firefly Android 11 定向验收与任务归档
+**Branch**: `antitrust`
+
+### Summary
+
+当前 ctOS APK 与测试包在 Firefly Android 11 安装哈希一致，七项非 Root 定向测试通过；归档 Portable 六子任务及父任务、Python 工作台、Root-only，并修复归档链接。
+
+### Main Changes
+
+- 记录当前 APK 的 Firefly 定向验证与未测边界。
+- 归档九个已完成 Trellis 任务并修复相对链接。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `0e3a312` | (see git log) |
+| `5675042` | (see git log) |
+
+### Testing
+
+- [OK] Firefly AIO-3568J Android 11：7 项非 Root 仪器测试 OK；HFTP loopback 停止后服务为空。
+- [OK] design 与本月归档任务的本地 Markdown 链接全部可解析；git diff --check 通过。
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 如需扩展设备兼容结论，另行明确授权并验证 Firefly Root、LAN/熄屏、SAF 手操等边界。
