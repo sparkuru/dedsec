@@ -1,5 +1,7 @@
 # Compatibility
 
+2026-09-28 当前 `9ca71e31…` APK 已在 Firefly AIO-3568J（Android 11 / API 30、arm64、SELinux Permissive）覆盖安装，设备 APK 哈希一致；七项非 Root 定向仪器测试通过，覆盖内置 Python/SDK、取消/超时/后台回收、App 网络快照、文件加解密与编码、文件不覆盖及 loopback HFTP 后台/停止。Root 采集/PTY、LAN/熄屏、SAF 手操与其他 Android 版本边界未由这次开发板检查扩展。详细范围见 [verification.md](verification.md)；下方各条按当时 APK 版本解释。
+
 2026-09-26 Portable Python 当前包 SHA-256 为 `00c19e0ca2ecc84b1fea32fafaec29708b152710a3f5a3b8ece64717a26d97c6`。Flutter 28 项、Android lint/测试包构建和本地 ARM64 Android/QEMU 检查通过。已覆盖安装 PLR110 / Android 16 / SELinux Enforcing，设备哈希一致，真机 8 项通过：App/Root python3、标准库/SDK、运行中取消、超时、后台待运行任务回收及原有 Root/网络回归。工作台二级页自检和 JSON 保存读回通过。APK 仅 arm64，最低 API 28；Python 3.13.9 和 NDK 启动器具备 16 KiB 对齐，但 Android 11、16 KiB 页面设备及其他 Root 管理器未测。下方均为旧包历史；详情见 [verification.md](verification.md)。
 
 已验证设备包括 T-CHIP / Firefly AIO-3568J（Android 11 / API 30、arm64、SELinux Permissive）及 OnePlus PLR110（Android 16 / API 36、arm64、SELinux Enforcing）。

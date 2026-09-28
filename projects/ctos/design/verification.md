@@ -1,5 +1,15 @@
 # Verification
 
+## 2026-09-28 Firefly 开发板当前包定向验收
+
+`adb devices -l` 本轮仅列出 `BOARD_ADB_SERIAL`，设备自报 AIO-3568J、Android 11 / API 30、arm64-v8a。显式指定该序列号读取 `pm path`、`dumpsys package` 和已安装 `base.apk` 的 SHA-256；ctOS 已安装，但安装时间为 2026-09-24，包哈希为 `22ab383fbaf02024b59f68ef958224a9215625aca58a87b6dd23b724511c2bcd`。本地 `dist/ctos-current-arm64.apk` 为 26,193,940 bytes、SHA-256 `9ca71e316525e5b5ba6a771f855f3df2d3b52342eb75162594e7972c3518c2e3`，与板上包不同。现有测试 APK 哈希为 `3cc68b0823d1cbde047484ab0cb088b82e5f2dde7ac048cbb6714dcb10319be1`。
+
+经用户明确授权，仅向这块板 `adb -s "$BOARD_ADB_SERIAL" install -r` 覆盖安装上述当前 APK 和测试 APK，保留 App 数据；两次安装均为 `Success`，设备上两个 `base.apk` 的 SHA-256 分别与本地产物 `9ca71e31…` 和 `3cc68b08…` 完全一致。安装前 ctOS 服务列表为空；设备为 SELinux Permissive。
+
+指定七项非 Root 仪器测试一次合跑 **OK (7 tests), 30.17 s**：Python 3.13.9/SDK 目录、自检与未知脚本拒绝，运行中取消/超时及后台任务回收，App 网络快照，文件输出不覆盖、加解密认证篡改拒绝与编码产物，HFTP 在 `127.0.0.1` 随机端口的后台通知、上传/下载、限额/不覆盖/路径拒绝及显式停止。测试自有文件由测试 `finally` 清理；结束后 `dumpsys activity services im.majo.ctos` 为空。安装与测试均未清除 App 数据、改系统配置或开启 LAN 服务。
+
+本轮没有运行需要 Root 授权的采集或 Root PTY 测试，也未做 SAF 手操、真实 IP 查询、熄屏/LAN 连通、通知拒绝、API 28/29 或原生 16 KiB 页验证。结论仅覆盖当前包在这块 Android 11 板上的上述七项。具体目标地址以本轮确认的 `BOARD_ADB_SERIAL` 为准，不能把项目文档中的默认地址当作当前连接状态。
+
 2026-09-28 提交决定：用户已在当前实测结果和已知熄屏限制基础上要求提交，并要求本轮内容脱敏。脱敏复核与工作提交已完成，当前专项任务按收敛范围归档并记录 journal；无新增设备操作或 Root 电源授权。下文各阶段“未提交/待测”保留为历史状态，以首项最终记录为当前结果。
 
 ## 证据脱敏约定
