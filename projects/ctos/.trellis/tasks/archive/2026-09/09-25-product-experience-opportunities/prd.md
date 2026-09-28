@@ -2,7 +2,7 @@
 
 ## Goal
 
-落实 [改进机会](../../../design/opportunities.md) 中的优先建议，让本机观测结果可信、常见操作形成闭环，并使手机界面更易读易用。
+落实 [改进机会](../../../../../design/opportunities.md) 中的优先建议，让本机观测结果可信、常见操作形成闭环，并使手机界面更易读易用。
 
 ## Background
 
@@ -13,9 +13,9 @@
 
 ## Requirements
 
-- R1：完成归档的 [可信状态与工作台基础体验](../archive/2026-09/09-25-trustworthy-state-workbench/prd.md)：快照新鲜度、明确的权限/失败状态、受限字段解释和工作台首屏层级。
-- R2：在 R1 的状态模型可用后完成归档的 [只读任务与选择性导出闭环](../archive/2026-09/09-25-read-only-task-loop/prd.md)：信息对象 → 只读任务 → 结果/历史 → 选择性导出。
-- R3：在 R1 的视觉基线稳定后完成归档的 [界面与终端可用性整理](../archive/2026-09/09-25-interface-terminal-polish/prd.md)：统一展示、连接可读性和手机终端操作。
+- R1：完成归档的 [可信状态与工作台基础体验](../09-25-trustworthy-state-workbench/prd.md)：快照新鲜度、明确的权限/失败状态、受限字段解释和工作台首屏层级。
+- R2：在 R1 的状态模型可用后完成归档的 [只读任务与选择性导出闭环](../09-25-read-only-task-loop/prd.md)：信息对象 → 只读任务 → 结果/历史 → 选择性导出。
+- R3：在 R1 的视觉基线稳定后完成归档的 [界面与终端可用性整理](../09-25-interface-terminal-polish/prd.md)：统一展示、连接可读性和手机终端操作。
 - R4：维持 App API、Root 采集、App/Root PTY 边界及采样/资源约束；对已移除的 Vector 仅保留历史日期语境；每个子任务独立记录代码、设备与人工验收结果。
 
 ## Acceptance Criteria

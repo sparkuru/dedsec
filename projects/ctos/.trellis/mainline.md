@@ -1,8 +1,9 @@
 # ctOS Mainline
 
-- **Mode:** `serial`
-- **Authorization:** On 2026-09-28, the user directed Codex to continue the remaining Trellis tasks in order and archive them all. This record bounds that authorization to the active task graph listed below.
-- **Current scope:** After archiving `09-25-read-only-task-loop`, the remaining active graph contains `09-25-interface-terminal-polish` and its parent `09-25-product-experience-opportunities`. Complete the child first, then finish the parent integration task.
-- **Current task:** `09-25-interface-terminal-polish` (in_progress). The PRD, design, implementation plan, and implement/check contexts were reviewed and approved on 2026-09-28; implementation and scoped validation are active.
-- **Device access:** P2 has separate authorization for `TARGET-BOARD` release installation, App Shell/keyboard/shortcut/Ctrl-C/output search-copy/return checks, and a read-only Root PTY `id`. This authorization is limited to `09-25-interface-terminal-polish`; it does not permit Root instrumentation, system/VPN changes, data clearing, reboot, or device work on the parent task.
-- **Stop conditions:** Stop and ask if the active graph changes, a material acceptance check cannot run, device permissions exceed task-specific authorization, or implementation scope needs to expand.
+- **Mode:** `guided`
+- **Authorization:** On 2026-09-28, the user directed Codex to complete the remaining Trellis task graph in order and archive all legacy tasks, then confirmed the parent task's three-commit plan. That authorization is fulfilled and does not extend to new scope or device actions.
+- **Current scope:** The three child tasks and `09-25-product-experience-opportunities` are complete and archived. No active task remains.
+- **Current task:** None. The parent integration mapped P0's eight historical acceptance criteria to saved evidence, repaired archive links, and reconciled `design/` with the delivered slices. Its documentation work commit is `3e78ad3`; archive and journal bookkeeping follow.
+- **Completed evidence:** P2 implementation `ca04b04`, archive `949a0f6`, journal `a30e0ae`; P1 implementation `fc254a4`, archive `9c78cfe`, journal `5d11297`; P0 implementation `90024df`, archive `d00f11d`; bootstrap archive `71c4130`. Parent integration evidence is in the archived task's `check.md` and `design/verification.md`.
+- **Device access:** No device access is currently authorized by this completed graph. Prior task device results remain scoped to their recorded APK and target.
+- **Next action:** New project work requires a separate bounded scope; do not infer priority or device authorization from these archives.
