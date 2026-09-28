@@ -7,7 +7,7 @@
 ## Background
 
 - 当前 `device.info` 与 `memory.snapshot` 只保留最后一次内存中结果，且以 JSON 为主；`lib/main.dart:227-263,609-676`。
-- 复用已归档的 [可信状态与工作台基础体验](../archive/2026-09/09-25-trustworthy-state-workbench/prd.md) 中现有快照状态/来源表达；以当前源码与实际接口为准。
+- 复用已归档的 [可信状态与工作台基础体验](../09-25-trustworthy-state-workbench/prd.md) 中现有快照状态/来源表达；以当前源码与实际接口为准。
 
 ## Requirements
 
@@ -25,7 +25,7 @@
 
 ## 当前验证状态（2026-09-28）
 
-本 task 全部验收项完成。Flutter analyze 和 76 项 Flutter 测试通过，Python fake Context 边界检查通过，Android release lint/build 与定向仪器测试通过。授权的 `TARGET-BOARD` 上完成应用强制停止再启动后的历史恢复、成功/失败状态、SAF 单记录导出读回、取消不写文件及手动清空验证。设备类型、哈希、测试范围和边界见 [验证记录](../../../design/verification.md#2026-09-28-只读任务闭环验收)。
+本 task 全部验收项完成。Flutter analyze 和 76 项 Flutter 测试通过，Python fake Context 边界检查通过，Android release lint/build 与定向仪器测试通过。授权的 `TARGET-BOARD` 上完成应用强制停止再启动后的历史恢复、成功/失败状态、SAF 单记录导出读回、取消不写文件及手动清空验证。设备类型、哈希、测试范围和边界见 [验证记录](../../../../../design/verification.md#2026-09-28-只读任务闭环验收)。
 
 ## Out of Scope
 

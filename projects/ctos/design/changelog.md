@@ -1,8 +1,15 @@
 # Changelog
 
+## 2026-09-28 — 界面与终端整理、产品机会集成
+
+- 统一 Material 3 Card 表面、标题与能力状态字级；概览和信息阅读列宽至多 840 dp，终端画布保留整页宽度。
+- 终端五个快捷键可收起/展开；输出快照增加搜索、高亮、匹配数和复制全部，保留 App/Root PTY 与原输入路径。
+- `./hako flutter analyze`、79 项 Flutter 测试、release APK 构建/签名/校验通过；APK SHA-256 `ab13ceac96a7a8958659cb9bb12ab298dd65d9fa22b3ec729d2f5d26e30e014f`。另行授权的 `TARGET-BOARD` Android 11 App/Root PTY 定向验收见 [验证记录](verification.md) 与 [子任务检查](../.trellis/tasks/archive/2026-09/09-25-interface-terminal-polish/check.md)。不代表其他 ROM 或完整 Root 回归通过。
+- 历史可信状态子任务补齐了逐项验收依据；当时的 Vector 条件已被后续移除决定取代。只读任务与界面终端子任务均已归档，父任务只负责文档和证据集成。
+
 2026-09-28：用户要求的当前工作台/HFTP 保留成果脱敏提交已完成，专项任务按收敛范围归档；停止/亮屏传输/同端口重启修复已有实测，熄屏失败作为已知限制保留，Root 电源候选未实现。脱敏仅整理本次提交的设备、网络及本机环境标识，不改变协议或实现行为。以下未提交描述为对应历史阶段状态，最终结果见 [验证记录](verification.md)。
 
-2026-09-28：完成 Trellis bootstrap 规范整理：按实际 Flutter、Android 宿主、JNI/C 与 Python 运行层重写指南，移除不适用的 React hooks 与 ORM 模板，并补充持久化、宿主桥接及状态生命周期约定。文档检查结果见 [bootstrap task](../.trellis/tasks/00-bootstrap-guidelines/check.md)。
+2026-09-28：完成 Trellis bootstrap 规范整理：按实际 Flutter、Android 宿主、JNI/C 与 Python 运行层重写指南，移除不适用的 React hooks 与 ORM 模板，并补充持久化、宿主桥接及状态生命周期约定。文档检查结果见 [bootstrap task](../.trellis/tasks/archive/2026-09/00-bootstrap-guidelines/check.md)。
 
 2026-09-28：接入 `network.interface_diagnose` App-only 只读任务，接口详情携带并锁定接口名；Python 只收到新鲜快照中的单接口投影，保持实际缺失、失败、取消和超时状态。新增 Android host 版本化原子任务历史（仅三个只读 ID，20 条 / 5 MiB、淘汰最旧、手动清理）与工作台历史页面。总导出改为逐项预览选择网络、设备、连接快照及用户勾选的历史记录，保存仍走 SAF。Flutter、Python、Android 仪器和指定开发板的历史重启、单项 SAF 导出/取消及清理验收均通过，见[验证记录](verification.md)。
 

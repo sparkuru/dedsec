@@ -21,7 +21,7 @@
 
 ## 授权设备验收
 
-- `TARGET-BOARD`：Android 11 / API 30、arm64-v8a。使用 `adb install -r` 安装本 task 的 release APK 和匹配测试 APK，保留 App 数据；两份设备哈希与本地产物一致，见 [验证记录](../../../design/verification.md#2026-09-28-只读任务闭环验收)。
+- `TARGET-BOARD`：Android 11 / API 30、arm64-v8a。使用 `adb install -r` 安装本 task 的 release APK 和匹配测试 APK，保留 App 数据；两份设备哈希与本地产物一致，见 [验证记录](../../../../../design/verification.md#2026-09-28-只读任务闭环验收)。
 - `TaskHistoryStoreTest` 通过 3 项；仅运行 `DeviceTest#interfaceDiagnosisUsesExactFreshAppSnapshotAndCanBeStored`，通过 1 项。未运行其他设备测试、Root 测试或 PTY 测试。
 - 手动接口流程验证 App 快照缺少目标接口时记录失败、App 可见接口诊断成功；强制停止并重新启动后两条记录均保留。
 - SAF 只导出用户勾选的一条历史记录并读回核对；取消唯一文件名的保存后该路径不存在。通过历史页确认清除两条记录，最终显示空状态。

@@ -1,6 +1,6 @@
 # ctOS 信息入口
 
-2026-09-28 当前收敛：工作台体验、HFTP 日志、Root 网络分离及停止/同端口重启修复完成已记录的定向验收；用户要求的脱敏工作提交已完成，本任务按收敛范围归档。熄屏断连仍为已知限制，Root 电源扩展暂缓、未实现。以下历史阶段的未提交/待测描述按当时版本解释；其他阶段及任务不因此标记完成。见 [当前验证](verification.md)。
+2026-09-28 当前交付：可信状态与工作台基础体验、只读任务与选择性导出、界面与终端整理三个子任务已完成并归档；父任务仍在核对跨任务证据。P2 当前 release 包 `ab13ceac…` 的本地检查及授权 Android 11 开发板定向验收见 [验证记录](verification.md)。较早的工作台/HFTP 专项也已按收敛范围归档，熄屏断连仍是已知限制，Root 电源扩展未实现。下方旧包哈希、未提交/待测及设备状态均按各自日期解释，不能当作当前连接或当前包的结论。
 
 `design/` 是 ctOS 项目各种信息的统一 landing。产品规划、约束、架构、决策、兼容性、验证记录、依赖和变更历史都在这里维护。根目录 README 仅保留项目简介和使用入口；项目级 AGENTS.md 约定后续工作的执行规则。
 
@@ -22,9 +22,15 @@
 | [Trellis Plus 规则](../.trellis/spec/trellis-plus/index.md) | 开发流程增强及项目验证配置；任务结果仍以 Trellis 任务记录为准 |
 | [Trellis 编码规范](../.trellis/spec/frontend/index.md) | Flutter 与 Android/Python 宿主代码约定；后端及原生层索引见 [Runtime 规范](../.trellis/spec/backend/index.md) |
 
-## 当前状态
+## 当前交付与阶段记录
 
-- 2026-09-28 P1 只读任务与选择性导出完成授权设备验收：Flutter 76 项、定向 Android instrumentation 4 项通过；应用强制停止再启动后历史仍可查看，SAF 单记录读回/取消和手动清空均实测通过。Root 自动恢复仅按用户授权随正常启动执行，未运行 Root 测试；见[验证记录](verification.md)与[任务 PRD](../.trellis/tasks/09-25-read-only-task-loop/prd.md)。
+- [可信状态与工作台基础体验](../.trellis/tasks/archive/2026-09/09-25-trustworthy-state-workbench/prd.md) 已补齐历史验收对应证据；当时的 Vector 要求后来被 [移除决定](decisions/2026-09-26-root-only.md) 取代，不属于当前 App 架构。
+- [只读任务与选择性导出](../.trellis/tasks/archive/2026-09/09-25-read-only-task-loop/prd.md) 仅把 `device.info`、`memory.snapshot` 和 `network.interface_diagnose` 纳入有界历史；接口诊断走 App 权限，导出由用户逐项选择后使用 SAF。
+- [界面与终端整理](../.trellis/tasks/archive/2026-09/09-25-interface-terminal-polish/prd.md) 完成统一 Card 表面、840 dp 阅读宽度、终端快捷栏折叠及输出搜索/复制。Flutter analyze、79 项 Flutter 测试与 release 构建通过；授权 `TARGET-BOARD` 的 App/Root PTY 定向检查见 [验证记录](verification.md)，不推断其他 ROM 或全新安装流程通过。
+
+### 历史阶段记录
+
+- 2026-09-28 P1 只读任务与选择性导出完成授权设备验收：Flutter 76 项、定向 Android instrumentation 4 项通过；应用强制停止再启动后历史仍可查看，SAF 单记录读回/取消和手动清空均实测通过。Root 自动恢复仅按用户授权随正常启动执行，未运行 Root 测试；见[验证记录](verification.md)与[任务 PRD](../.trellis/tasks/archive/2026-09/09-25-read-only-task-loop/prd.md)。
 - 2026-09-28 Firefly AIO-3568J 已安装当前 `9ca71e31…` APK 与匹配测试包，Android 11 / API 30 的七项非 Root 定向测试通过，HFTP 仅使用 loopback 且结束后服务为空。Root、LAN、熄屏等未在此板复验，见[验证记录](verification.md)。
 
 - 2026-09-28 停止反馈修复已安装9ca71e…包：73项Flutter、10项最终手机检查及三轮LAN传输/停止/同7888重启含31MiB通过，日志状态正常；原配置恢复、隔离文件精确清理、VPN保持不变。熄屏仍拒绝连接，App CPU锁登记不代表idle有效保活。独立Root临时CPU租约候选用户选择暂不扩大Root范围，未实现；任务in_progress，暂不提交/归档。见[验证记录](verification.md)和[实机记录](../.trellis/tasks/archive/2026-09/09-27-workbench-usability/restart-device-check.md)。

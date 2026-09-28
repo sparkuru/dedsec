@@ -1,1 +1,2 @@
-{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/trellis-plus/index.md", "reason": "Apply ctOS Trellis review, file ownership, archive, commit and mainline rules to the integration task."}
+{"file": ".trellis/spec/trellis-plus/validation.md", "reason": "Use documentation-only validation guidance and the project's verified check boundaries."}
