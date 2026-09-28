@@ -54,6 +54,19 @@ class WorkbenchApi {
   Future<void> cancel(String taskId) =>
       channel.invokeMethod<void>('pythonCancel', {'taskId': taskId});
 
+  Future<List<Map<String, dynamic>>> taskHistory() async {
+    final value = _decode(
+      await channel.invokeMethod<String>('taskHistoryList'),
+    );
+    return (value['records'] as List? ?? const [])
+        .whereType<Map>()
+        .map((record) => Map<String, dynamic>.from(record))
+        .toList(growable: false);
+  }
+
+  Future<void> clearTaskHistory() =>
+      channel.invokeMethod<void>('taskHistoryClear');
+
   Future<Map<String, dynamic>?> pickFile({bool share = false}) async {
     final raw = await channel.invokeMethod<String>(
       share ? 'hftpImport' : 'toolFilePick',

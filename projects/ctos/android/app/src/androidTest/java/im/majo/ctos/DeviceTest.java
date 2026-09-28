@@ -5,8 +5,10 @@ import android.os.SystemClock;
 import android.net.ConnectivityManager;
 import android.net.LinkProperties;
 import androidx.test.platform.app.InstrumentationRegistry;
+import org.json.JSONArray;
 import org.json.JSONObject;
 import org.junit.Test;
+import java.io.File;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import static org.junit.Assert.*;
@@ -25,7 +27,7 @@ public class DeviceTest {
             for (int i = 0; i < catalog.getJSONArray("scripts").length(); i++)
                 ids.add(catalog.getJSONArray("scripts").getJSONObject(i).getString("id"));
             assertTrue(ids.containsAll(java.util.Arrays.asList("python.selftest", "text.digest", "tools.password",
-                    "tools.encoder", "tools.ip", "tools.crypto", "tools.hftp")));
+                    "tools.encoder", "tools.ip", "tools.crypto", "tools.hftp", "network.interface_diagnose")));
             assertEquals("python3", catalog.getString("terminal"));
             assertTrue(runner.claim("check"));
             JSONObject checked = runner.execute("python.selftest", null);
@@ -44,6 +46,47 @@ public class DeviceTest {
             assertTrue(runner.claim("after-failure"));
             assertEquals("completed", runner.execute("memory.snapshot", null).getString("state"));
         } finally { runner.close(); }
+    }
+
+    @Test(timeout = 45000) public void interfaceDiagnosisUsesExactFreshAppSnapshotAndCanBeStored() throws Exception {
+        JSONObject snapshot = NetworkSnapshot.collect(context());
+        JSONArray interfaces = snapshot.getJSONArray("interfaces");
+        assertTrue("Android API snapshot should expose at least loopback", interfaces.length() > 0);
+        String interfaceName = interfaces.getJSONObject(0).getString("name");
+
+        PortablePackages packages = new PortablePackages(context());
+        PythonRunner runner = new PythonRunner(context(), packages);
+        File historyPath = new File(context().getCacheDir(),
+                "ctos-diagnostic-history-" + SystemClock.elapsedRealtime() + ".json");
+        TaskHistoryStore history = new TaskHistoryStore(historyPath);
+        try {
+            assertTrue(runner.claim("diagnosis-valid"));
+            JSONObject result = runner.execute("network.interface_diagnose",
+                    java.util.Collections.singletonMap("interface_name", interfaceName));
+            assertEquals("completed", result.getString("state"));
+            JSONObject data = result.getJSONObject("data");
+            assertEquals(interfaceName, data.getString("interfaceName"));
+            assertEquals(interfaceName, data.getJSONObject("interface").getString("name"));
+            assertFalse(data.has("root"));
+            assertFalse(data.has("interfaces"));
+
+            history.appendResult(result, interfaceName);
+            JSONObject saved = new JSONObject(history.listJson()).getJSONArray("records").getJSONObject(0);
+            assertEquals("network.interface_diagnose", saved.getString("script"));
+            assertEquals(interfaceName, saved.getString("interfaceName"));
+            assertEquals("App", saved.getString("source"));
+            assertEquals("completed", saved.getString("state"));
+            assertFalse(saved.has("stderr"));
+
+            assertTrue(runner.claim("diagnosis-missing"));
+            JSONObject missing = runner.execute("network.interface_diagnose",
+                    java.util.Collections.singletonMap("interface_name", "ctos_missing_" + SystemClock.elapsedRealtime()));
+            assertEquals("failed", missing.getString("state"));
+            assertTrue(missing.getString("stderr").contains("no longer present"));
+        } finally {
+            history.clear();
+            runner.close();
+        }
     }
 
     @Test(timeout = 30000) public void pythonCancellationAndTimeoutRecycleTheProcess() throws Exception {

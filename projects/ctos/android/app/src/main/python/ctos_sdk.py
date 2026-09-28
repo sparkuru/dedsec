@@ -38,6 +38,7 @@ class Context:
     device: dict
     workdir: Path
     files_root: Path | None = None
+    network: dict | None = None
 
     def section(self, name: str) -> dict:
         """Return a readable device section or report its actual failure."""

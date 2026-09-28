@@ -115,6 +115,18 @@ class _ResultCardState extends State<ResultCard> {
                 '开始于 $capturedAt',
                 style: Theme.of(context).textTheme.bodySmall,
               ),
+            if (value['historySaveError'] is String)
+              Text(
+                '本次结果未能保存到历史：${value['historySaveError']}',
+                style: TextStyle(color: Theme.of(context).colorScheme.error),
+              ),
+            if (widget.scriptId == 'network.interface_diagnose' &&
+                value['state'] == 'failed' &&
+                value['stderr'] is String)
+              SelectableText(
+                '诊断失败：${value['stderr']}',
+                style: TextStyle(color: Theme.of(context).colorScheme.error),
+              ),
             if (value['truncated'] == true) const Text('日志已达到上限，部分内容已截断。'),
             if (value['state'] == 'timed_out')
               const Text('超过 15 秒，进程已回收；可重新运行。'),
@@ -292,6 +304,57 @@ class _ResultCardState extends State<ResultCard> {
         }.entries)
           if (data[entry.key] != null) _summary(entry.value, data[entry.key]),
       ];
+    if (widget.scriptId == 'network.interface_diagnose') {
+      final selected = data['interface'];
+      final interfaces = selected is Map ? selected : const <String, dynamic>{};
+      final counters = interfaces['counters'];
+      final counterValues = counters is Map
+          ? counters.entries
+                .map((entry) => '${entry.key}: ${entry.value}')
+                .join(' · ')
+          : '无可用计数器';
+      final addresses = interfaces['addresses'];
+      final findings = data['findings'];
+      final warnings = data['warnings'];
+      final networks = data['networks'];
+      return [
+        if (data['summary'] is String)
+          Text(
+            data['summary'] as String,
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
+        if (data['source'] != null) _summary('来源', data['source']),
+        if (data['capturedAt'] is num)
+          _summary(
+            '采集时间',
+            DateTime.fromMillisecondsSinceEpoch(
+              (data['capturedAt'] as num).toInt(),
+            ).toLocal(),
+          ),
+        if (interfaces['state'] != null) _summary('接口状态', interfaces['state']),
+        if (interfaces['mtu'] != null) _summary('MTU', interfaces['mtu']),
+        if (addresses is List)
+          _summary('接口地址', addresses.isEmpty ? '无' : addresses.join('、')),
+        _summary('可用累计计数', counterValues),
+        if (findings is List && findings.isNotEmpty)
+          for (final finding in findings) _summary('观测', finding),
+        if (warnings is List && warnings.isNotEmpty)
+          for (final warning in warnings) _summary('采集提示', warning),
+        if (networks is List && networks.isNotEmpty)
+          for (final network in networks.whereType<Map>())
+            _summary(
+              '关联网络',
+              [
+                network['transport'],
+                if (network['default'] == true) '默认网络',
+                if (network['vpn'] == true) 'VPN',
+                if (network['validated'] == true) '系统标记已验证',
+                if (network['routes'] is List)
+                  ...(network['routes'] as List).whereType<String>(),
+              ].where((item) => item != null).join(' · '),
+            ),
+      ];
+    }
     if ((widget.scriptId == 'device.info' ||
             widget.scriptId == 'memory.snapshot') &&
         data['data'] is Map) {

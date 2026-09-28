@@ -102,6 +102,38 @@ public final class NetworkSnapshot {
         return result;
     }
 
+    public static JSONObject forInterface(Context context, String interfaceName) throws Exception {
+        if (interfaceName == null || !interfaceName.matches("[A-Za-z0-9_.:-]{1,64}"))
+            throw new IllegalArgumentException("Interface name is invalid");
+        JSONObject snapshot = collect(context);
+        JSONArray interfaces = new JSONArray();
+        JSONArray allInterfaces = snapshot.getJSONArray("interfaces");
+        for (int i = 0; i < allInterfaces.length(); i++) {
+            JSONObject item = allInterfaces.getJSONObject(i);
+            if (interfaceName.equals(item.optString("name"))) interfaces.put(item);
+        }
+        JSONArray networks = new JSONArray();
+        JSONArray allNetworks = snapshot.getJSONArray("networks");
+        String[] networkFields = {"interface", "default", "vpn", "transport", "validated",
+                "metered", "mtu", "addresses", "routes", "privateDns"};
+        for (int i = 0; i < allNetworks.length(); i++) {
+            JSONObject item = allNetworks.getJSONObject(i);
+            if (!interfaceName.equals(item.optString("interface"))) continue;
+            JSONObject selected = new JSONObject();
+            for (String field : networkFields) if (item.has(field)) selected.put(field, item.get(field));
+            networks.put(selected);
+        }
+        String counterSource = Build.VERSION.SDK_INT >= 31 ? "TrafficStats" : "procfs";
+        JSONObject result = new JSONObject()
+                .put("source", "Android App API / NetworkInterface + " + counterSource)
+                .put("capturedAt", snapshot.getLong("time"))
+                .put("interfaces", interfaces)
+                .put("networks", networks);
+        if (snapshot.has("interfaceError")) result.put("interfaceError", snapshot.get("interfaceError"));
+        if (snapshot.has("counterError")) result.put("counterError", snapshot.get("counterError"));
+        return result;
+    }
+
     public static JSONObject apiInterfaces(JSONObject snapshot, String source) throws Exception {
         JSONArray interfaces = snapshot.getJSONArray("interfaces");
         for (int i = 0; i < interfaces.length(); i++) {

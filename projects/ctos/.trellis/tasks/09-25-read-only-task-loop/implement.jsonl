@@ -1,1 +1,11 @@
-{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file":".trellis/spec/frontend/state-management.md","reason":"Own task route state, cancellation, async result handling and history UI lifecycle."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Parse MethodChannel task and history JSON into typed Dart models."}
+{"file":".trellis/spec/frontend/workbench.md","reason":"Reuse the catalogue, parameter, result and task interaction contract."}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Build accessible interface actions, result/history views and export preview."}
+{"file":".trellis/spec/backend/persistence.md","reason":"Define private bounded storage, cleanup and schema ownership for task history."}
+{"file":".trellis/spec/backend/host-bridge.md","reason":"Keep native snapshot, history file and SAF operations behind MethodChannel."}
+{"file":".trellis/spec/backend/python-workbench.md","reason":"Extend the trusted Python context and static allowlisted registry."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Preserve failed, cancelled, timed-out and unavailable task states."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Plan host, Python protocol, Flutter and device-layer validation separately."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Align the task context, SDK, MethodChannel, history and export contracts across layers."}
+{"file":".trellis/spec/trellis-plus/index.md","reason":"Apply the project-owned UI design, validation, review and finish workflow for this Flutter task."}

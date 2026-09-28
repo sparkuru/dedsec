@@ -74,6 +74,11 @@ public final class PythonRunner {
             JSONObject input = new JSONObject().put("params", values).put("workdir", workspace.getAbsolutePath())
                     .put("filesRoot", ToolFiles.store(context).getAbsolutePath())
                     .put("device", script == null ? new JSONObject() : DeviceSnapshot.collect(context));
+            if ("network.interface_diagnose".equals(script)) {
+                Object value = values.opt("interface_name");
+                if (!(value instanceof String)) throw new IllegalArgumentException("Interface name is required");
+                input.put("network", NetworkSnapshot.forInterface(context, (String) value));
+            }
             byte[] bytes = input.toString().getBytes(StandardCharsets.UTF_8);
             if (bytes.length > 32768) throw new IllegalArgumentException("Input exceeds 32 KiB");
             ProcessBuilder builder = new ProcessBuilder(command).directory(workspace);

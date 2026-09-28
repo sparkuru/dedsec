@@ -32,6 +32,23 @@ class WorkbenchScript {
           )
           .toList();
 
+  factory WorkbenchScript.interfaceDiagnostic() => WorkbenchScript({
+    'id': 'network.interface_diagnose',
+    'title': 'Interface diagnosis',
+    'description': 'Read-only facts for one current network interface',
+    'category': 'system',
+    'parameters': [
+      {
+        'name': 'interface_name',
+        'label': 'Interface name',
+        'required': true,
+        'max_length': 64,
+        'multiline': false,
+        'default': '',
+      },
+    ],
+  });
+
   final String id, fallbackTitle, fallbackDescription, category;
   final List<ScriptParameter> parameters;
 
@@ -39,6 +56,7 @@ class WorkbenchScript {
     'python.selftest' => 'Python3 环境',
     'device.info' => '设备摘要',
     'memory.snapshot' => '内存快照',
+    'network.interface_diagnose' => '接口诊断',
     'text.digest' => '文本摘要',
     'tools.password' => '密码生成',
     'tools.encoder' => '编码与哈希',
@@ -52,6 +70,7 @@ class WorkbenchScript {
     'python.selftest' => '离线运行 · 标准库 · 环境自检',
     'device.info' => '型号、系统版本、架构与运行时间',
     'memory.snapshot' => '内存总量、可用量与低内存状态',
+    'network.interface_diagnose' => '只读查看接口状态、地址、计数与关联路由',
     'text.digest' => '字符数、UTF-8 大小与 SHA-256',
     'tools.password' => '可复现密码 · 显式盐值 · 本地计算',
     'tools.encoder' => 'Base64、URL、Unicode · 文本或文件',
@@ -65,6 +84,7 @@ class WorkbenchScript {
     'python.selftest' => Icons.code,
     'device.info' => Icons.phone_android_outlined,
     'memory.snapshot' => Icons.memory_outlined,
+    'network.interface_diagnose' => Icons.lan_outlined,
     'text.digest' => Icons.text_snippet_outlined,
     'tools.password' => Icons.password,
     'tools.encoder' => Icons.transform,
@@ -98,6 +118,7 @@ class ParameterPresentation {
     ('tools.ip', 'target') => 'IP 或域名（可选）',
     ('tools.crypto', 'operation') => '操作',
     ('tools.crypto', 'password') => '密码',
+    ('network.interface_diagnose', 'interface_name') => '网络接口',
     _ => parameter.label,
   };
 
@@ -109,6 +130,8 @@ class ParameterPresentation {
     ('tools.password', 'must') => '生成结果必须包含的字符',
     ('tools.ip', 'target') => '留空查询当前公网 IP；运行时发起 HTTPS 请求',
     ('tools.crypto', 'password') => '解密需使用加密时的密码',
+    ('network.interface_diagnose', 'interface_name') =>
+      '只读取当前接口快照；不会探测互联网或修改配置',
     _ => null,
   };
 
@@ -121,6 +144,11 @@ class ParameterPresentation {
       return parameter.kind == 'file' ? '请选择$label' : '请填写$label';
     if (value.runes.length > parameter.maxLength)
       return '最多 ${parameter.maxLength} 个字符';
+    if (scriptId == 'network.interface_diagnose' &&
+        parameter.name == 'interface_name' &&
+        !RegExp(r'^[A-Za-z0-9_.:-]{1,64}$').hasMatch(value)) {
+      return '接口名称格式无效';
+    }
     if (passwordLength) {
       final length = int.tryParse(value);
       if (length == null || length < 1 || length > 128)

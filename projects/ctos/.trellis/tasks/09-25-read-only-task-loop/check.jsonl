@@ -1,1 +1,4 @@
-{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Check model, widget and workflow coverage at the Flutter boundary."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Keep Android host, Python and device acceptance as separate validation evidence."}
+{"file":".trellis/spec/trellis-plus/validation.md","reason":"Use the repository-defined review and validation gates for a cross-layer task."}
+{"file":".trellis/spec/trellis-plus/index.md","reason":"Classify the visible UI and residual human/device review gate from current evidence."}

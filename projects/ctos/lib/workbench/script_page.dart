@@ -12,10 +12,14 @@ class ScriptPage extends StatefulWidget {
     required this.script,
     this.api = const WorkbenchApi(),
     this.runtime,
+    this.initialParameters = const {},
+    this.lockedParameters = const {},
   });
   final WorkbenchScript script;
   final WorkbenchApi api;
   final Map<String, dynamic>? runtime;
+  final Map<String, String> initialParameters;
+  final Set<String> lockedParameters;
 
   @override
   State<ScriptPage> createState() => _ScriptPageState();
@@ -36,7 +40,7 @@ class _ScriptPageState extends State<ScriptPage> {
     super.initState();
     for (final parameter in widget.script.parameters) {
       controllers[parameter.name] = TextEditingController(
-        text: parameter.initial,
+        text: widget.initialParameters[parameter.name] ?? parameter.initial,
       );
     }
   }
@@ -140,7 +144,10 @@ class _ScriptPageState extends State<ScriptPage> {
       scriptId: widget.script.id,
       controller: controllers[parameter.name]!,
       api: widget.api,
-      enabled: !running && active,
+      enabled:
+          !running &&
+          active &&
+          !widget.lockedParameters.contains(parameter.name),
       active: active,
       onChanged: () => setState(() {}),
     ),
@@ -229,7 +236,9 @@ class _ScriptPageState extends State<ScriptPage> {
             Text(widget.script.description),
             const SizedBox(height: 8),
             Text(
-              'App 权限 · 本机工作台',
+              widget.script.id == 'network.interface_diagnose'
+                  ? 'App 只读快照 · 不探测互联网、不修改配置'
+                  : 'App 权限 · 本机工作台',
               style: Theme.of(context).textTheme.bodySmall,
             ),
             const SizedBox(height: 16),

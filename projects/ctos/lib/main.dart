@@ -8,6 +8,7 @@ import 'connection_info.dart';
 import 'connection_state.dart';
 import 'device_info.dart';
 import 'device_page.dart';
+import 'export_preview.dart';
 import 'terminal_interaction.dart';
 import 'traffic.dart';
 import 'workbench.dart';
@@ -527,29 +528,79 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
     terminalInputFocus.requestFocus();
   }
 
-  Future<void> export() async {
-    try {
-      final saved = await native.invokeMethod<bool>('export', {
-        'text': const JsonEncoder.withIndent('  ').convert({
-          'snapshot': snapshot,
-          'device': deviceSnapshot?.sections.map(
-            (key, value) => MapEntry(key, {
-              'state': value.state,
-              'source': value.source,
-              'capturedAt': value.capturedAt.toIso8601String(),
-              'data': value.data,
-              'reason': value.reason,
-            }),
-          ),
-          'connections': Map<String, dynamic>.from(connectionData)
-            ..remove('apps'),
-          'exportedAt': DateTime.now().toIso8601String(),
-        }),
-      });
-      if (saved == true) notice('已导出 JSON');
-    } catch (e) {
-      notice(e.toString());
+  void openExport({List<Map<String, dynamic>> history = const []}) {
+    final items = <String, ExportDataItem>{};
+    if (snapshot.isNotEmpty) {
+      final kernelSource =
+          snapshot['kernel']?['source']?.toString() ?? '接口来源未知';
+      items['network'] = ExportDataItem(
+        key: 'network',
+        title: '网络快照',
+        source: 'Android App API · $kernelSource',
+        capturedAt: _captureTime(snapshot['time']),
+        scope: '网络、接口地址、累计计数与可见路由',
+        data: snapshot,
+      );
     }
+    if (deviceSnapshot != null) {
+      final sections = deviceSnapshot!.sections.map(
+        (key, value) => MapEntry(key, {
+          'state': value.state,
+          'source': value.source,
+          'capturedAt': value.capturedAt.toIso8601String(),
+          'data': value.data,
+          if (value.reason != null) 'reason': value.reason,
+        }),
+      );
+      final captured = deviceSnapshot!.sections.values
+          .map((section) => section.capturedAt)
+          .fold<DateTime?>(
+            null,
+            (latest, value) =>
+                latest == null || value.isAfter(latest) ? value : latest,
+          );
+      items['device'] = ExportDataItem(
+        key: 'device',
+        title: '设备快照',
+        source: 'DeviceSnapshot Android API',
+        capturedAt: captured?.toLocal().toString() ?? '时间未知',
+        scope: '系统、内存、电池与存储分节状态',
+        data: sections,
+      );
+    }
+    if (connectionState.hasSnapshot) {
+      final connections = Map<String, dynamic>.from(connectionData)
+        ..remove('apps');
+      items['connections'] = ExportDataItem(
+        key: 'connections',
+        title: '连接快照',
+        source: connectionData['source']?.toString() ?? 'Android App API',
+        capturedAt: connectionState.capturedAt?.toLocal().toString() ?? '时间未知',
+        scope: '当前可见 TCP / UDP 连接；不含应用图标',
+        data: connections,
+      );
+    }
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => ExportPreviewPage(
+          api: const WorkbenchApi(),
+          items: items,
+          historyCandidates: history,
+        ),
+      ),
+    );
+  }
+
+  String _captureTime(Object? value) => value is num
+      ? DateTime.fromMillisecondsSinceEpoch(value.toInt()).toLocal().toString()
+      : '时间未知';
+
+  void browseInterfaces() {
+    setState(() {
+      tab = 1;
+      infoTab = 2;
+    });
+    refresh();
   }
 
   @override
@@ -581,8 +632,13 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
       ),
       actions: [
         IconButton(
-          onPressed: snapshot.isEmpty ? null : export,
-          tooltip: '导出 JSON',
+          onPressed:
+              snapshot.isEmpty &&
+                  deviceSnapshot == null &&
+                  !connectionState.hasSnapshot
+              ? null
+              : openExport,
+          tooltip: '选择导出内容',
           icon: const Icon(Icons.ios_share, size: 20),
         ),
       ],
@@ -616,7 +672,11 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
               children: [
                 workbench(),
                 informationPage(),
-                WorkbenchPage(active: tab == 2),
+                WorkbenchPage(
+                  active: tab == 2,
+                  onExportHistory: (records) => openExport(history: records),
+                  onBrowseInterfaces: browseInterfaces,
+                ),
                 terminalPage(),
               ],
             ),
@@ -1114,6 +1174,13 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
                   '累计值随接口或系统重置，不代表今日流量。',
                   style: TextStyle(color: Colors.white38, fontSize: 10),
                 ),
+                const SizedBox(height: 12),
+                FilledButton.icon(
+                  onPressed: () =>
+                      openInterfaceDiagnostic(item['name'] as String),
+                  icon: const Icon(Icons.search),
+                  label: const Text('诊断此接口'),
+                ),
               ],
             ),
           ),
@@ -1131,6 +1198,19 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
           ),
         ),
       ],
+    );
+  }
+
+  void openInterfaceDiagnostic(String interfaceName) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => ScriptPage(
+          script: WorkbenchScript.interfaceDiagnostic(),
+          api: const WorkbenchApi(),
+          initialParameters: {'interface_name': interfaceName},
+          lockedParameters: const {'interface_name'},
+        ),
+      ),
     );
   }
 

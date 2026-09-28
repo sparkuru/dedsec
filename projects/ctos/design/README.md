@@ -24,6 +24,7 @@
 
 ## 当前状态
 
+- 2026-09-28 P1 只读任务与选择性导出完成授权设备验收：Flutter 76 项、定向 Android instrumentation 4 项通过；应用强制停止再启动后历史仍可查看，SAF 单记录读回/取消和手动清空均实测通过。Root 自动恢复仅按用户授权随正常启动执行，未运行 Root 测试；见[验证记录](verification.md)与[任务 PRD](../.trellis/tasks/09-25-read-only-task-loop/prd.md)。
 - 2026-09-28 Firefly AIO-3568J 已安装当前 `9ca71e31…` APK 与匹配测试包，Android 11 / API 30 的七项非 Root 定向测试通过，HFTP 仅使用 loopback 且结束后服务为空。Root、LAN、熄屏等未在此板复验，见[验证记录](verification.md)。
 
 - 2026-09-28 停止反馈修复已安装9ca71e…包：73项Flutter、10项最终手机检查及三轮LAN传输/停止/同7888重启含31MiB通过，日志状态正常；原配置恢复、隔离文件精确清理、VPN保持不变。熄屏仍拒绝连接，App CPU锁登记不代表idle有效保活。独立Root临时CPU租约候选用户选择暂不扩大Root范围，未实现；任务in_progress，暂不提交/归档。见[验证记录](verification.md)和[实机记录](../.trellis/tasks/archive/2026-09/09-27-workbench-usability/restart-device-check.md)。
@@ -44,8 +45,8 @@
 - 2026-09-23 旧包曾在 Android 11 开发板完成网络、PTY、Vector 桥接和导出验收；该包已由 current 包替换。
 - 当前 `dist/ctos-current-arm64.apk` 已去掉 Vector/Xposed 依赖，保留连接快照状态、应用与分身映射及终端功能。Android 16 当前包的 App API、Root 和 PTY 五项设备测试通过，工作台确认 Root 自动恢复。Android 11、全新安装授权弹窗与完整导出在当前包未重测；历史系统桥接记录不再作为当前验收条件。
 - 规划方向：手机本机的系统观测与操作终端，形成“查看信息 → 定位对象 → 执行命令 → 保存结果”的闭环。
-- 第一阶段已实现可信状态与工作台，本轮完成终端输入与输出选择优化；完整只读任务闭环和选择性导出仍在 Trellis 子任务中规划。
-- 开发板默认 ADB 入口：`BOARD-ADB-SERIAL`；本轮用户指定并实测 `TEST-BOARD-ADB-SERIAL`。历史验收与当前连接状态分别记录，不推定设备始终在线。
+- 第一阶段的只读任务闭环与选择性导出已完成本任务验收，其他产品体验机会仍按 Trellis 子任务推进。
+- 开发板默认 ADB 入口和每轮授权目标均按角色占位符记录；历史验收与当前连接状态分开记录，不推定设备始终在线。
 - 当前版本的增强采集仅依赖 Root；普通 API 基础路径保留。完整结果及已知边界见 [验证记录](verification.md)。
 
 ## 维护规则

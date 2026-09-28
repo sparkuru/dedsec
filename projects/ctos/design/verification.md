@@ -1,5 +1,18 @@
 # Verification
 
+## 2026-09-28 只读任务闭环验收
+
+在用户指定并授权的 `TARGET-BOARD`（Android 11 / API 30、arm64-v8a）完成本任务验收。通过 `adb install -r` 覆盖安装 release APK 和匹配的 release test APK，保留原 App 数据；设备上两个 APK 的哈希分别与本地产物 `56b3ca3c580c5df97fdd5d5502782f2fad90bd53e89730ef38209947e82963d2` 和 `aee3475d38d2948128c488fb3fd3934bcaeb0be84df2776d4acd504bbe00239f` 一致。
+
+- `./hako dart format` 覆盖本轮修改的 Dart 源码和测试；`./hako flutter analyze` 无问题，`./hako flutter test` **76/76 通过**。Python fake Context 边界检查通过：接口状态、不可用计数器、非法或消失接口保持各自语义。
+- Android `:app:lintRelease`、`:app:compileReleaseAndroidTestJavaWithJavac`、`:app:assembleRelease` 和 `:app:assembleReleaseAndroidTest` 均 **BUILD SUCCESSFUL**。
+- 指定仪器测试通过：`TaskHistoryStoreTest` **OK (3 tests)**，覆盖 allowlist、文件重载和清理、20 条/5 MiB 淘汰、失败/取消/超时状态及损坏恢复；仅运行 `DeviceTest#interfaceDiagnosisUsesExactFreshAppSnapshotAndCanBeStored`，**OK (1 test)**，确认使用新鲜 App 快照、只传单接口投影并持久化结果。没有运行其他 DeviceTest、Root 或 PTY 测试。
+- 手动界面检查：Root 列表中一个接口不在新鲜 App 快照内，按预期得到失败并保留失败状态；另一个 App 可见接口诊断成功，来源显示为 App。执行 `am force-stop` 并重新启动后，历史页仍显示上述成功与失败两条记录。
+- 导出预览中仅勾选成功的历史记录，网络和设备快照未勾选。通过 SAF 保存到唯一测试名后读回 JSON，顶层仅含 `exportedAt` 和 `taskHistory`，其中恰有一条记录且没有 `networkSnapshot` / `deviceSnapshot`。按返回键取消另一唯一测试名的保存，目标文件不存在；随后在历史页确认清除两条记录，页面显示空状态。已从 Downloads 精确删除本轮创建的导出文件；取消路径始终未创建。
+- 按用户授权启动 ctOS，运行既有启动时 Root 自动恢复流程；没有运行 Root 测试。未修改系统或 VPN 配置，未清除 App 数据。临时截图和回读 JSON 验收后已从 `/tmp` 删除，未作为项目产物提交。
+
+`git diff --check` 与 `python3 ./.trellis/scripts/task.py validate 09-25-read-only-task-loop` 通过。设备标识按本项目脱敏约定记为 `TARGET-BOARD`。
+
 ## 2026-09-28 Firefly 开发板当前包定向验收
 
 `adb devices -l` 本轮仅列出 `BOARD_ADB_SERIAL`，设备自报 AIO-3568J、Android 11 / API 30、arm64-v8a。显式指定该序列号读取 `pm path`、`dumpsys package` 和已安装 `base.apk` 的 SHA-256；ctOS 已安装，但安装时间为 2026-09-24，包哈希为 `22ab383fbaf02024b59f68ef958224a9215625aca58a87b6dd23b724511c2bcd`。本地 `dist/ctos-current-arm64.apk` 为 26,193,940 bytes、SHA-256 `9ca71e316525e5b5ba6a771f855f3df2d3b52342eb75162594e7972c3518c2e3`，与板上包不同。现有测试 APK 哈希为 `3cc68b0823d1cbde047484ab0cb088b82e5f2dde7ac048cbb6714dcb10319be1`。

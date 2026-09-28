@@ -67,6 +67,33 @@ void main() {
             },
           ],
         });
+      if (call.method == 'pythonRun' &&
+          (call.arguments as Map)['script'] == 'network.interface_diagnose')
+        return jsonEncode({
+          'script': 'network.interface_diagnose',
+          'taskId': 'task-interface',
+          'state': 'completed',
+          'environment': 'App',
+          'startedAt': 1000,
+          'durationMs': 10,
+          'exitCode': 0,
+          'data': {
+            'source': 'Android App API / test',
+            'capturedAt': 1000,
+            'interfaceName': 'wlan0',
+            'summary': '接口 wlan0：UP · 1 个地址',
+            'interface': {
+              'name': 'wlan0',
+              'state': 'UP',
+              'addresses': ['192.0.2.10/24'],
+              'counters': {'rxBytes': 100},
+              'unavailableCounters': [],
+            },
+            'networks': [],
+            'findings': [],
+            'warnings': [],
+          },
+        });
       if (call.method == 'pythonRun')
         return jsonEncode({
           'script': 'device.info',
@@ -144,6 +171,27 @@ void main() {
     await tester.pump();
     expect(find.text('tun0'), findsWidgets);
     expect(find.text('wlan0'), findsNothing);
+    await tester.enterText(find.byType(TextField).first, '');
+    await tester.pump();
+    await tester.tap(find.text('wlan0').first);
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+      find.text('诊断此接口'),
+      180,
+      scrollable: find.byType(Scrollable).last,
+    );
+    await tester.tap(find.text('诊断此接口'));
+    await tester.pumpAndSettle();
+    expect(find.text('接口诊断'), findsOneWidget);
+    expect(
+      tester.widget<TextFormField>(find.byType(TextFormField)).enabled,
+      isFalse,
+    );
+    await tester.tap(find.text('运行'));
+    await tester.pumpAndSettle();
+    expect(find.text('接口 wlan0：UP · 1 个地址'), findsOneWidget);
+    await tester.pageBack();
+    await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
     await tester.tap(find.text('工作台').last);
     await tester.pumpAndSettle();

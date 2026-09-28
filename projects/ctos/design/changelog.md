@@ -4,6 +4,8 @@
 
 2026-09-28：完成 Trellis bootstrap 规范整理：按实际 Flutter、Android 宿主、JNI/C 与 Python 运行层重写指南，移除不适用的 React hooks 与 ORM 模板，并补充持久化、宿主桥接及状态生命周期约定。文档检查结果见 [bootstrap task](../.trellis/tasks/00-bootstrap-guidelines/check.md)。
 
+2026-09-28：接入 `network.interface_diagnose` App-only 只读任务，接口详情携带并锁定接口名；Python 只收到新鲜快照中的单接口投影，保持实际缺失、失败、取消和超时状态。新增 Android host 版本化原子任务历史（仅三个只读 ID，20 条 / 5 MiB、淘汰最旧、手动清理）与工作台历史页面。总导出改为逐项预览选择网络、设备、连接快照及用户勾选的历史记录，保存仍走 SAF。Flutter、Python、Android 仪器和指定开发板的历史重启、单项 SAF 导出/取消及清理验收均通过，见[验证记录](verification.md)。
+
 ## 2026-09-27至28 HFTP停止与连续重启反馈（停止通过，熄屏未解决）
 
 - 显式stop-request边界和stopping/closing状态，回调失效与后台精确关闭；失败清理期间保留owner，阻止新实例覆盖资源。

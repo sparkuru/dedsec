@@ -25,7 +25,8 @@ def main() -> int:
             raise ValueError("Input exceeds 32 KiB")
         payload = json.loads(raw)
         context = Context(payload["device"], Path(payload["workdir"]),
-                          Path(payload["filesRoot"]) if payload.get("filesRoot") else None)
+                          Path(payload["filesRoot"]) if payload.get("filesRoot") else None,
+                          payload.get("network"))
         result = execute(script, context, payload.get("params", {}))
     else:
         raise ValueError("Expected catalog or run SCRIPT_ID")

@@ -12,6 +12,7 @@ import io.flutter.plugin.common.MethodCall;
 import io.flutter.plugin.common.MethodChannel;
 import org.json.JSONObject;
 import java.nio.charset.StandardCharsets;
+import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -24,6 +25,7 @@ public final class MainActivity extends FlutterActivity {
     private final ExecutorService pythonWorker = Executors.newSingleThreadExecutor();
     private PortablePackages portablePackages;
     private PythonRunner pythonRunner;
+    private TaskHistoryStore taskHistoryStore;
     private ToolFiles toolFiles;
     private HftpBridge hftpBridge;
     private final Object rootLock = new Object();
@@ -39,6 +41,7 @@ public final class MainActivity extends FlutterActivity {
         super.configureFlutterEngine(engine);
         portablePackages = new PortablePackages(this);
         pythonRunner = new PythonRunner(this, portablePackages);
+        taskHistoryStore = new TaskHistoryStore(this);
         toolFiles = new ToolFiles(this);
         hftpBridge = new HftpBridge(this);
         new EventChannel(engine.getDartExecutor().getBinaryMessenger(), "ctos/terminal").setStreamHandler(
@@ -92,17 +95,43 @@ public final class MainActivity extends FlutterActivity {
                 result.error("PARAMETERS", "A script ID is required", null);
                 return;
             }
-            String taskId = call.method.equals("pythonRun") ? call.argument("taskId") : "catalog";
+            Object requestedTaskId = call.argument("taskId");
+            if (call.method.equals("pythonRun") && (!(requestedTaskId instanceof String)
+                    || !((String) requestedTaskId).matches("[A-Za-z0-9_-]{1,128}"))) {
+                result.error("PARAMETERS", "A task ID is required", null);
+                return;
+            }
+            String taskId = call.method.equals("pythonRun") ? (String) requestedTaskId : "catalog";
+            String script = call.method.equals("pythonRun") ? call.argument("script") : null;
+            Object parameters = call.argument("params");
             if (taskId == null || !pythonRunner.claim(taskId)) {
                 result.error("BUSY", "A Python task is already running", null);
                 return;
             }
             pythonWorker.execute(() -> {
                 try {
-                    String script = call.method.equals("pythonRun") ? call.argument("script") : null;
-                    String value = pythonRunner.execute(script, call.argument("params")).toString();
+                    JSONObject envelope;
+                    try {
+                        envelope = pythonRunner.execute(script, parameters);
+                    } catch (Exception error) {
+                        if (!TaskHistoryStore.shouldPersist(script)) {
+                            main.post(() -> result.error("PYTHON", error.toString(), null));
+                            return;
+                        }
+                        envelope = failedTask(script, taskId, error);
+                    }
+                    if (TaskHistoryStore.shouldPersist(script)) {
+                        try {
+                            taskHistoryStore.appendResult(envelope, selectedInterface(parameters));
+                        } catch (Exception error) {
+                            envelope.put("historySaveError", error.toString());
+                        }
+                    }
+                    String value = envelope.toString();
                     main.post(() -> result.success(value));
-                } catch (Exception error) { main.post(() -> result.error("PYTHON", error.toString(), null)); }
+                } catch (Exception error) {
+                    main.post(() -> result.error("PYTHON", error.toString(), null));
+                }
             });
             return;
         }
@@ -112,6 +141,26 @@ public final class MainActivity extends FlutterActivity {
             exportResult = result;
             startActivityForResult(new Intent(Intent.ACTION_CREATE_DOCUMENT).setType("application/json")
                     .addCategory(Intent.CATEGORY_OPENABLE).putExtra(Intent.EXTRA_TITLE, "ctos-snapshot.json"), 81);
+            return;
+        }
+        if (call.method.equals("taskHistoryList") || call.method.equals("taskHistoryClear")) {
+            if (call.method.equals("taskHistoryClear") && pythonRunner.busy()) {
+                result.error("HISTORY_BUSY", "Wait for the current read-only task before clearing history", null);
+                return;
+            }
+            pythonWorker.execute(() -> {
+                try {
+                    if (call.method.equals("taskHistoryClear")) {
+                        taskHistoryStore.clear();
+                        main.post(() -> result.success(null));
+                    } else {
+                        String value = taskHistoryStore.listJson();
+                        main.post(() -> result.success(value));
+                    }
+                } catch (Exception error) {
+                    main.post(() -> result.error("HISTORY", error.toString(), null));
+                }
+            });
             return;
         }
         ExecutorService executor = call.method.startsWith("terminal") ? terminalWorker : worker;
@@ -186,6 +235,19 @@ public final class MainActivity extends FlutterActivity {
                 main.post(() -> result.error("CTOS", error.toString(), null));
             }
         });
+    }
+
+    private static String selectedInterface(Object parameters) {
+        if (!(parameters instanceof Map)) return null;
+        Object value = ((Map<?, ?>) parameters).get("interface_name");
+        return value instanceof String ? (String) value : null;
+    }
+
+    private static JSONObject failedTask(String script, String taskId, Exception error) throws Exception {
+        return new JSONObject().put("script", script).put("taskId", taskId).put("environment", "App")
+                .put("sdk", 2).put("state", "failed").put("startedAt", System.currentTimeMillis())
+                .put("durationMs", 0).put("exitCode", 1).put("data", JSONObject.NULL)
+                .put("stdout", "").put("stderr", error.toString()).put("truncated", false);
     }
 
     private static int dimension(Object value, int fallback) {

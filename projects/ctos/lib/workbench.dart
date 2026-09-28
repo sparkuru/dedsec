@@ -6,6 +6,7 @@ import 'workbench/script_page.dart';
 import 'workbench/hftp_page.dart';
 import 'workbench/file_store_card.dart';
 import 'workbench/controls.dart';
+import 'workbench/task_history_page.dart';
 export 'workbench/api.dart';
 export 'workbench/models.dart';
 export 'workbench/script_page.dart';
@@ -14,9 +15,13 @@ class WorkbenchPage extends StatefulWidget {
   const WorkbenchPage({
     super.key,
     required this.active,
+    this.onExportHistory,
+    this.onBrowseInterfaces,
     this.api = const WorkbenchApi(),
   });
   final bool active;
+  final ValueChanged<List<Map<String, dynamic>>>? onExportHistory;
+  final VoidCallback? onBrowseInterfaces;
   final WorkbenchApi api;
 
   @override
@@ -98,6 +103,27 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
           const SizedBox(height: 8),
           const Text('在手机上完成常用任务'),
           const SizedBox(height: 16),
+          Card(
+            margin: const EdgeInsets.only(bottom: 8),
+            child: ListTile(
+              leading: Icon(
+                Icons.history,
+                color: Theme.of(context).colorScheme.primary,
+              ),
+              title: const Text('任务历史'),
+              subtitle: const Text('查看和选择已保存的只读任务结果'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => TaskHistoryPage(
+                    api: widget.api,
+                    onExportSelected: widget.onExportHistory ?? (_) {},
+                    onBrowseInterfaces: widget.onBrowseInterfaces ?? () {},
+                  ),
+                ),
+              ),
+            ),
+          ),
           if (loading) ...[
             const LinearProgressIndicator(),
             const Padding(

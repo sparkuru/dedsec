@@ -163,12 +163,24 @@ void main() {
     expect(find.textContaining('0 条匹配'), findsOneWidget);
     await tester.enterText(find.byType(TextField).last, '');
     await tester.pump();
-    await tester.tap(find.byTooltip('导出 JSON'));
+    await tester.tap(find.byTooltip('选择导出内容'));
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+      find.text('连接快照'),
+      300,
+      scrollable: find.byType(Scrollable).last,
+    );
+    await tester.tap(find.text('连接快照'));
     await tester.pump();
+    await tester.tap(find.text('预览并保存所选内容'));
+    await tester.pumpAndSettle();
     final exportedConnections =
         exported?['connections'] as Map<String, dynamic>?;
-    expect(exportedConnections?['output'], contains('tcp ESTAB'));
-    expect(exportedConnections?.containsKey('apps'), isFalse);
+    expect(exportedConnections?['data']['output'], contains('tcp ESTAB'));
+    expect(exportedConnections?['data'].containsKey('apps'), isFalse);
+    expect(exported?.containsKey('network'), isFalse);
+    await tester.pageBack();
+    await tester.pumpAndSettle();
     await tester.pump(connectionFreshness);
     await tester.pump();
     expect(find.textContaining('旧快照'), findsOneWidget);
