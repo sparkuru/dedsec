@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'api.dart';
 import 'controls.dart';
+import '../ui/ctos_theme.dart';
 
 class HftpPage extends StatefulWidget {
   const HftpPage({super.key, required this.api});
@@ -198,6 +199,7 @@ class _HftpPageState extends State<HftpPage> with WidgetsBindingObserver {
     final clear = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
+        scrollable: true,
         title: const Text('清空 HFTP 共享库？'),
         content: const Text('删除默认共享库内的导入副本和收到的上传文件。原始导入文件不会被修改。'),
         actions: [
@@ -240,283 +242,362 @@ class _HftpPageState extends State<HftpPage> with WidgetsBindingObserver {
     appBar: AppBar(title: const Text('HFTP 文件服务')),
     body: SafeArea(
       child: LayoutBuilder(
-        builder: (context, constraints) => ListView(
-          padding: EdgeInsets.symmetric(
-            horizontal: constraints.maxWidth > 880
-                ? (constraints.maxWidth - 840) / 2
-                : 20,
-            vertical: 20,
-          ),
-          children: [
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(switch (status['state']) {
-                      'running' => '运行中 · 后台继续',
-                      'starting' => '启动中…',
-                      'stopping' => '停止中…',
-                      'failed' => '服务异常',
-                      _ => '已停止',
-                    }, style: Theme.of(context).textTheme.titleMedium),
-                    if ((status['reason'] as String? ?? '').isNotEmpty)
-                      Text(status['reason'] as String),
-                    if (active)
-                      Text(
-                        status['rootRelay'] == true
-                            ? '访问方式：Root 局域网中继'
-                            : '访问方式：App 服务',
+        builder: (context, constraints) => SingleChildScrollView(
+          padding: workbenchPadding(constraints.maxWidth),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Card(
+                margin: EdgeInsets.zero,
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Icon(
+                        Icons.wifi_tethering,
+                        color: status['state'] == 'failed'
+                            ? Theme.of(context).colorScheme.error
+                            : active
+                            ? Theme.of(context).colorScheme.primary
+                            : Theme.of(context).colorScheme.onSurfaceVariant,
                       ),
-                    if (status['state'] == 'running') ...[
                       const SizedBox(height: 12),
-                      Text('共享目录：${status['directoryName'] ?? directoryName}'),
                       Text(
-                        '单次上传上限：${status['maxUploadMiB'] ?? maxUpload.text} MiB',
-                      ),
-                      for (final url in status['urls'] as List? ?? [])
-                        Row(
-                          children: [
-                            Expanded(child: SelectableText(url as String)),
-                            IconButton(
-                              tooltip: '复制地址',
-                              onPressed: () => copy(url),
-                              icon: const Icon(Icons.copy_outlined),
+                        !loaded
+                            ? busy
+                                  ? '读取服务状态…'
+                                  : '状态未读取'
+                            : switch (status['state']) {
+                                'running' => '运行中 · 后台继续',
+                                'starting' => '启动中…',
+                                'stopping' => '停止中…',
+                                'failed' => '服务异常',
+                                _ => '已停止',
+                              },
+                        style: Theme.of(context).textTheme.headlineSmall
+                            ?.copyWith(
+                              color: status['state'] == 'failed'
+                                  ? Theme.of(context).colorScheme.error
+                                  : active
+                                  ? Theme.of(context).colorScheme.primary
+                                  : null,
                             ),
-                          ],
+                      ),
+                      if ((status['reason'] as String? ?? '').isNotEmpty)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 12),
+                          child: Text(
+                            status['reason'] as String,
+                            style: TextStyle(
+                              color: Theme.of(context).colorScheme.error,
+                            ),
+                          ),
                         ),
+                      if (active)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 12),
+                          child: Text(
+                            status['rootRelay'] == true
+                                ? '访问方式：Root 局域网中继'
+                                : '访问方式：App 服务',
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                        ),
+                      if (status['state'] == 'running') ...[
+                        const SizedBox(height: 12),
+                        Text(
+                          '共享目录：${status['directoryName'] ?? directoryName}',
+                        ),
+                        Text(
+                          '单次上传上限：${status['maxUploadMiB'] ?? maxUpload.text} MiB',
+                        ),
+                        for (final url in status['urls'] as List? ?? [])
+                          Row(
+                            children: [
+                              Expanded(child: SelectableText(url as String)),
+                              IconButton(
+                                tooltip: '复制地址',
+                                onPressed: () => copy(url),
+                                icon: const Icon(Icons.copy_outlined),
+                              ),
+                            ],
+                          ),
+                      ],
                     ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              WorkbenchActions(
+                children: [
+                  FilledButton.icon(
+                    onPressed: busy || stopping || closing
+                        ? null
+                        : active
+                        ? stop
+                        : loaded
+                        ? start
+                        : load,
+                    icon: Icon(
+                      active
+                          ? Icons.stop
+                          : loaded
+                          ? Icons.play_arrow
+                          : Icons.refresh,
+                    ),
+                    label: Text(
+                      stopping
+                          ? '停止中…'
+                          : closing
+                          ? '结束中…'
+                          : busy
+                          ? '处理中…'
+                          : active
+                          ? '停止'
+                          : loaded
+                          ? '启动服务'
+                          : '重新加载配置',
+                    ),
+                  ),
+                ],
+              ),
+              if (busy || status['state'] == 'starting' || stopping || closing)
+                const Padding(
+                  padding: EdgeInsets.only(top: 16),
+                  child: LinearProgressIndicator(),
+                ),
+              const SizedBox(height: 24),
+              WorkbenchSection(
+                title: '服务配置',
+                icon: Icons.tune_outlined,
+                subtitle: '手动启动，通知栏可停止。先停止服务，再修改配置或目录。',
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    WorkbenchDropdown(
+                      child: DropdownButtonFormField<String>(
+                        key: ValueKey(host),
+                        initialValue: host,
+                        isExpanded: true,
+                        decoration: const InputDecoration(labelText: '监听范围'),
+                        items: const [
+                          DropdownMenuItem(
+                            value: '0.0.0.0',
+                            child: Text('局域网'),
+                          ),
+                          DropdownMenuItem(
+                            value: '127.0.0.1',
+                            child: Text('仅本机'),
+                          ),
+                        ],
+                        onChanged: editable
+                            ? (value) => setState(() {
+                                host = value!;
+                                if (host == '127.0.0.1') rootRelay = false;
+                              })
+                            : null,
+                      ),
+                    ),
+                    if (host == '0.0.0.0') ...[
+                      const SizedBox(height: 8),
+                      CheckboxListTile(
+                        contentPadding: EdgeInsets.zero,
+                        controlAffinity: ListTileControlAffinity.leading,
+                        title: const Text('Root 局域网中继'),
+                        subtitle: const Text(
+                          '需要 Root，仅转发网络，文件仍由 App 访问。运行期间耗电增加。',
+                        ),
+                        value: rootRelay,
+                        onChanged: editable
+                            ? (value) =>
+                                  setState(() => rootRelay = value ?? false)
+                            : null,
+                      ),
+                    ] else ...[
+                      const SizedBox(height: 8),
+                      const Text('仅本机模式无需 Root 中继。'),
+                    ],
+                    const SizedBox(height: 16),
+                    TextField(
+                      controller: port,
+                      enabled: editable,
+                      keyboardType: TextInputType.number,
+                      decoration: const InputDecoration(
+                        labelText: '端口',
+                        helperText: '1024–65535；不抢占其他进程的端口',
+                        helperMaxLines: 4,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    TextField(
+                      controller: maxUpload,
+                      enabled: editable,
+                      keyboardType: TextInputType.number,
+                      decoration: const InputDecoration(
+                        labelText: '最大上传大小（MiB）',
+                        helperText: '1–1024；每个上传文件的大小上限',
+                        helperMaxLines: 4,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    if (host == '0.0.0.0' || status['host'] == '0.0.0.0')
+                      const WorkbenchNotice(
+                        text: '同一网络中的设备可直接访问和上传，无需登录。HTTP 不加密文件传输。',
+                        icon: Icons.lock_open_outlined,
+                      ),
                   ],
                 ),
               ),
-            ),
-            const SizedBox(height: 12),
-            WorkbenchActions(
-              children: [
-                FilledButton.icon(
-                  onPressed: busy || stopping || closing
-                      ? null
-                      : active
-                      ? stop
-                      : loaded
-                      ? start
-                      : load,
-                  icon: Icon(
-                    active
-                        ? Icons.stop
-                        : loaded
-                        ? Icons.play_arrow
-                        : Icons.refresh,
-                  ),
-                  label: Text(
-                    stopping
-                        ? '停止中…'
-                        : closing
-                        ? '结束中…'
-                        : busy
-                        ? '处理中…'
-                        : active
-                        ? '停止'
-                        : loaded
-                        ? '启动服务'
-                        : '重新加载配置',
+              const SizedBox(height: 24),
+              WorkbenchSection(
+                title: '共享目录',
+                icon: Icons.folder_open_outlined,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    SelectableText(directoryName),
+                    const SizedBox(height: 8),
+                    Text(
+                      treeUri.isEmpty
+                          ? '默认目录保留已有共享文件，可导入文件副本。'
+                          : '直接共享所选本机目录；上传文件写入该目录，不覆盖同名文件。',
+                    ),
+                    const SizedBox(height: 12),
+                    WorkbenchActions(
+                      children: [
+                        OutlinedButton.icon(
+                          onPressed: editable ? chooseDirectory : null,
+                          icon: const Icon(Icons.folder_open_outlined),
+                          label: const Text('选择本机目录'),
+                        ),
+                        if (treeUri.isNotEmpty)
+                          OutlinedButton.icon(
+                            onPressed: editable ? useDefaultDirectory : null,
+                            icon: const Icon(Icons.home_outlined),
+                            label: const Text('使用默认共享目录'),
+                          ),
+                        if (treeUri.isEmpty) ...[
+                          OutlinedButton.icon(
+                            onPressed: editable ? import : null,
+                            icon: const Icon(Icons.file_open_outlined),
+                            label: const Text('导入共享文件'),
+                          ),
+                          TextButton(
+                            style: TextButton.styleFrom(
+                              foregroundColor: Theme.of(
+                                context,
+                              ).colorScheme.error,
+                            ),
+                            onPressed: editable ? clearShare : null,
+                            child: const Text('清空共享库'),
+                          ),
+                        ],
+                      ],
+                    ),
+                    if (imported != null)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 12),
+                        child: Text(imported!),
+                      ),
+                  ],
+                ),
+              ),
+              if (error != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 16),
+                  child: SelectableText(
+                    error!,
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.error,
+                    ),
                   ),
                 ),
-              ],
-            ),
-            if (busy || status['state'] == 'starting' || stopping || closing)
-              const Padding(
-                padding: EdgeInsets.only(top: 16),
-                child: LinearProgressIndicator(),
-              ),
-            const SizedBox(height: 16),
-            Card(
-              child: ExpansionTile(
-                key: const PageStorageKey('hftp-service-logs'),
-                initiallyExpanded: true,
-                maintainState: true,
-                title: const Text('服务日志'),
-                subtitle: Text('${logs.length} 条 · 实时更新'),
-                childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-                children: [
-                  if (logs.isEmpty)
-                    const Align(
-                      alignment: Alignment.centerLeft,
-                      child: Text('暂无服务日志。启动服务后，收到的请求会显示在这里。'),
-                    )
-                  else
-                    ConstrainedBox(
-                      constraints: const BoxConstraints(maxHeight: 320),
-                      child: SingleChildScrollView(
-                        key: const PageStorageKey('hftp-log-scroll'),
-                        reverse: true,
-                        child: Align(
-                          alignment: Alignment.centerLeft,
-                          child: SelectableText(
-                            logs.join('\n'),
-                            key: const PageStorageKey('hftp-log-text'),
-                            style: Theme.of(context).textTheme.bodyMedium
-                                ?.copyWith(fontFamily: 'monospace'),
+              const SizedBox(height: 24),
+              Card(
+                child: ExpansionTile(
+                  expansionAnimationStyle: AnimationStyle(
+                    duration: CtosTheme.duration(context),
+                    reverseDuration: CtosTheme.duration(context),
+                  ),
+                  key: const PageStorageKey('hftp-service-logs'),
+                  initiallyExpanded: true,
+                  maintainState: true,
+                  title: const Text('服务日志'),
+                  subtitle: Text(
+                    logs.isEmpty ? '暂无请求' : '${logs.length} 条 · 实时更新',
+                  ),
+                  childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                  children: [
+                    if (logs.isEmpty)
+                      const Align(
+                        alignment: Alignment.centerLeft,
+                        child: Text('暂无服务日志。启动服务后，收到的请求会显示在这里。'),
+                      )
+                    else
+                      ConstrainedBox(
+                        constraints: const BoxConstraints(maxHeight: 320),
+                        child: SingleChildScrollView(
+                          key: const PageStorageKey('hftp-log-scroll'),
+                          reverse: true,
+                          child: Align(
+                            alignment: Alignment.centerLeft,
+                            child: SelectableText(
+                              logs.join('\n'),
+                              key: const PageStorageKey('hftp-log-text'),
+                              style: Theme.of(context).textTheme.bodyMedium
+                                  ?.copyWith(fontFamily: 'monospace'),
+                            ),
                           ),
                         ),
                       ),
-                    ),
-                  const SizedBox(height: 12),
-                  const Align(
-                    alignment: Alignment.centerLeft,
-                    child: Text('日志仅在内存中保留；停止后可查看，重新启动服务会开始新日志。'),
-                  ),
-                  const SizedBox(height: 12),
-                  WorkbenchActions(
-                    children: [
-                      OutlinedButton.icon(
-                        onPressed: logs.isEmpty ? null : copyLogs,
-                        icon: const Icon(Icons.copy_outlined),
-                        label: const Text('复制日志'),
-                      ),
-                      TextButton(
-                        onPressed: clearingLogs || logs.isEmpty
-                            ? null
-                            : clearLogs,
-                        child: Text(clearingLogs ? '清空中…' : '清空日志'),
-                      ),
-                    ],
-                  ),
-                  if (logsError != null)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 12),
-                      child: SelectableText(
-                        logsError!,
-                        key: const PageStorageKey('hftp-log-error-text'),
-                        style: TextStyle(
-                          color: Theme.of(context).colorScheme.error,
+                    if (logs.isNotEmpty) ...[
+                      const SizedBox(height: 12),
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: Text(
+                          '停止后可查看；重启开始新日志，退出应用后不保留。',
+                          style: Theme.of(context).textTheme.bodySmall,
                         ),
                       ),
+                    ],
+                    const SizedBox(height: 12),
+                    WorkbenchActions(
+                      children: [
+                        OutlinedButton.icon(
+                          onPressed: logs.isEmpty ? null : copyLogs,
+                          icon: const Icon(Icons.copy_outlined),
+                          label: const Text('复制日志'),
+                        ),
+                        TextButton(
+                          onPressed: clearingLogs || logs.isEmpty
+                              ? null
+                              : clearLogs,
+                          child: Text(clearingLogs ? '清空中…' : '清空日志'),
+                        ),
+                      ],
                     ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 24),
-            Text('服务配置', style: Theme.of(context).textTheme.titleMedium),
-            const SizedBox(height: 8),
-            const Text('手动启动，切到后台继续运行，通知栏可停止。先停止服务，再修改配置或目录。'),
-            const SizedBox(height: 16),
-            WorkbenchDropdown(
-              child: DropdownButtonFormField<String>(
-                key: ValueKey(host),
-                initialValue: host,
-                isExpanded: true,
-                decoration: const InputDecoration(labelText: '监听范围'),
-                items: const [
-                  DropdownMenuItem(value: '0.0.0.0', child: Text('局域网')),
-                  DropdownMenuItem(value: '127.0.0.1', child: Text('仅本机')),
-                ],
-                onChanged: editable
-                    ? (value) => setState(() {
-                        host = value!;
-                        if (host == '127.0.0.1') rootRelay = false;
-                      })
-                    : null,
-              ),
-            ),
-            if (host == '0.0.0.0') ...[
-              const SizedBox(height: 8),
-              CheckboxListTile(
-                contentPadding: EdgeInsets.zero,
-                controlAffinity: ListTileControlAffinity.leading,
-                title: const Text('Root 局域网中继'),
-                subtitle: const Text(
-                  '需要 Root，仅转发网络，文件仍由 App 访问。运行期间耗电增加。',
+                    if (logsError != null)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 12),
+                        child: SelectableText(
+                          logsError!,
+                          key: const PageStorageKey('hftp-log-error-text'),
+                          style: TextStyle(
+                            color: Theme.of(context).colorScheme.error,
+                          ),
+                        ),
+                      ),
+                  ],
                 ),
-                value: rootRelay,
-                onChanged: editable
-                    ? (value) => setState(() => rootRelay = value ?? false)
-                    : null,
               ),
-            ] else ...[
-              const SizedBox(height: 8),
-              const Text('仅本机模式无需 Root 中继。'),
+              const SizedBox(height: 16),
+              Text(
+                '服务最长运行 5 小时；Android 也可能按后台限额停止服务，需要手动重新启动。',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
             ],
-            const SizedBox(height: 16),
-            TextField(
-              controller: port,
-              enabled: editable,
-              keyboardType: TextInputType.number,
-              decoration: const InputDecoration(
-                labelText: '端口',
-                helperText: '1024–65535；不抢占其他进程的端口',
-              ),
-            ),
-            const SizedBox(height: 16),
-            TextField(
-              controller: maxUpload,
-              enabled: editable,
-              keyboardType: TextInputType.number,
-              decoration: const InputDecoration(
-                labelText: '最大上传大小（MiB）',
-                helperText: '1–1024；每个上传文件的大小上限',
-              ),
-            ),
-            const SizedBox(height: 16),
-            if (host == '0.0.0.0' || status['host'] == '0.0.0.0')
-              const Text('同一网络中的设备可直接访问和上传，无需登录。HTTP 不加密文件传输。'),
-            const SizedBox(height: 24),
-            Text('共享目录', style: Theme.of(context).textTheme.titleMedium),
-            const SizedBox(height: 8),
-            SelectableText(directoryName),
-            const SizedBox(height: 8),
-            Text(
-              treeUri.isEmpty
-                  ? '默认目录保留已有共享文件，可导入文件副本。'
-                  : '直接共享所选本机目录；上传文件写入该目录，不覆盖同名文件。',
-            ),
-            const SizedBox(height: 12),
-            WorkbenchActions(
-              children: [
-                OutlinedButton.icon(
-                  onPressed: editable ? chooseDirectory : null,
-                  icon: const Icon(Icons.folder_open_outlined),
-                  label: const Text('选择本机目录'),
-                ),
-                if (treeUri.isNotEmpty)
-                  OutlinedButton.icon(
-                    onPressed: editable ? useDefaultDirectory : null,
-                    icon: const Icon(Icons.home_outlined),
-                    label: const Text('使用默认共享目录'),
-                  ),
-                if (treeUri.isEmpty) ...[
-                  OutlinedButton.icon(
-                    onPressed: editable ? import : null,
-                    icon: const Icon(Icons.file_open_outlined),
-                    label: const Text('导入共享文件'),
-                  ),
-                  TextButton(
-                    style: TextButton.styleFrom(
-                      foregroundColor: Theme.of(context).colorScheme.error,
-                    ),
-                    onPressed: editable ? clearShare : null,
-                    child: const Text('清空共享库'),
-                  ),
-                ],
-              ],
-            ),
-            if (imported != null)
-              Padding(
-                padding: const EdgeInsets.only(top: 12),
-                child: Text(imported!),
-              ),
-            if (error != null)
-              Padding(
-                padding: const EdgeInsets.only(top: 16),
-                child: SelectableText(
-                  error!,
-                  style: TextStyle(color: Theme.of(context).colorScheme.error),
-                ),
-              ),
-            const SizedBox(height: 16),
-            const Text('服务最长运行 5 小时；Android 也可能按后台限额停止服务，需要手动重新启动。'),
-          ],
+          ),
         ),
       ),
     ),

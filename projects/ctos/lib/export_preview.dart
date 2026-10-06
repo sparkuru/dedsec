@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'ui/ctos_theme.dart';
 import 'workbench/api.dart';
 
 class ExportDataItem {
@@ -103,7 +104,9 @@ class _ExportPreviewPageState extends State<ExportPreviewPage> {
   }
 
   String _historyTime(Object? value) => value is num
-      ? DateTime.fromMillisecondsSinceEpoch(value.toInt()).toLocal().toString()
+      ? DateTime.fromMillisecondsSinceEpoch(
+          value.toInt(),
+        ).toLocal().toString().replaceFirst(RegExp(r'\.000$'), '')
       : '时间未知';
 
   String _preview(Object value) {
@@ -143,18 +146,44 @@ class _ExportPreviewPageState extends State<ExportPreviewPage> {
   Widget build(BuildContext context) => Scaffold(
     appBar: AppBar(title: const Text('选择导出内容')),
     bottomNavigationBar: SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(20, 8, 20, 16),
-        child: FilledButton.icon(
-          onPressed: hasSelection && !saving ? save : null,
-          icon: saving
-              ? const SizedBox(
-                  width: 18,
-                  height: 18,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                )
-              : const Icon(Icons.save_alt),
-          label: Text(saving ? '等待文件位置…' : '预览并保存所选内容'),
+      child: Align(
+        heightFactor: 1,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 880),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Semantics(
+                  liveRegion: true,
+                  child: Text(
+                    hasSelection
+                        ? '已选择 ${selectedItems.length + selectedHistory.length} 项'
+                        : '选择至少一项后可以继续。',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                FilledButton.icon(
+                  key: const Key('export-save-selection'),
+                  onPressed: hasSelection && !saving ? save : null,
+                  icon: saving
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.save_alt),
+                  label: Text(
+                    saving ? '等待文件位置…' : '预览并保存所选内容',
+                    textAlign: TextAlign.center,
+                  ),
+                ),
+              ],
+            ),
+          ),
         ),
       ),
     ),
@@ -164,12 +193,21 @@ class _ExportPreviewPageState extends State<ExportPreviewPage> {
           padding: EdgeInsets.symmetric(
             horizontal: constraints.maxWidth > 880
                 ? (constraints.maxWidth - 840) / 2
+                : constraints.maxWidth < 360
+                ? 16
                 : 20,
-            vertical: 16,
+            vertical: 24,
           ),
           children: [
-            const Text('逐项选择要包含的数据；未选内容不会写入导出文件。'),
-            const SizedBox(height: 12),
+            Text('保存所选内容', style: Theme.of(context).textTheme.headlineMedium),
+            const SizedBox(height: 8),
+            Text(
+              '逐项选择要包含的数据；未选内容不会写入导出文件。',
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 24),
             if (widget.items.isEmpty && widget.historyCandidates.isEmpty)
               const Card(
                 child: Padding(
@@ -179,10 +217,15 @@ class _ExportPreviewPageState extends State<ExportPreviewPage> {
               ),
             for (final entry in widget.items.entries)
               Card(
-                margin: const EdgeInsets.only(bottom: 8),
+                margin: const EdgeInsets.only(bottom: 16),
                 child: Column(
                   children: [
                     CheckboxListTile(
+                      selected: selectedItems.contains(entry.key),
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 8,
+                      ),
                       value: selectedItems.contains(entry.key),
                       onChanged: saving
                           ? null
@@ -193,14 +236,21 @@ class _ExportPreviewPageState extends State<ExportPreviewPage> {
                                 selectedItems.remove(entry.key);
                               }
                             }),
-                      title: Text(entry.value.title),
+                      title: Text(
+                        entry.value.title,
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
                       subtitle: Text(
-                        '${entry.value.source} · ${entry.value.capturedAt}\n${entry.value.scope}',
+                        '${entry.value.source} · ${entry.value.scope}\n${entry.value.capturedAt.replaceFirst(RegExp(r'\.000$'), '')}',
                       ),
                       controlAffinity: ListTileControlAffinity.leading,
-                      isThreeLine: true,
                     ),
                     ExpansionTile(
+                      minTileHeight: 48,
+                      expansionAnimationStyle: AnimationStyle(
+                        duration: CtosTheme.duration(context),
+                      ),
+                      key: PageStorageKey('export-snapshot-${entry.key}'),
                       title: const Text('预览此快照'),
                       children: [
                         Padding(
@@ -208,8 +258,15 @@ class _ExportPreviewPageState extends State<ExportPreviewPage> {
                           child: Align(
                             alignment: Alignment.centerLeft,
                             child: SelectableText(
+                              key: PageStorageKey(
+                                'export-snapshot-text-${entry.key}',
+                              ),
                               _preview(entry.value.toJson()),
-                              style: const TextStyle(fontFamily: 'monospace'),
+                              style: Theme.of(context).textTheme.bodyMedium
+                                  ?.copyWith(
+                                    fontFamily: 'monospace',
+                                    height: 1.6,
+                                  ),
                             ),
                           ),
                         ),
@@ -220,18 +277,25 @@ class _ExportPreviewPageState extends State<ExportPreviewPage> {
               ),
             if (widget.historyCandidates.isNotEmpty) ...[
               Padding(
-                padding: const EdgeInsets.only(top: 12, bottom: 4),
+                padding: const EdgeInsets.only(top: 16, bottom: 12),
                 child: Text(
                   '只读任务历史',
-                  style: Theme.of(context).textTheme.titleMedium,
+                  style: Theme.of(context).textTheme.titleLarge,
                 ),
               ),
               for (final record in widget.historyCandidates)
                 Card(
-                  margin: const EdgeInsets.only(bottom: 8),
+                  margin: const EdgeInsets.only(bottom: 16),
                   child: Column(
                     children: [
                       CheckboxListTile(
+                        selected: selectedHistory.contains(
+                          record['taskId']?.toString(),
+                        ),
+                        contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 8,
+                        ),
                         value: selectedHistory.contains(
                           record['taskId']?.toString(),
                         ),
@@ -245,14 +309,24 @@ class _ExportPreviewPageState extends State<ExportPreviewPage> {
                                   selectedHistory.remove(id);
                                 }
                               }),
-                        title: Text(_historyLabel(record)),
+                        title: Text(
+                          _historyLabel(record),
+                          style: Theme.of(context).textTheme.titleMedium,
+                        ),
                         subtitle: Text(
-                          '${record['source'] ?? '来源未知'} · ${_historyTime(record['startedAt'])}',
+                          '${record['source'] ?? '来源未知'}\n${_historyTime(record['startedAt'])}',
                         ),
                         controlAffinity: ListTileControlAffinity.leading,
                         isThreeLine: false,
                       ),
                       ExpansionTile(
+                        minTileHeight: 48,
+                        expansionAnimationStyle: AnimationStyle(
+                          duration: CtosTheme.duration(context),
+                        ),
+                        key: PageStorageKey(
+                          'export-history-${record['taskId']}',
+                        ),
                         title: const Text('预览此历史记录'),
                         children: [
                           Padding(
@@ -260,8 +334,15 @@ class _ExportPreviewPageState extends State<ExportPreviewPage> {
                             child: Align(
                               alignment: Alignment.centerLeft,
                               child: SelectableText(
+                                key: PageStorageKey(
+                                  'export-history-text-${record['taskId']}',
+                                ),
                                 _preview(record),
-                                style: const TextStyle(fontFamily: 'monospace'),
+                                style: Theme.of(context).textTheme.bodyMedium
+                                    ?.copyWith(
+                                      fontFamily: 'monospace',
+                                      height: 1.6,
+                                    ),
                               ),
                             ),
                           ),
@@ -274,6 +355,10 @@ class _ExportPreviewPageState extends State<ExportPreviewPage> {
             if (hasSelection)
               Card(
                 child: ExpansionTile(
+                  expansionAnimationStyle: AnimationStyle(
+                    duration: CtosTheme.duration(context),
+                  ),
+                  key: const PageStorageKey('export-final-preview'),
                   title: const Text('预览最终导出 JSON'),
                   children: [
                     Padding(
@@ -281,6 +366,9 @@ class _ExportPreviewPageState extends State<ExportPreviewPage> {
                       child: Align(
                         alignment: Alignment.centerLeft,
                         child: SelectableText(
+                          key: const PageStorageKey(
+                            'export-final-preview-text',
+                          ),
                           _preview(
                             buildExportDocument(
                               items: widget.items,
@@ -290,19 +378,15 @@ class _ExportPreviewPageState extends State<ExportPreviewPage> {
                               exportedAt: DateTime.now(),
                             ),
                           ),
-                          style: const TextStyle(fontFamily: 'monospace'),
+                          style: Theme.of(context).textTheme.bodyMedium
+                              ?.copyWith(fontFamily: 'monospace', height: 1.6),
                         ),
                       ),
                     ),
                   ],
                 ),
               ),
-            if (!hasSelection)
-              const Padding(
-                padding: EdgeInsets.symmetric(vertical: 12),
-                child: Text('选择至少一项后可以继续。'),
-              ),
-            const SizedBox(height: 80),
+            const SizedBox(height: 24),
           ],
         ),
       ),

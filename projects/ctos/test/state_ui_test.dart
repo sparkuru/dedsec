@@ -271,6 +271,11 @@ void main() {
     await tester.tap(find.byTooltip('刷新连接'));
     await tester.pumpAndSettle();
     expect(find.textContaining('刷新失败'), findsOneWidget);
+    await tester.scrollUntilVisible(
+      find.text('UDP'),
+      100,
+      scrollable: find.byType(Scrollable).last,
+    );
     expect(find.text('UDP'), findsOneWidget);
     expect(find.text('tim'), findsWidgets);
     expect(connectionCalls, 3);

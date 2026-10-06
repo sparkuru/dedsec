@@ -7,6 +7,7 @@ multi-package workspace.
 | Path | Ownership |
 | --- | --- |
 | `lib/main.dart` | App theme, navigation, shared observatory state, and top-level screens |
+| `lib/ui/ctos_theme.dart`, `ctos_components.dart` | Semantic colors, typography, motion/terminal themes, and projection-only heading/status/data-field widgets |
 | `lib/device_info.dart`, `lib/connection_info.dart`, `lib/connection_state.dart`, `lib/traffic.dart` | Pure data projection and snapshot/traffic state |
 | `lib/device_page.dart` | Device information presentation |
 | `lib/terminal_interaction.dart` | PTY input, session command history, and selectable output projection |

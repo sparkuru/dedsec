@@ -13,9 +13,19 @@ class FileStoreCard extends StatelessWidget {
       final clear = await showDialog<bool>(
         context: context,
         builder: (context) => AlertDialog(
+          scrollable: true,
           title: const Text('工具临时文件'),
-          content: Text(
-            '已用 ${((info['bytes'] as num) / 1024 / 1024).toStringAsFixed(1)} / 128 MiB。\n清理会删除 App 内的导入副本和工具输出；已保存到外部的文件及 HFTP 共享库不受影响。',
+          content: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text('清理会删除 App 内的导入副本和工具输出；已保存到外部的文件及 HFTP 共享库不受影响。'),
+              const SizedBox(height: 16),
+              Text(
+                '已使用 ${((info['bytes'] as num) / 1024 / 1024).toStringAsFixed(1)} MiB · 总容量 128 MiB',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ],
           ),
           actions: [
             WorkbenchActions(
@@ -26,6 +36,9 @@ class FileStoreCard extends StatelessWidget {
                 ),
                 TextButton(
                   onPressed: () => Navigator.pop(context, true),
+                  style: TextButton.styleFrom(
+                    foregroundColor: Theme.of(context).colorScheme.error,
+                  ),
                   child: const Text('清理'),
                 ),
               ],
@@ -50,6 +63,7 @@ class FileStoreCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Card(
+    margin: EdgeInsets.zero,
     child: ListTile(
       leading: const Icon(Icons.folder_outlined),
       title: const Text('工具临时文件'),

@@ -15,6 +15,12 @@
   exit code, duration, provenance-bearing data and bounded logs. Primary copy
   actions copy the useful password, hash or preview; complete-envelope JSON
   actions remain in raw result details. Picker cancellation is not success.
+- Result capture/start times are formatted for people, omitting only zero
+  `.000`; nonzero milliseconds and original native/JSON values remain intact.
+  JSON/file saving reports picker cancellation without claiming a file was
+  written. Clipboard errors provide retry feedback and do not escape to the UI.
+  Destructive file-clear dialogs show deletion effects before storage metrics,
+  including large-text landscape; cancellation must invoke no cleanup method.
 - Use theme colors and Material controls with >=48 dp touch targets. Keep
   content <=840 dp, scroll long output, and test 375 dp, landscape, large text
   and reduced animation settings. Device UI and permission checks are separate.

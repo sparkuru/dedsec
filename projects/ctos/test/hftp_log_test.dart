@@ -29,7 +29,7 @@ class LogHftpApi extends WorkbenchApi {
     bool rootRelay = false,
   }) async {
     starts++;
-    if (startResponse != null) return startResponse!.future;
+    if (startResponse != null) return status = await startResponse!.future;
     return status = {
       'state': 'running',
       'logs': ['12:00:00 listening 0.0.0.0:7888'],
@@ -76,6 +76,7 @@ Future<void> show(WidgetTester tester, Finder finder) async {
   final position = tester.state<ScrollableState>(scrollable).position;
   if (finder.evaluate().isEmpty) {
     position.jumpTo(0);
+    await tester.pump();
     await tester.pump();
   }
   for (var step = 0; step < 40 && finder.evaluate().isEmpty; step++) {
@@ -423,6 +424,7 @@ void main() {
     expect(api.logClears, 1);
     expect(api.starts, 0);
     expect(api.stops, 0);
+    await tester.pump();
     api.status = {...api.status, 'closing': false};
     await tester.pump(const Duration(seconds: 2));
     await tester.pumpAndSettle();

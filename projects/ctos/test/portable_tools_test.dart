@@ -89,6 +89,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.textContaining('source.bin'), findsOneWidget);
       await tester.ensureVisible(find.text('运行'));
+      await tester.pumpAndSettle();
       await tester.tap(find.text('运行'));
       await tester.pumpAndSettle();
       expect(submitted?['params'], {

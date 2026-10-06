@@ -12,11 +12,13 @@ import 'export_preview.dart';
 import 'terminal_interaction.dart';
 import 'traffic.dart';
 import 'workbench.dart';
+import 'ui/ctos_theme.dart';
+import 'ui/ctos_components.dart';
 
 const native = MethodChannel('ctos/native');
-const mint = Color(0xff65efb4);
-const blue = Color(0xff65b9ff);
-const panel = Color(0xff151e2b);
+const mint = CtosColors.primary;
+const blue = CtosColors.secondary;
+const panel = CtosColors.surface;
 
 void main() => runApp(const CtosApp());
 
@@ -26,32 +28,9 @@ class CtosApp extends StatelessWidget {
   Widget build(BuildContext context) => MaterialApp(
     title: 'ctOS',
     debugShowCheckedModeBanner: false,
-    theme: ThemeData(
-      brightness: Brightness.dark,
-      scaffoldBackgroundColor: const Color(0xff0b1018),
-      colorScheme: ColorScheme.fromSeed(
-        seedColor: mint,
-        brightness: Brightness.dark,
-        surface: panel,
-        primary: mint,
-      ),
-      useMaterial3: true,
-      cardTheme: CardThemeData(
-        color: panel,
-        surfaceTintColor: Colors.transparent,
-        elevation: 0,
-        margin: const EdgeInsets.only(bottom: 12),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
-      ),
-      inputDecorationTheme: InputDecorationTheme(
-        filled: true,
-        fillColor: panel,
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(14),
-          borderSide: BorderSide.none,
-        ),
-      ),
-    ),
+    theme: CtosTheme.dark(),
+    builder: (context, child) =>
+        Theme(data: CtosTheme.withMotion(context), child: child!),
     home: const Observatory(),
   );
 }
@@ -218,8 +197,8 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
       final raw = await native.invokeMethod<String>('rootAuto');
       if (mounted && jsonDecode(raw!)['root'] == true) await refresh();
     } catch (_) {
-      if (mounted) setState(() => rootProblem = 'Root 授权未完成，可在工作台手动重试。');
-      notice('Root 自动授权未成功；可在工作台手动重试');
+      if (mounted) setState(() => rootProblem = 'Root 授权未完成，可在概览手动重试。');
+      notice('Root 自动授权未成功；可在概览手动重试');
     } finally {
       if (mounted) setState(() => granting = false);
     }
@@ -330,6 +309,7 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
   Future<void> stopTerminal() async {
     if (!session || terminalBusy) return;
     cancelTerminalLineSync(resetTracker: true);
+    terminalInputFocus.unfocus();
     setState(() => terminalBusy = true);
     try {
       await terminalWriteTail;
@@ -612,130 +592,167 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
     refresh();
   }
 
+  void selectTab(int value) {
+    setState(() => tab = value);
+    if (value == 1 && infoTab == 0) refreshDevice();
+    if (value == 1 && infoTab == 3) loadConnections();
+  }
+
   @override
-  Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(
-      backgroundColor: const Color(0xff0b1018),
-      title: const Row(
-        children: [
-          Icon(Icons.hub_outlined, color: mint),
-          SizedBox(width: 10),
-          Text(
-            'ctOS',
-            style: TextStyle(fontWeight: FontWeight.w800, letterSpacing: 2),
-          ),
-          SizedBox(width: 12),
-          Flexible(
-            child: Text(
-              'SYSTEM OBSERVATORY',
-              overflow: TextOverflow.ellipsis,
-              maxLines: 1,
-              style: TextStyle(
-                fontSize: 10,
-                color: Colors.white54,
-                letterSpacing: 1,
-              ),
+  Widget build(BuildContext context) {
+    final wide = MediaQuery.sizeOf(context).width >= 900;
+    return Scaffold(
+      appBar: AppBar(
+        title: Row(
+          children: [
+            const Icon(Icons.hub_outlined, color: mint),
+            const SizedBox(width: 10),
+            const Text(
+              'ctOS',
+              style: TextStyle(fontWeight: FontWeight.w800, letterSpacing: 2),
             ),
+            if (MediaQuery.sizeOf(context).width >= 375 &&
+                MediaQuery.textScalerOf(context).scale(14) < 22) ...[
+              const SizedBox(width: 16),
+              const Flexible(
+                child: Text(
+                  'SYSTEM OBSERVATORY',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: CtosColors.textSecondary,
+                    letterSpacing: 1,
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
+        actions: [
+          IconButton(
+            onPressed:
+                snapshot.isEmpty &&
+                    deviceSnapshot == null &&
+                    !connectionState.hasSnapshot
+                ? null
+                : openExport,
+            tooltip: '选择导出内容',
+            icon: const Icon(Icons.ios_share, size: 20),
           ),
         ],
       ),
-      actions: [
-        IconButton(
-          onPressed:
-              snapshot.isEmpty &&
-                  deviceSnapshot == null &&
-                  !connectionState.hasSnapshot
-              ? null
-              : openExport,
-          tooltip: '选择导出内容',
-          icon: const Icon(Icons.ios_share, size: 20),
-        ),
-      ],
-    ),
-    body: SafeArea(
-      child: Column(
-        children: [
-          if (tab != 3 || MediaQuery.viewInsetsOf(context).bottom == 0)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 2, 20, 10),
-              child: Align(
-                alignment: Alignment.centerLeft,
-                child: Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: [
-                    status('APP 可用', true),
-                    status(root ? 'ROOT 在线' : 'ROOT 未连接', root),
-                  ],
-                ),
+      body: SafeArea(
+        child: Row(
+          children: [
+            if (wide)
+              NavigationRail(
+                key: const Key('observatory-navigation-rail'),
+                selectedIndex: tab,
+                onDestinationSelected: selectTab,
+                labelType: NavigationRailLabelType.all,
+                destinations: const [
+                  NavigationRailDestination(
+                    icon: Icon(Icons.dashboard_outlined),
+                    label: Text('概览'),
+                  ),
+                  NavigationRailDestination(
+                    icon: Icon(Icons.info_outline),
+                    label: Text('信息'),
+                  ),
+                  NavigationRailDestination(
+                    icon: Icon(Icons.grid_view_outlined),
+                    label: Text('工作台'),
+                  ),
+                  NavigationRailDestination(
+                    icon: Icon(Icons.terminal),
+                    label: Text('终端'),
+                  ),
+                ],
+              ),
+            Expanded(
+              key: const ValueKey('observatory-content'),
+              child: Column(
+                children: [
+                  if (tab != 3 || MediaQuery.viewInsetsOf(context).bottom == 0)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(20, 4, 20, 12),
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: [
+                            status('APP 可用', true),
+                            status(root ? 'ROOT 在线' : 'ROOT 未连接', root),
+                          ],
+                        ),
+                      ),
+                    ),
+                  if (error.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Text(
+                        error,
+                        style: const TextStyle(color: CtosColors.warning),
+                      ),
+                    ),
+                  Expanded(
+                    child: IndexedStack(
+                      index: tab,
+                      children: [
+                        readingColumn(
+                          workbench(),
+                          key: const Key('overview-reading-column'),
+                        ),
+                        readingColumn(
+                          informationPage(),
+                          key: const Key('information-reading-column'),
+                        ),
+                        WorkbenchPage(
+                          active: tab == 2,
+                          onExportHistory: (records) =>
+                              openExport(history: records),
+                          onBrowseInterfaces: browseInterfaces,
+                        ),
+                        terminalPage(),
+                      ],
+                    ),
+                  ),
+                ],
               ),
             ),
-          if (error.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.all(12),
-              child: Text(error, style: const TextStyle(color: Colors.orange)),
-            ),
-          Expanded(
-            child: IndexedStack(
-              index: tab,
-              children: [
-                readingColumn(
-                  workbench(),
-                  key: const Key('overview-reading-column'),
+          ],
+        ),
+      ),
+      bottomNavigationBar:
+          wide || (tab == 3 && MediaQuery.viewInsetsOf(context).bottom > 0)
+          ? null
+          : NavigationBar(
+              animationDuration: CtosTheme.duration(context),
+              selectedIndex: tab,
+              onDestinationSelected: selectTab,
+              destinations: const [
+                NavigationDestination(
+                  icon: Icon(Icons.dashboard_outlined),
+                  label: '概览',
                 ),
-                readingColumn(
-                  informationPage(),
-                  key: const Key('information-reading-column'),
+                NavigationDestination(
+                  icon: Icon(Icons.info_outline),
+                  label: '信息',
                 ),
-                WorkbenchPage(
-                  active: tab == 2,
-                  onExportHistory: (records) => openExport(history: records),
-                  onBrowseInterfaces: browseInterfaces,
+                NavigationDestination(
+                  icon: Icon(Icons.grid_view_outlined),
+                  label: '工作台',
                 ),
-                terminalPage(),
+                NavigationDestination(icon: Icon(Icons.terminal), label: '终端'),
               ],
             ),
-          ),
-        ],
-      ),
-    ),
-    bottomNavigationBar: NavigationBar(
-      selectedIndex: tab,
-      onDestinationSelected: (value) {
-        setState(() => tab = value);
-        if (value == 1 && infoTab == 0) refreshDevice();
-        if (value == 1 && infoTab == 3) loadConnections();
-      },
-      destinations: const [
-        NavigationDestination(
-          icon: Icon(Icons.dashboard_outlined),
-          label: '概览',
-        ),
-        NavigationDestination(icon: Icon(Icons.info_outline), label: '信息'),
-        NavigationDestination(
-          icon: Icon(Icons.grid_view_outlined),
-          label: '工作台',
-        ),
-        NavigationDestination(icon: Icon(Icons.terminal), label: '终端'),
-      ],
-    ),
-  );
+    );
+  }
 
-  Widget status(String label, bool live) => Container(
-    padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
-    decoration: BoxDecoration(
-      color: (live ? mint : Colors.orange).withValues(alpha: .10),
-      borderRadius: BorderRadius.circular(6),
-    ),
-    child: Text(
-      '● $label',
-      style: TextStyle(
-        color: live ? mint : Colors.orange,
-        fontSize: 12,
-        fontWeight: FontWeight.bold,
-      ),
-    ),
-  );
+  Widget status(String label, bool live) =>
+      CtosStatus(label: label, color: live ? mint : CtosColors.warning);
 
   Widget readingColumn(Widget child, {required Key key}) => Center(
     child: ConstrainedBox(
@@ -746,154 +763,278 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
   );
 
   Widget card(Widget child) => Card(
-    child: Padding(padding: const EdgeInsets.all(18), child: child),
+    child: Padding(padding: const EdgeInsets.all(20), child: child),
   );
 
-  Widget heading(String title, String subtitle) => Padding(
-    padding: const EdgeInsets.only(bottom: 20),
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          title,
-          style: Theme.of(
-            context,
-          ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w700),
-        ),
-        const SizedBox(height: 4),
-        Text(
-          subtitle,
-          style: const TextStyle(color: Colors.white54, fontSize: 12),
-        ),
-      ],
-    ),
-  );
+  Widget heading(String title, String subtitle) =>
+      CtosPageHeading(title: title, subtitle: subtitle);
 
   Widget workbench() {
     final system = deviceSnapshot?['system'];
     final memory = deviceSnapshot?['memory'];
     final battery = deviceSnapshot?['battery'];
+    final availableMemory = memory?.available == true
+        ? memory?.data['availableBytes'] as num?
+        : null;
+    final totalMemory = memory?.available == true
+        ? memory?.data['totalBytes'] as num?
+        : null;
+    final batteryPercent = battery?.available == true
+        ? battery?.data['percent'] as num?
+        : null;
+    final deviceName = system?.available == true
+        ? '${system!.data['manufacturer']} ${system.data['model']}'
+        : system == null
+        ? '设备信息读取中'
+        : '设备信息${system.stateLabel}';
     return LayoutBuilder(
-      builder: (context, constraints) => RefreshIndicator(
-        onRefresh: () async {
-          await Future.wait([refresh(), refreshDevice()]);
-        },
-        child: ListView(
-          padding: EdgeInsets.symmetric(
-            horizontal: constraints.maxWidth > 840
-                ? (constraints.maxWidth - 840) / 2
-                : 20,
-            vertical: 20,
+      builder: (context, constraints) {
+        final columns =
+            (constraints.maxWidth >= 640 &&
+                MediaQuery.textScalerOf(context).scale(14) < 21) ||
+            (constraints.maxWidth >= 360 &&
+                MediaQuery.textScalerOf(context).scale(14) <= 18.2);
+        final inset = constraints.maxWidth < 360 ? 16.0 : 20.0;
+        final metrics = [
+          overviewMetric(
+            '可用内存',
+            deviceBytes(availableMemory),
+            Icons.memory_outlined,
+            contextLabel: totalMemory == null
+                ? memory?.stateLabel ?? '待读取'
+                : '总容量 ${deviceBytes(totalMemory)}',
+            fraction:
+                availableMemory != null &&
+                    totalMemory != null &&
+                    totalMemory > 0
+                ? availableMemory / totalMemory
+                : null,
           ),
-          children: [
-            card(
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    system?.available == true
-                        ? '${system!.data['manufacturer']} ${system.data['model']}'
-                        : system == null
-                        ? '设备信息读取中'
-                        : '设备信息${system.stateLabel}',
-                    style: const TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    'Android ${system?.data['android'] ?? snapshot['android'] ?? '—'}'
-                    ' · 运行 ${deviceUptime(system?.data['uptimeMs'] as num?)}',
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    '可用内存 ${deviceBytes(memory?.data['availableBytes'] as num?)}'
-                    ' · 电量 ${battery?.data['percent'] ?? '—'}%',
-                  ),
-                  if (deviceError.isNotEmpty)
-                    Text(
-                      deviceError,
-                      style: const TextStyle(color: Colors.orange),
-                    ),
-                ],
+          overviewMetric(
+            '电池电量',
+            batteryPercent == null
+                ? '—'
+                : '${batteryPercent.toStringAsFixed(0)}%',
+            Icons.battery_std_outlined,
+            contextLabel: battery?.available == true
+                ? '${switch (battery?.data['status']) {
+                    2 => '充电中',
+                    3 => '放电中',
+                    4 => '未充电',
+                    5 => '已充满',
+                    _ => '充电状态未知',
+                  }}${battery?.data['temperatureC'] == null ? '' : ' · ${battery?.data['temperatureC']} °C'}'
+                : '${battery?.stateLabel ?? '待读取'}${battery?.reason == null ? '' : ' · ${battery?.reason}'}',
+            fraction: batteryPercent == null ? null : batteryPercent / 100,
+          ),
+        ];
+        return RefreshIndicator(
+          onRefresh: () async {
+            await Future.wait([refresh(), refreshDevice()]);
+          },
+          child: ListView(
+            key: const PageStorageKey('overview-scroll'),
+            physics: const AlwaysScrollableScrollPhysics(),
+            padding: EdgeInsets.fromLTRB(inset, 20, inset, 32),
+            children: [
+              const Text(
+                'DEVICE / 设备观测',
+                style: TextStyle(
+                  fontSize: 13,
+                  color: mint,
+                  letterSpacing: 1.6,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
-            ),
-            card(
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    '能力与恢复',
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                  ),
-                  const SizedBox(height: 8),
-                  Text('App 基础信息：${system?.stateLabel ?? '待读取'}'),
-                  const SizedBox(height: 4),
-                  Text(root ? 'Root 采集：会话在线' : 'Root 采集：未连接；可手动申请'),
-                  if (rootProblem.isNotEmpty)
-                    Text(
-                      rootProblem,
-                      style: const TextStyle(color: Colors.orange),
+              const SizedBox(height: 12),
+              Text(
+                deviceName,
+                style: Theme.of(context).textTheme.headlineLarge,
+              ),
+              const SizedBox(height: 12),
+              Text(
+                'Android ${system?.data['android'] ?? snapshot['android'] ?? '—'} · 运行 ${deviceUptime(system?.data['uptimeMs'] as num?)}',
+                style: const TextStyle(
+                  color: CtosColors.textSecondary,
+                  fontSize: 14,
+                ),
+              ),
+              if (deviceError.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                Text(
+                  deviceError,
+                  style: const TextStyle(color: CtosColors.warning),
+                ),
+              ],
+              const SizedBox(height: 28),
+              if (columns)
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(child: metrics[0]),
+                    const SizedBox(width: 16),
+                    Expanded(child: metrics[1]),
+                  ],
+                )
+              else
+                ...metrics,
+              const SizedBox(height: 12),
+              card(
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Icon(Icons.lan_outlined, color: blue),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                '网络现场',
+                                style: Theme.of(context).textTheme.titleMedium,
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                snapshot.isEmpty
+                                    ? '等待采样'
+                                    : '${networks.length} 个网络 · ${interfaces.length} 个接口',
+                                style: const TextStyle(
+                                  color: CtosColors.textSecondary,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
                     ),
-                  if (!root) ...[
-                    const SizedBox(height: 10),
-                    FilledButton.icon(
-                      onPressed: granting ? null : authorize,
-                      icon: const Icon(Icons.key),
-                      label: Text(granting ? '等待授权…' : '授权 Root'),
+                    const SizedBox(height: 16),
+                    Text(
+                      '${snapshot['kernel']?['source'] ?? '等待采样'}${updated == null ? '' : ' · 网络采集 ${clock(updated!)}'}',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                    const SizedBox(height: 16),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        OutlinedButton.icon(
+                          onPressed: () => setState(() {
+                            tab = 1;
+                            infoTab = 1;
+                          }),
+                          icon: const Icon(Icons.lan_outlined),
+                          label: const Text('查看网络'),
+                        ),
+                        OutlinedButton.icon(
+                          onPressed: () {
+                            setState(() {
+                              tab = 1;
+                              infoTab = 0;
+                            });
+                            refreshDevice();
+                          },
+                          icon: const Icon(Icons.info_outline),
+                          label: const Text('设备信息'),
+                        ),
+                      ],
                     ),
                   ],
-                ],
+                ),
               ),
-            ),
-            card(
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    '${networks.length} 个网络 · ${interfaces.length} 个接口'
-                    ' · ${snapshot['kernel']?['source'] ?? '等待采样'}',
-                  ),
-                  if (updated != null)
+              const SizedBox(height: 8),
+              Text('能力与恢复', style: Theme.of(context).textTheme.titleMedium),
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  border: Border.all(color: CtosColors.border),
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('App 基础信息：${system?.stateLabel ?? '待读取'}'),
+                    const SizedBox(height: 8),
                     Text(
-                      '网络采集 ${updated!.hour.toString().padLeft(2, '0')}:${updated!.minute.toString().padLeft(2, '0')}:${updated!.second.toString().padLeft(2, '0')}',
-                      style: const TextStyle(color: Colors.white70),
+                      root ? 'Root 采集：会话在线' : 'Root 采集：未连接；可手动申请',
+                      style: const TextStyle(color: CtosColors.textSecondary),
                     ),
-                  const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: [
-                      OutlinedButton.icon(
-                        onPressed: () => setState(() {
-                          tab = 1;
-                          infoTab = 1;
-                        }),
-                        icon: const Icon(Icons.lan_outlined),
-                        label: const Text('查看网络'),
-                      ),
-                      OutlinedButton.icon(
-                        onPressed: () {
-                          setState(() {
-                            tab = 1;
-                            infoTab = 0;
-                          });
-                          refreshDevice();
-                        },
-                        icon: const Icon(Icons.info_outline),
-                        label: const Text('设备信息'),
+                    if (rootProblem.isNotEmpty) ...[
+                      const SizedBox(height: 8),
+                      Text(
+                        rootProblem,
+                        style: const TextStyle(color: CtosColors.warning),
                       ),
                     ],
-                  ),
-                ],
+                    if (!root) ...[
+                      const SizedBox(height: 16),
+                      FilledButton.icon(
+                        onPressed: granting ? null : authorize,
+                        icon: const Icon(Icons.key),
+                        label: Text(granting ? '等待授权…' : '授权 Root'),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  String clock(DateTime time) =>
+      '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}:${time.second.toString().padLeft(2, '0')}';
+
+  Widget overviewMetric(
+    String label,
+    String value,
+    IconData icon, {
+    required String contextLabel,
+    double? fraction,
+  }) => card(
+    Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Icon(icon, color: CtosColors.textSecondary, size: 20),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                label,
+                style: const TextStyle(color: CtosColors.textSecondary),
               ),
             ),
           ],
         ),
-      ),
-    );
-  }
+        const SizedBox(height: 16),
+        Text(
+          value,
+          key: Key('overview-metric-$label'),
+          style: Theme.of(context).textTheme.headlineLarge
+              ?.merge(CtosTheme.numeric)
+              .copyWith(color: mint),
+        ),
+        const SizedBox(height: 16),
+        if (fraction != null) ...[
+          LinearProgressIndicator(
+            value: fraction.clamp(0, 1),
+            minHeight: 3,
+            borderRadius: BorderRadius.circular(2),
+            color: mint,
+            backgroundColor: CtosColors.border,
+          ),
+          const SizedBox(height: 12),
+        ],
+        Text(contextLabel, style: Theme.of(context).textTheme.bodySmall),
+      ],
+    ),
+  );
 
   Widget informationPage() => Column(
     children: [
@@ -901,6 +1042,7 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
         scrollDirection: Axis.horizontal,
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         child: SegmentedButton<int>(
+          style: ButtonStyle(animationDuration: CtosTheme.duration(context)),
           segments: const [
             ButtonSegment(value: 0, label: Text('设备')),
             ButtonSegment(value: 1, label: Text('网络')),
@@ -950,6 +1092,8 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
     return RefreshIndicator(
       onRefresh: refresh,
       child: ListView(
+        key: const PageStorageKey('network-scroll'),
+        physics: const AlwaysScrollableScrollPhysics(),
         padding: const EdgeInsets.all(20),
         children: [
           heading(
@@ -968,7 +1112,10 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
                   const SizedBox(height: 6),
                   const Text(
                     '授权后读取各接口流量和连接信息。',
-                    style: TextStyle(color: Colors.white60, fontSize: 12),
+                    style: TextStyle(
+                      color: CtosColors.textSecondary,
+                      fontSize: 13,
+                    ),
                   ),
                   const SizedBox(height: 12),
                   FilledButton.icon(
@@ -989,63 +1136,108 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
             Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(
+                Wrap(
+                  spacing: 20,
+                  runSpacing: 8,
+                  crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
-                    const Text(
+                    Text(
                       '实时流量',
-                      style: TextStyle(fontWeight: FontWeight.bold),
+                      style: Theme.of(context).textTheme.titleMedium,
                     ),
-                    const Spacer(),
                     if (names.isNotEmpty)
-                      DropdownButton<String>(
-                        value: name,
-                        underline: const SizedBox(),
-                        items: names
-                            .map(
-                              (n) => DropdownMenuItem(
-                                value: n,
-                                child: Text(
-                                  n,
-                                  style: const TextStyle(fontSize: 12),
+                      SizedBox(
+                        width: math.min(
+                          240,
+                          MediaQuery.sizeOf(context).width - 80,
+                        ),
+                        child: DropdownButton<String>(
+                          isExpanded: true,
+                          value: name,
+                          underline: const SizedBox(),
+                          items: names
+                              .map(
+                                (n) => DropdownMenuItem(
+                                  value: n,
+                                  child: Text(
+                                    n,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(fontSize: 14),
+                                  ),
                                 ),
-                              ),
-                            )
-                            .toList(),
-                        onChanged: (n) => setState(() => selected = n!),
+                              )
+                              .toList(),
+                          onChanged: (n) => setState(() => selected = n!),
+                        ),
                       ),
                   ],
                 ),
-                const SizedBox(height: 12),
-                Row(
-                  children: [
-                    Expanded(
-                      child: metric(
-                        '↓ RECEIVE',
-                        rate == null ? '—' : '${bytes(rate.rx)}/s',
-                        mint,
-                      ),
-                    ),
-                    Expanded(
-                      child: metric(
-                        '↑ TRANSMIT',
-                        rate == null ? '—' : '${bytes(rate.tx)}/s',
-                        blue,
-                      ),
-                    ),
-                  ],
+                if (updated != null)
+                  Text(
+                    '采集于 ${clock(updated!)} · ${snapshot['kernel']?['source'] ?? '未知来源'}',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                const SizedBox(height: 20),
+                LayoutBuilder(
+                  builder: (context, constraints) {
+                    final receive = metric(
+                      '↓ RECEIVE',
+                      rate == null ? '—' : '${bytes(rate.rx)}/s',
+                      mint,
+                    );
+                    final transmit = metric(
+                      '↑ TRANSMIT',
+                      rate == null ? '—' : '${bytes(rate.tx)}/s',
+                      blue,
+                    );
+                    return constraints.maxWidth < 360 &&
+                            MediaQuery.textScalerOf(context).scale(14) > 20
+                        ? Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              receive,
+                              const SizedBox(height: 20),
+                              transmit,
+                            ],
+                          )
+                        : Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Expanded(child: receive),
+                              const SizedBox(width: 12),
+                              Expanded(child: transmit),
+                            ],
+                          );
+                  },
                 ),
                 const SizedBox(height: 20),
                 SizedBox(
                   height: 100,
                   width: double.infinity,
-                  child: CustomPaint(
-                    painter: TrafficChart(List.of(tracker.history[name] ?? [])),
-                  ),
+                  child: (tracker.history[name]?.length ?? 0) < 2
+                      ? const Center(
+                          child: Text(
+                            '等待连续采样，随后显示流量趋势',
+                            style: TextStyle(
+                              color: CtosColors.textSecondary,
+                              fontSize: 13,
+                            ),
+                          ),
+                        )
+                      : CustomPaint(
+                          painter: TrafficChart(
+                            List.of(tracker.history[name] ?? []),
+                          ),
+                        ),
                 ),
                 const SizedBox(height: 8),
                 const Text(
                   '每 2 秒采样 · 最近 60 点 · 接口独立计数，VPN 不重复合计',
-                  style: TextStyle(fontSize: 10, color: Colors.white38),
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: CtosColors.textSecondary,
+                  ),
                 ),
               ],
             ),
@@ -1062,12 +1254,15 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
     children: [
       Text(
         label,
-        style: TextStyle(fontSize: 10, color: color, letterSpacing: 1),
+        style: TextStyle(fontSize: 13, color: color, letterSpacing: 1),
       ),
       const SizedBox(height: 5),
       Text(
         value,
-        style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w600),
+        style: CtosTheme.numeric.copyWith(
+          fontSize: 28,
+          fontWeight: FontWeight.w600,
+        ),
       ),
     ],
   );
@@ -1084,11 +1279,13 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
               size: 20,
             ),
             const SizedBox(width: 10),
-            Text(
-              '${network['transport']} / ${network['interface']}',
-              style: const TextStyle(fontWeight: FontWeight.bold),
+            Expanded(
+              child: Text(
+                '${network['transport']} / ${network['interface']}',
+                style: const TextStyle(fontWeight: FontWeight.bold),
+              ),
             ),
-            const Spacer(),
+            const SizedBox(width: 8),
             if (network['default'] == true) status('默认', true),
           ],
         ),
@@ -1106,12 +1303,18 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
               : '未启用',
         ),
         ExpansionTile(
+          key: PageStorageKey(
+            'network-route-expansion-${network['interface']}',
+          ),
           tilePadding: EdgeInsets.zero,
-          title: const Text('路由', style: TextStyle(fontSize: 12)),
+          title: const Text('路由', style: TextStyle(fontSize: 13)),
           children: [
             SelectableText(
               (network['routes'] as List).join('\n'),
-              style: const TextStyle(fontSize: 11, color: Colors.white60),
+              style: const TextStyle(
+                fontSize: 13,
+                color: CtosColors.textSecondary,
+              ),
             ),
           ],
         ),
@@ -1119,33 +1322,15 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
     ),
   );
 
-  Widget keyValue(String key, String value) => Padding(
-    padding: const EdgeInsets.symmetric(vertical: 4),
-    child: Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        SizedBox(
-          width: 78,
-          child: Text(
-            key,
-            style: const TextStyle(fontSize: 12, color: Colors.white38),
-          ),
-        ),
-        Expanded(
-          child: SelectableText(
-            value.isEmpty ? '—' : value,
-            style: const TextStyle(fontSize: 12),
-          ),
-        ),
-      ],
-    ),
-  );
+  Widget keyValue(String key, String value) =>
+      CtosDataField(label: key, value: value);
 
   Widget interfacePage() {
     final filtered = interfaces
         .where((i) => jsonEncode(i).toLowerCase().contains(query.toLowerCase()))
         .toList();
     return ListView(
+      key: const PageStorageKey('interfaces-scroll'),
       padding: const EdgeInsets.all(20),
       children: [
         heading(
@@ -1164,6 +1349,7 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
         for (final item in filtered)
           card(
             ExpansionTile(
+              key: PageStorageKey('interface-${item['name']}'),
               tilePadding: EdgeInsets.zero,
               childrenPadding: const EdgeInsets.only(top: 8),
               title: Text(
@@ -1172,7 +1358,7 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
               ),
               subtitle: Text(
                 '${item['state'] ?? 'UNKNOWN'} · ↓ ${bytes(item['rx'])}  ↑ ${bytes(item['tx'])}',
-                style: const TextStyle(color: mint, fontSize: 11),
+                style: const TextStyle(color: mint, fontSize: 13),
               ),
               children: [
                 keyValue('地址', (item['addresses'] as List).join('\n')),
@@ -1191,7 +1377,10 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
                 ),
                 const Text(
                   '累计值随接口或系统重置，不代表今日流量。',
-                  style: TextStyle(color: Colors.white38, fontSize: 10),
+                  style: TextStyle(
+                    color: CtosColors.textSecondary,
+                    fontSize: 13,
+                  ),
                 ),
                 const SizedBox(height: 12),
                 FilledButton.icon(
@@ -1206,12 +1395,14 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
         if (filtered.isEmpty && interfaces.isNotEmpty) const Text('没有匹配的接口'),
         card(
           ExpansionTile(
+            key: const PageStorageKey('all-interface-routes-expansion'),
             tilePadding: EdgeInsets.zero,
             title: const Text('所有路由表'),
             children: [
               SelectableText(
+                key: const PageStorageKey('interface-routes-text'),
                 snapshot['kernel']?['routes'] ?? '',
-                style: const TextStyle(fontFamily: 'monospace', fontSize: 11),
+                style: const TextStyle(fontFamily: 'monospace', fontSize: 13),
               ),
             ],
           ),
@@ -1240,193 +1431,202 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
     final stale = connectionState.isStaleAt(DateTime.now());
     final captured = connectionState.capturedAt;
     final filtered = report.search(connectionQuery);
-    return Column(
+    final stateText = connectionState.loading
+        ? hasSnapshot
+              ? '正在刷新 · 暂显示上次结果'
+              : '正在读取连接…'
+        : connectionState.error != null
+        ? hasSnapshot
+              ? '刷新失败 · 显示上次结果'
+              : '读取失败 · 请重试'
+        : !hasSnapshot
+        ? '尚未读取连接 · 点击刷新'
+        : stale
+        ? '旧快照 · 请刷新确认当前连接'
+        : connectionState.partial
+        ? '部分结果 · 当前权限受限'
+        : '当前快照 · 未映射的 UID 保留原始信息';
+    final stateColor =
+        connectionState.partial || stale || connectionState.error != null
+        ? CtosColors.warning
+        : CtosColors.textSecondary;
+    return ListView(
+      key: const PageStorageKey('connections-scroll'),
+      padding: const EdgeInsets.fromLTRB(20, 20, 20, 32),
       children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(20, 20, 20, 12),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
+        heading('连接检索', 'TCP / UDP 快照'),
+        TextField(
+          onChanged: (value) => setState(() => connectionQuery = value),
+          decoration: const InputDecoration(
+            prefixIcon: Icon(Icons.search),
+            hintText: 'IP、端口、状态、UID 或包名',
+          ),
+        ),
+        const SizedBox(height: 16),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: Text(
+                stateText,
+                style: TextStyle(color: stateColor, fontSize: 13),
+              ),
+            ),
+            IconButton(
+              onPressed: connectionState.loading ? null : loadConnections,
+              tooltip: '刷新连接',
+              icon: connectionState.loading
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.refresh),
+            ),
+          ],
+        ),
+        if (captured != null)
+          Text(
+            '采集于 ${clock(captured)}',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+        if (connectionState.error != null)
+          ExpansionTile(
+            key: const PageStorageKey('connection-error-expansion'),
+            tilePadding: EdgeInsets.zero,
+            title: const Text('错误详情'),
             children: [
-              heading('连接检索', 'TCP / UDP 快照'),
-              TextField(
-                onChanged: (value) => setState(() => connectionQuery = value),
-                decoration: const InputDecoration(
-                  prefixIcon: Icon(Icons.search),
-                  hintText: 'IP、端口、状态、UID 或包名',
-                ),
+              SelectableText(
+                connectionState.error!,
+                key: const PageStorageKey('connection-error-text'),
               ),
-              const SizedBox(height: 8),
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      connectionState.loading
-                          ? hasSnapshot
-                                ? '正在刷新 · 暂显示上次结果'
-                                : '正在读取连接…'
-                          : connectionState.error != null
-                          ? hasSnapshot
-                                ? '刷新失败 · 显示上次结果'
-                                : '读取失败 · 请重试'
-                          : !hasSnapshot
-                          ? '尚未读取连接 · 点击刷新'
-                          : stale
-                          ? '旧快照 · 请刷新确认当前连接'
-                          : connectionState.partial
-                          ? '部分结果 · 当前权限受限'
-                          : '当前快照 · 未映射的 UID 保留原始信息',
-                      style: TextStyle(
-                        color:
-                            connectionState.partial ||
-                                stale ||
-                                connectionState.error != null
-                            ? Colors.orange
-                            : Colors.white54,
-                        fontSize: 12,
-                      ),
-                    ),
-                  ),
-                  IconButton(
-                    onPressed: connectionState.loading ? null : loadConnections,
-                    tooltip: '刷新连接',
-                    icon: connectionState.loading
-                        ? const SizedBox(
-                            width: 18,
-                            height: 18,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : const Icon(Icons.refresh),
-                  ),
-                ],
-              ),
-              if (captured != null)
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: Text(
-                    '采集于 ${captured.hour.toString().padLeft(2, '0')}:${captured.minute.toString().padLeft(2, '0')}:${captured.second.toString().padLeft(2, '0')}',
-                    style: const TextStyle(color: Colors.white70, fontSize: 12),
-                  ),
-                ),
-              if (connectionState.error != null)
-                ExpansionTile(
-                  tilePadding: EdgeInsets.zero,
-                  title: const Text('错误详情'),
-                  children: [SelectableText(connectionState.error!)],
-                ),
-              if (hasSnapshot) ...[
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: Text(
-                    '${report.entries.length} 条连接'
-                    '${connectionQuery.trim().isEmpty ? '' : ' · ${filtered.length} 条匹配'}'
-                    '${report.diagnostics.isEmpty ? '' : ' · ${report.diagnostics.length} 行采集提示'}',
-                    style: const TextStyle(color: Colors.white70, fontSize: 12),
-                  ),
-                ),
-                ExpansionTile(
-                  tilePadding: EdgeInsets.zero,
-                  title: const Text('原始输出'),
-                  children: [
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: SelectableText(
-                        raw.isEmpty ? '原始输出为空' : raw,
-                        style: const TextStyle(
-                          fontFamily: 'monospace',
-                          fontSize: 11,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
             ],
           ),
-        ),
-        Expanded(
-          child: ListView.builder(
-            padding: const EdgeInsets.symmetric(horizontal: 20),
-            itemCount: filtered.isEmpty ? 1 : filtered.length,
-            itemBuilder: (context, index) {
-              if (filtered.isEmpty) {
-                return Padding(
-                  padding: const EdgeInsets.all(20),
-                  child: Text(
-                    !hasSnapshot
-                        ? connectionState.loading
-                              ? '正在读取连接…'
-                              : connectionState.error == null
-                              ? '尚未读取连接'
-                              : '读取连接失败，请重试'
-                        : report.entries.isEmpty
-                        ? report.diagnostics.isNotEmpty
-                              ? '采集未返回可解析的连接，请查看原始输出'
-                              : '此快照没有可见连接'
-                        : '此快照没有匹配的连接；刷新可检查新连接',
-                  ),
-                );
-              }
-              final entry = filtered[index];
-              return card(
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 4,
-                      crossAxisAlignment: WrapCrossAlignment.center,
-                      children: [
-                        Text(
-                          entry.protocol.toUpperCase(),
-                          style: const TextStyle(
-                            color: mint,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        Text(entry.state),
-                        if (entry.uid != null)
-                          Text(
-                            'UID ${entry.uid}',
-                            style: const TextStyle(color: Colors.white70),
-                          ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    SelectableText('本地  ${entry.local}'),
-                    SelectableText('远端  ${entry.peer}'),
-                    if (entry.apps.isNotEmpty) ...[
-                      const SizedBox(height: 10),
-                      appIdentity(entry.apps.first),
-                      if (entry.apps.length > 1)
-                        ExpansionTile(
-                          tilePadding: EdgeInsets.zero,
-                          title: Text('同一 UID 的其他 ${entry.apps.length - 1} 个包'),
-                          children: entry.apps
-                              .skip(1)
-                              .map(appIdentity)
-                              .toList(),
-                        ),
-                    ] else if (entry.owner != null) ...[
-                      const SizedBox(height: 6),
-                      Text(
-                        entry.owner!,
-                        style: const TextStyle(color: Colors.white70),
-                      ),
-                    ],
-                    if (entry.recvQueue != 0 || entry.sendQueue != 0)
-                      Text(
-                        '接收队列 ${entry.recvQueue} · 发送队列 ${entry.sendQueue}',
-                        style: const TextStyle(color: Colors.white54),
-                      ),
-                  ],
-                ),
-              );
-            },
+        if (hasSnapshot) ...[
+          const SizedBox(height: 8),
+          Text(
+            '${report.entries.length} 条连接${connectionQuery.trim().isEmpty ? '' : ' · ${filtered.length} 条匹配'}${report.diagnostics.isEmpty ? '' : ' · ${report.diagnostics.length} 行采集提示'}',
+            style: Theme.of(context).textTheme.bodySmall,
           ),
-        ),
+          ExpansionTile(
+            key: const PageStorageKey('connection-raw-expansion'),
+            tilePadding: EdgeInsets.zero,
+            title: const Text('原始输出'),
+            children: [
+              Align(
+                alignment: Alignment.centerLeft,
+                child: SelectableText(
+                  raw.isEmpty ? '原始输出为空' : raw,
+                  key: const PageStorageKey('connection-raw-text'),
+                  style: const TextStyle(fontFamily: 'monospace', fontSize: 13),
+                ),
+              ),
+            ],
+          ),
+        ],
+        const SizedBox(height: 16),
+        if (filtered.isEmpty)
+          Container(
+            padding: const EdgeInsets.all(24),
+            decoration: BoxDecoration(
+              border: Border.all(color: CtosColors.border),
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(
+                  connectionState.error != null
+                      ? Icons.error_outline
+                      : Icons.manage_search_outlined,
+                  color: stateColor,
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  !hasSnapshot
+                      ? connectionState.loading
+                            ? '正在读取连接…'
+                            : connectionState.error == null
+                            ? '尚未读取连接'
+                            : '读取连接失败，请重试'
+                      : report.entries.isEmpty
+                      ? report.diagnostics.isNotEmpty
+                            ? '采集未返回可解析的连接，请查看原始输出'
+                            : '此快照没有可见连接'
+                      : '此快照没有匹配的连接；刷新可检查新连接',
+                ),
+              ],
+            ),
+          ),
+        for (final entry in filtered) connectionCard(entry),
       ],
     );
   }
+
+  Widget connectionCard(ConnectionEntry entry) => card(
+    Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Wrap(
+          spacing: 12,
+          runSpacing: 8,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            Text(
+              entry.protocol.toUpperCase(),
+              style: const TextStyle(
+                color: mint,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 1,
+              ),
+            ),
+            Text(entry.state),
+            if (entry.uid != null)
+              Text(
+                'UID ${entry.uid}',
+                style: const TextStyle(color: CtosColors.textSecondary),
+              ),
+          ],
+        ),
+        const SizedBox(height: 16),
+        SelectableText(
+          '本地  ${entry.local}',
+          style: CtosTheme.numeric.copyWith(fontSize: 14),
+        ),
+        const SizedBox(height: 8),
+        SelectableText(
+          '远端  ${entry.peer}',
+          style: CtosTheme.numeric.copyWith(fontSize: 14),
+        ),
+        if (entry.apps.isNotEmpty) ...[
+          const Divider(),
+          appIdentity(entry.apps.first),
+          if (entry.apps.length > 1)
+            ExpansionTile(
+              key: PageStorageKey(
+                'connection-apps-${entry.uid}-${entry.local}-${entry.peer}',
+              ),
+              tilePadding: EdgeInsets.zero,
+              title: Text('同一 UID 的其他 ${entry.apps.length - 1} 个包'),
+              children: entry.apps.skip(1).map(appIdentity).toList(),
+            ),
+        ] else if (entry.owner != null) ...[
+          const SizedBox(height: 12),
+          Text(
+            entry.owner!,
+            style: const TextStyle(color: CtosColors.textSecondary),
+          ),
+        ],
+        if (entry.recvQueue != 0 || entry.sendQueue != 0) ...[
+          const SizedBox(height: 12),
+          Text(
+            '接收队列 ${entry.recvQueue} · 发送队列 ${entry.sendQueue}',
+            style: const TextStyle(color: CtosColors.textSecondary),
+          ),
+        ],
+      ],
+    ),
+  );
 
   Widget appIdentity(AppIdentity app) => Padding(
     padding: const EdgeInsets.only(top: 4, bottom: 4),
@@ -1439,7 +1639,7 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
               ? const SizedBox(
                   width: 36,
                   height: 36,
-                  child: Icon(Icons.apps, color: Colors.white54),
+                  child: Icon(Icons.apps, color: CtosColors.textSecondary),
                 )
               : Image.memory(
                   app.iconBytes!,
@@ -1460,7 +1660,13 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
               ),
               SelectableText(
                 app.detail,
-                style: const TextStyle(color: Colors.white70, fontSize: 11),
+                key: PageStorageKey(
+                  'app-detail-${app.packageName}-${app.detail}',
+                ),
+                style: const TextStyle(
+                  color: CtosColors.textSecondary,
+                  fontSize: 13,
+                ),
               ),
             ],
           ),
@@ -1469,57 +1675,100 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
     ),
   );
 
+  void openTerminalOutput() {
+    final output = terminalOutputSnapshot(terminal);
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => TerminalOutputPage(output: output),
+      ),
+    );
+  }
+
   Widget terminalPage() {
     if (!session) {
-      return ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          const Text('选择终端会话', style: TextStyle(fontSize: 18)),
-          const SizedBox(height: 12),
-          Card(
-            child: ListTile(
-              key: const Key('terminal-app-entry'),
-              leading: const Icon(Icons.terminal, color: mint),
-              title: const Text('应用 Shell'),
-              subtitle: const Text('以应用权限运行本地 Shell'),
-              trailing: terminalBusy
-                  ? const SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.chevron_right),
-              onTap: terminalBusy ? null : () => startTerminal(false),
+      return CtosReadingColumn(
+        child: ListView(
+          key: const PageStorageKey('terminal-picker-scroll'),
+          padding: const EdgeInsets.fromLTRB(20, 20, 20, 32),
+          children: [
+            if (MediaQuery.viewInsetsOf(context).bottom == 0)
+              const CtosPageHeading(
+                title: '选择终端会话',
+                subtitle: '打开本机 Shell，连续输入与查看输出',
+                eyebrow: 'TERMINAL / 交互',
+              )
+            else ...[
+              Text('选择终端会话', style: Theme.of(context).textTheme.titleLarge),
+              const SizedBox(height: 16),
+            ],
+            Card(
+              child: ListTile(
+                key: const Key('terminal-app-entry'),
+                leading: const Icon(Icons.terminal, color: mint, size: 28),
+                title: const Text(
+                  '应用 Shell',
+                  style: TextStyle(fontWeight: FontWeight.w600),
+                ),
+                subtitle: const Padding(
+                  padding: EdgeInsets.only(top: 8),
+                  child: Text('以应用权限运行本地 Shell'),
+                ),
+                trailing: terminalBusy
+                    ? const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.arrow_forward),
+                onTap: terminalBusy ? null : () => startTerminal(false),
+              ),
             ),
-          ),
-          Card(
-            child: ListTile(
-              key: const Key('terminal-root-entry'),
-              leading: const Icon(Icons.admin_panel_settings_outlined),
-              title: const Text('Root PTY'),
-              subtitle: Text(root ? '以已授权的 Root 权限运行' : 'Root 未连接，请先在工作台授权'),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: terminalBusy || !root ? null : () => startTerminal(true),
+            Card(
+              child: ListTile(
+                key: const Key('terminal-root-entry'),
+                leading: Icon(
+                  Icons.admin_panel_settings_outlined,
+                  color: root ? mint : CtosColors.textSecondary,
+                  size: 28,
+                ),
+                title: const Text(
+                  'Root PTY',
+                  style: TextStyle(fontWeight: FontWeight.w600),
+                ),
+                subtitle: Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: Text(root ? '以已授权的 Root 权限运行' : 'Root 未连接，请先在概览授权'),
+                ),
+                trailing: Icon(root ? Icons.arrow_forward : Icons.lock_outline),
+                onTap: terminalBusy || !root ? null : () => startTerminal(true),
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       );
     }
-
+    final keyboard = MediaQuery.viewInsetsOf(context).bottom > 0;
     return Column(
       children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 4, 12, 4),
-          child: Row(
-            children: [
-              Expanded(
-                child: Text(
-                  terminalMode,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(color: mint, fontSize: 12),
+        if (!keyboard)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 8, 20, 4),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                terminalMode,
+                style: const TextStyle(
+                  color: mint,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
                 ),
               ),
+            ),
+          ),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          child: Row(
+            children: [
               IconButton(
                 key: const Key('terminal-shortcuts-toggle'),
                 onPressed: () => setState(
@@ -1532,23 +1781,19 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
                       : Icons.keyboard_alt_outlined,
                 ),
               ),
+              const Spacer(),
               TextButton(
+                style: TextButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                ),
                 onPressed: terminalBusy ? null : stopTerminal,
                 child: const Text('换用'),
               ),
               TextButton(
                 style: TextButton.styleFrom(
                   padding: const EdgeInsets.symmetric(horizontal: 8),
-                  minimumSize: const Size(0, 44),
                 ),
-                onPressed: () {
-                  final output = terminalOutputSnapshot(terminal);
-                  Navigator.of(context).push(
-                    MaterialPageRoute<void>(
-                      builder: (_) => TerminalOutputPage(output: output),
-                    ),
-                  );
-                },
+                onPressed: openTerminalOutput,
                 child: const Text('选择输出'),
               ),
               IconButton(
@@ -1561,22 +1806,28 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
         ),
         Expanded(
           child: Container(
-            color: const Color(0xff080c12),
+            margin: const EdgeInsets.symmetric(horizontal: 12),
+            decoration: BoxDecoration(
+              color: CtosColors.background,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: CtosColors.border),
+            ),
             padding: const EdgeInsets.all(8),
             child: TerminalView(
               terminal,
               key: const Key('terminal-output-view'),
               readOnly: true,
-              textStyle: const TerminalStyle(fontSize: 12),
+              theme: CtosTheme.terminal,
+              textStyle: const TerminalStyle(fontSize: 14),
               autofocus: false,
             ),
           ),
         ),
         if (terminalShortcutsExpanded)
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8),
-            child: Wrap(
-              spacing: 4,
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            child: Row(
               children: [
                 for (final entry in {
                   'Ctrl-C': '\x03',
@@ -1585,22 +1836,25 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
                   '↑': '\x1b[A',
                   '↓': '\x1b[B',
                 }.entries)
-                  TextButton(
-                    key: Key('terminal-shortcut-${entry.key}'),
-                    style: TextButton.styleFrom(
-                      minimumSize: const Size(48, 48),
-                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                  Padding(
+                    padding: const EdgeInsets.only(right: 4),
+                    child: TextButton(
+                      key: Key('terminal-shortcut-${entry.key}'),
+                      style: TextButton.styleFrom(
+                        minimumSize: const Size(48, 48),
+                        padding: const EdgeInsets.symmetric(horizontal: 8),
+                      ),
+                      onPressed: terminalBusy
+                          ? null
+                          : () => sendTerminalControl(entry.key, entry.value),
+                      child: Text(entry.key),
                     ),
-                    onPressed: terminalBusy
-                        ? null
-                        : () => sendTerminalControl(entry.key, entry.value),
-                    child: Text(entry.key),
                   ),
               ],
             ),
           ),
         Padding(
-          padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+          padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
           child: TerminalCommandInput(
             key: terminalInputKey,
             onWrite: sendTerminalInput,

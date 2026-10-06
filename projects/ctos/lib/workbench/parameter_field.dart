@@ -156,7 +156,10 @@ class _ParameterFieldState extends State<ParameterField> {
           initialValue: widget.controller.text,
           isExpanded: true,
           itemHeight: null,
-          decoration: InputDecoration(labelText: display.label),
+          decoration: InputDecoration(
+            labelText: display.label,
+            errorMaxLines: 4,
+          ),
           items: p.choices
               .map(
                 (value) => DropdownMenuItem(
@@ -183,7 +186,10 @@ class _ParameterFieldState extends State<ParameterField> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(display.label),
+              Text(
+                display.label,
+                style: Theme.of(context).textTheme.titleSmall,
+              ),
               const SizedBox(height: 8),
               WorkbenchActions(
                 children: [
@@ -204,11 +210,13 @@ class _ParameterFieldState extends State<ParameterField> {
                     ),
                 ],
               ),
+              const SizedBox(height: 12),
               Text(
                 filename ??
                     (widget.controller.text.isEmpty
                         ? '单文件最多 32 MiB；复制到 App 私有目录'
                         : '已选择文件'),
+                style: Theme.of(context).textTheme.bodySmall,
               ),
               if (field.errorText != null)
                 Text(
@@ -242,7 +250,8 @@ class _ParameterFieldState extends State<ParameterField> {
       decoration: InputDecoration(
         labelText: display.label,
         helperText: display.helper,
-        helperMaxLines: 3,
+        helperMaxLines: 6,
+        errorMaxLines: 4,
         suffixIcon: p.secret ? const SizedBox(width: 48) : null,
       ),
       validator: validate,

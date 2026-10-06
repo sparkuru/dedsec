@@ -115,7 +115,7 @@ class ParameterPresentation {
     ('tools.encoder', 'direction') => '转换方向',
     ('tools.encoder', 'text') || ('text.digest', 'text') => '文本',
     ('tools.encoder', 'file') || ('tools.crypto', 'file') => '输入文件',
-    ('tools.ip', 'target') => 'IP 或域名（可选）',
+    ('tools.ip', 'target') => 'IP 或域名',
     ('tools.crypto', 'operation') => '操作',
     ('tools.crypto', 'password') => '密码',
     ('network.interface_diagnose', 'interface_name') => '网络接口',

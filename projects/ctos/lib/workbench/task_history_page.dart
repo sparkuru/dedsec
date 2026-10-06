@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import '../ui/ctos_theme.dart';
 import 'api.dart';
 import 'controls.dart';
 
@@ -57,6 +58,10 @@ class _TaskHistoryPageState extends State<TaskHistoryPage> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
+        icon: Icon(
+          Icons.delete_outline,
+          color: Theme.of(context).colorScheme.error,
+        ),
         title: const Text('清除任务历史？'),
         content: Text(
           records.isEmpty
@@ -69,6 +74,10 @@ class _TaskHistoryPageState extends State<TaskHistoryPage> {
             child: const Text('取消'),
           ),
           FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(context).colorScheme.error,
+              foregroundColor: Theme.of(context).colorScheme.onError,
+            ),
             onPressed: () => Navigator.pop(dialogContext, true),
             child: const Text('清除历史'),
           ),
@@ -121,7 +130,9 @@ class _TaskHistoryPageState extends State<TaskHistoryPage> {
   };
 
   String _time(Object? value) => value is num
-      ? DateTime.fromMillisecondsSinceEpoch(value.toInt()).toLocal().toString()
+      ? DateTime.fromMillisecondsSinceEpoch(
+          value.toInt(),
+        ).toLocal().toString().replaceFirst(RegExp(r'\.000$'), '')
       : '时间未知';
 
   @override
@@ -143,16 +154,34 @@ class _TaskHistoryPageState extends State<TaskHistoryPage> {
         ),
       ],
     ),
-    floatingActionButton: selected.isEmpty
+    bottomNavigationBar: selected.isEmpty
         ? null
-        : FloatingActionButton.extended(
-            onPressed: () => widget.onExportSelected(
-              records
-                  .where((record) => selected.contains(_id(record)))
-                  .toList(),
+        : SafeArea(
+            child: Align(
+              heightFactor: 1,
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 880),
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+                  child: SizedBox(
+                    width: double.infinity,
+                    child: FilledButton.icon(
+                      key: const Key('history-export-selection'),
+                      onPressed: () => widget.onExportSelected(
+                        records
+                            .where((record) => selected.contains(_id(record)))
+                            .toList(),
+                      ),
+                      icon: const Icon(Icons.ios_share),
+                      label: Text(
+                        '预览并导出 ${selected.length} 项',
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
             ),
-            icon: const Icon(Icons.ios_share),
-            label: Text('预览并导出 ${selected.length} 项'),
           ),
     body: SafeArea(
       child: LayoutBuilder(
@@ -163,16 +192,42 @@ class _TaskHistoryPageState extends State<TaskHistoryPage> {
             padding: EdgeInsets.symmetric(
               horizontal: constraints.maxWidth > 880
                   ? (constraints.maxWidth - 840) / 2
+                  : constraints.maxWidth < 360
+                  ? 16
                   : 20,
-              vertical: 20,
+              vertical: 24,
             ),
             children: [
-              Text('最多保存 20 条或 5 MiB；达到上限时自动移除最旧记录。'),
+              Wrap(
+                spacing: 12,
+                runSpacing: 8,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  Text(
+                    '本机记录',
+                    style: Theme.of(context).textTheme.headlineMedium,
+                  ),
+                  Text(
+                    '${records.length} / 20',
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      color: Theme.of(context).colorScheme.primary,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              Text(
+                '最多保存 20 条或 5 MiB；达到上限时自动移除最旧记录。',
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+              ),
               const SizedBox(height: 8),
               Text(
                 '仅包含设备摘要、内存快照和接口诊断；不会自动过期。',
                 style: Theme.of(context).textTheme.bodySmall,
               ),
+              const SizedBox(height: 16),
               if (loading) ...[
                 const SizedBox(height: 16),
                 const LinearProgressIndicator(),
@@ -230,10 +285,11 @@ class _TaskHistoryPageState extends State<TaskHistoryPage> {
                 ),
               for (final record in records)
                 Card(
-                  margin: const EdgeInsets.only(top: 10),
+                  margin: const EdgeInsets.only(top: 0, bottom: 16),
                   child: Column(
                     children: [
                       CheckboxListTile(
+                        selected: selected.contains(_id(record)),
                         value: selected.contains(_id(record)),
                         onChanged: loading
                             ? null
@@ -251,12 +307,17 @@ class _TaskHistoryPageState extends State<TaskHistoryPage> {
                               size: 20,
                               color: record['state'] == 'completed'
                                   ? Theme.of(context).colorScheme.primary
+                                  : record['state'] == 'cancelled'
+                                  ? Theme.of(
+                                      context,
+                                    ).colorScheme.onSurfaceVariant
                                   : Theme.of(context).colorScheme.error,
                             ),
                             const SizedBox(width: 8),
                             Expanded(
                               child: Text(
                                 '${_title(record['script'] as String?)} · ${_state(record['state'] as String?)}',
+                                style: Theme.of(context).textTheme.titleMedium,
                               ),
                             ),
                           ],
@@ -267,15 +328,21 @@ class _TaskHistoryPageState extends State<TaskHistoryPage> {
                             record['source']?.toString() ?? '来源未知',
                             if (record['interfaceName'] is String)
                               '接口 ${record['interfaceName']}',
-                          ].join(' · '),
+                          ].join('\n'),
                         ),
                         controlAffinity: ListTileControlAffinity.leading,
                         contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 12,
+                          horizontal: 16,
+                          vertical: 8,
                         ),
                       ),
                       if (record['data'] != null)
                         ExpansionTile(
+                          minTileHeight: 48,
+                          expansionAnimationStyle: AnimationStyle(
+                            duration: CtosTheme.duration(context),
+                          ),
+                          key: PageStorageKey('history-result-${_id(record)}'),
                           tilePadding: const EdgeInsets.symmetric(
                             horizontal: 16,
                           ),
@@ -286,12 +353,17 @@ class _TaskHistoryPageState extends State<TaskHistoryPage> {
                               child: Align(
                                 alignment: Alignment.centerLeft,
                                 child: SelectableText(
+                                  key: PageStorageKey(
+                                    'history-result-text-${_id(record)}',
+                                  ),
                                   const JsonEncoder.withIndent(
                                     '  ',
                                   ).convert(record['data']),
-                                  style: const TextStyle(
-                                    fontFamily: 'monospace',
-                                  ),
+                                  style: Theme.of(context).textTheme.bodyMedium
+                                      ?.copyWith(
+                                        fontFamily: 'monospace',
+                                        height: 1.6,
+                                      ),
                                 ),
                               ),
                             ),
@@ -300,7 +372,7 @@ class _TaskHistoryPageState extends State<TaskHistoryPage> {
                     ],
                   ),
                 ),
-              const SizedBox(height: 88),
+              const SizedBox(height: 24),
             ],
           ),
         ),

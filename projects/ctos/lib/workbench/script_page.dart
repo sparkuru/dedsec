@@ -5,6 +5,7 @@ import 'controls.dart';
 import 'models.dart';
 import 'parameter_field.dart';
 import 'result_card.dart';
+import '../ui/ctos_theme.dart';
 
 class ScriptPage extends StatefulWidget {
   const ScriptPage({
@@ -137,7 +138,7 @@ class _ScriptPageState extends State<ScriptPage> {
   }
 
   Widget parameter(ScriptParameter parameter, {bool active = true}) => Padding(
-    padding: const EdgeInsets.only(bottom: 16),
+    padding: const EdgeInsets.only(bottom: 24),
     child: ParameterField(
       key: ValueKey(parameter.name),
       parameter: parameter,
@@ -204,7 +205,11 @@ class _ScriptPageState extends State<ScriptPage> {
                   onPressed: running
                       ? null
                       : () => setState(() => advanced = !advanced),
-                  icon: Icon(advanced ? Icons.expand_less : Icons.expand_more),
+                  icon: AnimatedRotation(
+                    turns: advanced ? .5 : 0,
+                    duration: CtosTheme.duration(context),
+                    child: const Icon(Icons.expand_more),
+                  ),
                   label: Text(advanced ? '收起高级选项' : '高级选项'),
                 ),
               ],
@@ -231,44 +236,64 @@ class _ScriptPageState extends State<ScriptPage> {
     body: SafeArea(
       child: LayoutBuilder(
         builder: (context, constraints) => ListView(
-          padding: _padding(constraints.maxWidth),
+          padding: workbenchPadding(constraints.maxWidth),
           children: [
-            Text(widget.script.description),
-            const SizedBox(height: 8),
+            Text(
+              widget.script.description,
+              style: Theme.of(context).textTheme.titleLarge,
+            ),
+            const SizedBox(height: 12),
             Text(
               widget.script.id == 'network.interface_diagnose'
                   ? 'App 只读快照 · 不探测互联网、不修改配置'
                   : 'App 权限 · 本机工作台',
               style: Theme.of(context).textTheme.bodySmall,
             ),
-            const SizedBox(height: 16),
-            if (widget.runtime != null) _runtime(widget.runtime!),
-            parameters(),
-            WorkbenchActions(
-              children: [
-                FilledButton.icon(
-                  onPressed: running ? null : run,
-                  icon: const Icon(Icons.play_arrow),
-                  label: Text(
-                    running
-                        ? '运行中…'
-                        : widget.runtime != null
-                        ? '运行自检'
-                        : '运行',
+            const SizedBox(height: 24),
+            if (widget.runtime != null) ...[
+              _runtime(widget.runtime!),
+              const SizedBox(height: 24),
+            ],
+            WorkbenchSection(
+              title: widget.script.parameters.isEmpty ? '执行任务' : '任务参数',
+              icon: Icons.tune_outlined,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  parameters(),
+                  WorkbenchActions(
+                    children: [
+                      FilledButton.icon(
+                        onPressed: running ? null : run,
+                        icon: const Icon(Icons.play_arrow),
+                        label: Text(
+                          running
+                              ? '运行中…'
+                              : widget.runtime != null
+                              ? '运行自检'
+                              : '运行',
+                        ),
+                      ),
+                      if (running)
+                        OutlinedButton(
+                          onPressed: cancelling ? null : cancel,
+                          child: Text(cancelling ? '取消中…' : '取消'),
+                        ),
+                    ],
                   ),
-                ),
-                if (running)
-                  OutlinedButton(
-                    onPressed: cancelling ? null : cancel,
-                    child: Text(cancelling ? '取消中…' : '取消'),
-                  ),
-              ],
-            ),
-            if (running)
-              const Padding(
-                padding: EdgeInsets.only(top: 16),
-                child: LinearProgressIndicator(),
+                  if (running)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 16),
+                      child: MediaQuery.disableAnimationsOf(context)
+                          ? const WorkbenchNotice(
+                              text: '正在执行任务…',
+                              icon: Icons.hourglass_top_outlined,
+                            )
+                          : const LinearProgressIndicator(),
+                    ),
+                ],
               ),
+            ),
             if (result != null)
               ResultCard(
                 key: ValueKey(result),
@@ -283,6 +308,7 @@ class _ScriptPageState extends State<ScriptPage> {
   );
 
   Widget _runtime(Map<String, dynamic> runtime) => Card(
+    margin: EdgeInsets.zero,
     child: Padding(
       padding: const EdgeInsets.all(16),
       child: Column(
@@ -295,12 +321,19 @@ class _ScriptPageState extends State<ScriptPage> {
           const SizedBox(height: 8),
           Text('${runtime['architecture']} · SDK ${runtime['sdk']}'),
           const SizedBox(height: 8),
-          const Text('随 APK 内置，可离线运行'),
+          Text('离线可用', style: Theme.of(context).textTheme.bodySmall),
           const SizedBox(height: 8),
-          const SelectableText(
+          SelectableText(
             '终端：python3\n示例：python3 --version\n      python3 script.py',
+            style: Theme.of(
+              context,
+            ).textTheme.bodyMedium?.copyWith(fontFamily: 'monospace'),
           ),
           ExpansionTile(
+            expansionAnimationStyle: AnimationStyle(
+              duration: CtosTheme.duration(context),
+              reverseDuration: CtosTheme.duration(context),
+            ),
             tilePadding: EdgeInsets.zero,
             title: const Text('内置运行包'),
             children: [
@@ -317,8 +350,3 @@ class _ScriptPageState extends State<ScriptPage> {
     ),
   );
 }
-
-EdgeInsets _padding(double width) => EdgeInsets.symmetric(
-  horizontal: width > 880 ? (width - 840) / 2 : 20,
-  vertical: 20,
-);

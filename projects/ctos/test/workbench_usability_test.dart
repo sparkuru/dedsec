@@ -183,15 +183,21 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(find.text('文件加解密'), findsOneWidget);
-      expect(find.text('设备摘要'), findsNothing);
       final ordered = [
         ...ids.where((id) => id.startsWith('tools.')),
         ...ids.where((id) => !id.startsWith('tools.')),
       ];
+      double? previousTop;
       for (final id in ordered) {
         final title = script(id).title;
         await revealWidget(tester, find.text(title));
         expect(find.text(title), findsOneWidget);
+        final position = tester
+            .state<ScrollableState>(find.byType(Scrollable).first)
+            .position;
+        final top = tester.getTopLeft(find.text(title)).dy + position.pixels;
+        if (previousTop != null) expect(top, greaterThan(previousTop));
+        previousTop = top;
       }
       await tapVisible(tester, find.text('Python3 环境'));
       expect(find.text('运行'), findsOneWidget);
@@ -548,9 +554,19 @@ void main() {
           ),
         ),
       );
-      expect(find.text('IP 地址：192.0.2.1'), findsOneWidget);
-      expect(find.text('时区：UTC'), findsOneWidget);
-      expect(find.text('代理标记：否'), findsOneWidget);
+      for (final pair in {
+        'IP 地址': '192.0.2.1',
+        '时区': 'UTC',
+        '代理标记': '否',
+      }.entries) {
+        final row = find
+            .ancestor(of: find.text(pair.key), matching: find.byType(Container))
+            .first;
+        expect(
+          find.descendant(of: row, matching: find.text(pair.value)),
+          findsOneWidget,
+        );
+      }
       expect(find.textContaining('retained'), findsNothing);
       await tapVisible(tester, find.text('原始 JSON 与日志'));
       expect(find.textContaining('"futureField": "retained"'), findsOneWidget);

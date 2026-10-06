@@ -18,6 +18,10 @@ Flutter/Android toolchain inside Docker without publishing service ports.
 - For visible layout changes, exercise narrow width, landscape, large text, and
   reduced animations. Use exact layout assertions only for the contract being
   changed; avoid snapshots of incidental widget structure.
+- Review actual Flutter renders including below-fold content and confirmations;
+  PageStorage errors may appear only after scrolling/collapse/return. Use real
+  CJK/icon/monospace fonts and native response-shaped public fixtures. Confirm
+  snapshot/trace evidence matches the tested source and installed APK hash.
 - `flutter test` does not prove Android IME, SAF, Root, HFTP service, or ROM
   behavior. Record those checks separately and only for an explicitly
   authorized current device.

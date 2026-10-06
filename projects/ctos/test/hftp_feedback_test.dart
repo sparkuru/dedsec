@@ -356,7 +356,9 @@ void main() {
       await mount(tester, api);
       await reveal(tester, find.text('Saved directory'));
       expect(find.text('Saved directory'), findsOneWidget);
+      await reveal(tester, field('端口'));
       expect(tester.widget<TextField>(field('端口')).controller!.text, '9090');
+      await reveal(tester, field('最大上传大小（MiB）'));
       expect(
         tester.widget<TextField>(field('最大上传大小（MiB）')).controller!.text,
         '96',

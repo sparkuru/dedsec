@@ -165,9 +165,20 @@ class TerminalCommandInputState extends State<TerminalCommandInput> {
       enableSuggestions: true,
       smartDashesType: SmartDashesType.disabled,
       smartQuotesType: SmartQuotesType.disabled,
-      style: const TextStyle(fontFamily: 'monospace', fontSize: 13),
+      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+        fontFamily: 'monospace',
+        fontSize: 14,
+        height: 1.4,
+      ),
       decoration: InputDecoration(
-        isDense: true,
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 16,
+          vertical: 14,
+        ),
+        suffixIconConstraints: const BoxConstraints(
+          minWidth: 48,
+          minHeight: 48,
+        ),
         suffixIcon: IconButton(
           tooltip: '执行命令',
           onPressed: _submit,
@@ -435,6 +446,21 @@ class _TerminalOutputPageState extends State<TerminalOutputPage> {
               width: double.infinity,
               child: Column(
                 children: [
+                  if (MediaQuery.viewInsetsOf(context).bottom == 0)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 20, 16, 16),
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: Text(
+                          widget.output.isEmpty
+                              ? '输出快照'
+                              : '输出快照 · ${widget.output.split('\n').length} 行',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ),
+                    ),
                   if (_searchVisible) ...[
                     Padding(
                       padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
@@ -476,7 +502,23 @@ class _TerminalOutputPageState extends State<TerminalOutputPage> {
                   ],
                   Expanded(
                     child: widget.output.isEmpty
-                        ? const Center(child: Text('暂无可选择的输出'))
+                        ? Center(
+                            child: Padding(
+                              padding: const EdgeInsets.all(24),
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(
+                                    Icons.terminal_outlined,
+                                    size: 36,
+                                    color: theme.colorScheme.onSurfaceVariant,
+                                  ),
+                                  const SizedBox(height: 16),
+                                  const Text('暂无可选择的输出'),
+                                ],
+                              ),
+                            ),
+                          )
                         : SelectionArea(
                             child: SingleChildScrollView(
                               padding: const EdgeInsets.all(16),
@@ -484,9 +526,10 @@ class _TerminalOutputPageState extends State<TerminalOutputPage> {
                                 width: double.infinity,
                                 child: Text.rich(
                                   _outputSpan(theme),
-                                  style: const TextStyle(
+                                  style: theme.textTheme.bodyMedium?.copyWith(
                                     fontFamily: 'monospace',
-                                    fontSize: 13,
+                                    fontSize: 14,
+                                    height: 1.6,
                                   ),
                                 ),
                               ),

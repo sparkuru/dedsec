@@ -1,5 +1,31 @@
 # Verification
 
+## 2026-10-05 全 Flutter 品质优化：最终代码与视觉复验
+
+用户批准整个 Flutter 实施和配置 A 验证，设备短暂离线后回复“已恢复，继续”。本轮最终包 `dist/ctos-current-arm64.apk` SHA-256 **`37d226009771ef8711196d91542f9b2c8b95d600ec238c35bf84709b97843c01`**；证书 SHA-256 `8d36c8be418174cb4cda0b897ff3e32b2da6f84032819726e8e5671872df52ef` 与旧安装一致。`adb install -r` 成功，最终设备 base.apk 哈希一致；旧包备份后覆盖，保留 App 数据。
+
+- **本地最终检查**：`./hako flutter analyze` 无问题；`./hako flutter test --reporter expanded` **103 项全部通过**；`./hako current` arm64 release 构建、签名与 `dist/SHA256SUMS` 校验通过。日志 `build/flutter-polish-evidence/{analyze-final,test-final,release-final2}.log`。Dart 源码由实现/检查 agent 格式化，最终 diff 另查；没有 native/Python 或依赖变更，未重复运行其他层全量测试。
+- **真实 Flutter 渲染**：`./hako flutter test build/flutter-polish-evidence/preview_test.dart --reporter expanded` **1 项通过**，107 场景、127 张矩阵图片，错误数组均为空。范围为 320×568、375×812、900×450、1200×900 dp，正常/2 倍文字与减少动画；八个核心画面、九项工具表单/结果、五种 HFTP 状态、文件/历史/导出/终端输出、受限/失败/取消/超时及三种清理弹窗，含下方滚动内容。当前 catalogue、公开响应夹具和显式 CJK/Roboto/monospace/MaterialIcons；22 文件源清单最终哈希匹配，不用 HTML 代替 Flutter。
+- **视觉迭代**：完整页面审查后收紧概览/目录/设备字段密度、降低历史/日志权重、提高必要输入边界对比；全矩阵复渲染后再修复原始时间戳、结果短字段、大字 IP 标签与横屏清理影响说明。Trellis check 及主 agent 最终图片复验未发现已证实的明显残余项。八维发现/修复/复验见 [任务检查](../.trellis/tasks/archive/2026-10/10-05-flutter-experience-polish/check.md)。不将测试绿灯单独当作视觉验收。
+- **IP 补充复验**：长矩阵一张 IP 结果图的首数字未绘出；独立挂载真实组件，在主页/详情路由 400 ms 和稳定帧均完整显示三个 `198.51.100.8`，文本与首字符位置断言通过。原图保留限制，有效复验图 `build/flutter-polish-evidence/ip-probe-true-settled.png`；未据此改产品代码。
+- **配置 A 当前设备**：Android 15 / API 35、Xiaomi 22041216UC、1080×2460 px、当前 378 dpi、文字缩放 1.0。每条 ADB 显式指定当前目标，serial 不提交。此次结论仅属于最终包及该手机，不沿用历史开发板/Root/仪器测试结论。
+- **实机已完成路径**：概览/设备/网络/接口/连接/工作台入口；密码工具使用公开测试种子，本机运行完成、16 字符结果默认遮罩、复制进入 Android 剪贴板、历史页可返回。App Shell 普通键盘输入 `id` 返回 App 身份，`pyth` 经 Tab 补为 `python3`，历史键恢复 `id`；输出快照搜索 `uid` 找到 1 处、复制全部、返回保持原会话；最终关闭本轮 PTY。键盘出现时底栏让位，控件与输入保持可达。`whoam` 没有可补命令，未误判为 Tab 故障。
+- **导出/HFTP 与最终页面**：导出未选择时主按钮禁用；选择网络快照后实际打开 Android SAF 保存界面，返回显示“文件选择已取消，未创建文件”，未创建外部文件。HFTP 实屏显示已停止、启动主动作、既有局域网/7888/32 MiB 配置与目录选择；只读查看，不启动/变更服务。最终重采概览/设备并回到概览，安装 hash 对应全部这些截图。19.76 秒本地录屏及逐秒接触表确认页面切换与实际数据刷新，无持续闪烁；抽样不代表逐帧性能或所有路由动效验收。
+- **状态/动效边界**：减少动画、失败/受限/停止竞态/取消和清理效果以确定性 widget 测试/渲染验证；实机交互证明关键动作可执行，不声称量化帧率。Root 自动恢复属于既有启动路径，未改 Root 授权、其他应用、网络、系统字体/旋转配置。此轮未重测 Root PTY、服务后台/熄屏/LAN 传输或全部 ROM；既有 HFTP 熄屏限制仍有效。
+
+原始 APK 备份、截图及控件树在 `/tmp/ctos-flutter-polish-20261005/device/`，含设备信息，仅本地临时保留、不提交。公开组件证据在忽略的 `build/flutter-polish-evidence/`；若临时目录被清除，需按当前授权重新生成。提交前归类 `human-required` 的观感审阅已于 2026-10-06 通过：用户回复“观感通过，按计划提交”。自动化、代理图片审查与设备交互结论仍按上述实际范围解释。
+
+## 2026-10-05 全 Flutter 品质优化：规划与改版前基线
+
+以下是批准前历史：用户当时仅同意创建任务/规划，产品代码未改动。后续批准与最终结果见本文件上方，设计及矩阵见 [全 Flutter 界面品质优化](flutter-experience.md)。
+
+- `./hako flutter --version`：Flutter 3.35.7 / Dart 3.9.2；`./hako flutter test`：当前源码 **79 项全部通过**。未运行改版后检查，也未重建/替换 APK。
+- 配置 A 当前在线目标的只读探测确认 Android 15、1080×2460、当前 378 dpi。打开已安装 `im.majo.ctos` 并截图，显示旧 Vector/旧导航；这是旧包视觉参考，不能作为当前源码功能验收。启动运行了该旧包的既有生命周期，未执行终端命令或调整 Root/系统配置。
+- 当前仓库 APK SHA-256 `ab13ceac96a7a8958659cb9bb12ab298dd65d9fa22b3ec729d2f5d26e30e014f`。此次未覆盖安装、未清数据、未修改网络/其他应用。
+- 原始截图 `/tmp/ctos-flutter-polish-20261005/baseline/overview.png` 为临时证据，不提交；若目录被清理，需重新确认设备并重采。目标 serial 按既有脱敏约定不写入项目文档。
+- Trellis implement/check 上下文校验通过。视觉、宽度矩阵、减少动画、完整新包设备验收均待实施，79 项基线不能代替这些结果。
+- 规划补充：复用已检查的 `build/workbench-usability-previews/preview_test.dart`，执行 `./hako flutter test build/workbench-usability-previews/preview_test.dart --reporter expanded`，**1 项通过**；生成并逐张查看六张当前源码组件基线图。采用公开模拟数据、旧目录元数据和显式字体，不是设备/真实执行证据；HFTP 图缺少配置响应，只能表示未就绪布局。夹具哈希、图片和具体发现见 [基线检查](../.trellis/tasks/archive/2026-10/10-05-flutter-experience-polish/check.md)。
+
 ## 2026-09-28 界面与终端可用性整理（P2）
 
 本 task 在用户另行授权后，向 `TARGET-BOARD`（AIO-3568J、Android 11 / API 30）安装 release 包 `im.majo.ctos`。本地产物 `dist/ctos-current-arm64.apk` SHA-256 `ab13ceac96a7a8958659cb9bb12ab298dd65d9fa22b3ec729d2f5d26e30e014f` 与安装前核验值一致，`adb install -r` 返回 Success；未卸载既有包或清除 App 数据。ADB serial 依本文件的证据脱敏约定不记录。

@@ -443,7 +443,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('应用 Shell'), findsOneWidget);
     expect(find.text('Root PTY'), findsOneWidget);
-    expect(find.text('Root 未连接，请先在工作台授权'), findsOneWidget);
+    expect(find.text('Root 未连接，请先在概览授权'), findsOneWidget);
     expect(
       tester
           .widget<ListTile>(find.byKey(const Key('terminal-root-entry')))
@@ -696,10 +696,14 @@ void main() {
     expect(stops, 1);
     expect(find.text('应用 Shell'), findsOneWidget);
     expect(tester.takeException(), isNull);
+    await tester.pump(const Duration(seconds: 5));
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('terminal-app-entry')));
     await tester.pumpAndSettle();
     expect(starts, 2);
     final writesBeforeNewHistory = writes.length;
+    await tester.ensureVisible(find.text('↑'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('↑'));
     await tester.pump();
     expect(writes, hasLength(writesBeforeNewHistory));

@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'api.dart';
 import 'controls.dart';
 import 'models.dart';
+import '../ui/ctos_theme.dart';
 
 class ResultCard extends StatefulWidget {
   const ResultCard({
@@ -27,14 +28,18 @@ class _ResultCardState extends State<ResultCard> {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
 
   Future<void> copy(String text, String label) async {
-    await Clipboard.setData(ClipboardData(text: text));
-    if (mounted) notice('已复制$label');
+    try {
+      await Clipboard.setData(ClipboardData(text: text));
+      if (mounted) notice('已复制$label');
+    } catch (_) {
+      if (mounted) notice('复制失败，请重试');
+    }
   }
 
   Future<void> saveJson() async {
     try {
       final saved = await widget.api.export(widget.value);
-      if (mounted && saved) notice('结果已保存');
+      if (mounted) notice(saved ? '结果已保存' : '文件选择已取消，未创建文件');
     } catch (error) {
       if (mounted) notice('保存失败：$error');
     }
@@ -43,7 +48,7 @@ class _ResultCardState extends State<ResultCard> {
   Future<void> saveFile(Map<String, dynamic> artifact) async {
     try {
       final saved = await widget.api.exportFile(artifact);
-      if (mounted && saved) notice('文件已保存');
+      if (mounted) notice(saved ? '文件已保存' : '文件选择已取消，未创建文件');
     } catch (error) {
       if (mounted) notice('保存失败：$error');
     }
@@ -51,6 +56,17 @@ class _ResultCardState extends State<ResultCard> {
 
   String json(Object? value) =>
       const JsonEncoder.withIndent('  ').convert(value);
+
+  String _time(Object? value) {
+    final time = value is DateTime
+        ? value
+        : value is num
+        ? DateTime.fromMillisecondsSinceEpoch(value.toInt())
+        : null;
+    return time == null
+        ? '$value'
+        : time.toLocal().toString().replaceFirst(RegExp(r'\.000$'), '');
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -91,54 +107,84 @@ class _ResultCardState extends State<ResultCard> {
       'timed_out' => '超时',
       _ => '未知状态',
     };
+    final theme = Theme.of(context);
+    final completed = value['state'] == 'completed';
+    final stateColor = completed
+        ? theme.colorScheme.primary
+        : value['state'] == 'failed'
+        ? theme.colorScheme.error
+        : theme.colorScheme.secondary;
     return Card(
-      margin: const EdgeInsets.only(top: 20),
+      margin: const EdgeInsets.only(top: 24),
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Text(
-              state,
-              style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                color: value['state'] == 'completed'
-                    ? Theme.of(context).colorScheme.primary
-                    : Theme.of(context).colorScheme.error,
-              ),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(
+                  completed
+                      ? Icons.check_circle_outline
+                      : value['state'] == 'failed'
+                      ? Icons.error_outline
+                      : Icons.pause_circle_outline,
+                  color: stateColor,
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    state,
+                    style: theme.textTheme.titleLarge?.copyWith(
+                      color: stateColor,
+                    ),
+                  ),
+                ),
+              ],
             ),
-            const SizedBox(height: 8),
-            Text(
-              'App · ${value['durationMs']} ms · 退出码 ${value['exitCode'] ?? '—'}',
-            ),
-            if (capturedAt != null)
-              Text(
-                '开始于 $capturedAt',
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
+            const SizedBox(height: 20),
             if (value['historySaveError'] is String)
-              Text(
-                '本次结果未能保存到历史：${value['historySaveError']}',
-                style: TextStyle(color: Theme.of(context).colorScheme.error),
+              WorkbenchNotice(
+                text: '本次结果未能保存到历史：${value['historySaveError']}',
+                error: true,
               ),
-            if (widget.scriptId == 'network.interface_diagnose' &&
-                value['state'] == 'failed' &&
-                value['stderr'] is String)
-              SelectableText(
-                '诊断失败：${value['stderr']}',
-                style: TextStyle(color: Theme.of(context).colorScheme.error),
+            if (value['state'] == 'failed' &&
+                value['stderr'] is String &&
+                (value['stderr'] as String).isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 16),
+                child: WorkbenchNotice(
+                  text:
+                      '${widget.scriptId == 'network.interface_diagnose' ? '诊断失败：' : ''}${sensitive && !reveal
+                          ? secret != null && secret.isNotEmpty
+                                ? (value['stderr'] as String).replaceAll(secret, '••••••••')
+                                : '••••••••'
+                          : value['stderr']}',
+                  error: true,
+                  icon: Icons.error_outline,
+                ),
               ),
             if (value['truncated'] == true) const Text('日志已达到上限，部分内容已截断。'),
             if (value['state'] == 'timed_out')
               const Text('超过 15 秒，进程已回收；可重新运行。'),
-            const SizedBox(height: 16),
             if (sensitive) ...[
               Text('生成密码', style: Theme.of(context).textTheme.titleSmall),
               const SizedBox(height: 8),
               SelectableText(
                 reveal && secret != null ? secret : '••••••••',
-                style: Theme.of(context).textTheme.titleLarge,
+                style: Theme.of(
+                  context,
+                ).textTheme.headlineMedium?.copyWith(fontFamily: 'monospace'),
               ),
-              if (data['length'] != null) Text('${data['length']} 个字符'),
+              if (data['length'] != null)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  child: Text(
+                    '${data['length']} 个字符',
+                    style: theme.textTheme.bodySmall,
+                  ),
+                ),
               WorkbenchActions(
                 children: [
                   TextButton.icon(
@@ -160,16 +206,42 @@ class _ResultCardState extends State<ResultCard> {
               ),
             ] else if (data != null)
               ..._content(data),
+            const SizedBox(height: 20),
+            Divider(color: theme.colorScheme.outlineVariant),
+            const SizedBox(height: 12),
+            Text(
+              'App · ${value['durationMs']} ms · 退出码 ${value['exitCode'] ?? '—'}',
+              style: theme.textTheme.bodySmall,
+            ),
+            if (capturedAt != null)
+              Text(
+                '开始于 ${_time(capturedAt)}',
+                style: theme.textTheme.bodySmall,
+              ),
             ExpansionTile(
+              key: const PageStorageKey('workbench-raw-result'),
+              expansionAnimationStyle: AnimationStyle(
+                duration: CtosTheme.duration(context),
+                reverseDuration: CtosTheme.duration(context),
+              ),
               tilePadding: EdgeInsets.zero,
               childrenPadding: EdgeInsets.zero,
               title: const Text('原始 JSON 与日志'),
               children: [
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: SelectableText(
-                    visibleRaw,
-                    style: const TextStyle(fontFamily: 'monospace'),
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxHeight: 320),
+                  child: SingleChildScrollView(
+                    key: const PageStorageKey('workbench-raw-scroll'),
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: SelectableText(
+                        key: const PageStorageKey('workbench-raw-text'),
+                        visibleRaw,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          fontFamily: 'monospace',
+                        ),
+                      ),
+                    ),
                   ),
                 ),
                 const SizedBox(height: 8),
@@ -213,7 +285,7 @@ class _ResultCardState extends State<ResultCard> {
           'utf8Bytes': 'UTF-8 字节数',
           'lines': '行数',
         }.entries)
-          if (data[entry.key] != null) _summary(entry.value, data[entry.key]),
+          if (data[entry.key] != null) _metric(entry.value, data[entry.key]),
         if (data['sha256'] != null) _copyValue('SHA-256', '${data['sha256']}'),
       ];
     final artifact = data['artifact'];
@@ -270,7 +342,6 @@ class _ResultCardState extends State<ResultCard> {
     if (widget.scriptId == 'tools.ip' && data['data'] is Map) {
       final provider = data['data'] as Map;
       return [
-        if (data['source'] != null) _summary('来源', data['source']),
         if (data['target'] != null) _summary('查询目标', data['target']),
         if (data['resolved'] != null) _summary('解析地址', data['resolved']),
         for (final entry in const {
@@ -289,6 +360,7 @@ class _ResultCardState extends State<ResultCard> {
         }.entries)
           if (provider[entry.key] != null)
             _summary(entry.value, provider[entry.key]),
+        if (data['source'] != null) _provenance('来源', data['source']),
       ];
     }
     if (widget.scriptId == 'python.selftest')
@@ -325,12 +397,7 @@ class _ResultCardState extends State<ResultCard> {
           ),
         if (data['source'] != null) _summary('来源', data['source']),
         if (data['capturedAt'] is num)
-          _summary(
-            '采集时间',
-            DateTime.fromMillisecondsSinceEpoch(
-              (data['capturedAt'] as num).toInt(),
-            ).toLocal(),
-          ),
+          _summary('采集时间', _time(data['capturedAt'])),
         if (interfaces['state'] != null) _summary('接口状态', interfaces['state']),
         if (interfaces['mtu'] != null) _summary('MTU', interfaces['mtu']),
         if (addresses is List)
@@ -360,8 +427,6 @@ class _ResultCardState extends State<ResultCard> {
         data['data'] is Map) {
       final snapshot = data['data'] as Map;
       return [
-        if (data['source'] != null) _summary('来源', data['source']),
-        if (data['capturedAt'] != null) _summary('采集时间', data['capturedAt']),
         for (final entry in const {
           'manufacturer': '厂商',
           'model': '型号',
@@ -375,12 +440,15 @@ class _ResultCardState extends State<ResultCard> {
           'low': '低内存状态',
         }.entries)
           if (snapshot[entry.key] != null)
-            _summary(
+            (entry.key.endsWith('Bytes') ? _metric : _summary)(
               entry.value,
               entry.key.endsWith('Bytes')
                   ? formatFileSize(snapshot[entry.key])
                   : snapshot[entry.key],
             ),
+        if (data['source'] != null) _provenance('来源', data['source']),
+        if (data['capturedAt'] != null)
+          _provenance('采集时间', _time(data['capturedAt'])),
       ];
     }
     return [
@@ -391,14 +459,82 @@ class _ResultCardState extends State<ResultCard> {
     ];
   }
 
-  Widget _summary(String label, Object? value) => Padding(
-    padding: const EdgeInsets.only(bottom: 8),
+  Widget _metric(String label, Object? value) => Padding(
+    padding: const EdgeInsets.symmetric(vertical: 12),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(label, style: Theme.of(context).textTheme.bodySmall),
+        const SizedBox(height: 4),
+        SelectableText(
+          '$value',
+          style: Theme.of(
+            context,
+          ).textTheme.headlineMedium?.merge(CtosTheme.numeric),
+        ),
+      ],
+    ),
+  );
+
+  Widget _provenance(String label, Object? value) => Padding(
+    padding: const EdgeInsets.only(top: 12),
     child: SelectableText(
-      '$label：${value is List
-          ? value.join('、')
-          : value is bool
-          ? (value ? '是' : '否')
-          : value}',
+      '$label：$value',
+      style: Theme.of(context).textTheme.bodySmall,
+    ),
+  );
+
+  Widget _summary(String label, Object? value) => Container(
+    padding: const EdgeInsets.symmetric(vertical: 10),
+    decoration: BoxDecoration(
+      border: Border(
+        bottom: BorderSide(
+          color: Theme.of(
+            context,
+          ).colorScheme.outlineVariant.withValues(alpha: .5),
+        ),
+      ),
+    ),
+    child: LayoutBuilder(
+      builder: (context, constraints) {
+        final theme = Theme.of(context);
+        final displayed =
+            '${value is List
+                ? value.join('、')
+                : value is bool
+                ? (value ? '是' : '否')
+                : value}';
+        final labelWidget = Text(label, style: theme.textTheme.bodySmall);
+        final valueWidget = SelectableText(
+          displayed,
+          style: theme.textTheme.bodyLarge,
+        );
+        var compact =
+            constraints.maxWidth >= 240 &&
+            MediaQuery.textScalerOf(context).scale(14) <= 18;
+        if (compact) {
+          final painter = TextPainter(
+            text: TextSpan(text: displayed, style: theme.textTheme.bodyLarge),
+            textDirection: Directionality.of(context),
+            textScaler: MediaQuery.textScalerOf(context),
+          )..layout(maxWidth: constraints.maxWidth - 100);
+          compact = painter.computeLineMetrics().length <= 2;
+          painter.dispose();
+        }
+        return compact
+            ? Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SizedBox(width: 88, child: labelWidget),
+                  const SizedBox(width: 12),
+                  Expanded(child: valueWidget),
+                ],
+              )
+            : Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [labelWidget, const SizedBox(height: 4), valueWidget],
+              );
+      },
     ),
   );
 
@@ -408,8 +544,23 @@ class _ResultCardState extends State<ResultCard> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Text(label, style: Theme.of(context).textTheme.titleSmall),
-        const SizedBox(height: 4),
-        SelectableText(value, style: const TextStyle(fontFamily: 'monospace')),
+        const SizedBox(height: 12),
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: Theme.of(
+              context,
+            ).colorScheme.surfaceContainerHighest.withValues(alpha: .5),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: SelectableText(
+            value,
+            style: Theme.of(
+              context,
+            ).textTheme.bodyLarge?.copyWith(fontFamily: 'monospace'),
+          ),
+        ),
+        const SizedBox(height: 8),
         WorkbenchActions(
           children: [
             TextButton.icon(

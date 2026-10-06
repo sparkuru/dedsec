@@ -92,36 +92,35 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       onRefresh: load,
       child: ListView(
         physics: const AlwaysScrollableScrollPhysics(),
-        padding: _padding(constraints.maxWidth),
+        padding: workbenchPadding(constraints.maxWidth),
         children: [
-          Text(
-            '工作台',
-            style: Theme.of(
-              context,
-            ).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.bold),
-          ),
-          const SizedBox(height: 8),
-          const Text('在手机上完成常用任务'),
-          const SizedBox(height: 16),
-          Card(
-            margin: const EdgeInsets.only(bottom: 8),
-            child: ListTile(
-              leading: Icon(
-                Icons.history,
-                color: Theme.of(context).colorScheme.primary,
-              ),
-              title: const Text('任务历史'),
-              subtitle: const Text('查看和选择已保存的只读任务结果'),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: () => Navigator.of(context).push(
-                MaterialPageRoute<void>(
-                  builder: (_) => TaskHistoryPage(
-                    api: widget.api,
-                    onExportSelected: widget.onExportHistory ?? (_) {},
-                    onBrowseInterfaces: widget.onBrowseInterfaces ?? () {},
+          Wrap(
+            alignment: WrapAlignment.spaceBetween,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: 16,
+            runSpacing: 8,
+            children: [
+              Text('工作台', style: Theme.of(context).textTheme.headlineMedium),
+              TextButton.icon(
+                icon: const Icon(Icons.history, size: 20),
+                label: const Text('任务历史'),
+                onPressed: () => Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => TaskHistoryPage(
+                      api: widget.api,
+                      onExportSelected: widget.onExportHistory ?? (_) {},
+                      onBrowseInterfaces: widget.onBrowseInterfaces ?? () {},
+                    ),
                   ),
                 ),
               ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            '本机工具与任务',
+            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
             ),
           ),
           if (loading) ...[
@@ -156,19 +155,24 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
             ),
           if (scripts.any((script) => script.category == 'tools')) ...[
             _heading(context, '常用工具'),
-            for (final script in scripts.where(
-              (script) => script.category == 'tools',
-            ))
-              _item(context, script),
+            _group(
+              context,
+              scripts.where((script) => script.category == 'tools').toList(),
+            ),
           ],
           if (scripts.any((script) => script.category != 'tools')) ...[
             _heading(context, '其他脚本与环境'),
-            for (final script in scripts.where(
-              (script) => script.category != 'tools',
-            ))
-              _item(context, script),
+            _group(
+              context,
+              scripts.where((script) => script.category != 'tools').toList(),
+            ),
           ],
           if (catalog != null) ...[
+            if (scripts.isEmpty)
+              const WorkbenchNotice(
+                text: '暂未发现可用工具。下拉可重新加载目录。',
+                icon: Icons.inventory_2_outlined,
+              ),
             _heading(context, '文件管理'),
             FileStoreCard(api: widget.api),
           ],
@@ -177,34 +181,80 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     ),
   );
   Widget _heading(BuildContext context, String title) => Padding(
-    padding: const EdgeInsets.only(top: 12, bottom: 8),
-    child: Text(title, style: Theme.of(context).textTheme.titleSmall),
+    padding: const EdgeInsets.only(top: 24, bottom: 12),
+    child: Text(title, style: Theme.of(context).textTheme.titleMedium),
   );
 
-  Widget _item(BuildContext context, WorkbenchScript script) => Card(
-    margin: const EdgeInsets.only(bottom: 8),
-    child: ListTile(
-      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-      leading: Icon(script.icon, color: Theme.of(context).colorScheme.primary),
-      title: Text(script.title),
-      subtitle: Text(script.description),
-      trailing: const Icon(Icons.chevron_right),
-      onTap: () => Navigator.of(context).push(
-        MaterialPageRoute<void>(
-          builder: (_) => script.id == 'tools.hftp'
-              ? HftpPage(api: widget.api)
-              : ScriptPage(
-                  script: script,
-                  api: widget.api,
-                  runtime: script.category == 'runtime' ? catalog : null,
+  Widget _group(BuildContext context, List<WorkbenchScript> entries) => Card(
+    margin: EdgeInsets.zero,
+    clipBehavior: Clip.antiAlias,
+    child: Column(
+      children: [
+        for (var index = 0; index < entries.length; index++) ...[
+          if (index > 0) const Divider(height: 1, indent: 68, endIndent: 16),
+          _item(context, entries[index]),
+        ],
+      ],
+    ),
+  );
+
+  Widget _item(BuildContext context, WorkbenchScript script) => InkWell(
+    onTap: () => Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => script.id == 'tools.hftp'
+            ? HftpPage(api: widget.api)
+            : ScriptPage(
+                script: script,
+                api: widget.api,
+                runtime: script.category == 'runtime' ? catalog : null,
+              ),
+      ),
+    ),
+    child: Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: Theme.of(
+                context,
+              ).colorScheme.primary.withValues(alpha: .1),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Icon(
+              script.icon,
+              color: Theme.of(context).colorScheme.primary,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  script.title,
+                  style: Theme.of(context).textTheme.titleMedium,
                 ),
-        ),
+                const SizedBox(height: 4),
+                Text(
+                  script.description,
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          Icon(
+            Icons.arrow_forward,
+            size: 20,
+            color: Theme.of(context).colorScheme.onSurfaceVariant,
+          ),
+        ],
       ),
     ),
   );
 }
-
-EdgeInsets _padding(double width) => EdgeInsets.symmetric(
-  horizontal: width > 880 ? (width - 840) / 2 : 20,
-  vertical: 20,
-);
