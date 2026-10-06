@@ -611,22 +611,6 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
               'ctOS',
               style: TextStyle(fontWeight: FontWeight.w800, letterSpacing: 2),
             ),
-            if (MediaQuery.sizeOf(context).width >= 375 &&
-                MediaQuery.textScalerOf(context).scale(14) < 22) ...[
-              const SizedBox(width: 16),
-              const Flexible(
-                child: Text(
-                  'SYSTEM OBSERVATORY',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 13,
-                    color: CtosColors.textSecondary,
-                    letterSpacing: 1,
-                  ),
-                ),
-              ),
-            ],
           ],
         ),
         actions: [
@@ -838,7 +822,7 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
             padding: EdgeInsets.fromLTRB(inset, 20, inset, 32),
             children: [
               const Text(
-                'DEVICE / 设备观测',
+                'DEVICE',
                 style: TextStyle(
                   fontSize: 13,
                   color: mint,

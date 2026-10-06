@@ -1,5 +1,14 @@
 # Verification
 
+## 2026-10-06 两处显示文案精简
+
+按用户要求不建 task，测试并提交用户在 `lib/main.dart` 的两处修改：顶部移除 `SYSTEM OBSERVATORY`，概览标签由 `DEVICE / 设备观测` 简化为 `DEVICE`。
+
+- 使用既有 `./hako`：Flutter 3.35.7 / Dart 3.9.2。
+- `./hako flutter analyze` 无问题；`./hako flutter test --reporter expanded` **103 项全部通过**，包含概览 320/375/800/1200 dp、双倍文字和减少动画的现有组件检查。
+- `./hako dart format --output=none --set-exit-if-changed lib/main.dart` 通过，0 文件需格式化；`git diff --check` 通过。
+- 本轮仅验证当前源码，未重建或替换 APK、未执行设备操作或截图视觉验收。上次构建和实机结论仍只对应其原包。
+
 ## 2026-10-05 全 Flutter 品质优化：最终代码与视觉复验
 
 用户批准整个 Flutter 实施和配置 A 验证，设备短暂离线后回复“已恢复，继续”。本轮最终包 `dist/ctos-current-arm64.apk` SHA-256 **`37d226009771ef8711196d91542f9b2c8b95d600ec238c35bf84709b97843c01`**；证书 SHA-256 `8d36c8be418174cb4cda0b897ff3e32b2da6f84032819726e8e5671872df52ef` 与旧安装一致。`adb install -r` 成功，最终设备 base.apk 哈希一致；旧包备份后覆盖，保留 App 数据。
