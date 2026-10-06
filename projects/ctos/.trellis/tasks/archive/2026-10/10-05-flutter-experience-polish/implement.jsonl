@@ -1,0 +1,4 @@
+{"file": "design/flutter-experience.md", "reason": "User-approved visual direction and full-surface quality matrix"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "Flutter guideline index"}
+{"file": ".trellis/spec/frontend/workbench.md", "reason": "Forms results HFTP and lifecycle contracts"}
+{"file": ".trellis/spec/frontend/terminal-interaction.md", "reason": "PTY IME and session invariants"}

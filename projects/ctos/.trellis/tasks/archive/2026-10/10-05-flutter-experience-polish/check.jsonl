@@ -1,0 +1,5 @@
+{"file": "design/flutter-experience.md", "reason": "Full eight-dimension visual and responsive acceptance"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "Flutter checks and state layout validation"}
+{"file": ".trellis/spec/frontend/workbench.md", "reason": "Workbench and HFTP regressions"}
+{"file": ".trellis/spec/frontend/terminal-interaction.md", "reason": "Terminal behavior and device acceptance"}
+{"file": ".trellis/spec/trellis-plus/validation.md", "reason": "Device boundaries and project validation commands"}
