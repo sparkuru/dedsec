@@ -7,7 +7,8 @@
 - 使用既有 `./hako`：Flutter 3.35.7 / Dart 3.9.2。
 - `./hako flutter analyze` 无问题；`./hako flutter test --reporter expanded` **103 项全部通过**，包含概览 320/375/800/1200 dp、双倍文字和减少动画的现有组件检查。
 - `./hako dart format --output=none --set-exit-if-changed lib/main.dart` 通过，0 文件需格式化；`git diff --check` 通过。
-- 本轮仅验证当前源码，未重建或替换 APK、未执行设备操作或截图视觉验收。上次构建和实机结论仍只对应其原包。
+- 初次提交只验证源码，未重建 APK；随后用户明确要求 build，基于提交 `3e0833e` 执行 `./hako current`：arm64 release 构建成功（约 26.3 MB），签名校验通过，并原子更新 `dist/ctos-current-arm64.apk` 与 `dist/SHA256SUMS`，校验和检查通过。当前 APK SHA-256：**`b7e67386f6b0058f0898320f654aaea856669ded78fc0432c516409fb76d9d7b`**。
+- 本轮未安装到设备、未执行设备操作或截图视觉验收。上次实机结论仍只对应其原包。
 
 ## 2026-10-05 全 Flutter 品质优化：最终代码与视觉复验
 
