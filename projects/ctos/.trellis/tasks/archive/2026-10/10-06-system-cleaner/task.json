@@ -1,0 +1,30 @@
+{
+  "id": "system-cleaner",
+  "name": "system-cleaner",
+  "title": "已取消：工具箱系统清理",
+  "description": "用户于 2026-10-07 取消该功能，未实施；仅保留取消归档记录。",
+  "status": "completed",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "ctos",
+  "assignee": "ctos",
+  "createdAt": "2026-10-06",
+  "completedAt": "2026-10-07",
+  "branch": null,
+  "base_branch": "antitrust",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "用户要求归档并移除相关讨论、设计及实现。产品代码未改动；仅做过只读探索，未执行设备清理。",
+  "meta": {
+    "outcome": "cancelled",
+    "cancelledAt": "2026-10-07",
+    "implementationDelivered": false
+  }
+}
