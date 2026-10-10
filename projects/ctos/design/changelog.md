@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-10-10 — APK 编译预览入口
+
+- 新增 [`preview.sh`](../preview.sh)：默认或 `build` 调用现有 `hako` 编译最新 arm64 release APK，成功后输出绝对路径及经过 shell 转义的 `adb install` 命令；`--help` 不触发构建。
+- 需要 Docker，首次运行可能下载工具链；从其他工作目录也可调用。失败保留非零退出码，不打印成功路径；不自动安装或替换 `dist/`。具体实测见 [验证记录](verification.md#2026-10-10--apk-编译预览入口)。
+
 ## 2026-10-06 — 显示文案精简
 
 - 顶部移除 `SYSTEM OBSERVATORY`，概览标签由 `DEVICE / 设备观测` 简化为 `DEVICE`。

@@ -46,6 +46,12 @@ Reuse the existing `./hako` and its ignored `.devhome/` cache.
 Before a task needs development commands, check that the wrapper still works;
 if absent or broken, follow `dev-it-in-docker` within that task's scope.
 ctOS has no development server or host port, so no `dev.sh` is needed.
+For a fresh arm64 release APK, run `./preview.sh` (or `./preview.sh build`).
+This native preview entry reuses `hako`, prints the absolute
+`build/app/outputs/flutter-apk/app-release.apk` path and a quoted `adb install`
+command only after a successful build with a nonempty APK. It does not install
+the APK or publish to `dist/`. `./preview.sh --help` performs no build; Docker
+with a reachable daemon is required, and first use may download build tools.
 Agent-specific allow rules belong only in ignored personal configuration,
 scoped to `./hako`; they must not authorize raw Docker or shell commands.
 

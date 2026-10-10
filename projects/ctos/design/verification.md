@@ -1,5 +1,13 @@
 # Verification
 
+## 2026-10-10 — APK 编译预览入口
+
+- 新增 `./preview.sh`（默认或 `build`），复用 `hako` 的 arm64 release 编译；不安装设备、不替换 `dist/`。用户仅要求这个原生 APK 入口，Trellis Plus 服务生命周期、监听地址和环境文件增强不适用，其他增强未执行。
+- `bash -n`、ShellCheck、`shfmt -d` 通过。`/tmp` 隔离桩覆盖默认/build 参数、其他工作目录、路径含空格、帮助无副作用、非法参数、缺少 wrapper/Docker、缺失/空 APK，以及构建失败且存在旧 APK 时不打印成功结果。
+- 从 `/tmp` 使用脚本绝对路径实际执行，退出 0；Gradle 14.2 秒，末尾 APK 路径和 `adb install` 命令与文件一致。产物 `build/app/outputs/flutter-apk/app-release.apk`，32,209,925 字节，SHA-256 `14fc814678f005d4614a885b971a6060ba89c0058db4ff1cbe3259959c204850`；日志 `/tmp/ctos-preview-build-20261010.log`。`dist/ctos-current-arm64.apk` 及 `SHA256SUMS` 哈希保持不变。
+- 沙箱首次执行因 Docker socket 访问受限以 126 退出，没有打印成功路径；随后仅对该编译命令按工具权限机制重试并成功。没有运行 ADB 或重新执行产品验收；构建不改变秘密库任务仍在进行的状态。
+- 该 APK 来自包含尚未提交秘密库实现的当前工作区；此处哈希不作为本次仅提交编译入口后独立 checkout 的产物保证。
+
 ## 2026-10-06 两处显示文案精简
 
 按用户要求不建 task，测试并提交用户在 `lib/main.dart` 的两处修改：顶部移除 `SYSTEM OBSERVATORY`，概览标签由 `DEVICE / 设备观测` 简化为 `DEVICE`。
