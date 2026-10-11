@@ -1,5 +1,13 @@
 # Architecture
 
+## 主页双返回退出（2026-10-11，源码及本地检查完成）
+
+`lib/ui/home_exit_guard.dart` 通过 builder 包装主页 Scaffold；`CtosApp` 注册并传入包含 PopupRoute 的 `RouteObserver<ModalRoute<dynamic>>`，保留原公开构造/预览入口。概览、信息、工作台和终端根路由首次系统返回提示“再按一次返回键退出”，2 秒内再次返回调用标准 `SystemNavigator.pop`，重复返回不会重复发出退出调用。Timer 配合单调时钟拒绝超时确认。
+
+切换入口、路由覆盖、键盘打开及非前台生命周期清除确认；详情/弹层仍正常返回，Flutter 收到键盘可见的返回时只收键盘。局部短提示沿用 Snackbar 主题、liveRegion、IgnorePointer、SafeArea 与 840 dp 阅读宽度。用户报告首版实机通过并要求提示改至下方；当前使用 Scaffold 的 centerFloat 布局槽，提示处于底部导航/安全区上方，其他浮动 Snackbar 由 Scaffold 自动排在提示上方。稳定 key 的提示槽空闲时为零尺寸，避免退出动画残留文字/朗读节点；不清理其他反馈或新增点击按钮，不强杀进程或增加服务停止操作。没有 observer 的独立预览通过 ModalRoute.isCurrent 变化重置；销毁时取消计时并解除观察。
+
+最新下方提示的16 项定向/154 全量 Flutter、analyze/格式通过，首版14/152及旧7ad包结果作为历史解释。上一轮实机通过仅为用户报告，未提供设备/API/安装哈希；新位置检查与产物见 [验证记录](verification.md#2026-10-11-退出提示移至下方)。公共秘密库按用户要求暂停推进，既有功能源码保留。
+
 2026-10-05 界面更新：`lib/ui/ctos_theme.dart` 集中管理语义色、字体角色、控件边界、终端和减少动画；`ctos_components.dart` 提供无平台副作用的共享展示。900 dp 起切换侧边导航，保持同一带 key 的内容子树和 IndexedStack；普通手机概览的内存/电量并列，大字退回纵排，网络入口与能力恢复分层。设备和结果短字段采用紧凑行，长值/大字纵排；工作台按组列出工具，历史为次级入口，结果先展示有用内容再显示执行元数据。HFTP 配置/目录在日志之前，空日志降低权重，真实停止/关闭锁和轮询修订号保留。全部执行协议、Python/Java/JNI 算法和权限策略不变。实现与实测分别见 [界面设计](flutter-experience.md) 和 [验证记录](verification.md)；下文历史顺序以本段最新展示结构为准。
 
 Flutter `MethodChannel` 调用 APK 进程中的 Java 后端；数据采集使用工作线程，UI 每两秒请求一次快照，仅在前台采样。连接列表按需刷新。导出由 Android Storage Access Framework 完成。

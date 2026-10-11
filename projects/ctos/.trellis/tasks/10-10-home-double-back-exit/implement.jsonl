@@ -1,0 +1,5 @@
+{"file":".trellis/spec/frontend/index.md","reason":"Flutter layer entry"}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Existing theme and accessible feedback"}
+{"file":".trellis/spec/frontend/state-management.md","reason":"Local state and lifecycle disposal"}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Behavior tests and platform limitations"}
+{"file":".trellis/spec/trellis-plus/validation.md","reason":"Docker checks and device boundaries"}

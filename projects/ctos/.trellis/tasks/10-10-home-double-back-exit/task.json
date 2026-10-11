@@ -1,0 +1,68 @@
+{
+  "id": "home-double-back-exit",
+  "name": "home-double-back-exit",
+  "title": "APK 主页双返回退出到桌面",
+  "description": "四个主入口首次返回在下方提示再按一次返回键退出，2秒内第二次返回才退出；提示自动避让导航/安全区/Snackbar，保留正常二级返回。",
+  "status": "in_progress",
+  "dev_type": "frontend",
+  "scope": "home-double-back-exit",
+  "package": null,
+  "priority": "P2",
+  "creator": "ctos",
+  "assignee": "ctos",
+  "createdAt": "2026-10-10",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "antitrust",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [
+    "lib/main.dart",
+    "lib/ui/home_exit_guard.dart",
+    "test/home_exit_guard_test.dart",
+    "design/plan.md",
+    "design/architecture.md"
+  ],
+  "notes": "2026-10-11 用户报告首版实机验收通过，要求prompt在下方。新布局使用Scaffold centerFloat自动协调导航/安全区/Snackbar，双返回逻辑保留。16定向/154全量、analyze/格式、新arm64构建v2验签通过，APK981ef814。等待新位置反馈，未agent设备操作/替换dist/提交/归档。公共底座继续暂停。",
+  "meta": {
+    "planning_stage": "approved",
+    "execution_state": "approved_for_commit",
+    "commit_approval": {
+      "date": "2026-10-11",
+      "response": "可以提交当前 task",
+      "scope": "当前任务功能、文档及归档；公共底座继续暂停",
+      "agent_device_executed": false
+    },
+    "user_device_acceptance": {
+      "date": "2026-10-11",
+      "response": "实机验收过；但是能否把 prompt 出现在下方？",
+      "scope": "用户报告上一轮交付验收通过，要求将提示移至下方",
+      "agent_device_executed": false,
+      "device_identity_provided": false
+    },
+    "local_validation": {
+      "date": "2026-10-11",
+      "focused_flutter_passed": 16,
+      "full_flutter_passed": 154,
+      "analyze_issues": 0,
+      "format_changes": 0,
+      "independent_review_remaining_code_findings": 0,
+      "visual_overlap_red_before_fix": true,
+      "release_apk_sha256": "981ef8145c01f1ce037f6ee5d80bd5672fe28e46fea591ac3d762fd48f9ef02a",
+      "signature_v2_verified": true,
+      "device_executed": false,
+      "review_classification": "human-required"
+    },
+    "side_task": true,
+    "implementation_approval": {
+      "date": "2026-10-11",
+      "response": "然后开始当前 task；四个主入口，2 秒（推荐）",
+      "scope": "本地实现、检查、构建；四个主入口2秒内双返回",
+      "device_authorized": false
+    }
+  }
+}

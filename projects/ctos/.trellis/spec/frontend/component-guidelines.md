@@ -66,3 +66,50 @@ state owners. Correct: keep the same keyed content subtree and change only
 navigation presentation. Wrong: a PageStorage-keyed list with unkeyed nested
 ExpansionTile/SelectableText storing bool and double to the same path. Correct:
 give each persisted expansion and text/scroll position its own storage key.
+
+## Main-entry system back confirmation
+
+**Scope / trigger:** Android system back on the uncovered root Observatory,
+in all four main entries. The UX is owned by `HomeExitGuard` in `lib/ui/`.
+
+**Signatures:** `HomeExitGuard({RouteObserver<ModalRoute<dynamic>>?
+routeObserver, required int entry, required Scaffold Function(BuildContext,
+Widget exitPrompt) builder})` wraps the builder's root Scaffold.
+`CtosApp.build` still returns MaterialApp; `Observatory({exitRouteObserver?})`
+retains its optional standalone preview constructor. Production CtosApp
+registers and passes the same ModalRoute observer, including PopupRoutes.
+
+**Contract:** PopScope blocks the first root back and shows
+`再按一次返回键退出`. A second back strictly before 2 seconds calls
+`SystemNavigator.pop` once; Timer expiry plus Stopwatch reject stale
+confirmation. The prompt uses Snackbar theme, SafeArea, IgnorePointer and a
+live-region Semantics with max width 840 dp. The builder places it in Scaffold's
+floatingActionButton slot with FloatingActionButtonLocation.centerFloat;
+Scaffold coordinates navigation/safe insets and puts floating Snackbar above
+the prompt. This is an IgnorePointer informational surface, not a tap action.
+
+**Validation / reset matrix:** details or popup current → normal route back;
+keyboard visible → hide keyboard without exit; entry/observer change, route
+coverage, keyboard opening, or non-resumed lifecycle → reset confirmation;
+dispose → cancel timer and unsubscribe; pending exit → ignore repeated back.
+Without an observer, standalone previews track inherited ModalRoute.isCurrent.
+
+**Good / base / bad:** good preserves ordinary Snackbar feedback while the
+exit hint is immediately visible; base confirms root back with a local timer;
+bad clears every Snackbar, uses only PageRoute observation, or kills services.
+
+**Tests:** `home_exit_guard_test.dart` dispatches binding.handlePopRoute,
+observes SystemNavigator.pop, covers 1999/2000/2300 ms, production four entries,
+popup/IME metrics/lifecycle resets, observer replacement/disposal and large
+text. Assert multiline Snackbar and prompt Material rectangles do not overlap.
+Cover Snackbar before and after the prompt, bottom placement, system safe
+insets and production NavigationRail. A stable keyed non-null slot switches to
+SizedBox.shrink while idle: no retained FAB exit-transition text/liveRegion,
+and its measured size must be zero after timeout/switch/exit.
+Actual Android IME/gesture/desktop/reopen still require scoped device checks.
+
+**Wrong / correct:** wrong places a prompt at Scaffold.body bottom and only
+asserts find.text: Scaffold's floating Snackbar can paint over it. Correct
+uses the public Scaffold layout slot and asserts non-overlapping bottom geometry. Shared
+ScaffoldMessenger cannot remove arbitrary queued Snackbar safely; do not let
+an old exit hint queue behind another operation or delete unrelated feedback.

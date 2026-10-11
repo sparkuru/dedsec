@@ -2,6 +2,8 @@
 
 最新源码 APK：运行 [`./preview.sh`](../preview.sh)，完成 arm64 release 编译后输出 APK 绝对路径和 `adb install` 命令；需要 Docker，具体检查见 [验证记录](verification.md)。
 
+2026-10-11 最新交付：四入口2秒双返回已实现，提示位于底部导航/安全区上方，普通Snackbar自动排在其上方；16定向/154全量、analyze/格式与arm64/v2验签通过，APK `981ef814…`。用户报告实机验收通过，并在下方提示交付后回复“可以提交当前 task”，本任务提交与收尾已获批准。用户反馈与agent检查分别记录，公共秘密库继续暂停，未替换dist或操作设备，见 [验证](verification.md#2026-10-11-退出提示移至下方)。
+
 2026-10-06 文案补充：顶部移除 `SYSTEM OBSERVATORY`，概览标签简化为 `DEVICE`；当前源码 analyze、103 项 Flutter 测试及格式检查通过。用户追加要求后已构建 arm64 release 包 `b7e67386…`，签名与校验和通过，未安装到设备。见 [验证记录](verification.md#2026-10-06-两处显示文案精简) 与 [变更历史](changelog.md#2026-10-06--显示文案精简)。
 
 2026-10-06 当前交付：全 Flutter 界面优化已实施，统一主题与全部页面、900 dp 导航适配、大字布局及交互反馈。最终本地检查为 analyze 无问题、103 项测试通过、107 个实际 Flutter 渲染场景；release 包 `37d22600…` 已在配置 A Android 15 手机覆盖安装，安装哈希一致。用户已回复“观感通过，按计划提交”；实机交互见 [验证记录](verification.md)，任务见 [归档检查](../.trellis/tasks/archive/2026-10/10-05-flutter-experience-polish/check.md)。旧包/设备结论均按日期解释，既有 HFTP 熄屏断连限制未改变。
@@ -29,6 +31,7 @@
 
 ## 当前交付与阶段记录
 
+- [APK 主页双返回退出到桌面](../.trellis/tasks/10-10-home-double-back-exit/prd.md)：16/154检查与新版构建通过，用户报告实机通过并批准最新下方提示提交；本任务收尾，见 [检查记录](../.trellis/tasks/10-10-home-double-back-exit/check.md)。
 - [可信状态与工作台基础体验](../.trellis/tasks/archive/2026-09/09-25-trustworthy-state-workbench/prd.md) 已补齐历史验收对应证据；当时的 Vector 要求后来被 [移除决定](decisions/2026-09-26-root-only.md) 取代，不属于当前 App 架构。
 - [只读任务与选择性导出](../.trellis/tasks/archive/2026-09/09-25-read-only-task-loop/prd.md) 仅把 `device.info`、`memory.snapshot` 和 `network.interface_diagnose` 纳入有界历史；接口诊断走 App 权限，导出由用户逐项选择后使用 SAF。
 - [界面与终端整理](../.trellis/tasks/archive/2026-09/09-25-interface-terminal-polish/prd.md) 完成统一 Card 表面、840 dp 阅读宽度、终端快捷栏折叠及输出搜索/复制。Flutter analyze、79 项 Flutter 测试与 release 构建通过；授权 `TARGET-BOARD` 的 App/Root PTY 定向检查见 [验证记录](verification.md)，不推断其他 ROM 或全新安装流程通过。

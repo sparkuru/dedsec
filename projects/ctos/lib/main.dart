@@ -14,6 +14,7 @@ import 'traffic.dart';
 import 'workbench.dart';
 import 'ui/ctos_theme.dart';
 import 'ui/ctos_components.dart';
+import 'ui/home_exit_guard.dart';
 
 const native = MethodChannel('ctos/native');
 const mint = CtosColors.primary;
@@ -25,18 +26,23 @@ void main() => runApp(const CtosApp());
 class CtosApp extends StatelessWidget {
   const CtosApp({super.key});
   @override
-  Widget build(BuildContext context) => MaterialApp(
-    title: 'ctOS',
-    debugShowCheckedModeBanner: false,
-    theme: CtosTheme.dark(),
-    builder: (context, child) =>
-        Theme(data: CtosTheme.withMotion(context), child: child!),
-    home: const Observatory(),
-  );
+  Widget build(BuildContext context) {
+    final exitRouteObserver = RouteObserver<ModalRoute<dynamic>>();
+    return MaterialApp(
+      title: 'ctOS',
+      debugShowCheckedModeBanner: false,
+      theme: CtosTheme.dark(),
+      builder: (context, child) =>
+          Theme(data: CtosTheme.withMotion(context), child: child!),
+      navigatorObservers: [exitRouteObserver],
+      home: Observatory(exitRouteObserver: exitRouteObserver),
+    );
+  }
 }
 
 class Observatory extends StatefulWidget {
-  const Observatory({super.key});
+  const Observatory({super.key, this.exitRouteObserver});
+  final RouteObserver<ModalRoute<dynamic>>? exitRouteObserver;
   @override
   State<Observatory> createState() => _ObservatoryState();
 }
@@ -601,137 +607,147 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
   @override
   Widget build(BuildContext context) {
     final wide = MediaQuery.sizeOf(context).width >= 900;
-    return Scaffold(
-      appBar: AppBar(
-        title: Row(
-          children: [
-            const Icon(Icons.hub_outlined, color: mint),
-            const SizedBox(width: 10),
-            const Text(
-              'ctOS',
-              style: TextStyle(fontWeight: FontWeight.w800, letterSpacing: 2),
+    return HomeExitGuard(
+      routeObserver: widget.exitRouteObserver,
+      entry: tab,
+      builder: (context, exitPrompt) => Scaffold(
+        floatingActionButton: exitPrompt,
+        floatingActionButtonLocation: FloatingActionButtonLocation.centerFloat,
+        appBar: AppBar(
+          title: Row(
+            children: [
+              const Icon(Icons.hub_outlined, color: mint),
+              const SizedBox(width: 10),
+              const Text(
+                'ctOS',
+                style: TextStyle(fontWeight: FontWeight.w800, letterSpacing: 2),
+              ),
+            ],
+          ),
+          actions: [
+            IconButton(
+              onPressed:
+                  snapshot.isEmpty &&
+                      deviceSnapshot == null &&
+                      !connectionState.hasSnapshot
+                  ? null
+                  : openExport,
+              tooltip: '选择导出内容',
+              icon: const Icon(Icons.ios_share, size: 20),
             ),
           ],
         ),
-        actions: [
-          IconButton(
-            onPressed:
-                snapshot.isEmpty &&
-                    deviceSnapshot == null &&
-                    !connectionState.hasSnapshot
-                ? null
-                : openExport,
-            tooltip: '选择导出内容',
-            icon: const Icon(Icons.ios_share, size: 20),
+        body: SafeArea(
+          child: Row(
+            children: [
+              if (wide)
+                NavigationRail(
+                  key: const Key('observatory-navigation-rail'),
+                  selectedIndex: tab,
+                  onDestinationSelected: selectTab,
+                  labelType: NavigationRailLabelType.all,
+                  destinations: const [
+                    NavigationRailDestination(
+                      icon: Icon(Icons.dashboard_outlined),
+                      label: Text('概览'),
+                    ),
+                    NavigationRailDestination(
+                      icon: Icon(Icons.info_outline),
+                      label: Text('信息'),
+                    ),
+                    NavigationRailDestination(
+                      icon: Icon(Icons.grid_view_outlined),
+                      label: Text('工作台'),
+                    ),
+                    NavigationRailDestination(
+                      icon: Icon(Icons.terminal),
+                      label: Text('终端'),
+                    ),
+                  ],
+                ),
+              Expanded(
+                key: const ValueKey('observatory-content'),
+                child: Column(
+                  children: [
+                    if (tab != 3 ||
+                        MediaQuery.viewInsetsOf(context).bottom == 0)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(20, 4, 20, 12),
+                        child: Align(
+                          alignment: Alignment.centerLeft,
+                          child: Wrap(
+                            spacing: 8,
+                            runSpacing: 8,
+                            children: [
+                              status('APP 可用', true),
+                              status(root ? 'ROOT 在线' : 'ROOT 未连接', root),
+                            ],
+                          ),
+                        ),
+                      ),
+                    if (error.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Text(
+                          error,
+                          style: const TextStyle(color: CtosColors.warning),
+                        ),
+                      ),
+                    Expanded(
+                      child: IndexedStack(
+                        index: tab,
+                        children: [
+                          readingColumn(
+                            workbench(),
+                            key: const Key('overview-reading-column'),
+                          ),
+                          readingColumn(
+                            informationPage(),
+                            key: const Key('information-reading-column'),
+                          ),
+                          WorkbenchPage(
+                            active: tab == 2,
+                            onExportHistory: (records) =>
+                                openExport(history: records),
+                            onBrowseInterfaces: browseInterfaces,
+                          ),
+                          terminalPage(),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
-        ],
-      ),
-      body: SafeArea(
-        child: Row(
-          children: [
-            if (wide)
-              NavigationRail(
-                key: const Key('observatory-navigation-rail'),
+        ),
+        bottomNavigationBar:
+            wide || (tab == 3 && MediaQuery.viewInsetsOf(context).bottom > 0)
+            ? null
+            : NavigationBar(
+                animationDuration: CtosTheme.duration(context),
                 selectedIndex: tab,
                 onDestinationSelected: selectTab,
-                labelType: NavigationRailLabelType.all,
                 destinations: const [
-                  NavigationRailDestination(
+                  NavigationDestination(
                     icon: Icon(Icons.dashboard_outlined),
-                    label: Text('概览'),
+                    label: '概览',
                   ),
-                  NavigationRailDestination(
+                  NavigationDestination(
                     icon: Icon(Icons.info_outline),
-                    label: Text('信息'),
+                    label: '信息',
                   ),
-                  NavigationRailDestination(
+                  NavigationDestination(
                     icon: Icon(Icons.grid_view_outlined),
-                    label: Text('工作台'),
+                    label: '工作台',
                   ),
-                  NavigationRailDestination(
+                  NavigationDestination(
                     icon: Icon(Icons.terminal),
-                    label: Text('终端'),
+                    label: '终端',
                   ),
                 ],
               ),
-            Expanded(
-              key: const ValueKey('observatory-content'),
-              child: Column(
-                children: [
-                  if (tab != 3 || MediaQuery.viewInsetsOf(context).bottom == 0)
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(20, 4, 20, 12),
-                      child: Align(
-                        alignment: Alignment.centerLeft,
-                        child: Wrap(
-                          spacing: 8,
-                          runSpacing: 8,
-                          children: [
-                            status('APP 可用', true),
-                            status(root ? 'ROOT 在线' : 'ROOT 未连接', root),
-                          ],
-                        ),
-                      ),
-                    ),
-                  if (error.isNotEmpty)
-                    Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: Text(
-                        error,
-                        style: const TextStyle(color: CtosColors.warning),
-                      ),
-                    ),
-                  Expanded(
-                    child: IndexedStack(
-                      index: tab,
-                      children: [
-                        readingColumn(
-                          workbench(),
-                          key: const Key('overview-reading-column'),
-                        ),
-                        readingColumn(
-                          informationPage(),
-                          key: const Key('information-reading-column'),
-                        ),
-                        WorkbenchPage(
-                          active: tab == 2,
-                          onExportHistory: (records) =>
-                              openExport(history: records),
-                          onBrowseInterfaces: browseInterfaces,
-                        ),
-                        terminalPage(),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
       ),
-      bottomNavigationBar:
-          wide || (tab == 3 && MediaQuery.viewInsetsOf(context).bottom > 0)
-          ? null
-          : NavigationBar(
-              animationDuration: CtosTheme.duration(context),
-              selectedIndex: tab,
-              onDestinationSelected: selectTab,
-              destinations: const [
-                NavigationDestination(
-                  icon: Icon(Icons.dashboard_outlined),
-                  label: '概览',
-                ),
-                NavigationDestination(
-                  icon: Icon(Icons.info_outline),
-                  label: '信息',
-                ),
-                NavigationDestination(
-                  icon: Icon(Icons.grid_view_outlined),
-                  label: '工作台',
-                ),
-                NavigationDestination(icon: Icon(Icons.terminal), label: '终端'),
-              ],
-            ),
     );
   }
 

@@ -1,0 +1,5 @@
+{"file":".trellis/spec/frontend/index.md","reason":"Flutter conventions"}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Feedback and theme compliance"}
+{"file":".trellis/spec/frontend/state-management.md","reason":"Lifecycle and observer ownership"}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Meaningful back behavior regression checks"}
+{"file":".trellis/spec/trellis-plus/validation.md","reason":"Validation and real device gaps"}

@@ -7,7 +7,7 @@ work through the Android host APIs.
 | Guide | Scope |
 | --- | --- |
 | [Directory Structure](./directory-structure.md) | Where screens, models, APIs, and tests live |
-| [Components](./component-guidelines.md) | Widget composition, theme, layout, and accessible actions |
+| [Components](./component-guidelines.md) | Widget composition, theme, layout, accessible actions, and main-entry back confirmation |
 | [State Management](./state-management.md) | Widget-owned state and async lifecycle |
 | [Type Safety](./type-safety.md) | Dart models and MethodChannel JSON boundaries |
 | [Quality](./quality-guidelines.md) | Flutter checks and representative tests |
