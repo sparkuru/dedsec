@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 9
-- **Last Active**: 2026-10-06
+- **Total Sessions**: 16
+- **Last Active**: 2026-10-11
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~290 | Active |
+| `journal-1.md` | ~378 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,9 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 16 | 2026-10-11 | 提交并归档主页双返回退出任务 | `a46a296` | `antitrust` |
+| 15 | 2026-10-11 | 用户验收反馈后将退出提示移至下方 | - | `antitrust` |
+| 14 | 2026-10-11 | 暂停公共底座并实现主页双返回退出 | - | `antitrust` |
 | 9 | 2026-10-06 | 全 Flutter 界面优化验收与交付 | `9ff29de` | `antitrust` |
 | 8 | 2026-09-28 | 完成产品体验父任务集成与归档 | `3e78ad3`, `d620fe0` | `antitrust` |
 | 7 | 2026-09-28 | 界面与终端可用性整理及归档 | `ca04b04`, `949a0f6` | `antitrust` |

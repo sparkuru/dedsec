@@ -288,3 +288,91 @@
 ### Next Steps
 
 - 当前任务已按计划归档；后续新需求另行确定范围。
+
+---
+
+## Session 14: 暂停公共底座并实现主页双返回退出
+
+**Date**: 2026-10-11
+**Task**: 暂停公共底座并实现主页双返回退出
+**Branch**: `antitrust`
+
+### Summary
+
+四入口2秒双返回已实现，经独立检查修复提示遮挡；14定向/152全量Flutter、analyze/格式与arm64构建v2验签通过。公共底座按用户要求暂停，主页任务待Android实机验收；未安装/替换dist/提交/归档。
+
+### Main Changes
+
+- 主页guard与production observer接线，保留预览接口，精确重置确认与独立短提示
+
+### Git Commits
+
+(No commits - planning session)
+
+### Testing
+
+- [OK] Trellis implement/check：14 focused、152 full、analyze clean、format0 changes；arm64 APK7ad103a9验签通过
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 获取本任务当轮设备验收范围或用户返回/IME/桌面测试反馈；不自动恢复公共底座
+
+
+## Session 15: 用户验收反馈后将退出提示移至下方
+
+**Date**: 2026-10-11
+**Task**: 用户验收反馈后将退出提示移至下方
+**Branch**: `antitrust`
+
+### Summary
+
+记录用户上一轮实机通过报告；新提示用Scaffold布局位于导航/安全区上方并避让Snackbar。最终16定向/154全量Flutter、analyze/格式、新APK981ef814构建v2验签通过，等待新位置反馈；底座仍暂停，无设备操作或提交。
+
+### Git Commits
+
+(No commits - planning session)
+
+### Testing
+
+- [OK] 16 focused/154 full、analyze clean、format0 changes、arm64 APK/v2签名；两Snackbar顺序/大字/rail/semantics验证通过
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 收集新下方提示位置反馈后提交本任务；不恢复暂停底座
+
+
+## Session 16: 提交并归档主页双返回退出任务
+
+**Date**: 2026-10-11
+**Task**: 提交并归档主页双返回退出任务
+**Branch**: `antitrust`
+
+### Summary
+
+用户批准提交；功能a46a296已提交，本任务归档并清除当前指针。仅提交本任务代码/规范和共享文档内本任务段落；底座及其他任务未提交，继续暂停。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `a46a296` | (see git log) |
+
+### Testing
+
+- [OK] 完整工作区16定向/154全量；排除底座的隔离提交快照analyze及119全量通过；981ef814 APK/v2验签通过
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 等待用户选择下一工作；不恢复暂停底座或push
