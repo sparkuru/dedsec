@@ -31,7 +31,7 @@
 
 ## 当前交付与阶段记录
 
-- [APK 主页双返回退出到桌面](../.trellis/tasks/10-10-home-double-back-exit/prd.md)：16/154检查与新版构建通过，用户报告实机通过并批准最新下方提示提交；本任务收尾，见 [检查记录](../.trellis/tasks/10-10-home-double-back-exit/check.md)。
+- [APK 主页双返回退出到桌面](../.trellis/tasks/archive/2026-10/10-10-home-double-back-exit/prd.md)：16/154检查与新版构建通过，用户报告实机通过并批准最新下方提示提交；已提交并归档，见 [检查记录](../.trellis/tasks/archive/2026-10/10-10-home-double-back-exit/check.md)。
 - [可信状态与工作台基础体验](../.trellis/tasks/archive/2026-09/09-25-trustworthy-state-workbench/prd.md) 已补齐历史验收对应证据；当时的 Vector 要求后来被 [移除决定](decisions/2026-09-26-root-only.md) 取代，不属于当前 App 架构。
 - [只读任务与选择性导出](../.trellis/tasks/archive/2026-09/09-25-read-only-task-loop/prd.md) 仅把 `device.info`、`memory.snapshot` 和 `network.interface_diagnose` 纳入有界历史；接口诊断走 App 权限，导出由用户逐项选择后使用 SAF。
 - [界面与终端整理](../.trellis/tasks/archive/2026-09/09-25-interface-terminal-polish/prd.md) 完成统一 Card 表面、840 dp 阅读宽度、终端快捷栏折叠及输出搜索/复制。Flutter analyze、79 项 Flutter 测试与 release 构建通过；授权 `TARGET-BOARD` 的 App/Root PTY 定向检查见 [验证记录](verification.md)，不推断其他 ROM 或全新安装流程通过。

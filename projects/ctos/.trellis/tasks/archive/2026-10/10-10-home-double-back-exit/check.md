@@ -16,7 +16,7 @@
 - 实际Semantics节点有liveRegion、无button/tap；点击提示不退出，超时立即消失。新测试首轮仅因测试SemanticsHandle在框架清理之后释放而失败，改为测试内try/finally释放后重跑通过；无实现缺陷。
 - 新arm64构建成功，Gradle26.2秒/32.2MB，v2验签/1signer。APK SHA256 `981ef8145c01f1ce037f6ee5d80bd5672fe28e46fea591ac3d762fd48f9ef02a`，日志 `/tmp/ctos-home-double-back-bottom-build-20261011.log`；覆盖build同路径旧7ad输出，未替换dist。
 - source SHA：main `25cdb690b428cbde61c771c95624df31c744047669b59b4f3e485cb51abe40c6`、guard `2b799533f6dbffdec70de692edd324cbe29eeb0b78635762ed0656056a271f86`、test `18d79a0584cdbf8c92b5e98febd1e37e1c02b296946e49bcf3331ea9466304a6`。root核对最终代码/回归/产物/哈希，同步design/spec。
-- 未执行设备操作。上一轮用户验收反馈不等于新位置已实机通过；最新证据见 [验证](../../../design/verification.md#2026-10-11-退出提示移至下方)。
+- 未执行设备操作。上一轮用户验收反馈不等于新位置已实机通过；最新证据见 [验证](../../../../../design/verification.md#2026-10-11-退出提示移至下方)。
 
 ## 授权与任务切换
 
@@ -37,7 +37,7 @@
 - 初次两个测试因非法生命周期快捷跳转失败，改用SystemChannels.lifecycle真实消息；analyze发现旧预览构造/build兼容与test protected调用问题，均已修正。最终检查无未修复代码发现。
 - arm64 release构建成功，Gradle31.3秒/32.2MB；build-tools36 apksigner verify成功，v2=true/1signer。产物 `build/app/outputs/flutter-apk/app-release.apk`，SHA-256 `7ad103a9cf2684d79b9e582e30a8e7cb6819d29e2eac3a560e03fae9c2637407`，日志 `/tmp/ctos-home-double-back-build-20261011.log`。
 - 本任务sourceSHA：main `31d63445968e98531f8edb4bea61c9c9838c5cd492cc3cc2f6cf4e43b226f09b`，guard `759c85b4487ff7b02de4340fd7d22fa084e76c467dabbb5cebdbe8f85bc7cf65`，test `87a88017a50c33a56295b26aa460fb23481732c60bb93873f242a629ba1b1c51`。
-- root已核对最终源码/回归/真实build日志/签名/哈希，同步design与frontend契约。完整结果见 [验证](../../../design/verification.md#2026-10-11-主页双返回退出本地实现与构建)。
+- root已核对最终源码/回归/真实build日志/签名/哈希，同步design与frontend契约。完整结果见 [验证](../../../../../design/verification.md#2026-10-11-主页双返回退出本地实现与构建)。
 
 不将平台 mock、构建或过往设备记录作为本轮 Android 实测。APK包含当前整体源码与暂停公共底座的已有实现；未安装、替换dist或推进底座工作。
 

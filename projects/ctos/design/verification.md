@@ -7,7 +7,7 @@
 - **布局**：guard以builder提供主页Scaffold及稳定key提示槽，使用公共centerFloat布局，提示位于底部导航/系统安全区上方。普通floating Snackbar由Scaffold排到提示上方，无需猜导航高度或清理别的反馈。提示不可点击，保持主题/liveRegion/宽度上限；闲时为SizedBox.shrink，立即移除提示/朗读节点，避免FAB退出动画保留旧文字。四入口/2秒/返回重置逻辑保留。
 - **检查**：实施15定向/153全量通过；独立检查补充实际Semantics无button/tap、点击不退出、超时即时清除，以及production rail24dp安全区后，最终 `./hako flutter test test/home_exit_guard_test.dart` **16项通过**，`./hako flutter test` **154项通过**，`./hako flutter analyze` 无问题（2.1秒），指定3文件format0变更/diffcheck通过。新semantics测试首次因测试handle释放晚于框架检查失败，改为测试内try/finally后通过；无源码缺陷。几何断言覆盖320/375/900横屏/1200、1/2倍文字、安全区24dp和普通多行Snackbar前后两种出现顺序，两提示不重叠，闲时槽尺寸零。
 - **产物**：`./hako flutter build apk --release --target-platform android-arm64` 成功，Gradle26.2秒/32.2MB；hako内build-tools36 apksigner verify --verbose成功，v2=true/1signer。`build/app/outputs/flutter-apk/app-release.apk` SHA-256 **`981ef8145c01f1ce037f6ee5d80bd5672fe28e46fea591ac3d762fd48f9ef02a`**，已覆盖同路径旧7ad构建输出，未替换dist。日志 `/tmp/ctos-home-double-back-bottom-build-20261011.log`。
-- **源码冻结**：main `25cdb690b428cbde61c771c95624df31c744047669b59b4f3e485cb51abe40c6`、guard `2b799533f6dbffdec70de692edd324cbe29eeb0b78635762ed0656056a271f86`、test `18d79a0584cdbf8c92b5e98febd1e37e1c02b296946e49bcf3331ea9466304a6`。root已核对最终源码、geometry/semantics回归、build日志、签名与哈希；持久任务记录见 [check](../.trellis/tasks/10-10-home-double-back-exit/check.md)。
+- **源码冻结**：main `25cdb690b428cbde61c771c95624df31c744047669b59b4f3e485cb51abe40c6`、guard `2b799533f6dbffdec70de692edd324cbe29eeb0b78635762ed0656056a271f86`、test `18d79a0584cdbf8c92b5e98febd1e37e1c02b296946e49bcf3331ea9466304a6`。root已核对最终源码、geometry/semantics回归、build日志、签名与哈希；持久任务记录见 [check](../.trellis/tasks/archive/2026-10/10-10-home-double-back-exit/check.md)。
 
 Review classification为human-required；用户在最新下方提示交付后回复“可以提交当前 task”，审阅门槛已解除。原返回行为实机通过为用户报告，未提供设备/API/安装哈希；本轮不冒称agent设备实测，按授权提交/归档本任务，公共秘密库继续暂停。
 
@@ -23,7 +23,7 @@ Review classification为human-required；用户在最新下方提示交付后回
 - **覆盖范围**：真实 binding.handlePopRoute 派发与平台退出 mock 观察；1999/2000/2300ms、四入口实际 CtosApp、活动 App PTY/弹窗，详情/弹层/键盘 metrics/生命周期/observer 替换和销毁；320/375/900横屏/1200宽度及2倍文字布局。未将 Android IME/手势/桌面当作通过。
 - **构建**：`./hako flutter build apk --release --target-platform android-arm64` 成功，Gradle31.3秒，Flutter报告32.2MB；依赖按既有版本解析，未升级。经 hako 的 build-tools36 apksigner verify --verbose 成功，v2=true / 1 signer。首次 sandbox 的 Docker socket 被拒后，任务范围 require_escalated 通过自动审查。
 
-APK：`build/app/outputs/flutter-apk/app-release.apk`，SHA-256 `7ad103a9cf2684d79b9e582e30a8e7cb6819d29e2eac3a560e03fae9c2637407`。这是当前整体源码构建，包含暂停公共底座已有实现；不代表底座开放关卡已验收。构建日志 `/tmp/ctos-home-double-back-build-20261011.log`；临时产物可能被后续构建覆盖，持久结论为本节及 [task check](../.trellis/tasks/10-10-home-double-back-exit/check.md)。
+APK：`build/app/outputs/flutter-apk/app-release.apk`，SHA-256 `7ad103a9cf2684d79b9e582e30a8e7cb6819d29e2eac3a560e03fae9c2637407`。这是当前整体源码构建，包含暂停公共底座已有实现；不代表底座开放关卡已验收。构建日志 `/tmp/ctos-home-double-back-build-20261011.log`；临时产物可能被后续构建覆盖，持久结论为本节及 [task check](../.trellis/tasks/archive/2026-10/10-10-home-double-back-exit/check.md)。
 
 本任务源码 SHA-256：main `31d63445968e98531f8edb4bea61c9c9838c5cd492cc3cc2f6cf4e43b226f09b`、guard `759c85b4487ff7b02de4340fd7d22fa084e76c467dabbb5cebdbe8f85bc7cf65`、test `87a88017a50c33a56295b26aa460fb23481732c60bb93873f242a629ba1b1c51`。
 
