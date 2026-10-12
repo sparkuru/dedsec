@@ -573,3 +573,69 @@
 ### Next Steps
 
 - 继续底座开放验收项，保留当前task指针与业务规划状态。
+
+
+## Session 19: 继续概览截图细节及默认快捷解锁验证
+
+**Date**: 2026-10-12
+**Task**: 继续概览截图细节及默认快捷解锁验证
+**Branch**: `antitrust`
+
+### Summary
+
+继续已有overview-settings；四项截图细节实现与全范围检查通过，新版已安装开发板并读回一致，有界实机验收完成；任务保留in_progress，未提交/归档。
+
+### Main Changes
+
+- 同步全宽分类/Root信息/终端眉标题精简/默认快捷失败三选择的spec及design；补3管理真实口令回归。
+
+### Git Commits
+
+(No commits - implementation and review remain uncommitted)
+
+### Testing
+
+- [OK] 188全量/53秘密库、analyze/14格式、Android夹具编译/lint0错误3既有警告、84真字体场景、arm64/v2通过；af600c41设备读回一致。
+- [OK] 实机布局/底部滚动、系统快捷直接调起/Home取消后三选择/显式重试/主口令空表单取消、AppPTY公开echo切换保持及关闭、四入口双返回桌面/重开通过；结束库锁定/快捷开启/后台30秒。
+
+### Status
+
+[IN PROGRESS] **本轮实现与检查完成；任务待最终人工反馈，未提交/归档**
+
+### Next Steps
+
+- 等待新细节最终观感/本APK成功系统认证等未测反馈；保持current/in_progress，不自动提交归档或推进原底座/TOTP/SSH。
+
+
+## Session 20: 最终概览细节提交与任务归档
+
+**Date**: 2026-10-12
+**Task**: 最终概览细节提交与任务归档
+**Branch**: `antitrust`
+
+### Summary
+
+用户授权当前task完成后提交；所有概览/设置/安全迁移及截图细节已提交5e67227，任务已归档、当前指针清除，原底座与其余业务任务状态保持。
+
+### Main Changes
+
+- 删除DEVICE/Android运行摘要，统一网络/接口/连接范围说明，保留动态来源/计数；同步spec/design及归档链接。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `5e67227` | (see git log) |
+
+### Testing
+
+- [OK] 最终188全量15秒、analyze1.5秒、14文件格式0修改、84真字体场景、arm64/v2通过；Android fixture源码未变，沿用编译/lint0错误3既有警告。
+- [OK] 最终25bcdf7c APK在AIO-3568J/API30安装并再次读回一致，4分类实际节点/截图正确；成功系统认证/真实快照写盘未测边界保留，不冒称原底座完成。
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 本任务已完成；等待用户选择下一工作，不自动开始公共底座剩余验收、TOTP或SSH。
