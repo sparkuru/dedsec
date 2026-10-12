@@ -1,6 +1,6 @@
 # 概览与设置（2026-10-12）
 
-本轮用户要求新建并启动 [task](../.trellis/tasks/10-12-overview-settings/prd.md)，其后确认迁移有效并追加四项截图细节。现均已实现，188全量/84真字体场景和新版APK证据见 [最新验证](verification.md#2026-10-12-概览截图细节与默认快捷解锁)；开发板已解锁、新版af600c41…安装读回一致，布局、快捷调起及取消回退/重试、AppPTY切换保持实测通过。成功系统认证本APK未重测，task 保持 current / in_progress；见 [实机记录](../.trellis/tasks/10-12-overview-settings/device-check.md)。
+本任务及全部截图反馈已完成，按用户授权提交`5e67227`并[归档](../.trellis/tasks/archive/2026-10/10-12-overview-settings/prd.md)。最终188全量/84真字体场景和25bcdf7c…APK、设备读回及分类布局证据见 [最终验证](verification.md#2026-10-12-最终概览文案收敛与提交)。此前af600c41…快捷调起/Home取消/重试、AppPTY切换保持和四入口返回实测按该包解释；最终APK成功系统认证未重测、原共享快照写盘未执行边界保留，见 [实机记录](../.trellis/tasks/archive/2026-10/10-12-overview-settings/device-check.md)。当前指针已清除，原公共底座及其他业务任务状态保持。
 
 ## 当前结构
 

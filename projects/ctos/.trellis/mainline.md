@@ -5,7 +5,7 @@
 - **Authorization:** 用户要求“不建task；在当前task一起完成；完成后提交”，后续“继续任务”保留该授权；不重复提交许可。
 - **Scope:** 当前overview-settings全部概览/设置/安全迁移及截图反馈；最终删除DEVICE/Android运行摘要，统一网络/接口/连接范围描述，保留动态来源/计数。只提交本任务相关路径。
 - **Evidence:** 最终188全量15秒、analyze1.5秒/14格式、84真字体场景、arm6428.7秒/v2通过；25bcdf7c…开发板安装读回一致。其他产品/测试/Android fixture源未变，已有快捷/返回/PTY有界实机结论与未测项按原APK解释。
-- **Next:** 正在完成提交及正常归档/会话记录；不启动原底座剩余关卡或TOTP/SSH，原共享快照审批拒绝边界保持。
+- **Result:** 工作提交5e67227完成，本任务已归档到tasks/archive/2026-10/10-12-overview-settings，当前指针已清除；会话记录按收尾流程提交。原底座in_progress和其余业务planning保持，原共享快照审批拒绝边界保留，不自动启动下一任务。
 
 ## 2026-10-12 继续概览截图细节与默认解锁
 
@@ -17,12 +17,12 @@
 
 ## 2026-10-12 概览整合与设置迁移
 
-- **Authorization:** 用户明确新建 task、作为 current 并开始完成；已建立 [overview-settings](tasks/10-12-overview-settings/prd.md)，完成规划并启动，in_progress。
+- **Authorization:** 用户明确新建 task、作为 current 并开始完成；已建立 [overview-settings](tasks/archive/2026-10/10-12-overview-settings/prd.md)，完成规划并启动，in_progress。
 - **Scope:** 概览合并原信息四分类及完整内容，删除网络现场/能力与恢复和信息主入口；移除顶部导出，将原流程和完整秘密库管理迁到设置/安全。
 - **Boundary:** 初轮仅本地；用户随后授权自行连接验收，已在当前AIO-3568J/API30覆盖安装及部分UI检查。未获系统安全修改/真实库改变/账号操作、dist替换或提交归档授权，不推进原公共底座待测项或SSH/TOTP。
 - **Result:** 代码、160全量/增强后6专项、analyze/格式、60场景渲染、arm64构建/v2验签通过；APK a441d114…，design/spec同步，未操作设备/替换dist/提交/归档。
 - **Device:** a441d114…已安装读回一致，概览/设置/安全及导出取消检查通过；真实共享快照保存/pull被自动审批拒绝并取消确认不存在。板随后系统重启、进入锁屏，原因未确认。
-- **Next:** 已请求系统解锁，继续剩余四入口返回和AppPTY检查，保持current/in_progress；详情tasks/10-12-overview-settings/device-check.md。
+- **Next:** 已请求系统解锁，继续剩余四入口返回和AppPTY检查，保持current/in_progress；详情tasks/archive/2026-10/10-12-overview-settings/device-check.md。
 
 ## 2026-10-12 用户确认效果并授权相关任务提交
 
