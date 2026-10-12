@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "widget and layout verification"}
+{"file": ".trellis/spec/frontend/app-secrets.md", "reason": "security flow retention"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "fixture instrumentation compile; exact window/click guards inspected directly"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "full-width centered categories, title Root status and four-entry navigation"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "cancelled and late authentication response/route guards"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "full scope tests and real-font responsive renders"}
+{"file": ".trellis/spec/frontend/terminal-interaction.md", "reason": "keep App PTY state and sole IME path after navigation migration"}

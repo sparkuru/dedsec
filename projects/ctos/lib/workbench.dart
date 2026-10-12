@@ -7,7 +7,6 @@ import 'workbench/hftp_page.dart';
 import 'workbench/file_store_card.dart';
 import 'workbench/controls.dart';
 import 'workbench/task_history_page.dart';
-import 'secrets/settings_page.dart';
 export 'workbench/api.dart';
 export 'workbench/models.dart';
 export 'workbench/script_page.dart';
@@ -102,15 +101,6 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
             runSpacing: 8,
             children: [
               Text('工作台', style: Theme.of(context).textTheme.headlineMedium),
-              TextButton.icon(
-                icon: const Icon(Icons.lock_outline, size: 20),
-                label: const Text('秘密库设置'),
-                onPressed: () => Navigator.of(context).push(
-                  MaterialPageRoute<void>(
-                    builder: (_) => const SecretVaultSettingsPage(),
-                  ),
-                ),
-              ),
               TextButton.icon(
                 icon: const Icon(Icons.history, size: 20),
                 label: const Text('任务历史'),

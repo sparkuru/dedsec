@@ -1,5 +1,15 @@
 # Architecture
 
+## 概览与设置（2026-10-12，源码已实现）
+
+最终摘要去掉DEVICE和Android/运行时间副标题；完整设备字段保留。网络/接口/连接副标题为静态内容范围，接口数量/采集来源位于检索框下独立元数据，状态/时间/映射仍由原数据层提供。
+
+当前四入口为概览、工作台、终端、设置；原信息页四分类在概览设备摘要后直接呈现，删除网络现场及能力与恢复。每个分类 ListView 以 overviewHeader 为首项，保留完整内容与分类自身状态；DevicePage.leading 默认空，独立使用兼容。900 dp 导航适配、keyed 内容树与 PTY 保留。
+
+截图追加实现：分类 SegmentedButton 均分铺满阅读列并居中；Root 状态移到 ctOS 标题旁的信息按钮，tooltip/弹窗给出状态和失败原因，在线绿色、授权中/未连接黄色。移除 APP 状态行及终端选择眉标题。公共解锁流程直接尝试已登记快捷，失败后显示三选择；重试新请求、当前路由/代次检查和管理真实口令保留。
+
+顶部数据导出入口移到 `lib/settings_page.dart`，callback 继续由 Observatory 提供同一快照与 ExportPreviewPage。完整 SecretVaultSettingsPage 从工作台迁至设置/安全，普通设置页不初始化秘密库；密码、安全窗口、事务和宿主契约保持。前台采样条件统一到概览，连接分类进入/返回概览/恢复前台刷新；Root 手动重试和失败说明位于概览/网络，历史接口回跳概览/接口。双返回覆盖新的四主入口，终端键盘条件同步新索引。详情见 [契约](overview-settings.md) 和 [验证](verification.md#2026-10-12-概览整合与设置迁移)。下文旧入口/布局均按历史日期解释。
+
 ## 主页双返回退出（2026-10-11，源码及本地检查完成）
 
 `lib/ui/home_exit_guard.dart` 通过 builder 包装主页 Scaffold；`CtosApp` 注册并传入包含 PopupRoute 的 `RouteObserver<ModalRoute<dynamic>>`，保留原公开构造/预览入口。概览、信息、工作台和终端根路由首次系统返回提示“再按一次返回键退出”，2 秒内再次返回调用标准 `SystemNavigator.pop`，重复返回不会重复发出退出调用。Timer 配合单调时钟拒绝超时确认。

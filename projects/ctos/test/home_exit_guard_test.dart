@@ -547,7 +547,7 @@ void main() {
     });
     await tester.pumpWidget(const CtosApp());
     await tester.pumpAndSettle();
-    for (final entry in ['概览', '信息', '工作台', '终端']) {
+    for (final entry in ['概览', '工作台', '终端', '设置']) {
       final count = exits.length;
       await tester.tap(find.text(entry).last);
       await tester.pumpAndSettle();

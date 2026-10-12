@@ -34,6 +34,7 @@ Future<bool> _secretVaultReady(
 ) async {
   final current = await api.status();
   return context.mounted &&
+      (ModalRoute.of(context)?.isCurrent ?? true) &&
       current.unlocked &&
       current.generation == generation;
 }
@@ -502,7 +503,8 @@ Future<bool> ensureSecretVaultUnlocked(
   SecretVaultApi api = const SecretVaultApi(),
 }) async {
   var status = await api.status();
-  if (!context.mounted) return false;
+  if (!context.mounted || !(ModalRoute.of(context)?.isCurrent ?? true))
+    return false;
   if (status.unlocked)
     return _secretVaultReady(context, api, status.generation);
   if (!status.exists) {
@@ -547,12 +549,33 @@ Future<bool> ensureSecretVaultUnlocked(
   if (!context.mounted) return false;
   if (status.unlocked)
     return _secretVaultReady(context, api, status.generation);
-  if (!context.mounted) return false;
-  if (status.quickUnlockEnabled && status.quickUnlockAvailable) {
+  if (!context.mounted || !(ModalRoute.of(context)?.isCurrent ?? true))
+    return false;
+  while (status.quickUnlockEnabled) {
+    final request = SecretRequest(api);
+    _SecretQuickUnlockResult? result;
+    try {
+      result = await _pushSecretRoute<_SecretQuickUnlockResult>(
+        Navigator.of(context),
+        MaterialPageRoute(
+          builder: (_) => _SecretQuickUnlockPage(api: api, request: request),
+        ),
+      );
+    } finally {
+      if (result?.unlocked != true) await request.cancel();
+    }
+    if (result == null ||
+        !context.mounted ||
+        !(ModalRoute.of(context)?.isCurrent ?? true))
+      return false;
+    if (result.unlocked)
+      return _secretVaultReady(context, api, status.generation);
+    final failureMessage = result.error!;
     final choice = await _showSecretDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('解锁秘密库'),
+        content: Text(failureMessage),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
@@ -569,25 +592,19 @@ Future<bool> ensureSecretVaultUnlocked(
         ],
       ),
     );
-    if (!context.mounted || choice == null) return false;
-    if (choice) {
-      final request = SecretRequest(api);
-      bool? unlocked;
-      try {
-        unlocked = await _pushSecretRoute<bool>(
-          Navigator.of(context),
-          MaterialPageRoute(
-            builder: (_) => _SecretQuickUnlockPage(api: api, request: request),
-          ),
-        );
-      } finally {
-        if (unlocked != true) await request.cancel();
-      }
-      if (unlocked == null || !context.mounted) return false;
-      if (unlocked) return _secretVaultReady(context, api, status.generation);
-    }
+    if (!context.mounted ||
+        choice == null ||
+        !(ModalRoute.of(context)?.isCurrent ?? true))
+      return false;
+    if (!choice) break;
+    status = await api.status();
+    if (!context.mounted || !(ModalRoute.of(context)?.isCurrent ?? true))
+      return false;
+    if (status.unlocked)
+      return _secretVaultReady(context, api, status.generation);
   }
-  if (!context.mounted) return false;
+  if (!context.mounted || !(ModalRoute.of(context)?.isCurrent ?? true))
+    return false;
   final result = await showSecretPasswordFlow(
     context,
     api: api,
@@ -599,6 +616,13 @@ Future<bool> ensureSecretVaultUnlocked(
     api,
     SecretVaultStatus.fromMap(result).generation,
   );
+}
+
+class _SecretQuickUnlockResult {
+  const _SecretQuickUnlockResult.success() : unlocked = true, error = null;
+  const _SecretQuickUnlockResult.failure(this.error) : unlocked = false;
+  final bool unlocked;
+  final String? error;
 }
 
 class _SecretQuickUnlockPage extends StatefulWidget {
@@ -619,29 +643,40 @@ class _SecretQuickUnlockPageState extends State<_SecretQuickUnlockPage> {
   }
 
   Future<void> _unlock() async {
-    if (!mounted) return;
+    if (!mounted ||
+        widget.request.cancelled ||
+        !(ModalRoute.of(context)?.isCurrent ?? true))
+      return;
     try {
       final status = await widget.api.mutate(
         'quickUnlock',
         arguments: {'action': 'unlock'},
         request: widget.request,
       );
-      if (!mounted || _leaving) return;
+      if (!mounted ||
+          _leaving ||
+          widget.request.cancelled ||
+          !(ModalRoute.of(context)?.isCurrent ?? true))
+        return;
       if (!status.unlocked) throw const FormatException('解锁未完成');
       setState(() => _leaving = true);
-      Navigator.pop(context, true);
+      Navigator.pop(context, const _SecretQuickUnlockResult.success());
     } catch (error) {
-      if (mounted && !_leaving)
-        setState(() => _error = secretVaultError(error));
+      if (mounted &&
+          !_leaving &&
+          !widget.request.cancelled &&
+          (ModalRoute.of(context)?.isCurrent ?? true))
+        await _leave(_SecretQuickUnlockResult.failure(secretVaultError(error)));
     }
   }
 
-  Future<void> _leave([bool? result]) async {
+  Future<void> _leave([_SecretQuickUnlockResult? result]) async {
     if (_leaving) return;
     setState(() => _leaving = true);
     try {
       await widget.request.cancel();
-      if (mounted) Navigator.pop(context, result);
+      if (mounted && (ModalRoute.of(context)?.isCurrent ?? true))
+        Navigator.pop(context, result);
     } catch (error) {
       if (mounted)
         setState(() {
@@ -675,11 +710,6 @@ class _SecretQuickUnlockPageState extends State<_SecretQuickUnlockPage> {
             const SizedBox(height: 16),
             WorkbenchActions(
               children: [
-                if (_error != null)
-                  OutlinedButton(
-                    onPressed: _leaving ? null : () => _leave(false),
-                    child: const Text('使用主口令'),
-                  ),
                 TextButton(
                   onPressed: _leaving ? null : _leave,
                   child: const Text('取消'),
@@ -706,7 +736,7 @@ Future<void> offerSecretQuickUnlock(
     context: context,
     builder: (context) => AlertDialog(
       title: const Text('开启本设备快捷解锁？'),
-      content: const Text('可用系统身份验证解锁。也可以稍后在秘密库设置中开启。'),
+      content: const Text('可用系统身份验证解锁。也可以稍后在设置 / 安全中开启。'),
       actions: [
         TextButton(
           onPressed: () => Navigator.pop(context, false),

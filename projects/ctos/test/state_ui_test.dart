@@ -6,6 +6,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'helpers/overview_navigation.dart';
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -60,10 +62,10 @@ void main() {
       tester.getSize(find.byKey(const Key('overview-reading-column'))).width,
       840,
     );
-    await tester.tap(find.text('信息').last);
+    await tester.tap(find.text('概览').last);
     await tester.pumpAndSettle();
     expect(
-      tester.getSize(find.byKey(const Key('information-reading-column'))).width,
+      tester.getSize(find.byKey(const Key('overview-reading-column'))).width,
       840,
     );
     expect(tester.takeException(), isNull);
@@ -144,7 +146,7 @@ void main() {
               'partial': true,
             });
           }
-          if (connectionCalls == 2) {
+          if (connectionCalls == 2 || connectionCalls == 3) {
             return jsonEncode({
               'output':
                   'Netid State Recv-Q Send-Q Local Peer\n'
@@ -191,21 +193,20 @@ void main() {
     await tester.pumpWidget(const CtosApp());
     await tester.pump(const Duration(milliseconds: 100));
     expect(autoRootCalls, 1);
-    expect(find.text('● APP 可用'), findsOneWidget);
-    expect(find.text('● ROOT 未连接'), findsOneWidget);
+    expect(find.textContaining('APP 可用'), findsNothing);
+    expect(find.byTooltip('ROOT 未连接'), findsOneWidget);
     expect(find.textContaining('VECTOR'), findsNothing);
     expect(tester.takeException(), isNull);
 
-    await tester.tap(find.text('信息').last);
+    await tester.tap(find.text('概览').last);
     await tester.pumpAndSettle();
-    await tester.drag(find.byType(ListView).first, const Offset(0, -350));
-    await tester.pumpAndSettle();
+
     expect(find.text('系统负载'), findsNothing);
     expect(find.text('EACCES from procfs'), findsNothing);
-    await tester.tap(find.text('连接'));
-    await tester.pumpAndSettle();
+    await selectOverviewCategory(tester, '连接');
+    await revealOverviewContent(tester, find.byType(TextField));
     expect(
-      tester.getTopLeft(find.text('连接检索')).dx,
+      tester.getTopLeft(find.byType(ListView).first).dx + 20,
       tester.getTopLeft(find.byType(TextField).last).dx,
     );
     expect(find.textContaining('部分结果'), findsOneWidget);
@@ -224,7 +225,9 @@ void main() {
     expect(find.textContaining('0 条匹配'), findsOneWidget);
     await tester.enterText(find.byType(TextField).last, '');
     await tester.pump();
-    await tester.tap(find.byTooltip('选择导出内容'));
+    await tester.tap(find.text('设置').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('数据导出'));
     await tester.pumpAndSettle();
     await tester.scrollUntilVisible(
       find.text('连接快照'),
@@ -242,6 +245,8 @@ void main() {
     expect(exported?.containsKey('network'), isFalse);
     await tester.pageBack();
     await tester.pumpAndSettle();
+    await tester.tap(find.text('概览').last);
+    await tester.pumpAndSettle();
     await tester.pump(connectionFreshness);
     await tester.pump();
     expect(find.textContaining('旧快照'), findsOneWidget);
@@ -257,7 +262,7 @@ void main() {
     }
     await tester.pump();
     await tester.pumpAndSettle();
-    expect(connectionCalls, 2);
+    expect(connectionCalls, 3);
     await tester.enterText(find.byType(TextField).last, 'qq');
     await tester.pump();
     expect(find.textContaining('2 条匹配'), findsOneWidget);
@@ -278,7 +283,7 @@ void main() {
     );
     expect(find.text('UDP'), findsOneWidget);
     expect(find.text('tim'), findsWidgets);
-    expect(connectionCalls, 3);
+    expect(connectionCalls, 4);
     expect(autoRootCalls, 1);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox());
@@ -341,9 +346,11 @@ void main() {
 
     await tester.pumpWidget(const CtosApp());
     await tester.pump(const Duration(milliseconds: 100));
+    await selectOverviewCategory(tester, '网络');
+    await revealOverviewContent(tester, find.text('授权 Root'));
     expect(find.text('Root 采集会话已结束，请手动重新授权。'), findsOneWidget);
     expect(find.text('授权 Root'), findsOneWidget);
-    expect(find.text('● ROOT 未连接'), findsOneWidget);
+    expect(find.byTooltip('ROOT 未连接'), findsOneWidget);
     expect(find.textContaining('VECTOR'), findsNothing);
     expect(autoRootCalls, 1);
     expect(tester.takeException(), isNull);

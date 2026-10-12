@@ -105,8 +105,8 @@ public final class AppSecretsUiFlowTest {
     private void stage(String value) { Log.i(TAG, "run=" + runId + " phase=" + value); }
     private void launchSettings() {
         activity = instrumentation.startActivitySync(new Intent(target, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
-        waitText("● ROOT 未连接", 15000);
-        click("工作台"); click("秘密库设置"); waitText("秘密库设置", 15000);
+        waitText("ROOT 未连接", 15000);
+        click("设置"); click("安全"); waitText("安全", 15000);
     }
     @Test public void semanticsProbeWithoutCreatingVault() throws Exception {
         assertFreshVault(); launchSettings(); waitText("尚未创建", 10000);
@@ -179,7 +179,7 @@ public final class AppSecretsUiFlowTest {
 
             click("立即锁定"); waitText("秘密库已锁定。", 10000);
             assertFalse(core.session.unlocked());
-            click("解锁秘密库"); click("快捷解锁");
+            click("解锁秘密库");
             awaitHumanAuthentication("manual_secure_unlock_await_human", "秘密库已解锁。", core);
             assertArrayEquals("Quick unlock must keep the persisted wrapper", wrapper, new VaultStore(target).quickMaterial());
             assertSameEmptyContent(initial, password, contentBinding);
@@ -187,7 +187,7 @@ public final class AppSecretsUiFlowTest {
             stage("manual_secure_real_quick_unlock_pass");
 
             click("关闭本设备快捷解锁"); waitEditors("当前主口令");
-            setEditor(0, password); click("取消"); waitText("秘密库设置", 10000);
+            setEditor(0, password); click("取消"); waitText("安全", 10000);
             assertTrue(core.session.unlocked());
             assertArrayEquals(wrapper, new VaultStore(target).quickMaterial());
             assertSameEmptyContent(initial, password, contentBinding);
@@ -292,7 +292,7 @@ public final class AppSecretsUiFlowTest {
         clickSubmit("创建秘密库"); waitText("两次口令不一致", 10000); fixtureNodeDiagnostics("mismatch_validation_visible"); assertFreshVault();
         setEditor(1, original); clickSubmit("创建秘密库"); waitText("秘密库已创建。", 30000);
         byte[] initial = cipher(); authenticate(initial, original); stage("create_and_confirmation_pass");
-        click("更换主口令"); waitEditors("当前主口令", "新主口令", "确认新主口令"); setEditor(0, original); click("取消"); waitText("秘密库设置", 10000);
+        click("更换主口令"); waitEditors("当前主口令", "新主口令", "确认新主口令"); setEditor(0, original); click("取消"); waitText("安全", 10000);
         assertArrayEquals(initial, cipher()); stage("management_cancel_preserves_cipher");
         click("立即锁定"); waitText("秘密库已锁定。", 10000); waitText("已锁定", 10000);
         click("解锁秘密库"); waitEditors("当前主口令"); setEditor(0, "Wrong-" + runId); clickSubmit("解锁秘密库"); waitText("口令错误或文件损坏，请重新输入。", 30000);
@@ -329,11 +329,11 @@ public final class AppSecretsUiFlowTest {
         byte[] destinationCipher = cipher(); authenticate(destinationCipher, destination);
         assertFalse(Arrays.equals(overwritten, destinationCipher));
         startImport("Wrong-" + runId, destination); chooseImportFile(leaf, filename); waitText("口令错误或文件损坏，请重新输入。", 30000);
-        assertArrayEquals(destinationCipher, cipher()); click("取消"); waitText("秘密库设置", 10000);
+        assertArrayEquals(destinationCipher, cipher()); click("取消"); waitText("安全", 10000);
         startImport(latest, "Wrong-" + runId); chooseImportFile(leaf, filename); waitText("口令错误或文件损坏，请重新输入。", 30000);
-        assertArrayEquals(destinationCipher, cipher()); click("取消"); waitText("秘密库设置", 10000);
+        assertArrayEquals(destinationCipher, cipher()); click("取消"); waitText("安全", 10000);
         startImport(latest, destination); chooseImportFile(leaf, filename); waitText("审阅加密备份", 30000);
-        click("取消导入"); waitText("秘密库设置", 10000); assertArrayEquals(destinationCipher, cipher());
+        click("取消导入"); waitText("安全", 10000); assertArrayEquals(destinationCipher, cipher());
         stage("actual_saf_import_wrong_source_target_and_cancel_preserve_cipher");
         startImport(latest, destination); chooseImportFile(leaf, filename); waitText("审阅加密备份", 30000);
         click("确认覆盖全部现有库内容"); click("确认导入"); waitText("备份已导入，使用来源备份主口令解锁。", 30000);
@@ -753,8 +753,9 @@ public final class AppSecretsUiFlowTest {
     private static boolean fixtureRole(AccessibilityNodeInfo node, String label, boolean buttonOnly) {
         if ("android.widget.Button".contentEquals(String.valueOf(node.getClassName()))) return true;
         if (buttonOnly) return false;
-        if ("工作台".equals(label)) return "android.view.View".contentEquals(String.valueOf(node.getClassName()))
+        if ("设置".equals(label)) return "android.view.View".contentEquals(String.valueOf(node.getClassName()))
                 || "android.widget.RadioButton".contentEquals(String.valueOf(node.getClassName()));
+        if ("安全".equals(label)) return "android.view.View".contentEquals(String.valueOf(node.getClassName()));
         return Arrays.asList("确认覆盖此同名文件", "确认覆盖全部现有库内容").contains(label)
                 && "android.widget.CheckBox".contentEquals(String.valueOf(node.getClassName())) && node.isCheckable();
     }
@@ -901,7 +902,7 @@ public final class AppSecretsUiFlowTest {
         try {
             for (int index = 0; index < queue.size() && index < 500; index++) {
                 AccessibilityNodeInfo node = queue.get(index);
-                for (String label : new String[] { "秘密库设置", "尚未创建", "已锁定", "已解锁", "创建秘密库", "更换主口令", "解锁秘密库",
+                for (String label : new String[] { "安全", "尚未创建", "已锁定", "已解锁", "创建秘密库", "更换主口令", "解锁秘密库",
                         "确认覆盖此同名文件", "确认覆盖全部现有库内容", "加密备份已保存。", "导出已取消，本次暂存已清理。" })
                     if (semanticExact(node, label)) return true;
                 for (int child = 0; child < node.getChildCount(); child++) { AccessibilityNodeInfo next = node.getChild(child); if (next != null) queue.add(next); }
@@ -917,7 +918,7 @@ public final class AppSecretsUiFlowTest {
                     || n.getActionList().contains(AccessibilityNodeInfo.AccessibilityAction.ACTION_CLICK)) return false;
             Rect bounds = new Rect(); n.getBoundsInScreen(bounds);
             if (bounds.isEmpty() || !windowBounds.contains(bounds) || bounds.bottom > scrollBounds.top) return false;
-            for (String label : new String[] { "秘密库设置", "创建秘密库", "解锁秘密库", "更换主口令", "导出加密备份", "导入加密备份", "审阅加密备份" })
+            for (String label : new String[] { "安全", "创建秘密库", "解锁秘密库", "更换主口令", "导出加密备份", "导入加密备份", "审阅加密备份" })
                 if (semanticExact(n, label)) return true;
             return false;
         });

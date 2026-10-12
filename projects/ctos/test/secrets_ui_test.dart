@@ -116,6 +116,7 @@ void main() {
   final calls = <MethodCall>[];
   Future<Object?> Function(MethodCall)? response;
   var ownerCounter = 0;
+  Completer<void>? cancelGate;
   final owners = <String>{};
   void Function(String)? onRelease;
 
@@ -124,6 +125,7 @@ void main() {
     response = null;
     owners.clear();
     ownerCounter = 0;
+    cancelGate = null;
     onRelease = null;
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(api.channel, (call) async {
@@ -140,9 +142,11 @@ void main() {
             expect(owners.remove(owner), isTrue);
             return null;
           }
-          if (call.method == 'secrets.cancel' ||
-              call.method == 'secrets.importCancel')
+          if (call.method == 'secrets.cancel') {
+            await cancelGate?.future;
             return null;
+          }
+          if (call.method == 'secrets.importCancel') return null;
           if (response != null) return response!(call);
           return status();
         });
@@ -995,11 +999,12 @@ void main() {
     );
     await tester.tap(find.text('打开'));
     await frames(tester);
-    await tester.tap(find.widgetWithText(FilledButton, '快捷解锁'));
-    await frames(tester);
+    expect(find.byType(AlertDialog), findsNothing);
+    expect(find.byType(LinearProgressIndicator), findsOneWidget);
     await tester.binding.handlePopRoute();
     await frames(tester);
     expect(result, false);
+    expect(find.byType(AlertDialog), findsNothing);
     expect(
       calls
           .singleWhere((call) => call.method == 'secrets.cancel')
@@ -1013,6 +1018,545 @@ void main() {
     expect(result, false);
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets(
+    'registered quick unlock starts directly and verifies fresh state',
+    (tester) async {
+      var unlocked = false;
+      response = (call) async {
+        if (call.method == 'secrets.quickUnlock') unlocked = true;
+        return {
+          ...status(unlocked: unlocked),
+          'quickUnlockEnabled': true,
+          'quickUnlockAvailable': true,
+        };
+      };
+      Object? result;
+      await tester.pumpWidget(
+        app(
+          launcher(
+            (context) => ensureSecretVaultUnlocked(context, api: api),
+            completed: (value) => result = value,
+          ),
+        ),
+      );
+      await tester.tap(find.text('打开'));
+      await frames(tester);
+      expect(result, true);
+      expect(find.byType(AlertDialog), findsNothing);
+      expect(find.byType(TextFormField), findsNothing);
+      expect(calls.map((call) => call.method), [
+        'secrets.status',
+        'secrets.quickUnlock',
+        'secrets.status',
+      ]);
+      expect(owners, isEmpty);
+    },
+  );
+
+  testWidgets(
+    'app cancel during automatic quick unlock suppresses late failure',
+    (tester) async {
+      final pending = Completer<Object?>();
+      response = (call) async {
+        if (call.method == 'secrets.quickUnlock') return pending.future;
+        return {
+          ...status(),
+          'quickUnlockEnabled': true,
+          'quickUnlockAvailable': true,
+        };
+      };
+      Object? result = 'waiting';
+      await tester.pumpWidget(
+        app(
+          launcher(
+            (context) => ensureSecretVaultUnlocked(context, api: api),
+            completed: (value) => result = value,
+          ),
+        ),
+      );
+      await tester.tap(find.text('打开'));
+      await frames(tester);
+      await tester.tap(find.text('取消'));
+      await frames(tester);
+      expect(result, false);
+      expect(
+        calls.where((call) => call.method == 'secrets.cancel'),
+        hasLength(1),
+      );
+      pending.completeError(PlatformException(code: 'VAULT_CANCELLED'));
+      await frames(tester);
+      expect(result, false);
+      expect(find.byType(AlertDialog), findsNothing);
+      expect(find.byType(TextFormField), findsNothing);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'quick fresh-status completion cannot succeed for a covered consumer',
+    (tester) async {
+      final fresh = Completer<Object?>();
+      var reads = 0;
+      response = (call) async {
+        if (call.method == 'secrets.quickUnlock') return status(unlocked: true);
+        if (++reads == 1)
+          return {
+            ...status(),
+            'quickUnlockEnabled': true,
+            'quickUnlockAvailable': true,
+          };
+        return fresh.future;
+      };
+      Object? result = 'waiting';
+      final navigator = GlobalKey<NavigatorState>();
+      await tester.pumpWidget(
+        app(
+          launcher(
+            (context) => ensureSecretVaultUnlocked(context, api: api),
+            completed: (value) => result = value,
+          ),
+          navigatorKey: navigator,
+        ),
+      );
+      await tester.tap(find.text('打开'));
+      await frames(tester);
+      expect(reads, 2);
+      navigator.currentState!.push(
+        MaterialPageRoute<void>(
+          builder: (_) => const Scaffold(body: Text('其他页面')),
+        ),
+      );
+      await frames(tester);
+      fresh.complete(status(unlocked: true));
+      await frames(tester);
+      expect(result, false);
+      expect(find.text('其他页面'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('delayed quick cancellation cannot pop a later route', (
+    tester,
+  ) async {
+    final pending = Completer<Object?>();
+    cancelGate = Completer<void>();
+    response = (call) async {
+      if (call.method == 'secrets.quickUnlock') return pending.future;
+      return {
+        ...status(),
+        'quickUnlockEnabled': true,
+        'quickUnlockAvailable': true,
+      };
+    };
+    Object? result = 'waiting';
+    final navigator = GlobalKey<NavigatorState>();
+    await tester.pumpWidget(
+      app(
+        launcher(
+          (context) => ensureSecretVaultUnlocked(context, api: api),
+          completed: (value) => result = value,
+        ),
+        navigatorKey: navigator,
+      ),
+    );
+    await tester.tap(find.text('打开'));
+    await frames(tester);
+    await tester.tap(find.text('取消'));
+    await tester.pump();
+    // A second system back removes the leaving route while host cancellation
+    // is still pending; the old continuation must not pop the next route.
+    await tester.binding.handlePopRoute();
+    await frames(tester);
+    navigator.currentState!.push(
+      MaterialPageRoute<void>(
+        builder: (_) => const Scaffold(body: Text('其他页面')),
+      ),
+    );
+    await frames(tester);
+    cancelGate!.complete();
+    await frames(tester);
+    pending.complete(status(unlocked: true));
+    await frames(tester);
+    expect(result, false);
+    expect(find.text('其他页面'), findsOneWidget);
+    expect(
+      calls.where((call) => call.method == 'secrets.cancel'),
+      hasLength(1),
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  for (final label in ['更换主口令', '关闭本设备快捷解锁', '导出加密备份']) {
+    testWidgets(
+      'unlocked quick-enabled management still needs password: $label',
+      (tester) async {
+        response = (_) async => {
+          ...status(unlocked: true),
+          'quickUnlockEnabled': true,
+          'quickUnlockAvailable': true,
+        };
+        await tester.pumpWidget(app(SecretVaultSettingsPage(api: api)));
+        await frames(tester);
+        final action = find.widgetWithText(OutlinedButton, label);
+        await reveal(tester, action);
+        await tester.tap(action);
+        await frames(tester);
+        expect(find.text('当前主口令'), findsOneWidget);
+        expect(owners, hasLength(1));
+        expect(
+          calls.where(
+            (call) => !const {
+              'secrets.status',
+              'secrets.protect',
+            }.contains(call.method),
+          ),
+          isEmpty,
+        );
+        await reveal(tester, find.text('取消'));
+        await tester.tap(find.text('取消'));
+        await frames(tester);
+        expect(
+          find
+              .byType(TextField)
+              .evaluate()
+              .any((element) => (element.widget as TextField).obscureText),
+          isFalse,
+        );
+        expect(owners, isEmpty);
+        expect(tester.takeException(), isNull);
+      },
+    );
+  }
+
+  testWidgets('unregistered quick unlock opens password directly', (
+    tester,
+  ) async {
+    var unlocked = false;
+    response = (call) async {
+      if (call.method == 'secrets.unlock') unlocked = true;
+      return {...status(unlocked: unlocked), 'quickUnlockAvailable': true};
+    };
+    Object? result;
+    await tester.pumpWidget(
+      app(
+        launcher(
+          (context) => ensureSecretVaultUnlocked(context, api: api),
+          completed: (value) => result = value,
+        ),
+      ),
+    );
+    await tester.tap(find.text('打开'));
+    await frames(tester);
+    expect(find.byType(AlertDialog), findsNothing);
+    expect(find.byKey(const ValueKey('password')), findsOneWidget);
+    await tester.enterText(
+      find.byKey(const ValueKey('password')),
+      'fixture password',
+    );
+    await tester.tap(find.widgetWithText(FilledButton, '解锁秘密库'));
+    await frames(tester);
+    expect(result, true);
+    expect(
+      calls.where((call) => call.method == 'secrets.quickUnlock'),
+      isEmpty,
+    );
+    expect(owners, isEmpty);
+  });
+
+  for (final failure in [
+    'VAULT_LOCKED_OUT',
+    'VAULT_UNAVAILABLE',
+    'VAULT_CANCELLED',
+  ]) {
+    testWidgets('quick $failure presents recovery choices only after failure', (
+      tester,
+    ) async {
+      response = (call) async {
+        if (call.method == 'secrets.quickUnlock')
+          throw PlatformException(code: failure);
+        return {
+          ...status(),
+          'quickUnlockEnabled': true,
+          'quickUnlockAvailable': failure != 'VAULT_UNAVAILABLE',
+        };
+      };
+      Object? result = 'waiting';
+      await tester.pumpWidget(
+        app(
+          launcher(
+            (context) => ensureSecretVaultUnlocked(context, api: api),
+            completed: (value) => result = value,
+          ),
+        ),
+      );
+      await tester.tap(find.text('打开'));
+      await frames(tester);
+      expect(find.byType(AlertDialog), findsOneWidget);
+      expect(find.text('使用主口令'), findsOneWidget);
+      expect(find.widgetWithText(FilledButton, '快捷解锁'), findsOneWidget);
+      expect(
+        find.text(secretVaultError(PlatformException(code: failure))),
+        findsOneWidget,
+      );
+      await frames(tester);
+      expect(
+        calls.where((call) => call.method == 'secrets.quickUnlock'),
+        hasLength(1),
+      );
+      expect(
+        calls
+            .singleWhere((call) => call.method == 'secrets.cancel')
+            .arguments['requestId'],
+        calls
+            .singleWhere((call) => call.method == 'secrets.quickUnlock')
+            .arguments['requestId'],
+      );
+      await tester.tap(find.text('取消'));
+      await frames(tester);
+      expect(result, false);
+      expect(find.byType(TextFormField), findsNothing);
+      expect(owners, isEmpty);
+    });
+  }
+
+  testWidgets(
+    'quick recovery retry reads fresh generation and uses a new request',
+    (tester) async {
+      var attempts = 0;
+      var generation = 1;
+      var unlocked = false;
+      response = (call) async {
+        if (call.method == 'secrets.quickUnlock') {
+          attempts++;
+          if (attempts == 1) throw PlatformException(code: 'VAULT_LOCKED_OUT');
+          unlocked = true;
+        }
+        return {
+          ...status(unlocked: unlocked),
+          'generation': generation,
+          'quickUnlockEnabled': true,
+          'quickUnlockAvailable': true,
+        };
+      };
+      Object? result;
+      await tester.pumpWidget(
+        app(
+          launcher(
+            (context) => ensureSecretVaultUnlocked(context, api: api),
+            completed: (value) => result = value,
+          ),
+        ),
+      );
+      await tester.tap(find.text('打开'));
+      await frames(tester);
+      generation = 2;
+      await tester.tap(find.widgetWithText(FilledButton, '快捷解锁'));
+      await frames(tester);
+      expect(result, true);
+      final quick = calls
+          .where((call) => call.method == 'secrets.quickUnlock')
+          .toList();
+      expect(quick, hasLength(2));
+      expect(
+        quick.first.arguments['requestId'],
+        isNot(quick.last.arguments['requestId']),
+      );
+      expect(calls.map((call) => call.method), [
+        'secrets.status',
+        'secrets.quickUnlock',
+        'secrets.cancel',
+        'secrets.status',
+        'secrets.quickUnlock',
+        'secrets.status',
+      ]);
+      expect(find.byType(AlertDialog), findsNothing);
+    },
+  );
+
+  testWidgets('quick recovery choices fit 320dp with doubled text', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(320, 568);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    response = (call) async {
+      if (call.method == 'secrets.quickUnlock')
+        throw PlatformException(code: 'VAULT_LOCKED_OUT');
+      return {
+        ...status(),
+        'quickUnlockEnabled': true,
+        'quickUnlockAvailable': true,
+      };
+    };
+    await tester.pumpWidget(
+      app(
+        launcher((context) => ensureSecretVaultUnlocked(context, api: api)),
+        scale: 2,
+      ),
+    );
+    await tester.tap(find.text('打开'));
+    await frames(tester);
+    for (final label in ['取消', '使用主口令', '快捷解锁']) {
+      expect(find.text(label).hitTestable(), findsOneWidget);
+    }
+    expect(tester.takeException(), isNull);
+    await tester.tap(find.text('取消'));
+    await frames(tester);
+    expect(find.byType(AlertDialog), findsNothing);
+  });
+
+  testWidgets('quick recovery password uses a protected password route', (
+    tester,
+  ) async {
+    var unlocked = false;
+    response = (call) async {
+      if (call.method == 'secrets.quickUnlock')
+        throw PlatformException(code: 'VAULT_UNAVAILABLE');
+      if (call.method == 'secrets.unlock') unlocked = true;
+      return {...status(unlocked: unlocked), 'quickUnlockEnabled': true};
+    };
+    Object? result;
+    await tester.pumpWidget(
+      app(
+        launcher(
+          (context) => ensureSecretVaultUnlocked(context, api: api),
+          completed: (value) => result = value,
+        ),
+      ),
+    );
+    await tester.tap(find.text('打开'));
+    await frames(tester);
+    await tester.tap(find.text('使用主口令'));
+    await frames(tester);
+    expect(owners, hasLength(1));
+    await tester.enterText(
+      find.byKey(const ValueKey('password')),
+      'fixture password',
+    );
+    await tester.tap(find.widgetWithText(FilledButton, '解锁秘密库'));
+    await frames(tester);
+    expect(result, true);
+    expect(
+      calls.where((call) => call.method == 'secrets.quickUnlock'),
+      hasLength(1),
+    );
+    expect(owners, isEmpty);
+  });
+
+  testWidgets(
+    'quick route destruction cancels once and ignores late authentication',
+    (tester) async {
+      final pending = Completer<Object?>();
+      response = (call) async {
+        if (call.method == 'secrets.quickUnlock') return pending.future;
+        return {
+          ...status(),
+          'quickUnlockEnabled': true,
+          'quickUnlockAvailable': true,
+        };
+      };
+      Object? result = 'waiting';
+      await tester.pumpWidget(
+        app(
+          launcher(
+            (context) => ensureSecretVaultUnlocked(context, api: api),
+            completed: (value) => result = value,
+          ),
+        ),
+      );
+      await tester.tap(find.text('打开'));
+      await frames(tester);
+      await tester.pumpWidget(const SizedBox());
+      await frames(tester);
+      expect(result, false);
+      expect(
+        calls.where((call) => call.method == 'secrets.cancel'),
+        hasLength(1),
+      );
+      pending.complete(status(unlocked: true));
+      await frames(tester);
+      expect(result, false);
+      expect(
+        calls.where((call) => call.method == 'secrets.status'),
+        hasLength(1),
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  for (final replacement in [
+    status(),
+    {...status(unlocked: true), 'generation': 2},
+  ]) {
+    testWidgets('quick success rejects stale final session $replacement', (
+      tester,
+    ) async {
+      var reads = 0;
+      response = (call) async {
+        if (call.method == 'secrets.quickUnlock') return status(unlocked: true);
+        if (++reads == 1)
+          return {
+            ...status(),
+            'quickUnlockEnabled': true,
+            'quickUnlockAvailable': true,
+          };
+        return replacement;
+      };
+      Object? result;
+      await tester.pumpWidget(
+        app(
+          launcher(
+            (context) => ensureSecretVaultUnlocked(context, api: api),
+            completed: (value) => result = value,
+          ),
+        ),
+      );
+      await tester.tap(find.text('打开'));
+      await frames(tester);
+      expect(result, false);
+      expect(find.byType(AlertDialog), findsNothing);
+    });
+  }
+
+  testWidgets(
+    'back during initial status loading prevents late automatic quick start',
+    (tester) async {
+      final pending = Completer<Object?>();
+      response = (_) async => pending.future;
+      final navigator = GlobalKey<NavigatorState>();
+      Object? result = 'waiting';
+      await tester.pumpWidget(
+        app(const Scaffold(body: Text('首页')), navigatorKey: navigator),
+      );
+      navigator.currentState!.push(
+        MaterialPageRoute<void>(
+          builder: (_) => launcher(
+            (context) => ensureSecretVaultUnlocked(context, api: api),
+            completed: (value) => result = value,
+          ),
+        ),
+      );
+      await frames(tester);
+      await tester.tap(find.text('打开'));
+      await tester.pump();
+      await tester.binding.handlePopRoute();
+      pending.complete({
+        ...status(),
+        'quickUnlockEnabled': true,
+        'quickUnlockAvailable': true,
+      });
+      await frames(tester);
+      expect(result, false);
+      expect(
+        calls.where((call) => call.method == 'secrets.quickUnlock'),
+        isEmpty,
+      );
+      expect(find.text('首页'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   testWidgets(
     'import requires both fresh passwords, overwrite and concrete trust consent',

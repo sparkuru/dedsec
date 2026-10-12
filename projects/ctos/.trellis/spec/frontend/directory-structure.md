@@ -10,6 +10,7 @@ multi-package workspace.
 | `lib/ui/ctos_theme.dart`, `ctos_components.dart` | Semantic colors, typography, motion/terminal themes, and projection-only heading/status/data-field widgets |
 | `lib/device_info.dart`, `lib/connection_info.dart`, `lib/connection_state.dart`, `lib/traffic.dart` | Pure data projection and snapshot/traffic state |
 | `lib/device_page.dart` | Device information presentation |
+| `lib/settings_page.dart`, `lib/secrets/settings_page.dart` | Global export/security navigation and full shared-vault management |
 | `lib/terminal_interaction.dart` | PTY input, session command history, and selectable output projection |
 | `lib/workbench.dart` | Catalogue page and routes into workbench flows |
 | `lib/workbench/api.dart`, `models.dart` | Dart-side channel wrapper and catalogue/result models |

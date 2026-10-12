@@ -23,6 +23,49 @@ Reference examples: `CtosApp` and `Observatory` in `lib/main.dart`,
 `WorkbenchActions` and `WorkbenchDropdown` in `lib/workbench/controls.dart`,
 and `ResultCard` in `lib/workbench/result_card.dart`.
 
+## Overview and settings navigation
+
+The four root entries are overview (0), workbench (1), terminal (2), settings
+(3). Overview owns device/network/interfaces/connections categories; the
+summary and category selector lead each category's single vertical ListView.
+Do not embed a fixed-height detail viewport or a scrolling ListView inside
+another vertical ListView. `DevicePage.leading` defaults to an empty widget
+list so standalone device presentation stays compatible. Preserve category
+scroll/filter state in IndexedStack and independent PageStorage paths.
+
+Settings owns global snapshot export and the lazily pushed security route.
+Keep snapshot export's original availability gating and `openExport` payload;
+task-history selection and tool output saves remain local to their flows.
+Security reuses all SecretVaultSettingsPage behavior; merely opening settings
+must not initialize/read the vault. Keep network polling on foreground overview
+only, refresh connections when its category is entered/resumed/reselected via
+overview, and retain Root retry/error in overview/network. Interface-history
+navigation targets overview/interfaces; terminal IME guards use index 2.
+
+Tests must verify root labels/order, absent old global export/secret entries,
+lazy security, ordinary detail back, overview polling and inactive-entry silence,
+large-text reachable actions, category filtering and live PTY preservation.
+
+Overview's four-category SegmentedButton fills the reading column with
+`expandedInsets: EdgeInsets.zero`; labels occupy equal widths and are centered.
+Keep the selected fill/semantics while hiding the check icon so 320 dp / 2×
+labels fit without horizontal scrolling. Root status belongs to the 48 dp
+`root-status-info` icon immediately after the ctOS title: primary green online,
+warning yellow while granting/offline. Tooltip and the scrollable status dialog
+provide the state, source and existing failure reason; opening it must not
+request Root. Do not restore the global APP badge/body Root row or the terminal
+session selector's eyebrow. `overview_polish_test.dart` asserts bounds, colors,
+accessible labels, state changes and absence of implicit Root calls.
+
+Overview's summary contains the device name and memory/battery metrics, without
+an eyebrow or Android/uptime subtitle. Keep full system/version/uptime fields in
+DevicePage. Category subtitles describe their content scope consistently:
+device system/resources/power; network status/live traffic; interfaces/address/
+link state; TCP/UDP connections/app mapping. Count, source and capture time are
+data metadata; interface count/source stays below the filter, separate from the
+static heading description. Removing repetitive headings must not remove data
+provenance or change collection/state lifetimes.
+
 ## Adaptive presentation contracts
 
 **Scope:** navigation, theme, forms, results and data-field presentation.

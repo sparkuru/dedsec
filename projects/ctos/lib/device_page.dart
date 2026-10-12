@@ -8,12 +8,14 @@ class DevicePage extends StatelessWidget {
     required this.loading,
     required this.error,
     required this.onRefresh,
+    this.leading = const [],
   });
 
   final DeviceSnapshot? snapshot;
   final bool loading;
   final String error;
   final Future<void> Function() onRefresh;
+  final List<Widget> leading;
 
   @override
   Widget build(BuildContext context) => LayoutBuilder(
@@ -30,6 +32,7 @@ class DevicePage extends StatelessWidget {
           vertical: 24,
         ),
         children: [
+          ...leading,
           Text('设备信息', style: Theme.of(context).textTheme.headlineMedium),
           const SizedBox(height: 8),
           Text(

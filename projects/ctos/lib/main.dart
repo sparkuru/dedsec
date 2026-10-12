@@ -9,6 +9,7 @@ import 'connection_state.dart';
 import 'device_info.dart';
 import 'device_page.dart';
 import 'export_preview.dart';
+import 'settings_page.dart';
 import 'terminal_interaction.dart';
 import 'traffic.dart';
 import 'workbench.dart';
@@ -85,6 +86,7 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
   int infoTab = 0;
   String error = '',
       rootProblem = '',
+      rootAuthorizationOutput = '',
       query = '',
       connectionQuery = '',
       selected = '',
@@ -96,6 +98,11 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
       ((snapshot['kernel']?['interfaces'] ?? []) as List)
           .cast<Map<String, dynamic>>();
   bool get root => snapshot['root'] == true;
+  String get rootStatus => granting
+      ? 'ROOT 授权中'
+      : root
+      ? 'ROOT 在线'
+      : 'ROOT 未连接';
   Map<String, dynamic> get connectionData => connectionState.data ?? {};
   List<dynamic> get networks => snapshot['networks'] ?? [];
 
@@ -135,9 +142,7 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
     refreshDevice();
     unawaited(restoreRoot());
     timer = Timer.periodic(const Duration(seconds: 2), (_) {
-      if (foreground &&
-          (tab == 0 || (tab == 1 && (infoTab == 1 || infoTab == 2))))
-        refresh();
+      if (foreground && tab == 0) refresh();
     });
   }
 
@@ -145,9 +150,9 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     foreground = state == AppLifecycleState.resumed;
     if (foreground) {
-      if (tab == 0 || (tab == 1 && (infoTab == 1 || infoTab == 2))) refresh();
-      if (tab == 1 && infoTab == 0) refreshDevice();
-      if (tab == 1 && infoTab == 3) loadConnections();
+      if (tab == 0) refresh();
+      if (tab == 0 && infoTab == 0) refreshDevice();
+      if (tab == 0 && infoTab == 3) loadConnections();
     }
   }
 
@@ -201,7 +206,14 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
   Future<void> restoreRoot() async {
     try {
       final raw = await native.invokeMethod<String>('rootAuto');
-      if (mounted && jsonDecode(raw!)['root'] == true) await refresh();
+      final result = jsonDecode(raw!) as Map<String, dynamic>;
+      if (!mounted) return;
+      setState(() {
+        rootAuthorizationOutput = result['output'] as String? ?? '';
+        if (result['attempted'] == true && result['root'] != true)
+          rootProblem = 'Root 授权未完成，可在概览手动重试。';
+      });
+      if (result['root'] == true) await refresh();
     } catch (_) {
       if (mounted) setState(() => rootProblem = 'Root 授权未完成，可在概览手动重试。');
       notice('Root 自动授权未成功；可在概览手动重试');
@@ -215,10 +227,10 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
     try {
       final result = jsonDecode((await native.invokeMethod<String>('root'))!);
       if (mounted) {
-        setState(
-          () =>
-              rootProblem = result['root'] == true ? '' : 'Root 授权未完成，可稍后手动重试。',
-        );
+        setState(() {
+          rootAuthorizationOutput = result['output'] as String? ?? '';
+          rootProblem = result['root'] == true ? '' : 'Root 授权未完成，可稍后手动重试。';
+        });
       }
       notice(
         result['root'] == true
@@ -592,7 +604,7 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
 
   void browseInterfaces() {
     setState(() {
-      tab = 1;
+      tab = 0;
       infoTab = 2;
     });
     refresh();
@@ -600,8 +612,9 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
 
   void selectTab(int value) {
     setState(() => tab = value);
-    if (value == 1 && infoTab == 0) refreshDevice();
-    if (value == 1 && infoTab == 3) loadConnections();
+    if (value == 0) refresh();
+    if (value == 0 && infoTab == 0) refreshDevice();
+    if (value == 0 && infoTab == 3) loadConnections();
   }
 
   @override
@@ -622,20 +635,17 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
                 'ctOS',
                 style: TextStyle(fontWeight: FontWeight.w800, letterSpacing: 2),
               ),
+              const SizedBox(width: 4),
+              IconButton(
+                key: const Key('root-status-info'),
+                tooltip: rootStatus,
+                constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
+                color: root && !granting ? mint : CtosColors.warning,
+                icon: const Icon(Icons.info_outline, size: 20),
+                onPressed: showRootStatus,
+              ),
             ],
           ),
-          actions: [
-            IconButton(
-              onPressed:
-                  snapshot.isEmpty &&
-                      deviceSnapshot == null &&
-                      !connectionState.hasSnapshot
-                  ? null
-                  : openExport,
-              tooltip: '选择导出内容',
-              icon: const Icon(Icons.ios_share, size: 20),
-            ),
-          ],
         ),
         body: SafeArea(
           child: Row(
@@ -652,10 +662,6 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
                       label: Text('概览'),
                     ),
                     NavigationRailDestination(
-                      icon: Icon(Icons.info_outline),
-                      label: Text('信息'),
-                    ),
-                    NavigationRailDestination(
                       icon: Icon(Icons.grid_view_outlined),
                       label: Text('工作台'),
                     ),
@@ -663,28 +669,16 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
                       icon: Icon(Icons.terminal),
                       label: Text('终端'),
                     ),
+                    NavigationRailDestination(
+                      icon: Icon(Icons.settings_outlined),
+                      label: Text('设置'),
+                    ),
                   ],
                 ),
               Expanded(
                 key: const ValueKey('observatory-content'),
                 child: Column(
                   children: [
-                    if (tab != 3 ||
-                        MediaQuery.viewInsetsOf(context).bottom == 0)
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(20, 4, 20, 12),
-                        child: Align(
-                          alignment: Alignment.centerLeft,
-                          child: Wrap(
-                            spacing: 8,
-                            runSpacing: 8,
-                            children: [
-                              status('APP 可用', true),
-                              status(root ? 'ROOT 在线' : 'ROOT 未连接', root),
-                            ],
-                          ),
-                        ),
-                      ),
                     if (error.isNotEmpty)
                       Padding(
                         padding: const EdgeInsets.all(16),
@@ -698,20 +692,24 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
                         index: tab,
                         children: [
                           readingColumn(
-                            workbench(),
+                            overviewPage(),
                             key: const Key('overview-reading-column'),
                           ),
-                          readingColumn(
-                            informationPage(),
-                            key: const Key('information-reading-column'),
-                          ),
                           WorkbenchPage(
-                            active: tab == 2,
+                            active: tab == 1,
                             onExportHistory: (records) =>
                                 openExport(history: records),
                             onBrowseInterfaces: browseInterfaces,
                           ),
                           terminalPage(),
+                          SettingsPage(
+                            onExport:
+                                snapshot.isEmpty &&
+                                    deviceSnapshot == null &&
+                                    !connectionState.hasSnapshot
+                                ? null
+                                : openExport,
+                          ),
                         ],
                       ),
                     ),
@@ -722,7 +720,7 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
           ),
         ),
         bottomNavigationBar:
-            wide || (tab == 3 && MediaQuery.viewInsetsOf(context).bottom > 0)
+            wide || (tab == 2 && MediaQuery.viewInsetsOf(context).bottom > 0)
             ? null
             : NavigationBar(
                 animationDuration: CtosTheme.duration(context),
@@ -734,16 +732,16 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
                     label: '概览',
                   ),
                   NavigationDestination(
-                    icon: Icon(Icons.info_outline),
-                    label: '信息',
-                  ),
-                  NavigationDestination(
                     icon: Icon(Icons.grid_view_outlined),
                     label: '工作台',
                   ),
                   NavigationDestination(
                     icon: Icon(Icons.terminal),
                     label: '终端',
+                  ),
+                  NavigationDestination(
+                    icon: Icon(Icons.settings_outlined),
+                    label: '设置',
                   ),
                 ],
               ),
@@ -753,6 +751,34 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
 
   Widget status(String label, bool live) =>
       CtosStatus(label: label, color: live ? mint : CtosColors.warning);
+
+  void showRootStatus() {
+    final details = [
+      if (granting) '正在等待 Root 授权结果。',
+      if (!granting && root) 'Root 采集会话在线。',
+      if (!granting && !root) 'Root 采集会话未连接，可在概览 / 网络中手动授权。',
+      if (snapshot['kernel']?['source'] case final String source)
+        '当前采集来源：$source',
+      if (rootProblem.isNotEmpty) rootProblem,
+      if (snapshot['rootError'] case final String reason) reason,
+      if (rootAuthorizationOutput.isNotEmpty) '最近授权结果：$rootAuthorizationOutput',
+    ];
+    showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(rootStatus),
+        content: SingleChildScrollView(
+          child: SelectableText(details.join('\n\n')),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('关闭'),
+          ),
+        ],
+      ),
+    );
+  }
 
   Widget readingColumn(Widget child, {required Key key}) => Center(
     child: ConstrainedBox(
@@ -769,7 +795,7 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
   Widget heading(String title, String subtitle) =>
       CtosPageHeading(title: title, subtitle: subtitle);
 
-  Widget workbench() {
+  Widget overviewHeader() {
     final system = deviceSnapshot?['system'];
     final memory = deviceSnapshot?['memory'];
     final battery = deviceSnapshot?['battery'];
@@ -790,11 +816,10 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
     return LayoutBuilder(
       builder: (context, constraints) {
         final columns =
-            (constraints.maxWidth >= 640 &&
+            (constraints.maxWidth >= 600 &&
                 MediaQuery.textScalerOf(context).scale(14) < 21) ||
-            (constraints.maxWidth >= 360 &&
+            (constraints.maxWidth >= 320 &&
                 MediaQuery.textScalerOf(context).scale(14) <= 18.2);
-        final inset = constraints.maxWidth < 360 ? 16.0 : 20.0;
         final metrics = [
           overviewMetric(
             '可用内存',
@@ -828,160 +853,33 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
             fraction: batteryPercent == null ? null : batteryPercent / 100,
           ),
         ];
-        return RefreshIndicator(
-          onRefresh: () async {
-            await Future.wait([refresh(), refreshDevice()]);
-          },
-          child: ListView(
-            key: const PageStorageKey('overview-scroll'),
-            physics: const AlwaysScrollableScrollPhysics(),
-            padding: EdgeInsets.fromLTRB(inset, 20, inset, 32),
-            children: [
-              const Text(
-                'DEVICE',
-                style: TextStyle(
-                  fontSize: 13,
-                  color: mint,
-                  letterSpacing: 1.6,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(deviceName, style: Theme.of(context).textTheme.headlineLarge),
+            if (deviceError.isNotEmpty) ...[
               const SizedBox(height: 12),
               Text(
-                deviceName,
-                style: Theme.of(context).textTheme.headlineLarge,
-              ),
-              const SizedBox(height: 12),
-              Text(
-                'Android ${system?.data['android'] ?? snapshot['android'] ?? '—'} · 运行 ${deviceUptime(system?.data['uptimeMs'] as num?)}',
-                style: const TextStyle(
-                  color: CtosColors.textSecondary,
-                  fontSize: 14,
-                ),
-              ),
-              if (deviceError.isNotEmpty) ...[
-                const SizedBox(height: 12),
-                Text(
-                  deviceError,
-                  style: const TextStyle(color: CtosColors.warning),
-                ),
-              ],
-              const SizedBox(height: 28),
-              if (columns)
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(child: metrics[0]),
-                    const SizedBox(width: 16),
-                    Expanded(child: metrics[1]),
-                  ],
-                )
-              else
-                ...metrics,
-              const SizedBox(height: 12),
-              card(
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Icon(Icons.lan_outlined, color: blue),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                '网络现场',
-                                style: Theme.of(context).textTheme.titleMedium,
-                              ),
-                              const SizedBox(height: 4),
-                              Text(
-                                snapshot.isEmpty
-                                    ? '等待采样'
-                                    : '${networks.length} 个网络 · ${interfaces.length} 个接口',
-                                style: const TextStyle(
-                                  color: CtosColors.textSecondary,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 16),
-                    Text(
-                      '${snapshot['kernel']?['source'] ?? '等待采样'}${updated == null ? '' : ' · 网络采集 ${clock(updated!)}'}',
-                      style: Theme.of(context).textTheme.bodySmall,
-                    ),
-                    const SizedBox(height: 16),
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
-                      children: [
-                        OutlinedButton.icon(
-                          onPressed: () => setState(() {
-                            tab = 1;
-                            infoTab = 1;
-                          }),
-                          icon: const Icon(Icons.lan_outlined),
-                          label: const Text('查看网络'),
-                        ),
-                        OutlinedButton.icon(
-                          onPressed: () {
-                            setState(() {
-                              tab = 1;
-                              infoTab = 0;
-                            });
-                            refreshDevice();
-                          },
-                          icon: const Icon(Icons.info_outline),
-                          label: const Text('设备信息'),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 8),
-              Text('能力与恢复', style: Theme.of(context).textTheme.titleMedium),
-              const SizedBox(height: 12),
-              Container(
-                padding: const EdgeInsets.all(20),
-                decoration: BoxDecoration(
-                  border: Border.all(color: CtosColors.border),
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('App 基础信息：${system?.stateLabel ?? '待读取'}'),
-                    const SizedBox(height: 8),
-                    Text(
-                      root ? 'Root 采集：会话在线' : 'Root 采集：未连接；可手动申请',
-                      style: const TextStyle(color: CtosColors.textSecondary),
-                    ),
-                    if (rootProblem.isNotEmpty) ...[
-                      const SizedBox(height: 8),
-                      Text(
-                        rootProblem,
-                        style: const TextStyle(color: CtosColors.warning),
-                      ),
-                    ],
-                    if (!root) ...[
-                      const SizedBox(height: 16),
-                      FilledButton.icon(
-                        onPressed: granting ? null : authorize,
-                        icon: const Icon(Icons.key),
-                        label: Text(granting ? '等待授权…' : '授权 Root'),
-                      ),
-                    ],
-                  ],
-                ),
+                deviceError,
+                style: const TextStyle(color: CtosColors.warning),
               ),
             ],
-          ),
+            const SizedBox(height: 28),
+            if (columns)
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(child: metrics[0]),
+                  const SizedBox(width: 16),
+                  Expanded(child: metrics[1]),
+                ],
+              )
+            else
+              ...metrics,
+            const SizedBox(height: 12),
+            informationSelector(),
+            const SizedBox(height: 24),
+          ],
         );
       },
     );
@@ -1036,45 +934,50 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
     ),
   );
 
-  Widget informationPage() => Column(
+  Widget informationSelector() => SizedBox(
+    width: double.infinity,
+    child: SegmentedButton<int>(
+      key: const Key('overview-category-selector'),
+      expandedInsets: EdgeInsets.zero,
+      showSelectedIcon: false,
+      style: ButtonStyle(
+        animationDuration: CtosTheme.duration(context),
+        padding: const WidgetStatePropertyAll(
+          EdgeInsets.symmetric(vertical: 12),
+        ),
+      ),
+      segments: const [
+        ButtonSegment(value: 0, label: Text('设备')),
+        ButtonSegment(value: 1, label: Text('网络')),
+        ButtonSegment(value: 2, label: Text('接口')),
+        ButtonSegment(value: 3, label: Text('连接')),
+      ],
+      selected: {infoTab},
+      onSelectionChanged: (selection) {
+        final value = selection.first;
+        setState(() => infoTab = value);
+        if (value == 0) refreshDevice();
+        if (value == 1 || value == 2) refresh();
+        if (value == 3) loadConnections();
+      },
+    ),
+  );
+
+  Widget overviewPage() => IndexedStack(
+    index: infoTab,
     children: [
-      SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        child: SegmentedButton<int>(
-          style: ButtonStyle(animationDuration: CtosTheme.duration(context)),
-          segments: const [
-            ButtonSegment(value: 0, label: Text('设备')),
-            ButtonSegment(value: 1, label: Text('网络')),
-            ButtonSegment(value: 2, label: Text('接口')),
-            ButtonSegment(value: 3, label: Text('连接')),
-          ],
-          selected: {infoTab},
-          onSelectionChanged: (selection) {
-            final value = selection.first;
-            setState(() => infoTab = value);
-            if (value == 0) refreshDevice();
-            if (value == 1 || value == 2) refresh();
-            if (value == 3) loadConnections();
-          },
-        ),
+      DevicePage(
+        snapshot: deviceSnapshot,
+        loading: deviceLoading,
+        error: deviceError,
+        leading: [overviewHeader()],
+        onRefresh: () async {
+          await Future.wait([refresh(), refreshDevice()]);
+        },
       ),
-      Expanded(
-        child: IndexedStack(
-          index: infoTab,
-          children: [
-            DevicePage(
-              snapshot: deviceSnapshot,
-              loading: deviceLoading,
-              error: deviceError,
-              onRefresh: refreshDevice,
-            ),
-            networkOverview(),
-            interfacePage(),
-            connectionsPage(),
-          ],
-        ),
-      ),
+      networkOverview(),
+      interfacePage(),
+      connectionsPage(),
     ],
   );
 
@@ -1096,10 +999,8 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
         physics: const AlwaysScrollableScrollPhysics(),
         padding: const EdgeInsets.all(20),
         children: [
-          heading(
-            '网络概览',
-            '${snapshot['device'] ?? 'Android'} · Android ${snapshot['android'] ?? '—'}',
-          ),
+          overviewHeader(),
+          heading('网络概览', '网络状态与实时流量'),
           if (!root)
             card(
               Column(
@@ -1117,6 +1018,13 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
                       fontSize: 13,
                     ),
                   ),
+                  if (rootProblem.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      rootProblem,
+                      style: const TextStyle(color: CtosColors.warning),
+                    ),
+                  ],
                   const SizedBox(height: 12),
                   FilledButton.icon(
                     onPressed: granting ? null : authorize,
@@ -1333,10 +1241,8 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
       key: const PageStorageKey('interfaces-scroll'),
       padding: const EdgeInsets.all(20),
       children: [
-        heading(
-          '网络接口',
-          '${interfaces.length} 个接口 · ${snapshot['kernel']?['source'] ?? '等待采样'}',
-        ),
+        overviewHeader(),
+        heading('网络接口', '接口、地址与链路状态'),
         TextField(
           onChanged: (value) => setState(() => query = value),
           decoration: const InputDecoration(
@@ -1345,6 +1251,11 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
           ),
         ),
         const SizedBox(height: 16),
+        Text(
+          '${interfaces.length} 个接口 · ${snapshot['kernel']?['source'] ?? '等待采样'}',
+          style: Theme.of(context).textTheme.bodySmall,
+        ),
+        const SizedBox(height: 12),
         if (interfaces.isEmpty) const Text('当前权限无法读取接口计数。请在概览中授权 Root。'),
         for (final item in filtered)
           card(
@@ -1454,7 +1365,8 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
       key: const PageStorageKey('connections-scroll'),
       padding: const EdgeInsets.fromLTRB(20, 20, 20, 32),
       children: [
-        heading('连接检索', 'TCP / UDP 快照'),
+        overviewHeader(),
+        heading('连接检索', 'TCP / UDP 连接与应用映射'),
         TextField(
           onChanged: (value) => setState(() => connectionQuery = value),
           decoration: const InputDecoration(
@@ -1695,7 +1607,6 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
               const CtosPageHeading(
                 title: '选择终端会话',
                 subtitle: '打开本机 Shell，连续输入与查看输出',
-                eyebrow: 'TERMINAL / 交互',
               )
             else ...[
               Text('选择终端会话', style: Theme.of(context).textTheme.titleLarge),

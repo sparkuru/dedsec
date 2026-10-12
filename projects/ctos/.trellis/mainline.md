@@ -1,5 +1,29 @@
 # ctOS Mainline
 
+## 2026-10-12 最终概览文案收敛与提交批准
+
+- **Authorization:** 用户要求“不建task；在当前task一起完成；完成后提交”，后续“继续任务”保留该授权；不重复提交许可。
+- **Scope:** 当前overview-settings全部概览/设置/安全迁移及截图反馈；最终删除DEVICE/Android运行摘要，统一网络/接口/连接范围描述，保留动态来源/计数。只提交本任务相关路径。
+- **Evidence:** 最终188全量15秒、analyze1.5秒/14格式、84真字体场景、arm6428.7秒/v2通过；25bcdf7c…开发板安装读回一致。其他产品/测试/Android fixture源未变，已有快捷/返回/PTY有界实机结论与未测项按原APK解释。
+- **Next:** 正在完成提交及正常归档/会话记录；不启动原底座剩余关卡或TOTP/SSH，原共享快照审批拒绝边界保持。
+
+## 2026-10-12 继续概览截图细节与默认解锁
+
+- **Authorization:** 用户在初轮确认有效后追加四项截图要求，本轮“继续任务”恢复同一overview-settings指针；沿用本任务自行连接验收授权与已核对的.14开发板，不新建任务、不推断成功认证凭证授权。
+- **Scope:** 分类全宽均分居中、Root标题旁绿/黄信息按钮、移除APP状态及终端眉标题，已登记默认快捷/未登记口令/失败三选择，新请求/取消/代次/路由保护；管理真实口令保持。
+- **Evidence:** 独立check无产品缺陷、补3管理认证回归；188全量/53秘密库、analyze/14格式、Android夹具编译及lint0错误3既有警告、84真字体场景、arm64/v2通过。af600c41…已安装并读回一致，详见design/verification.md和task check。
+- **Device:** 解锁后的AIO-3568J/API30新版布局、系统快捷直接调起/Home取消后三选择/显式重试/主口令空表单取消、AppPTY公开echo切换保持及四主入口连续双返回桌面/重开通过。成功认证新版未重测，原共享快照写盘审批拒绝不重试，原底座平台/业务关卡保持。
+- **Next:** implementation_complete=true、current/in_progress，待新细节观感/成功认证等未测反馈；未提交/归档/替换dist或推进TOTP/SSH。
+
+## 2026-10-12 概览整合与设置迁移
+
+- **Authorization:** 用户明确新建 task、作为 current 并开始完成；已建立 [overview-settings](tasks/10-12-overview-settings/prd.md)，完成规划并启动，in_progress。
+- **Scope:** 概览合并原信息四分类及完整内容，删除网络现场/能力与恢复和信息主入口；移除顶部导出，将原流程和完整秘密库管理迁到设置/安全。
+- **Boundary:** 初轮仅本地；用户随后授权自行连接验收，已在当前AIO-3568J/API30覆盖安装及部分UI检查。未获系统安全修改/真实库改变/账号操作、dist替换或提交归档授权，不推进原公共底座待测项或SSH/TOTP。
+- **Result:** 代码、160全量/增强后6专项、analyze/格式、60场景渲染、arm64构建/v2验签通过；APK a441d114…，design/spec同步，未操作设备/替换dist/提交/归档。
+- **Device:** a441d114…已安装读回一致，概览/设置/安全及导出取消检查通过；真实共享快照保存/pull被自动审批拒绝并取消确认不存在。板随后系统重启、进入锁屏，原因未确认。
+- **Next:** 已请求系统解锁，继续剩余四入口返回和AppPTY检查，保持current/in_progress；详情tasks/10-12-overview-settings/device-check.md。
+
 ## 2026-10-12 用户确认效果并授权相关任务提交
 
 - **Authorization:** 用户回复“效果可以；提交所有相关 task 文件”，当前成果提交已获授权，不再次请求确认。

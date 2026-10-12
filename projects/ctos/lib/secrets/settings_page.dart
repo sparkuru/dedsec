@@ -145,7 +145,7 @@ class _SecretVaultSettingsPageState extends State<SecretVaultSettingsPage>
     final status = _status;
     return Scaffold(
       appBar: AppBar(
-        title: const Text('秘密库设置'),
+        title: const Text('安全'),
         actions: [
           IconButton(
             tooltip: '刷新状态',

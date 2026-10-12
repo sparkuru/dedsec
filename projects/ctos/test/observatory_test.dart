@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'helpers/overview_navigation.dart';
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   testWidgets('phone layout displays Root collection and filters interfaces', (
@@ -149,37 +151,37 @@ void main() {
     await tester.pumpWidget(const CtosApp());
     await tester.pump(const Duration(milliseconds: 100));
     expect(autoRootCalls, 1);
-    expect(find.text('● ROOT 在线'), findsOneWidget);
+    expect(find.byTooltip('ROOT 在线'), findsOneWidget);
     expect(find.textContaining('VECTOR'), findsNothing);
     expect(find.textContaining('Vector'), findsNothing);
     expect(tester.takeException(), isNull);
-    await tester.tap(find.text('信息').last);
+    await tester.tap(find.text('概览').last);
     await tester.pumpAndSettle();
     expect(find.text('设备信息'), findsOneWidget);
-    await tester.tap(find.text('网络').last);
-    await tester.pumpAndSettle();
+    await selectOverviewCategory(tester, '网络');
     await tester.scrollUntilVisible(
       find.text('Wi-Fi / wlan0'),
       200,
-      scrollable: find.byType(Scrollable).last,
+      scrollable: overviewScroll,
     );
     expect(find.text('192.0.2.10/24'), findsOneWidget);
     expect(find.textContaining('Vector'), findsNothing);
-    await tester.tap(find.text('接口').last);
-    await tester.pumpAndSettle();
+    await selectOverviewCategory(tester, '接口');
     await tester.enterText(find.byType(TextField).first, 'tun0');
     await tester.pump();
     expect(find.text('tun0'), findsWidgets);
     expect(find.text('wlan0'), findsNothing);
     await tester.enterText(find.byType(TextField).first, '');
     await tester.pump();
+    await revealOverviewContent(tester, find.text('wlan0').first);
     await tester.tap(find.text('wlan0').first);
     await tester.pumpAndSettle();
     await tester.scrollUntilVisible(
       find.text('诊断此接口'),
       180,
-      scrollable: find.byType(Scrollable).last,
+      scrollable: overviewScroll,
     );
+    await tester.pumpAndSettle();
     await tester.tap(find.text('诊断此接口'));
     await tester.pumpAndSettle();
     expect(find.text('接口诊断'), findsOneWidget);

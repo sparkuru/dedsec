@@ -1,5 +1,61 @@
 # Verification
 
+## 2026-10-12 最终概览文案收敛与提交
+
+用户要求当前task一起完成并提交，不新建任务。去掉摘要DEVICE和Android/运行时间行，网络/接口/连接统一静态范围描述，接口原数量/来源移到搜索框下元数据，详细设备字段保持。本轮只有main.dart产品增量，没有host/认证/采样变化。
+
+- implement定向27项/格式/analyze4秒通过，完整任务check无缺陷；最终188 Flutter全量15秒、analyze1.5秒、14文件格式0修改及diffcheck通过。日志`/tmp/ctos-overview-copy-*`和`/tmp/ctos-overview-copy-check-*`；Android夹具哈希不变，沿用已执行编译/lint0错误3既有警告。
+- 6配置84真字体场景/1驱动7秒通过，`build/overview-final-evidence/`；主会话实看320dp、2倍字和三分类截图。驱动SHA256`b6ec4383c175b3ab745421c369a56e45fdb8b8b5ec708eaf5ecbbbe6506e4eeb`，日志`/tmp/ctos-overview-copy-render.log`。
+- `./preview.sh` arm64 release成功，Gradle28.7秒，32,217,117字节；v2验签/1 signer通过。最终APK SHA256 **`25bcdf7c22067afaac0c9c457e29ad0bc802194910eec7e2c71bf1f1ada95f78`**；main源码`393741d4c48215e45766ac65f34818d8995701ea2e0b256f98d71cf4e001ea44`，其他源哈希`/tmp/ctos-overview-copy-check-reviewed-sha256.txt`，构建/签名日志`/tmp/ctos-overview-copy-{build,signature}.log`。
+
+此轮用户提交授权覆盖整个概览/设置任务及全部反馈，先前原底座/其他业务任务的验收状态保持。新版成功系统认证、其他ROM/输入法与真实快照保存等边界沿用下方实测记录；不重试原共享写盘审批拒绝。最终设备安装/读回及分类布局结果见 [task实机记录](../.trellis/tasks/10-12-overview-settings/device-check.md)。
+
+最终25bcdf7c…已在AIO-3568J/API30覆盖安装，不清数据；再次base.apk读回哈希一致，四分类实际节点和主会话实看4张PNG确认摘要删除和全部副标题正确，接口来源/计数、连接状态/时间/映射保留。当前设备证据`/tmp/ctos-overview-final-device-20261012/`。继续会话后本地ADB及前轮/tmp目录重置，已重连已授权.14/核对解锁身份并重建当前证据；旧/tmp日志仅按执行时位置解释，源码/最终84渲染驱动及APK哈希均与已记录结果一致，没有因此重做或冒称未测平台验收。
+
+## 2026-10-12 概览截图细节与默认快捷解锁
+
+继续既有 overview-settings 任务完成用户四项截图反馈：分类全宽均分/文字居中、标题旁绿色/黄色Root信息按钮、移除APP状态与终端眉标题，以及登记快捷优先/未登记口令/快捷失败三选择。独立 Trellis check 完整复核无产品缺陷，新增3项已解锁管理真实口令回归；当前用户仍未授权提交/归档或替换dist。
+
+- Flutter初轮93定向、最终秘密库53项和全量188项通过；全量16秒，analyze无问题2.0秒，14个Dart文件格式0修改、diff检查通过。日志 `/tmp/ctos-overview-increment-{focused,secrets-final,full-final,analyze-final,format}.log`。
+- Android隔离UI夹具Java编译及`lintSecretsFixtureRelease`通过，32秒，0错误/3既有警告；`/tmp/ctos-overview-increment-android-fixture.log`。本轮未运行隔离库认证E2E。
+- 真CJK/Roboto/Material/monospace字体6配置×14页面/状态=84PNG、1渲染驱动7秒通过。320/375dp、横屏、1200dp、2倍字号与减少动画均包含，主会话实看代表性截图。`build/overview-increment-evidence/preview_test.dart` SHA256 `55c529a1349f6da2b32e60e5a7c1de40ff01399885c283fb3a8aa3e192023456`；matrix及图片同目录，日志 `/tmp/ctos-overview-increment-render.log`。初次临时夹具的pumpAndSettle在异步快捷路由等待上超时，采用既有测试的多帧推进后通过，没有修改产品代码来绕过。
+- `./preview.sh` arm64 release成功，Gradle28.8秒，32,217,261字节；apksigner36验证v2=true/1 signer。APK `build/app/outputs/flutter-apk/app-release.apk` SHA256 **`af600c41e93040026591d2b72285eb5c5b79a41363965e30c02f98bd7f62295a`**，日志 `/tmp/ctos-overview-increment-{build,signature}.log`。
+
+沿用本任务已获“自行连接上去，自行验收”授权；显式192.168.9.14:5555重新核对AIO-3568J/API30，Keyguard showing=false/secure=true。覆盖安装不清数据，设备base.apk读回与新版哈希一致。实际四分类均分（x330–1730，每项350px）、ctOS旁绿色Root信息/可读来源及授权结果、无旧状态行和终端眉标题通过。已登记库点击解锁直接打开系统BiometricPrompt；Back和中心取消面没有结束该ROM的浮层，通过Home取消并恢复ctOS后显示“操作已取消。”及取消/主口令/快捷三选择；选择快捷再次调起系统提示，再Home取消后选择主口令进入受保护口令页，空表单取消返回已锁定/快捷已开启。未输入系统或主口令，**本APK成功系统认证未由agent重测**，不更改快捷登记或用户库。
+
+App PTY公开`echo CTOS_NAV_20261012`输出，在设置/工作台/概览/终端切换后保持；普通键盘输入、执行/收键盘、输出快照二级返回路径实际使用，测试会话随后关闭。该结果不代替其他输入法/中文组合、RootPTY或底座平台关卡。全部临时设备证据在 `/tmp/ctos-overview-increment-device-20261012/`；BiometricPrompt期间screencap返回空文件`quick-failure.png`，不作为画面证据，实际恢复弹窗使用`quick-recovery.png`。
+
+四个主入口首次下方提示分别拍摄并实看；等待过期后单个`input keyevent 4 4`连续返回，各次mResumedActivity均切到QuickstepLauncher，重开成功。首轮临时驱动在两次返回间夹入截图后未退出，发送前测时未覆盖第二个ADB命令的到达耗时，不能作为2秒内失败证据；合并输入重跑全部通过、未改产品。概览图有一次自动Root恢复的Magisk系统Toast叠层，其余3张提示清晰。设备页实际滚到最后电源/温度和存储/data字段，底部内容完整可达。结果和精确驱动见back-results.json/back_check.py；系统/用户库配置保持。
+
+原共享快照保存/pull审批拒绝边界保持，本轮没有重试该操作。没有修改系统安全、Root配置、真实库内容或其他应用。具体返回结果和剩余边界见 [本task实机记录](../.trellis/tasks/10-12-overview-settings/device-check.md)。
+
+## 2026-10-12 概览设置追加开发板验收（部分完成）
+
+用户追加“你可以自行连接上去，自行验收”，授权当前开发板安装和本任务UI检查。约定.13拒绝；当前ADB唯一.14经核对为AIO-3568J/Android11/API30/1920×1080/density280。保留旧71d00e7c…包并覆盖安装成功，读回base.apk与本地均为 `a441d1141da02708eecfc6638840af154accd3df7ffdc94e9a2e540e1054c4c6`；全部设备命令显式指定目标，不清应用数据。
+
+实际概览四分类切换/滚动、实时数据/来源时间、宽屏四入口及无顶部导出、设置/安全完整管理入口与现有已锁定/快捷已开启/后台30秒状态通过。备份导出认证页打开后未输入口令即取消；安全返回设置正常。全局导出从设置到设备单项选择、启用动作、系统SAF保存页和取消反馈实际通过，不创建用户库/备份/恢复或改变安全设置。
+
+准备唯一临时快照文件名后，实际保存到共享目录并pull动作被自动审批拒绝，理由是授权未明确覆盖该真实payload和目的地。没有绕过；取消后精确文件不存在核验通过，没有读回内容，真实写盘/单项JSON读回**未执行**，不能写通过。
+
+后续工作台/终端导航检查时开发板出现Android启动logo和锁屏；`/proc/uptime`330.37秒、boot_completed=1，确认系统重启。agent未执行reboot/force-stop/系统配置，原因未确定，当前安全锁屏阻止继续；已请用户在板上解锁，不获取系统凭证。剩余四主入口双返回、AppPTY/IME、设备底部和历史接口回跳，不把驱动找不到锁屏后的按钮算成产品失败或验收通过。
+
+同步 `AppSecretsUiFlowTest.java` 原工作台/秘密库设置导航、页标题与固定滚动锚点为设置/安全；只对精确入口增加View角色，保留活跃fixture包/窗口/自身CLICK与非editable约束。离线`-PctosSecretsUiFixture=true :app:assembleSecretsFixtureReleaseAndroidTest`编译通过（worker12秒）；本轮未运行原密码/认证E2E，生产源码及APK未变。完整证据与后续结果见 [device check](../.trellis/tasks/10-12-overview-settings/device-check.md)。原始截图、UI驱动和旧/新APK位于 `/tmp/ctos-overview-settings-device-20261012/`。
+
+任务仍current/in_progress，设备验收部分完成、待系统解锁；未提交/归档/替换dist。以下本地交付阶段的“没有设备操作授权”仅为当时状态，已由本次追加授权更新。
+
+## 2026-10-12 概览整合与设置迁移
+
+用户要求新建 [overview-settings task](../.trellis/tasks/10-12-overview-settings/prd.md)，设为 current 并开始完成。源码已实现，task 保持 current / in_progress；本轮仅本地工作，没有 ADB/设备安装、系统设置、真实账号操作、dist 替换、提交或归档。
+
+- **实现**：导航为概览/工作台/终端/设置。删除独立信息入口及网络现场/能力与恢复，原四分类和完整内容直接接在概览摘要后；每分类一个竖向列表，保留搜索/列表/PTY状态。顶部导出整体迁至设置/数据导出，完整秘密库管理迁至设置/安全，工作台旧入口移除。网络分类保留 Root 失败说明和重试，连接进入/返回概览/恢复前台刷新，工作台/设置不额外网络轮询。Android host、加密、依赖和权限没有修改。
+- **自动化**：Trellis check 全范围复核后 `./hako flutter test` **160 项通过**（15秒）。随后修正新增设置测试的假数据缺失 `kernel.elapsed`，加强成功采样及正向概览轮询断言；`./hako flutter test test/settings_navigation_test.dart` **6 项重新通过**。`./hako flutter analyze` 无问题（4.1秒），12 个改动 Dart 文件格式检查0修改，`git diff --check` 通过。35项既有秘密库交互及16项主页返回包含在全量内，不重复计数。
+- **渲染**：使用当前 Observatory、设置、安全和导出真实 Flutter 组件，合成公开 native-shaped 数据及 CJK/Roboto/等宽/MaterialIcons 字体，生成 **60 场景 / 60 PNG**。320×700、375×812、800×500、1200×900和375/800两倍字号；减少动画，覆盖概览/设备/存储/网络/接口/连接、设置、安全、备份及数据导出。全部场景异常断言通过，主会话检查代表性窄屏/宽屏/大字及下方内容。字体注入仅用于克服 widget 测试默认 Ahem，不属于生产主题修改或实际设备屏幕。
+- **构建**：`./preview.sh` 成功，Gradle30.8秒，APK **32,216,569字节**；build-tools36 `apksigner verify --verbose` 通过，v2=true / 1 signer。产物 [app-release.apk](../build/app/outputs/flutter-apk/app-release.apk)，SHA-256 `a441d1141da02708eecfc6638840af154accd3df7ffdc94e9a2e540e1054c4c6`。未安装或更新 dist。
+
+主要源码 SHA-256：main `fd7b7d40…`、settings `669cc879…`、device `5152074f…`、workbench `7e6faefc…`、secret settings `683a1cb5…`、secret flows `42fc1286…`。完整清单/验收映射见 [task check](../.trellis/tasks/10-12-overview-settings/check.md)。临时日志 `/tmp/ctos-overview-settings-{full,review-test,analyze,format,render,build,signature}.log`；渲染夹具、图片和 matrix 位于忽略的 `build/overview-settings-evidence/`，后续构建可覆盖临时产物。
+
+Review：**human-required**，因为本轮没有实际设备观感、系统返回/软键盘或 SAF/快捷认证复验。建议检查概览四分类和滚动、设置导出及取消、完整安全操作入口、二级页普通返回及四主入口双返回；不把既有公共底座设备记录作为迁移版新 APK 的实测结论，其他公共底座未测关卡保持。
+
 ## 2026-10-12 安全锁屏开发板快捷认证修复与实测
 
 后续用户回复“效果可以；提交所有相关 task 文件”，确认当前效果并授权阶段成果提交；未测关卡保持开放，不由此标整个底座完成。本轮提交只补做范围/元数据/产物检查，不重复设备操作或冒称新全量测试。

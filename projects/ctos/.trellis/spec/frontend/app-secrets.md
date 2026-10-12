@@ -2,7 +2,7 @@
 
 ## 1. Scope / Trigger
 
-Applies to `lib/secrets/{api,flows,settings_page}.dart`, workbench entry and future
+Applies to `lib/secrets/{api,flows,settings_page}.dart`, settings/security entry and future
 Authenticator/SSH consumers. Host contracts are in [backend/app-secrets.md](../backend/app-secrets.md);
 product scope remains [design/app-authentication.md](../../../design/app-authentication.md).
 
@@ -11,7 +11,7 @@ product scope remains [design/app-authentication.md](../../../design/app-authent
 `SecretVaultApi.status()`, `mutate(method, arguments, request)`,
 `cancel(requestId)`, `cancelImport(previewId)`, `acquireProtection()` and
 `releaseProtection(owner)` wrap `ctos/native` `secrets.*`.
-`ensureSecretVaultUnlocked(...)` owns create/import/password/optional quick
+`ensureSecretVaultUnlocked(...)` owns create/import/password/registered quick
 flows and returns to the original consumer. It does not authorize a native
 business operation. Every release/write remains checked by the host.
 
@@ -45,6 +45,16 @@ reauthorization. `SecretExportPreview`, `SecretExportRemaining`,
 - Management always prompts for the actual required password even if the vault
   is unlocked. Separate source/target passwords and trust consent in imports.
   Recheck fresh status before returning an unlock flow as successful.
+- `ensureSecretVaultUnlocked` tries registered quick unlock immediately, including
+  when the platform currently reports it unavailable; unregistered vaults go
+  directly to the protected password route. Only a failed quick attempt opens
+  cancel/password/quick choices. A retry rereads status and allocates a fresh
+  SecretRequest; failures never automatically loop system authentication.
+  Explicit App cancel/back ends this unlock flow, while system authentication
+  cancellation is a failed attempt with recovery choices. Quick success and
+  fresh status completion must still belong to the current consumer route and
+  match its captured generation. Cancel failed/popped/destroyed scopes and ignore
+  late results; these choices do not change management password requirements.
 - Export uses fresh password authentication, one bounded filename and a native
   directory picker, then metadata-only same-name overwrite confirmation bound
   to `exportId`. Do not reuse the password for commit or claim existing files
@@ -71,6 +81,8 @@ reauthorization. `SecretExportPreview`, `SecretExportRemaining`,
 | Unsupported SSH validation | explain unsupported backup; keep original |
 | Stale/expired state | restart flow, no stale success |
 | System unavailable/locked out | retain password recovery |
+| Registered quick authentication fails/cancels | show recovery choices after the attempt |
+| No registered quick / App cancel or back | password directly / end the current flow |
 | `VAULT_EXPORT_UNCERTAIN` | backup may exist; check chosen location |
 | Export terminal receipt has remaining files | show role/location/present-or-unknown and recovery action, including after success |
 | `VAULT_COMMIT_UNCERTAIN` | locked; reopen with password and verify content |
@@ -80,8 +92,9 @@ reauthorization. `SecretExportPreview`, `SecretExportRemaining`,
 
 - Good: wrong-password retry gets a new request; host result determines effect
   outcome; sensitive pages never render before the protection owner exists.
-- Base: ordinary workbench stays accessible without creating a vault; one
-  settings entry is usable before full business pages are implemented.
+- Base: ordinary workbench/settings stay accessible without creating or reading
+  a vault; settings/security lazily opens full management before business pages
+  are implemented. Password protection and owner lifetimes are unchanged.
 - Bad: global unlocked Boolean, generic raw secret channel, route pop releasing
   protection before secret frame removal, late success entering a new route.
 
@@ -92,6 +105,10 @@ bounds, source/target import and trust consent, window acquire-before-render /
 release-after-removal, route destruction and keyboard accessibility. Review real
 Flutter CJK/Material renders at 320 dp with keyboard and scrollable lower actions.
 Widget fakes do not verify Android secure windows, Keystore or actual SAF.
+Quick-flow regressions also assert no first-choice dialog, one attempt before
+recovery, fresh retry IDs/status, failed-system password fallback, App back,
+disposed/covered routes and stale generation; management actions still prompt
+for actual passwords even with a registered, unlocked session.
 Export tests cover filename bounds, collision confirmation/decline, fresh commit
 request without password, cancelled preview cleanup, terminal failed/uncertain
 and successful-with-residual receipts, recovery confirmation and stale IDs.

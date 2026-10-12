@@ -7,6 +7,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:xterm/xterm.dart';
 
+import 'helpers/overview_navigation.dart';
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -91,15 +93,13 @@ void main() {
               .data,
           '—',
         );
-        await tester.tap(find.text('信息').last);
+        await tester.tap(find.text('概览').last);
         await tester.pumpAndSettle();
         for (final label in ['网络', '接口', '连接']) {
-          final tab = find.text(label).last;
-          await tester.ensureVisible(tab);
-          await tester.tap(tab);
-          await tester.pumpAndSettle();
+          await selectOverviewCategory(tester, label);
           expect(tester.takeException(), isNull, reason: '$label at $size');
         }
+        await revealOverviewContent(tester, find.byType(TextField));
         final field = find.byType(TextField).last;
         await tester.enterText(field, 'not-in-snapshot');
         await tester.pumpAndSettle();
@@ -136,10 +136,9 @@ void main() {
     );
     await tester.pumpWidget(const CtosApp());
     await tester.pumpAndSettle();
-    await tester.tap(find.text('信息').last);
+    await tester.tap(find.text('概览').last);
     await tester.pumpAndSettle();
-    await tester.tap(find.text('接口').last);
-    await tester.pumpAndSettle();
+    await selectOverviewCategory(tester, '接口');
     await tester.enterText(find.byType(TextField).first, 'veth-long');
     await tester.pump();
     tester.view.physicalSize = const Size(1200, 900);
