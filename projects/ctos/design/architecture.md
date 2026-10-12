@@ -8,6 +8,18 @@
 
 最新下方提示的16 项定向/154 全量 Flutter、analyze/格式通过，首版14/152及旧7ad包结果作为历史解释。上一轮实机通过仅为用户报告，未提供设备/API/安装哈希；新位置检查与产物见 [验证记录](verification.md#2026-10-11-退出提示移至下方)。公共秘密库按用户要求暂停推进，既有功能源码保留。
 
+## 公共秘密库（2026-10-10，源码已实现、验收进行中）
+
+工作台新增单一秘密库设置入口；`lib/secrets` 管理创建、解锁、设备快捷、后台解锁保留时间及导入/导出/改口令流程。`MainActivity` 的 `secrets.*` 交给 `AppSecretsBridge`，密码派生、格式验证、密文和设备包装提交均在 worker 执行。`AppSecretsOwner` 持有进程唯一核心，Activity 只附着 UI/系统认证；未来服务复用核心。手动/锁屏锁快速使会话 epoch 失效，迟到回调不能重新开库。
+
+Bridge 关闭先撤销自身后台定时回调、退出前台并锁库，再完成已排队请求的清理和线程回收；重复关闭及关闭后的 `onStop`/定时回调无效果，迟到文件选择器回调不能向已关闭线程提交。新增包内依赖构造供独立库/设置/Journal 集成检查，共用生产请求与生命周期逻辑；生产构造仍使用唯一 Owner 并执行既有快捷密钥维护。实际验证与正常 App 启动作用按 [验证记录](verification.md) 分列。
+
+`VaultEnvelope`/`VaultManifest` 拥有固定格式和有界逻辑文件图，`VaultStore` 在 no-backup 私有目录以单一 AtomicFile 保存完整密文及可选包装；提交后核验读回，不确定就锁定并返回明确错误。TOTP/SSH 通过 native-only 一次性用途/资源/连接能力，实际释放/提交再核验会话及快照；Flutter 无主密钥或种子读取接口。普通编辑保留 key-material epoch，改口令/覆盖使旧包装失效。安全窗口按 owner 先保护后展示、移除秘密后释放，后台任务预览另行隐藏。
+
+公共 SSH 文件图增改删复用完整密文提交，必须有精确 proposal 批准及正式语义校验；恢复审阅另绑定来源与已认证目标，覆盖纯 TOTP 包移除目标 SSH 的情况。生产 SSH 语义校验器/native 内存视图尚未接入，相关恢复失败关闭。敏感复制 helper 仅响应用户主动复制 TOTP 并附敏感标记；用户于 2026-10-10 撤销剪贴板清理/设置/跟踪/探针，清理由用户自理。
+
+已实现用户决定的导出同名确认及失败精确清理。`VaultExportTransaction` 区分新 stage/final 与旧 rollback，绝不对原 URI 开写流；`SafExportProvider` 仅本次选定目录的有界查询，`VaultExportJournal` 保存最小身份/阶段和读回核验，不存秘密或自动重启访问目录。路径型 ID 区分历史 original 与当前对象：只有旧对象已移到独立 rollback 的阶段证据才允许新 final 复用历史路径；已删除角色先持久移除，再恢复旧路径，防止过期引用指向已恢复旧文件。新 final 验证并确认事务记录后才清旧文件，取消和故障返回清理/残留/恢复回执；坏导出记录仅阻止导出/恢复，不阻止普通库使用。具体关卡见 [公共契约](app-authentication.md#2026-10-10-当前实现与未完成验收)、[代码规范](../.trellis/spec/backend/app-secrets.md) 与 [验证](verification.md)。本段不把代码存在等同于设备或完整业务验收。
+
 2026-10-05 界面更新：`lib/ui/ctos_theme.dart` 集中管理语义色、字体角色、控件边界、终端和减少动画；`ctos_components.dart` 提供无平台副作用的共享展示。900 dp 起切换侧边导航，保持同一带 key 的内容子树和 IndexedStack；普通手机概览的内存/电量并列，大字退回纵排，网络入口与能力恢复分层。设备和结果短字段采用紧凑行，长值/大字纵排；工作台按组列出工具，历史为次级入口，结果先展示有用内容再显示执行元数据。HFTP 配置/目录在日志之前，空日志降低权重，真实停止/关闭锁和轮询修订号保留。全部执行协议、Python/Java/JNI 算法和权限策略不变。实现与实测分别见 [界面设计](flutter-experience.md) 和 [验证记录](verification.md)；下文历史顺序以本段最新展示结构为准。
 
 Flutter `MethodChannel` 调用 APK 进程中的 Java 后端；数据采集使用工作线程，UI 每两秒请求一次快照，仅在前台采样。连接列表按需刷新。导出由 Android Storage Access Framework 完成。

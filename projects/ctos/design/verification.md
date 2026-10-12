@@ -1,5 +1,22 @@
 # Verification
 
+## 2026-10-12 安全锁屏开发板快捷认证修复与实测
+
+后续用户回复“效果可以；提交所有相关 task 文件”，确认当前效果并授权阶段成果提交；未测关卡保持开放，不由此标整个底座完成。本轮提交只补做范围/元数据/产物检查，不重复设备操作或冒称新全量测试。
+
+用户提供已设置安全锁屏的开发板并授权自行继续测试。`adb devices -l` 唯一在线目标为 `192.168.9.14:5555`，核对 AIO-3568J / Android 11 API 30。仅向已确认活动的系统 BiometricPrompt / SystemUI 数字密码框输入本轮授权凭证；不保存凭据、不修改系统安全设置、不操作真实 SSH 账号。任务恢复 active / in_progress，10-11 的暂停记录保留为历史。
+
+- **症状与修复**：旧实现成功生成认证绑定密钥、初始化 Cipher，甚至 `updateAAD` 返回，但系统凭证认证后登记没有保存包装。将 `AppAuthentication` 的相同 `materialBinding()` AAD 从认证前 `cipher()` 移至成功认证后的 `perform()`，位于请求/epoch/期限检查及 API28/29 Cipher 创建后、`doFinal` 前。API30 继续使用原 CryptoObject/Cipher、每次认证参数 0 / 强生物或系统凭证，不改变 GCM、AAD 内容、错误回退或持久化保护。Android11 [Cipher 实现](https://raw.githubusercontent.com/aosp-mirror/platform_frameworks_base/android-11.0.0_r1/keystore/java/android/security/keystore/AndroidKeyStoreCipherSpiBase.java) 的 `engineUpdateAAD` 可缓存 Keystore 异常，后续 `doFinal` 才抛出；[GCM 实现](https://raw.githubusercontent.com/aosp-mirror/platform_frameworks_base/android-11.0.0_r1/keystore/java/android/security/keystore/AndroidKeyStoreAuthenticatedAESCipherSpi.java) 可直接提交 AAD。旧 ROM 的具体异常未直接捕获，机制解释是源码与同板红绿结果支持的判断，不声称读到了具体错误码。
+- **诊断单列**：公开能力诊断 1项/0.030秒：isDeviceSecure/isKeyguardSecure=true，系统凭证及组合 canAuthenticate=0，强生物=12，未报告指纹/人脸/虹膜 feature。独立 UID 自有精确 probe alias 的生成/getKey/Cipher.init/AAD 初始化诊断 1项/0.123秒完成；API报告 authRequired=true、authType=3、validity=0、insideSecureHardware=true，alias 最终缺失。初始化成功不等于成功认证，硬件字段不等于硬件审计；该探针没有 prompt/doFinal。
+- **同一真实流程红绿**：未改动的 `AppSecretsUiFlowTest#freshFixtureManualSecureQuickAuthenticationFlow`（源码 `05b7a759…`）旧 main `7650dcef…` / test `e8c8f5ed…`，run `3828e47a-d711-4bbb-a59b-7bc5d03aa2fa`，系统 PIN 已输入且认证窗口结束，但登记超时失败，100.698秒。只移动生产 AAD 时序后的 main `437628ef…` / test `5eb96824…`，run `290a2d3e-17e5-4ce3-9bac-afe3e69a7a3e`，**1项通过/95.811秒，0失败/跳过**：创建合成空库并拒绝初始快捷邀请、系统登记持久包装、锁定后系统快捷解锁、真实会话密钥认证解密未变密文、关闭取消/错口令保留、正确关闭锁定且包装/自有 alias 消失、主口令回退。连续日志混有旧 run，结论仅来自上述新 run 的十个有序阶段。两次系统认证由主 agent 使用当前授权凭证，夹具不遍历系统凭据节点。
+- **隔离与清理**：初轮 fixture UID10145/test10146；失败状态先用仅自身 UID 的只读元数据诊断 1项/0.035秒核清：owned marker/库存在，六个已知文件中 bak/new/journal 均缺失，包装缺失、persisted grants=0、精确快捷 alias 缺失、进程/认证窗口已结束，才卸载本轮 fixture 两包。修复后新 UID10147/test10148；成功后只读诊断 1项/0.036秒再次确认无未决文件/包装/授权。完整 E2E 已断言 own alias 清理，后一诊断未指定 alias，不冒称独立再次核验。主/测试包设备读回哈希与构建一致，随后仅卸载这两个自有包；未创建 SAF 外部文件。测试时主包 ca85 哈希保留。
+- **本地质量**：最终源码冻结后 `:app:testReleaseUnitTest :app:lintRelease :app:assembleReleaseAndroidTest --offline --console=plain` 成功，106 JVM 实际重新执行，0 failure/error/skipped（XML 2026-10-12T06:28:11–27Z）；lint 0 errors/3既有 warnings，普通 instrumentation 编译通过。fixture main/test 编译及 lint 通过；Flutter analyze 无问题（2.9秒），diffcheck通过。Flutter 未改，本轮未重跑全量；最新154项为10-11主页任务结果，不能与本轮 JVM 合并成新全量执行。独立 reviewer 核对源码与红绿日志，无剩余源码发现。
+- **主包交付及现有库**：`./preview.sh` 成功（assembleRelease16.7秒/32.2MB），v2验签通过、既有 signer `8d36c8be…`；主 APK SHA256 **`71d00e7cab8460f3bd93e87f6dc6e8ccf2a3a58b2245f73a149791c586b6bcef`**。`adb -s … install -r` 成功，安装后 base.apk 读回完全一致，生产 UID10131保留。通过正常工作台/秘密库设置：原库已锁定、快捷未开、后台30秒；重新输入用户提供的当前库口令并系统认证后显示“本设备快捷解锁已开启”，再从锁定状态选择快捷解锁并系统认证后显示“秘密库已解锁”。结束时点击立即锁定，最终库已锁定/快捷已开启。这里只以公开 UI 与正常管理结果为证据，不读取现有条目或私有密文，不冒称已有库内容逐字比对；未重建/导入/导出/改口令。正常主包启动恢复既有 Root 自动采集，未执行额外 Root 指令。
+
+冻结源码 SHA256：AppAuthentication `337c3fdec4a7b8a12934218a8c16b1742c48de2caa379b3714619289ebccb739`，新增 SecretsQuickAuthDiagnosticsTest `53c1e050c7d42105897c37a897cec679fd582516e4a5c3ed736b74da99dd8d89`。修复 fixture main `437628efffcbe3cfc27f20386cc06967b1e28f1e3cd631b99465620a6b5c49d4`，test `5eb968245e9221b696452c0a1c9729da3b3bcfcfa6f958ebb5b38ffed197db6f`。证据 `/tmp/ctos-secure-board-20261012/`：`manual-auth-e2e.log`、`fixed-auth-e2e.log`、`fixed-auth-continuous.log`、两轮 `*-fixture-own-state*`、`production-public-ui-result.json`；本地日志 `/tmp/ctos-auth-aad-order-{normal-check,analyze,fixture-build,fixture-apk-check}.log` 与 `/tmp/ctos-auth-aad-current-release-{build,apk-check}.log`。临时证据不保证跨环境持久。系统认证安全截图未产出可用图像，不计新截图验收。
+
+范围：**本板 API30 系统凭证分支**的真实成功快捷认证已实测；生物识别、API28/29、真实锁屏事件/进程死亡、非空混合恢复、权限撤销/云 provider 及 TOTP/SSH/native 业务联合验收仍开放。不关闭整个 BASE 或启动两个新业务 task，不提交/归档/替换 dist；后续按 [task check](../.trellis/tasks/10-08-app-authentication/check.md) 的剩余验收继续。
+
 ## 2026-10-11 退出提示移至下方
 
 用户回复“实机验收过；但是能否把 prompt 出现在下方？”。上一轮交付的实机通过登记为**用户报告**；未提供设备/API/安装哈希，不冒称 agent 实测。当前直接实施位置调整，本轮无设备操作。
@@ -29,6 +46,33 @@ APK：`build/app/outputs/flutter-apk/app-release.apk`，SHA-256 `7ad103a9cf2684d
 
 Review classification：**human-required**。真实 Android 硬件返回/返回手势、软键盘收起、桌面退出/重开和提示观感未实测；精确场景见 task check。任务保留 in_progress，待当轮授权设备验收或用户反馈；本轮未安装、替换 dist、提交或归档，也不恢复公共底座任务。
 
+## 2026-10-10 继续任务：本地效果边界修复与手动认证夹具
+
+用户要求继续已有任务，并明确“暂时没有，先继续本地工作”。本轮恢复 `10-08-app-authentication` 当前指针，只做本地检查/修复和下一平台关卡准备；没有连接设备、安装、操作真实账号或更改系统安全设置。
+
+- **修复与回归**：两个新 JVM 测试在旧实现上均失败。typed manifest 写入最后store guard遗漏操作期限；SSH最后host-key gate使会话失效后仍向receiver释放秘密。现在最终写入检查 `clock.now() >= operation.deadline`，过期保留原密文/包装且一次请求不可重放；凭据/私钥clone后依次执行最后host gate、core `protectedEffect`、receiver，finally擦除。六个释放负例覆盖两路径各自锁定/取消/恰好到期。
+- **实际本地结果**：`./hako bash -lc 'cd android && ./gradlew :app:testReleaseUnitTest :app:lintRelease --offline --console=plain'` 成功，41秒；**106 JVM**全通过，0 failure/error/skipped，XML 2026-10-10T09:46:11–37Z。`./hako flutter analyze` 无问题、`./hako flutter test` **138全量**重新执行通过。lint实际报告0 errors/3 warnings（QueryPermissionsNeeded/AndroidGradlePluginVersion/DataExtractionRules），历史5项不作为当前数字。opt-in `:app:lintSecretsFixtureRelease --offline --console=plain` 另外成功，12秒、0 errors/3 warnings，日志 `/tmp/ctos-secrets-check-fixture-lint.log`。
+- **真实认证准备**：新增 `AppSecretsUiFlowTest#freshFixtureManualSecureQuickAuthenticationFlow`，显式 `ctosManualSecureQuickAuth=true`、已有安全锁屏、固定fixture包/独立UID/Application/Rootauto=false、fresh vault/journal（含bak/new）/marker/无自身旧alias前置约束。创建空合成库并暂不登记，再用当前主口令开启、真人系统认证登记、锁定后真人快捷解锁；真实owner会话密钥须认证未变内容，包装真实持久存在。关闭取消/错口令保护原状态，正确口令关闭后包装消失/会话锁定，仅读自身alias有界等待异步清理，最后验证主口令回退。系统等待90秒仅轮询自身包装/会话，不请求accessibility roots；手动场景关闭字段诊断，密码与公开runId无关联。失败不自动reset/删除自有库，需按现场证据核清后处理。
+- **编译和产物**：最终 `./hako bash -lc 'cd android && ./gradlew -PctosSecretsUiFixture=true :app:assembleSecretsFixtureRelease :app:assembleSecretsFixtureReleaseAndroidTest --offline --console=plain'` 成功，12秒；正常 `:app:assembleReleaseAndroidTest --offline --console=plain` 编译成功，7秒。两个fixture包均v2同证书验签，aapt确认 `im.majo.ctos.secretsfixture` / `.test`，test instrumentation精确target、minSDK28/target36。只编译打包，**未执行手动测试，也没有一次成功认证结果**。未选opt-in的skip不计通过；明确opt-in但无安全锁屏会前置失败。
+
+| 本地产物 | SHA-256 |
+| --- | --- |
+| `build/app/outputs/apk/secretsFixture/release/app-secretsFixture-release.apk` | `61c49cb4e1d89e9ed129dde1c7ad579faeeef62f1023238e30bce0956549c313` |
+| `build/app/outputs/apk/androidTest/secretsFixture/release/app-secretsFixture-release-androidTest.apk` | `8be2cd331fdc5ea852010b494ad74da42803ad4c0c37bbf58eaae3021cea1a18` |
+
+后续仅在已有安全锁屏设备获得当前安装/隔离验收授权，安装核准包并复核独立UID后，明确选择此单项；`SECURE_ADB_SERIAL` 为当轮核准目标，不从历史配置推导。人只在设备系统窗口完成两次认证；驱动不输入或获取锁屏秘密。以下命令**本轮未运行**：
+
+```sh
+adb -s "$SECURE_ADB_SERIAL" shell am instrument -w -r \
+  -e class 'im.majo.ctos.AppSecretsUiFlowTest#freshFixtureManualSecureQuickAuthenticationFlow' \
+  -e ctosManualSecureQuickAuth true \
+  im.majo.ctos.secretsfixture.test/androidx.test.runner.AndroidJUnitRunner
+```
+
+源码冻结SHA：AppSecrets `652d69514652090c02a7d2e962cbf5d648086474918769262ca7c81e2d9d73ea`、SshVaultAdapter `3c942effa0d3ecaa9b919814694668b68d626a555fbf909dd01504264fe443cc`、VaultTest `9a721d1763243a0afa3144f97a9fa539adbfca071e5b9ccca7500a765a8d618d`、UI test `05b7a75941525eeb80424111c579e87fa93c1bd272b6c18421f5a738c4a93904`。主agent独立核对红灯、最终XML/lint/Flutter日志、源码、包SHA及验签/target；临时原始日志 `/tmp/ctos-secrets-check-{red,android,fixture-package,fixture-identity,fixture-test-manifest,androidtest-final}.log` 与 `/tmp/ctos-secrets-check-flutter-{analyze,full}.log`，持久结论为本节和 [task check](../.trellis/tasks/10-08-app-authentication/check.md)。
+
+手动夹具限定空库，不证明非空业务、强生物专门分支、API28/29、真实锁屏/kill/跨设备恢复或SSH生产集成；成功系统认证等关卡继续开放。任务仍in_progress，未提交/归档或替换dist；生产release APK没有为本轮修复重建/安装，历史ca85仅覆盖旧源码和原场景。
+
 ## 2026-10-10 — APK 编译预览入口
 
 - 新增 `./preview.sh`（默认或 `build`），复用 `hako` 的 arm64 release 编译；不安装设备、不替换 `dist/`。用户仅要求这个原生 APK 入口，Trellis Plus 服务生命周期、监听地址和环境文件增强不适用，其他增强未执行。
@@ -36,6 +80,98 @@ Review classification：**human-required**。真实 Android 硬件返回/返回�
 - 从 `/tmp` 使用脚本绝对路径实际执行，退出 0；Gradle 14.2 秒，末尾 APK 路径和 `adb install` 命令与文件一致。产物 `build/app/outputs/flutter-apk/app-release.apk`，32,209,925 字节，SHA-256 `14fc814678f005d4614a885b971a6060ba89c0058db4ff1cbe3259959c204850`；日志 `/tmp/ctos-preview-build-20261010.log`。`dist/ctos-current-arm64.apk` 及 `SHA256SUMS` 哈希保持不变。
 - 沙箱首次执行因 Docker socket 访问受限以 126 退出，没有打印成功路径；随后仅对该编译命令按工具权限机制重试并成功。没有运行 ADB 或重新执行产品验收；构建不改变秘密库任务仍在进行的状态。
 - 该 APK 来自包含尚未提交秘密库实现的当前工作区；此处哈希不作为本次仅提交编译入口后独立 checkout 的产物保证。
+
+## 2026-10-10 配置 B 追加：Bridge 生命周期与独立 UID UI 探针
+
+修复 `AppSecretsBridge` 关闭后后台/文件选择器回调向停用 executor 提交、重复关闭和旧 `onStop` 影响新上下文的问题；恢复/关闭撤销自身定时器，关闭进入非前台并锁库。独立审查另发现 0 秒后台锁定后旧预览未及时清理，现总在 worker 清理失效预览/操作，仅取消旧 epoch 请求，不误取消本就从锁定状态开始的有效管理请求。生产仍使用唯一 Owner/原设置/Journal 与既有快捷密钥维护；包内四依赖构造只用于注入独立验收数据。
+
+本轮最终独立UID实际release Flutter/Main/Bridge空库完整E2E **1项通过，235.79秒，0失败/跳过**。测试包 `83e6302e5a2e50a118e1edd99000f8c9800566a7bcaed6365e9d27b6831af2c3`、Java `9e731e466acc3437544ee6db98f3a98b36813737006e017b89a8365c1692563a`，fixture main仍f358/UID10142、testUID10143；编译10秒/v2同证书/设备读回一致。run `aa14c7a8-5274-4db3-87a6-d67af20fa38c` 的连续原始TAG覆盖16:58:59–17:02:54全部阶段：创建/取消/手动锁/错误及正确口令/改口令；真实系统exact叶目录授权、新导出、同名取消保留旧字节、明确覆盖并仅一个final；错误来源与目标口令拒绝、取消预览保留目标密文；确认后两侧完整有效manifest认证相同、新UUID/gen1/nonce/material及无wrapper、锁定、旧目标口令拒绝与来源Latest实际UI解锁。最后精确备份/空UUID叶目录删除和treegrant回收的测试终态均通过。原始证据 `/tmp/ctos-config-b-20261010/secrets-ui-import-generation-e2e-3f7c6a55-d0f6-459c-a580-29d7ffd02df3`；不把以下历史失败合成为通过，也不外推非空/mixed/真实认证。
+
+终态后独立genericreadonly **0.175秒**确认own库/marker已知存在、journal各恢复变体不存在/persisted0，旧测试进程退出；shell只核精确备份与叶目录均不存在、ctos parent保留、fixture grant投影空。仅卸载本轮fresh fixture两包，实际Success且pm path/包列表均空（此板不存在包的pm path退出1，按stdout/列表核对，未误作测试失败或重复卸载）。生产APK设备读回仍ca85/UID10131，主会话查看最终设置图，公开尚未创建、快捷不可用未开、后台30保持；正常Main原Root/alias维护作用按报告边界记录。最终14项源码SHA（fixture5/export4/真实SAF3/Bridge2）保持，未替换dist/提交/归档。持久 [完整UI报告](../.trellis/tasks/10-08-app-authentication/research/flutter-ui-config-b.md) 与以下历史阶段分列。
+
+- **本地**：修复后实际执行104 JVM，XML 2026-10-10T06:07:32–49Z，0 failure/error/skipped；最后测试归属 guard 改动复用未变 JVM 结果。lint0 errors/5既有warnings；Flutter analyze及35定向通过，未重跑此前未变138全量；arm64 release/测试APK编译及v2同证书通过。
+- **产物**：主包 `ca85ec00dd7eb737454d4380e03fc6c6ae45343e3faac9fc68ab77b372116f3e`、测试包 `577d54687631df40bc40b8d70ca08944aa7c83a2fb7f3177910365d2556a1757` 在 B 安装读回一致。固定副本与日志 `/tmp/ctos-lifecycle-final.9RFwueDn/`，此前候选 d448/7bc 未安装。
+- **实机6项通过，53.408秒，无失败/跳过**：真 HOME/返回的宽限与期限、两 typed consumer、手动锁/迟到解锁一次回调、关闭/旧 timer/旧 onStop、真实排队 late picker、独立 core 重建只恢复设置，以及0秒真后台后预览 key/plain/seed 擦除与 fresh locked 请求反例。直接旧回调/重建和主队列排序注入另标，不称真实 SCREEN_OFF、进程死亡或生产 SSH 语义。
+- **主 App 状态/清理**：公开库前后 missing、快捷未启用且不可用、后台30秒；所有 own worker 退出后 target UID 精确删除6套自有文件/偏好成功。Shell stat 私有路径被拒，不能当独立不存在回读，没有用 su 绕过。测试包已卸载、临时XML精确删除、相关URI grant投影为空，主ca85保留。正常 Main 启动 `root_auto=true/root_active=true` 且有模块alias维护；没有新su授权操作，不称整轮Root/Keystore-free。完整 [生命周期报告](../.trellis/tasks/10-08-app-authentication/research/bridge-lifecycle-config-b.md)。
+- **独立 UI 探针1项通过，4.123秒**：显式 opt-in `ctosSecretsUiFixture=true` 构建固定独立包 `im.majo.ctos.secretsfixture`/`.test`，实际UID10142/10143，生产10131。fixture Application确认自身包后仅对自己的 Root 自动启动设置同步关闭；测试 manifest 不包含旧固定authority/授予生产包的组件。主fixture `f3582423561734c1bbaa5f709cdc323cf4f159ef0fc1251d259b786da898cd83`、probe test `894938650e20bc22cb5f85f91ca8b98e584c8ebc01d895c712eb80b8b65556bd` v2/安装读回一致。真实导航及取消成功，两字段SET_TEXT返回成功；后续诊断发现未聚焦时该返回可仅更新Android预测缓存，因此探针不证明Dart控制器收到输入。fixture库与journal前后不存在，未打开文件picker；两fixture包暂保留供本轮后续验证。完整 [UI报告](../.trellis/tasks/10-08-app-authentication/research/flutter-ui-config-b.md)。
+- **首轮完整 UI 尝试失败**：仅更新fixture测试包为 `974b2cd59cdb131ce03959ed8ccfa5b586fe52eeea45c61eec71f2c12551be01`，单项E2E实跑13.018秒在首个“两次口令不一致”提示检查失败；没有创建成功stage、没有打开文件picker。公开fixture仍未创建，但私有journal需由同UID只读诊断确认，不由公开UI或shell权限拒绝推断不存在。保留自有marker及两包，未清空以丢失证据；正在修正测试字段/按钮/提示定位，不能由此声称生产校验存在缺陷。
+- 修正前的失败逐版本记录：c4c2未聚焦字段调用无广告SET_TEXT，13.948秒失败；a0d1聚焦后真实mismatch/创建密文认证/取消保留通过，在重试焦点缓存处19.637秒失败；37af创建/取消通过，21.337秒在锁定可见状态检查失败；d99键盘遮挡与集合类名限制14.959秒失败；2e5真实创建后因lazy顶部锚点脱树，36.201秒未找到创建回执。均未进SAF。按实际Dart/Android SDK来源只修测试驱动；targetUID只读诊断及exact授权/旧PID证据单列，仅在明确归属及无未决journal/grant后重置本轮自建fixture，不计为产品验收。
+- **完整管理1项通过，29.272秒，无失败/跳过**：测试包 `a7c73fee1c1631add2752b995571680278ee2419ac173b738a906811d6641b81` 编译10秒/v2同证书/安装读回一致，mainfixture f358及UID10142/10143未变。当前驱动按准确标签重新聚焦且检查广告输入动作，业务控件用自身精确CLICK并绑定activewindow；实际垂直集合有明确metadata，固定AppBar标题在lazy子项脱树后仍能定位唯一容器，已撤掉可选键盘BACK。真实mismatch/创建及原口令KDF/GCM、管理取消cipher完整保留、手动锁/错误口令/正确重试、改口令新口令成功与旧口令AUTH拒绝均通过。证据 `/tmp/ctos-config-b-20261010/secrets-ui-toolbar-management-0b589436-324a-4369-afac-473007513930`，管理项未调用SAF；后续完整导出/恢复另跑。
+- 完整E2E后续失败另记：a7c7在最终输入动作异步重建处20.619秒失败，c6a7首次picker导航33.437秒失败且核对调用者后取消。实际安装provider primary-emulated标题规则复核后，65a2只读公开primary映射PASS0.184秒；当前root标题不是由Build.MODEL或长度猜测。c3ac按active DocumentsUI窗口重新冻结/安装，E2E60.233秒在新建叶目录后的定位处失败：exact primary→Download→ctos已过，未到完整consent/Allow；可能已创建空自有leaf，保持现场待exact资源核对及测试驱动修正，不重置或猜名删除。完整导出/恢复尚未通过，逐版包/SHA/原始证据见UI报告。
+- c3ac现场证实系统已自动进入新目录，末级breadcrumb不可CLICK；经逐步核对调用者取消picker、精确空叶目录rmdir后absent，genericreadonly0.167/0.163分别核对清理前后资源，不计产品测试。下一测试包 `01998a2a750c4868a6065a4fb3781fc47ff2c520cd70627aa4dd710b80b86ca7` 仅修正create后的有界完整路径等待，编译9秒/v2同证书/安装读回一致。完整E2E实际FAIL150.174秒：管理、真实新导出、同名取消保留旧完整密文、明确覆盖并核只有一个final均通过，随后Destination改口令认证通过；首次import在exact文件名选择处失败，尚未错误来源口令校验。保留本次backup/leaf/grant并核对系统控件及MIME，不重置/卸载或猜名删除；整体SAF恢复仍未通过。
+- b964独立只读actions诊断PASS0.346秒，证实exact文件标题到第6层原生item_root才有广告CLICK，旧driver仅检查0–5；正常MIME为octet-stream。019旧picker按逐步caller/path证明取消，只有本次已验116-byte文件经公共格式头/mtime/设备SHA双检后精确删除，空leaf rmdir后不存在；genericreadonly0.148确认无未决journal/grant，保留ctos parent。一次清理初稿因额外保存完整加密备份被自动审批整条拒绝且未执行；收窄到公开header内存校验/设备端SHA后完成，没有完整payload传输或留档。最终8709/a156测试驱动补齐精确row身份/刷新/父链/边界/广告CLICK，编译10秒/v2及源码审阅通过，单完整E2E已放行；尚不预标恢复通过。
+- 8709实际E2E FAIL227.504秒，完整连续原始TAG记录管理/三个导出阶段/错误来源口令与错误目标口令分别拒绝/取消预览密文保持。确认恢复后真实UI返回导入成功，测试却误要求与来源备份密文逐字节相同；失败byte32为新UUID起点。真实 `AppSecrets.importCommit` 生成新local UUID/generation1/nonce，沿用已认证来源salt/key/plaintext并去设备wrapper，因此成功应比较完整有效解密manifest及新材料，不能直接复制cipherbytes。旧目标口令拒绝/来源UI解锁/终态cleanup当版尚未执行，不能合成整项通过。readonly0.119确认无journal/grant；唯一自有备份按新run/116bytes/mtime/公开header/设备SHA双核后精确删除、空leaf rmdir，postreadonly0.154 settled。83e/9e仅修成功oracle，保留失败/取消字节保护，编译10秒/v2及源码审阅通过，已放行单完整E2E，尚不预标通过。
+- 成功快捷认证、API28/29、真实进程死亡/权限撤销/云provider与SSH业务仍开放。下节17平台/真实provider六阶段分别对应原包，不能混称本轮新包全部重测。
+
+## 2026-10-10 配置 B 追加：真实目录与路径标识复用
+
+在下节初轮验证后，继续补真实 ExternalStorageProvider 的隔离事务检查。源码复核发现路径型 document ID 的合法复用会被 journal 拒绝，且删除新 final 后恢复旧路径、或已验证 final 的旧文件清理成功后仍留有过期角色引用；已修复生产 `VaultExportJournal`/`VaultExportTransaction`，保留对当前对象角色冲突的拒绝。只有记录了 distinct rollback/重命名阶段和一致名字/元数据才承认历史 original ID 被新 final 复用。确认对象已不存在后先持久确认角色移除，再恢复旧名；未确认则保留证据/不还原到该路径。已验证 final 始终保留。
+
+- 本地组合 `:app:testReleaseUnitTest :app:lintRelease :app:assembleReleaseAndroidTest` 退出 0、36 秒，XML 2026-10-10T04:30:42–56Z：**104 JVM**（35 Vault/7 Session/3 Writer/16 Bundle/17 Restore/26 ExportTransaction），0 failure/error/skipped；lint 0 errors/5 既有 warnings。新增 3 项路径 ID/日志确认故障 JVM 与 4 项 Journal instrumentation 回归，实际设备执行另记。未变 Flutter 仍引用此前 analyze/35 定向/138 全量结果。
+- 新版 arm64 release 构建通过，15.3 秒、32.2 MB；主 APK **`a309bd9d46393af5dacc6eced11577f36f85ce60911cffcabc5f016e1db3dd9f`**，平台组合测试 APK **`cb829f963d8cc42235829a85277dfdcdbdcab2ae8cd6834c9a938fb473f3427f`**，两包 v2 签名核验、配置 B 安装读回一致。证书仍 `8d36c8be418174cb4cda0b897ff3e32b2da6f84032819726e8e5671872df52ef`。本轮没有替换 dist。
+- 测试专属 picker 仅接受 `com.android.externalstorage.documents` 的本轮新建 `primary:Download/ctos/ctos-saf-<UUID>`；错误选择在 query/grant/I/O 前拒绝。ResultReceiver/nonce 与 120 秒 lease 保持 helper 到清理结束，再撤销固定目标包的 exact tree 临时 grant；不取得持久授权。测试核心使用独立 UUID 私有 VaultStore/Journal，不启动 MainActivity/生产 Owner/Bridge/AppAuth/Keystore。
+- **配置 B 17 项组合通过，32.066 秒，无失败/跳过**：Store4、Journal9、fixture adapter1、Platform3。新增 Journal 角色/历史 ID/恢复回归已实跑；它们的恢复 provider 为受控 fixture，不称真正进程死亡/断电。
+- **真实 ExternalStorageProvider 1 项通过，59.838 秒**，包含首次新建、拒绝覆盖、确认覆盖、取消预览、stage 中段写入失败和 final 中段写入失败六阶段。每次真实私有 AtomicFile journal save 都 fresh load 校对，密文完整读回并实际 GCM 认证/0与1 typed TOTP 条目核对；`path_id_reused=true` 实际确认历史路径 ID 复用。两种 partial IOException 是测试 wrapper 在真实写入中段主动注入，不声称实遇磁盘故障。旧内容恢复及本次部分清理均通过，不按名字或前缀猜身份。
+- 真实首跑在跨 UID ResultReceiver 中反序列化测试匿名类时崩溃，未进入导出，外部叶目录为空；测试专属回调修为 framework base Parcelable，增加 target UID exact tree 撤权、已知路径 marker 及有界元数据诊断。修订测试 APK **`b7c90f2b700a47b0ea0de39ca092fa07832677c3716435d7aed7a3e87c403021`** 编译/lint/v2 验签、安装读回一致，承载真实六阶段通过；主 APK/17 项无需重复。独立 preflight1 撤权通过，0.055 秒，不混入产品验收计数。
+- **最终清理完成**：正常真实测试的私有库/Journal/marker 清理及 helper release ACK 通过，exact tree grant 投影为空、外部叶目录为空且已 rmdir；只保留本轮新建空 `/sdcard/Download/ctos` parent，临时 XML 已删除。首跑唯一 217-byte 私有加密缓存按唯一 producer/执行时间/canonical 路径/固定结构确认归属；专属清理包 **`c4e8170ed0e053fefa3e5a82efef94015f25e7ae1ded47b3775923fbcf3a9cc5`** 编译/lint/v2 签名及安装读回一致，cleanup1 通过、0.06 秒，删除前再次严格核对唯一文件/大小/mtime/公共头/零 wrapper，不读取密文；仅 exact file/空目录删除并回读。诊断入口与六阶段方法分离，不重复17/真实1、不把两项诊断计为产品验收。
+- 测试包已卸载、`pm path` 为空，fixture authority 与 exact external tree 权限投影均为空；主 `a309bd9d…` 保留，生产库未创建或修改、后台设置 30 秒保持，没有真实账号/系统安全配置操作。持久完整结果见 [设备记录](../.trellis/tasks/10-08-app-authentication/research/device-config-b-validation.md)。
+- 此项证明 native 事务与当前真实本机 provider 六阶段，不是生产 Flutter 导出口令全流程；生产库保持 missing。已有锁屏设备的成功快捷认证、API 28/29、真实权限撤销中断/进程死亡/云 provider、完整生产会话及 SSH 业务/native 接入仍开放，不据 17+1 通过关闭全部 BASE。
+- 原始本地日志 `/tmp/ctos-real-saf-{journal-final,release-build,apk-signatures}.log`，源码核对 `/tmp/ctos-path-id-source-sha256.txt` 和 `/tmp/ctos-real-saf-source-sha256.txt`。初轮 13 项及 `6c0f00e6…` 包按下节历史范围解释。
+
+## 2026-10-10 配置 B：当前授权设备验收
+
+用户在本次安装/隔离验收请求后指定外部配置文件的“配置 B”。当前唯一 `BOARD_ADB_SERIAL=192.168.9.14:5555`，已连接并两次核对为 T-CHIP AIO-3568J / Android 11 API 30 / arm64-v8a / SELinux Permissive。授权仅当前 APK/测试包安装及合成数据/owned-file 验收，不覆盖现有用户库、操作真实账号或修改系统安全配置；没有使用其他在线设备或配置 B 的服务器。
+
+- 主 APK **`6c0f00e61f7ad90bcd2e31b675027e619987cd191ec302c1c589946d55d8739b`** 覆盖安装成功，设备 base.apk 读回哈希一致；生产源码/APK 本轮未改。最终测试 APK **`ac95d226a6c3a123fb5181c853e0de3c0b166216ee703d3f1ad71cae2908b744`** 重编译、v2 签名核验、安装及读回哈希一致。
+- 第一轮 Store4/Journal5 通过、SAF adapter 冷启动授权失败。修复仅限测试夹具：固定 bootstrap Activity 在 provider 自身 UID 初始化；instrumentation 使用 targetContext，避免包名/Binder UID 不匹配。保留 MANAGE_DOCUMENTS 保护，仅固定 fixture 根/目标包获得临时 read/write/PREFIX grant；没有新增生产权限。
+- **最终 13 项实机测试全通过，30.211 秒，无失败/跳过**：4 VaultStore、5 Journal、1 真 ContentResolver/隔离 DocumentsProvider、3 平台 Window/认证不可用/Android 加密管理。BC/Argon2id/GCM 的合成 TOTP、错误口令、导出、改口令、恢复和 0/1 秒超时在独立 MemoryStore 验证；磁盘 AtomicFile 由 Store 夹具单独验证，不能称完整 KDF 加磁盘崩溃恢复联合验收。单次 create 2035 ms、管理组合 22856 ms，仅为此板样本。
+- **实际界面隐私**：创建口令页只输入合成内容、未提交；敏感页两次 screencap 无可用 PNG，最近任务 ctOS 卡片为空。敏感录屏 7 帧 App 区域均黑，系统普通 IME 可见；取消后普通截图恢复，普通滚动录屏 54 帧可读。系统导入 picker 实际打开/取消，未选中或读取文件；后台 ctOS 窗口保持 SECURE，移除敏感路由后恢复普通窗口。结果仅覆盖此 API 30/ROM 与实际路径。
+- **设备认证边界**：实测 `Keyguard.isDeviceSecure=false`，快捷路径在 worker/store/认证 key 操作前返回不可用，未跳过；没有设置临时 PIN/生物登记。真实凭证/强生物成功 CryptoObject、Keystore 登记/解封/撤销/失效、API 28/29 仍待已有安全锁屏设备验证。
+- 上述“认证 key 操作前返回”仅指独立不可用实例；真实 MainActivity 正常启动会初始化生产 bridge、读取状态，并排入既有 `cleanupDisabledKeys()`，可能枚举和回收模块孤立 alias。未据此断言本轮删除了 alias，也不把整套 UI/instrumentation 称为无 Keystore 操作。
+- **清理与未完成项**：测试 APK 已卸载，fixture grant 回收，仅精确删除本轮四个视频和一个 UI XML；主 App 保留，公开库状态前后“尚未创建”、后台 30 秒，未更改生产库或偏好、未创建外部备份。真实存储 SAF 的覆盖/取消/权限撤销/进程死亡、生产解锁会话完整生命周期及正式 SSH validator/reviewer/native/双方业务联合验收仍开放；隔离 provider 不替代真实存储 provider。
+- 主 agent 独立核对最终日志/包哈希并查看敏感录屏、普通对照及最终设置图片。仅测试源码重编译/lint 通过，0 errors/5 既有 warnings；未变生产 JVM/Flutter 不重复。原始证据 `/tmp/ctos-config-b-20261010/`，持久详情为 [设备验收记录](../.trellis/tasks/10-08-app-authentication/research/device-config-b-validation.md)。以下“未安装/未授权”是此前阶段历史；任务保持 in_progress，未替换 dist、提交或归档。
+
+## 2026-10-10 公共文件图与导出/恢复审阅：最终本地检查
+
+本轮用户回复“继续吧”，并明确文件导出应提示同名覆盖、失败删除仅本次创建的部分/保护原文件。公共 bundle、导出事务、恢复审阅及 Flutter 联动已实现并完成最终独立源码/本地检查；下方阶段性数字和上一版 APK 按历史解释。本节是配置 B 授权前的本地冻结结果，随后设备结果见上节。
+
+- **最终检查**：Android 组合命令退出 0、1 分钟，XML timestamp 2026-10-10T03:25:43–57Z：**101 JVM**（35 Vault/7 Session/3 Writer/16 Bundle/17 Restore/23 ExportTransaction）全部通过，零 failure/error/skipped；lint **0 errors / 5 既有 warnings**。4 VaultStore + 5 VaultExportJournal + 1 SafExportProvider 隔离 instrumentation 夹具编译通过，共 **10 项**，没有设备执行。Flutter analyze 无问题、**35 定向 / 138 全量**测试通过。主 agent 独立读 XML/log/lint，13 项 UI/导出源码签名核对一致。
+- **导出结果**：同名需明确确认；新 stage/final 写入关闭及完整密文读回，旧对象从不以写流打开；失败精确补偿，已验证 final 后旧删除失败保留 final。journal 的 silent finalize/readback/finish 后失败分支有真实 AtomicFile 故障注入夹具，但仅编译。恢复 ownership/version/digest 不足则保留未知位置，不能猜 ID/按前缀删除。取消/超时/session 变更/close、系统 recovery picker 取消与 exact cached receipt 保留真实残留；坏 journal 只阻止导出/恢复，不阻止普通库使用。120 秒限制提交权限，不能保证任意阻塞 provider 的 I/O/补偿按时完成。
+- **界面**：实际 CJK/Material 字体渲染检查 1 项通过；320 dp/2 倍文字与键盘、同名确认/取消、成功但残留、重新选择目录恢复、完整来源/目标恢复审阅可滚动到达。主 agent 与独立 reviewer 实看图片，信任状态中文化、opaque credential binding 不展示为正文。图片位于忽略目录 `.devhome/secrets-ui-visual/`；这不是目标 ROM 屏幕保护实测。
+- **最新产物**：`./hako flutter build apk --release --target-platform android-arm64` 构建成功，32.5 秒、32.2 MB；`build/app/outputs/flutter-apk/app-release.apk` SHA-256 **`6c0f00e61f7ad90bcd2e31b675027e619987cd191ec302c1c589946d55d8739b`**。`apksigner verify --verbose --print-certs` 核验 v2 签名通过，开发证书 SHA-256 `8d36c8be418174cb4cda0b897ff3e32b2da6f84032819726e8e5671872df52ef`。测试 APK SHA-256 `5517df88df8ba054c069d7092770ca246c42f2df9cdd3ee294f62fdc80efd16d`。未安装、未替换 dist、未提交/归档。
+- **证据与剩余范围**：临时日志 `/tmp/ctos-export-{analyze,focused,full,visual,android-final}.log`、源码清单 `/tmp/ctos-export-source-sha256.txt`；持久结果为本节、[task check](../.trellis/tasks/10-08-app-authentication/check.md)、测试源及 [导出研究](../.trellis/tasks/10-08-app-authentication/research/export-transaction-plan.md)。最终 review 无遗留必须修复项。当前真实 SAF/provider 授权/覆盖/中断恢复、API 28/29 与 30+ Keystore、安全窗口/最近任务及 KDF 性能未验；生产 SSH validator/reviewer/native 缺位仍拒绝相关导入，不以 synthetic tests 标 BASE 或联合业务验收通过。
+
+- `SshBundleProposal`/typed `SSH_BUNDLE_WRITE` 已补共同原子新增/替换/删除：完整对象 CAS、exact approval 默认拒绝、候选图/正式 validator 必须存在（即便删最后 SSH 对象）、最终 beforeCommit 权限/期限/open 复核、保留无关数据及包装材料。16 项新测试使用明确 synthetic reviewer/validator，证明公共合同，不证明生产 OpenSSH 配置/信任/native 恢复。
+- `./hako bash -lc 'cd android && ./gradlew :app:testReleaseUnitTest :app:lintRelease :app:assembleReleaseAndroidTest --console=plain'` 冻结 bundle 版退出 0、25 秒；主 agent 核对 XML timestamp 2026-10-10T02:48:17–20Z：**61 项 JVM 通过**（35 Vault/7 Session/3 Export/16 Bundle）零失败/错误/跳过；lint 0 errors、5 既有 warnings、instrumentation APK 编译通过。独立 review 无必须修复残项；临时日志 `/tmp/ctos-host-bundle-frozen-check.log`。此后导出/恢复接口继续变化，最终全范围结果待冻结另记。
+- [验收边界调查](../.trellis/tasks/10-08-app-authentication/research/base-acceptance-boundary.md) 识别底座与完整 SSH 相互等待，文档按公共合同/独立平台、客户端接入后的联合证据分层；所有完整目标保留，未宣布 BASE-09 通过或自动授权设备/业务。
+- 用户导出决定对应的 [事务方案](../.trellis/tasks/10-08-app-authentication/research/export-transaction-plan.md) 采用 create-new final，禁止直接截断旧 URI；角色明确的 stage/final/confirmed old/rollback 和成功后的旧清理分阶段。provider 拒绝清理/恢复或效果不明会显示位置及恢复状态，不能称已清理。以下为实施期间证据，最终本地检查见上，未做真实 provider 测试。
+- 恢复审阅核心已暂冻结并独立源码审查：来源/已认证目标任一含 SSH 都需完整对象 coverage、provider revision、exact native approval 和同一 reviewBinding；纯 TOTP 覆盖目标 SSH 也要求审阅。公开 credential binding 使用本次随机 HMAC opaque token，避免暴露口令猜测验证器；provider loan 用后擦除。中间 JVM 退出 0、31 秒，XML 2026-10-10T03:05:14–28Z 的 **91 项**全部通过（新增 17 Restore/13 初稿 ExportTransaction），主 agent 核对日志和 XML。导出与 UI 随后继续修改，这不是最终 APK 检查；synthetic reviewer 只验证公共编排，生产 SSH 语义/信任提供者仍缺位并拒绝相关导入。
+- 发现 TOTP 来源覆盖现有 SSH 也会移除目标信任，正在补 source/target 审阅快照与绑定，生产缺正式 reviewer/validator 的 mixed 路径仍失败关闭。没有读取个人配置/账号/设备，未安装、提交或归档。
+
+## 2026-10-10 撤销验证码剪贴板清理
+
+用户要求 ctOS 提供 TOTP，验证码清理由用户自理。Android/Flutter 删除清理时长设置、协议/status/prefs 字段、复制 ID/跟踪预留及合成竞态探针；主动复制/敏感标记保留，无读取/监听/清空或清理定时器，后台库超时不变。旧 ClipboardRaceTest 与下面第一版 46 项/包哈希是变更前历史，本次最新检查/构建结果在本节记录。
+
+- Android 最终 `:app:testReleaseUnitTest :app:lintRelease :app:assembleReleaseAndroidTest` 退出 0、45 秒；主 agent 再核对 XML timestamp 2026-10-10T02:27:13Z：**45 项 JVM 通过**（35 VaultTest、7 Session、3 Export），0 failure/error/skipped；被撤销功能的 ClipboardRaceTest 源/报告已移除。lint **0 错误、5 既有警告**，4 项恢复 instrumentation 夹具只编译通过。临时日志 `/tmp/ctos-host-clipboard-removal-check.log`。
+- Flutter 最终 analyze 无问题，**28 项定向 / 131 项全量通过**，保留管理取消/回执/安全路由/会话检查。设置只提交 `backgroundTimeoutSeconds`；验证 0、正数/超限、保存失败保留草稿，大字后台超时标签用完整外置标签避免输入框截断。主 agent 核对临时日志 `/tmp/ctos-secrets-no-clipboard-{analyze,focused,full}.log`，均成功。
+- 活动代码定向搜索确认无 clipboard timeout/status/prefs/copy ID 及 get/listener/clear/timer；只有用户主动复制路径的 ClipboardManager `setPrimaryClip`/敏感标记。本轮未访问真实设备剪贴板或增加权限/后台服务，其他平台/SAF/生产 SSH 未完成关卡保留。
+- 27 Markdown 本地目标与两相关 task 的 JSON/JSONL 验证通过；`git diff --check` 通过。旧清理规划在 changelog/check 中按历史保留，最新活动契约统一为用户自理。
+- 最终实际 CJK/Material 渲染 1 项通过，320 dp/1 倍与 2 倍文字的设置 top/timeout/backup 图片共 6 张；实现与独立检查代理实际查看，外置完整后台标签和保存按钮可达，无剪贴板设置。临时图在 `.devhome/secrets-ui-visual/settings-{top,timeout,backup}[-large]-320.png`；不作为设备或人工观感验收。
+- 最终冻结版 `./hako flutter build apk --release --target-platform android-arm64` 成功（30.8 秒、32.1 MB）；`build/app/outputs/flutter-apk/app-release.apk` SHA-256 **`72a2dd5513ccb085e031a64130d90384214d2413b5fabd719d9417231297e1d7`**。`apksigner verify --verbose --print-certs` 退出 0、v2 签名通过，开发证书 SHA-256 `8d36c8be418174cb4cda0b897ff3e32b2da6f84032819726e8e5671872df52ef`。测试 APK SHA-256 仍为 `d8e400f9f9c4604ee6e4a34eec66d59fc906677f678d04f9047d7dfc861f5fc9`。未安装或替换 dist，未提交/归档；BASE-09/10 及真实平台验收继续保留。
+
+## 2026-10-10 公共秘密库第一版：本地检查与研究（清理撤销前）
+
+用户批准最新规划后，当前实施入口为 `10-08-app-authentication`，保持 in_progress。以下为本地源码/算法/研究结果，本轮没有连接或安装设备，没有账号登录或读取个人 SSH/剪贴板。
+
+- **最终 Android 宿主**：现有 `./hako` 容器执行 `:app:testReleaseUnitTest :app:lintRelease :app:assembleReleaseAndroidTest` 退出 0、39 秒。BC 1.86；主 agent 再读 XML：VaultTest 35、VaultSessionTest 7、VaultExportWriterTest 3、ClipboardRaceTest 1，**46 项全通过，0 skipped/failures/errors**。Android lint **0 错误、5 条既有警告**，4 项 VaultStore 隔离文件 instrumentation 夹具仅编译通过、没有设备运行。包括最后增加的提交阶段取消/超时临界保护及实际 core after-guard/after-persist 交错，报告在 `build/app/{test-results/testReleaseUnitTest,reports/lint-results-release.xml}`；临时日志 `/tmp/ctos-host-final-check.log`。前一轮 42 项为修复前历史。
+- **最终 Flutter**：`./hako flutter analyze` 无问题；28 项秘密库定向、`./hako flutter test --reporter expanded` **131 项全通过**，主 agent 核对最终日志末行。包括取消后等待宿主完成/不确定结果及 acknowledgement、导入传递不确定、错口令重试、安全路由移除，以及 320 dp/2 倍文字/240 px 键盘 inset 下回执确认按钮可达且至少 48 dp。临时日志 `/tmp/ctos-secrets-review-flutter.log`。前一轮 24/127 为修复前历史。
+- **最终可审阅 APK**：冻结后的 `./hako flutter build apk --release --target-platform android-arm64` 成功（30.2 秒、32.1 MB），文件 `build/app/outputs/flutter-apk/app-release.apk`，SHA-256 **`36d3985d3b2cc6f32688fc62afb04a82375dce45dfe710c8288a249479bef3bb`**。`apksigner verify --verbose --print-certs` 退出 0、v2 签名通过，开发证书 SHA-256 `8d36c8be418174cb4cda0b897ff3e32b2da6f84032819726e8e5671872df52ef`。测试 APK SHA-256 `d8e400f9f9c4604ee6e4a34eec66d59fc906677f678d04f9047d7dfc861f5fc9`。未替换 `dist/ctos-current-arm64.apk`、未安装；这些 build 目录是可重建的忽略产物。
+- **真实 Flutter 渲染**：忽略目录 `.devhome/secrets-ui-visual/` 的 7 张 320 dp CJK/Material 图片覆盖设置上部/时间/备份、改口令/键盘、导入/信任；另生成 2 张 320 dp/2 倍文字/键盘的最终不确定回执 top/return 图片。两项独立渲染测试通过，检查代理实际查看可读性和下部动作，主 agent 再看回执返回图，按钮可达、正文竖向滚动且不横向裁切；这是本地 widget 渲染，不是安全窗口/设备/人工观感验收。
+- **固定 Linux native 研究**：主 agent 独立运行 `research/ssh-memory-run.py`，官方 OpenSSH 10.0p2 archive SHA-256 `021a2e709a0edf4250b1256bd5a9e500411a90dddabea830ed59cef90eb9d85c`，实际 **6 PASS**。覆盖真实 config/Include/glob、stock FD 继承反例、私钥/known_hosts 文件形状、ProxyJump exec 临时视图、owned 取消回收及缺失/遍历/撤销读写。持久 [研究报告](../.trellis/tasks/10-08-app-authentication/research/ssh-memory-results.md) 和原始 `ssh-memory-validation.log` 记来源/哈希/边界。只用合成秘密/loopback，不落普通磁盘明文；不证明 Android/Bionic/16 KiB、完整登录、每跳受限释放或正式生产 native 集成。
+- **历史剪贴板核对**：Android 公开 `clearPrimaryClip()` 没有身份条件参数；read/check 与 clear 两次调用之间仍可能被其他复制替换。当时 ClipboardRaceTest 用合成数据复现反例，未访问真实设备剪贴板，第一版仅敏感标记/ID、无自动清理。随后用户撤销清理，旧探针源及设置/ID 已移除；不把它列当前阻塞或功能验证。
+- **SAF 不确定**：真实导出 writer 的 JVM provider 反例表明，完整认证标签写出后 flush 失败仍可留下有效加密包。返回 `VAULT_EXPORT_UNCERTAIN`，不能标记“失败无可用备份”通过。原子库提交无法判定时 `VAULT_COMMIT_UNCERTAIN` 锁库读回恢复；真实 provider/AtomicFile 设备分支仍待验证。
+
+生产 SSH 语义校验器没有接入，混合 SSH 包导入明确失败关闭，不把测试注入的 validator 当生产验证。真实 API 28/29 与 30+ Keystore、强生物/系统凭证、敏感截图/录屏/最近任务、SAF、崩溃恢复、性能和完整两业务接入均未验收。详细条款与当前关卡见 [task check](../.trellis/tasks/10-08-app-authentication/check.md)；不提交/归档、不沿用旧任务设备授权。
 
 ## 2026-10-06 两处显示文案精简
 

@@ -1,0 +1,13 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <activity android:name="im.majo.ctos.ExportTreePickerActivity"
+            android:configChanges="keyboardHidden|orientation|screenSize"
+            android:exported="true" android:theme="@android:style/Theme.Material.Light.NoActionBar" />
+        <activity android:name="im.majo.ctos.ExportFixtureGrantActivity"
+            android:exported="true" android:theme="@android:style/Theme.NoDisplay" />
+        <provider android:name="im.majo.ctos.ExportFixtureProvider"
+            android:authorities="im.majo.ctos.export.fixture"
+            android:permission="android.permission.MANAGE_DOCUMENTS"
+            android:exported="true" android:grantUriPermissions="true" />
+    </application>
+</manifest>

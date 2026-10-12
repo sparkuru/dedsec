@@ -1,5 +1,17 @@
 # Compatibility
 
+## 2026-10-12 API30 系统凭证快捷认证
+
+AIO-3568J Android11 API30 当前已由用户设置安全锁屏，公开系统凭证能力可用；同一隔离UID真实空库流程旧实现失败，认证后提交AAD的修复流程1项95.811秒通过，覆盖真实包装/解封和内容认证、关闭取消/错误保护、正确关闭及主口令回退。主包71d00e7c已覆盖安装/读回一致，现有用户库正常UI开启及快捷解锁成功，结束为库锁定/快捷已开。此结果替代10-10“无锁屏”在本板当前的限制；不证明生物识别、API28/29或其他ROM，也不覆盖真实锁屏事件/进程死亡/非空混合恢复及业务集成。AAD必须在系统认证成功及最终guard后提交，初始化探针完成不能记成功认证。完整 [验证](verification.md#2026-10-12-安全锁屏开发板快捷认证修复与实测)。
+
+## 2026-10-10 秘密库兼容性边界
+
+本轮主包ca85在B实跑6项Bridge生命周期通过，104 JVM重新执行、35定向通过；未变138全量未重跑。独立UID复用实际release Flutter/Main/Bridge的空库完整UI/SAF流程1项235.79秒通过，真实创建/锁定/改口令、新导出/同名取消/确认覆盖及不同来源/目标口令恢复均验证，测试资源/授权/两包清理完成。只在fixture自身关闭Root自动启动，不改系统无障碍或安全配置。真实HOME与core重建/排序注入分列，不称真实锁屏/进程死亡；非空/混合业务和成功认证未外推。以下17平台/真实provider六阶段对应此前a309包，详见 [追加验证](verification.md#2026-10-10-配置-b-追加bridge-生命周期与独立-uid-ui-探针)。
+
+公共宿主路径ID修复时 104 JVM/未变138 Flutter/lint 通过；API 28/29 采用系统锁屏确认及认证绑定 Cipher，30+ 采用强生物/锁屏 CryptoObject。已清除 minSDK 28 不可用的 Java 集合工厂调用。配置 B T-CHIP AIO-3568J / Android 11 API 30 / arm64 的此前 `a309bd9d…` 包安装读回一致，17 平台测试与真实 ExternalStorageProvider1六阶段通过。路径型 provider 实测新 final 复用历史 original ID；journal 需区分存活角色/历史 ID，已删除角色先持久移除再恢复旧路径，已验证 final 保留。真实 provider 使用独立私有磁盘库/journal及密文认证，包含两种主动注入写入失败补偿，不代表生产 Flutter 全流程、真正进程死亡/云端/权限撤销。初轮 `6c0f00e6…` 的敏感截图无 PNG、录屏 App 区域黑、最近任务为空，取消后普通捕获恢复；相关 UI/helper 源码未变。此板无安全锁屏，不证明成功 CryptoObject/Keystore 或 API 28/29。KDF create 2035 ms 仅为样本，不外推其他 ROM。完整边界见 [本次验证](verification.md#2026-10-10-配置-b-追加真实目录与路径标识复用)。
+
+Linux/glibc OpenSSH 10.0p2 内存文件访问六组研究验证通过，但不证明 Android/Bionic、NDK、16 KiB 页、完整登录/每跳信任或前台服务兼容。用户已撤销验证码剪贴板清理及其设置/跟踪/探针，不再有自动清理兼容性关卡；主动复制的敏感标记按平台能力生效。导出按用户新决定实现同名确认、新文档写入/读回和精确补偿；SAF rename/create/delete、权限撤销和恢复需要真实 provider 验证，清理失败或效果未知须显示位置，不承诺任意 provider 多文档原子性。只使用本次 tree 授权，不加广泛存储权限/持久 grant；Android 11+ 可选目录受系统限制。生产 SSH 内容及恢复语义 provider 缺位时拒绝来源或目标包含 SSH 的导入。见 [验证记录](verification.md) 与 [未完成关卡](app-authentication.md#2026-10-10-当前实现与未完成验收)。
+
 2026-09-28 当前 `9ca71e31…` APK 已在 Firefly AIO-3568J（Android 11 / API 30、arm64、SELinux Permissive）覆盖安装，设备 APK 哈希一致；七项非 Root 定向仪器测试通过，覆盖内置 Python/SDK、取消/超时/后台回收、App 网络快照、文件加解密与编码、文件不覆盖及 loopback HFTP 后台/停止。Root 采集/PTY、LAN/熄屏、SAF 手操与其他 Android 版本边界未由这次开发板检查扩展。详细范围见 [verification.md](verification.md)；下方各条按当时 APK 版本解释。
 
 2026-09-26 Portable Python 当前包 SHA-256 为 `00c19e0ca2ecc84b1fea32fafaec29708b152710a3f5a3b8ece64717a26d97c6`。Flutter 28 项、Android lint/测试包构建和本地 ARM64 Android/QEMU 检查通过。已覆盖安装 PLR110 / Android 16 / SELinux Enforcing，设备哈希一致，真机 8 项通过：App/Root python3、标准库/SDK、运行中取消、超时、后台待运行任务回收及原有 Root/网络回归。工作台二级页自检和 JSON 保存读回通过。APK 仅 arm64，最低 API 28；Python 3.13.9 和 NDK 启动器具备 16 KiB 对齐，但 Android 11、16 KiB 页面设备及其他 Root 管理器未测。下方均为旧包历史；详情见 [verification.md](verification.md)。

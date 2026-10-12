@@ -3,6 +3,10 @@ plugins {
     id 'dev.flutter.flutter-gradle-plugin'
     id 'com.chaquo.python'
 }
+def secretsFixtureOption = providers.gradleProperty('ctosSecretsUiFixture').orNull
+if (secretsFixtureOption != null && secretsFixtureOption != 'true') {
+    throw new GradleException('ctosSecretsUiFixture accepts only true; omit it for the normal application')
+}
 android {
     namespace 'im.majo.ctos'
     compileSdk 36
@@ -30,6 +34,20 @@ android {
     sourceSets.main.jniLibs.srcDirs += [layout.buildDirectory.dir('generated/jniLibs').get().asFile]
     packaging { jniLibs { useLegacyPackaging = true } }
     testBuildType 'release'
+    if (secretsFixtureOption == 'true') {
+        flavorDimensions += 'secretsFixtureValidation'
+        productFlavors {
+            secretsFixture {
+                dimension 'secretsFixtureValidation'
+                applicationId 'im.majo.ctos.secretsfixture'
+                testApplicationId 'im.majo.ctos.secretsfixture.test'
+            }
+        }
+        // Replace the base test manifest only in this opt-in build. The normal test
+        // provider's fixed authority and grants must never be merged into this UID.
+        sourceSets.androidTest.manifest.srcFile('src/secretsFixtureTest/AndroidManifest.xml')
+        sourceSets.androidTest.java.setSrcDirs([])
+    }
 }
 chaquopy {
     defaultConfig {
@@ -46,6 +64,8 @@ chaquopy {
 }
 flutter { source '../..' }
 dependencies {
+    implementation 'org.bouncycastle:bcprov-jdk18on:1.86'
+    testImplementation 'junit:junit:4.13.2'
     androidTestImplementation 'androidx.test:runner:1.6.2'
     androidTestImplementation 'junit:junit:4.13.2'
 }

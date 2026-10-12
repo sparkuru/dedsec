@@ -28,6 +28,7 @@ public final class MainActivity extends FlutterActivity {
     private TaskHistoryStore taskHistoryStore;
     private ToolFiles toolFiles;
     private HftpBridge hftpBridge;
+    private AppSecretsBridge appSecrets;
     private final Object rootLock = new Object();
     private volatile boolean root;
     private EventChannel.EventSink terminalSink;
@@ -44,6 +45,7 @@ public final class MainActivity extends FlutterActivity {
         taskHistoryStore = new TaskHistoryStore(this);
         toolFiles = new ToolFiles(this);
         hftpBridge = new HftpBridge(this);
+        appSecrets = new AppSecretsBridge(this);
         new EventChannel(engine.getDartExecutor().getBinaryMessenger(), "ctos/terminal").setStreamHandler(
                 new EventChannel.StreamHandler() {
                     @Override public void onListen(Object arguments, EventChannel.EventSink sink) { terminalSink = sink; }
@@ -79,6 +81,7 @@ public final class MainActivity extends FlutterActivity {
     }
 
     private void call(MethodCall call, MethodChannel.Result result) {
+        if (appSecrets != null && appSecrets.handle(call, result)) return;
         if (hftpBridge.handle(call, result)) return;
         if (call.method.equals("toolFilesClear") && pythonRunner.busy()) {
             result.error("FILES", "Wait for the current tool task before clearing files", null);
@@ -302,6 +305,7 @@ public final class MainActivity extends FlutterActivity {
 
     @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+        if (appSecrets != null && appSecrets.onActivityResult(requestCode, resultCode, data)) return;
         if (hftpBridge != null && hftpBridge.onActivityResult(requestCode, resultCode, data)) return;
         if (toolFiles != null && toolFiles.onActivityResult(requestCode, resultCode, data)) return;
         if (requestCode != 81 || exportResult == null) return;
@@ -318,8 +322,19 @@ public final class MainActivity extends FlutterActivity {
     }
 
     @Override protected void onStop() {
+        if (appSecrets != null) appSecrets.onStop();
         if (pythonRunner != null) pythonRunner.cancel(null);
         super.onStop();
+    }
+
+    @Override protected void onResume() {
+        super.onResume();
+        if (appSecrets != null) appSecrets.onResume();
+    }
+
+    @Override protected void onPause() {
+        if (appSecrets != null) appSecrets.onPause();
+        super.onPause();
     }
 
     @Override public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
@@ -329,6 +344,7 @@ public final class MainActivity extends FlutterActivity {
 
     @Override protected void onDestroy() {
         destroyed = true;
+        if (appSecrets != null) appSecrets.close();
         stopTerminal();
         worker.shutdownNow();
         terminalWorker.shutdownNow();

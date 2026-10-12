@@ -1,0 +1,17 @@
+{"file":".trellis/spec/backend/host-bridge.md","reason":"Android 宿主接口、线程与资源所有权。"}
+{"file":".trellis/spec/backend/error-handling.md","reason":"认证取消/不可用/失败的稳定结果及回收。"}
+{"file":".trellis/spec/backend/persistence.md","reason":"密文原子提交、失败保护及跨代次/设备快捷材料一致性。"}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"审核秘密是否进入日志/历史/无关输出。"}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"审核公共设置/解锁/管理操作在窄屏、大字、键盘下可达，复用当前主题。"}
+{"file":".trellis/spec/frontend/state-management.md","reason":"审核取消/路由销毁/迟到回调、请求代次和敏感画面 owner 生命周期。"}
+{"file":".trellis/tasks/10-08-app-authentication/research/ssh-memory-results.md","reason":"真实固定 OpenSSH 内存文件探针与独立主会话重放；严格区分 Linux 文件形状、生产每对象授权与待测 Android 客户端。"}
+{"file":".trellis/spec/trellis-plus/validation.md","reason":"实际平台验证、设备授权及人工审阅。"}
+{"file":".trellis/spec/backend/app-secrets.md","reason":"复核已实现宿主接口与效果边界、未完成SSH/真实存储SAF/成功认证 gates；用户已撤销剪贴板清理。"}
+{"file":".trellis/tasks/10-08-app-authentication/research/device-config-b-validation.md","reason":"配置B最终104JVM/17平台+真实provider1六阶段及单列诊断、路径ID/角色日志与回调修复、精确清理及剩余平台/业务关卡；历史13/未安装按阶段解释。"}
+{"file":".trellis/tasks/10-08-app-authentication/research/bridge-lifecycle-config-b.md","reason":"核对ca85/577读回和6项实际生命周期、0秒预览擦除及fresh locked反例；不混称真实锁屏/进程kill/业务SSH或全程无Root/Keystore。"}
+{"file":".trellis/tasks/10-08-app-authentication/research/flutter-ui-config-b.md","reason":"核对独立UID/Root设置/准确字段按钮语义与真实管理SAF结果，失败后ownjournal/grant诊断及清理归属；probe不代替完整验收。"}
+{"file":".trellis/spec/frontend/app-secrets.md","reason":"核验敏感路由、重试请求与实际取消/提交反馈。"}
+{"file":".trellis/tasks/10-08-app-authentication/research/export-transaction-plan.md","reason":"复核导出无未确认覆盖、精确owned补偿、新final保留、清理失败/重启回执及真实provider待验界限。"}
+{"file":"design/app-authentication.md","reason":"统一主口令/KDF/密文库/会话/设备快捷/设置/ctOS 完整备份/隐私配套权威契约；先验收底座，再分别接入 TOTP 和 SSH，最新完整规划已于 2026-10-10 批准，公共底座先行实施。"}
+{"file":".trellis/tasks/10-08-ssh-terminal/prd.md","reason":"SSH R1–R11/AC1–AC10 保留客户端与信任/输入/转发要求，R10/R11 改为统一秘密库，统一模型最新规划已批准。"}
+{"file":".trellis/spec/trellis-plus/index.md","reason":"用户限定的 preview.sh APK 编译入口复用 hako，成功后输出路径/安装命令，不安装或替换 dist。"}

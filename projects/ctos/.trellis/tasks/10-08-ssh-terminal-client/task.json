@@ -1,0 +1,41 @@
+{
+  "id": "ssh-terminal-client",
+  "name": "ssh-terminal-client",
+  "title": "OpenSSH 终端与公共认证接入",
+  "description": "APK OpenSSH/config/交互与统一秘密库 SSH adapter 接入；依赖共享底座，旧设备-only 凭据方案已取代，仅规划。",
+  "status": "planning",
+  "dev_type": "fullstack",
+  "scope": "terminal",
+  "package": null,
+  "priority": "P2",
+  "creator": "ctos",
+  "assignee": "ctos",
+  "createdAt": "2026-10-08",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "antitrust",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": "10-08-ssh-terminal",
+  "relatedFiles": [
+    "design/ssh-terminal.md",
+    "lib/main.dart",
+    "lib/terminal_interaction.dart",
+    "design/app-authentication.md"
+  ],
+  "notes": "2026-10-10 用户在最新完整规划摘要后回复“批准”。先启动公共统一秘密库/认证底座实施，并前置协调 SSH 无明文磁盘文件访问探针；公共底座已 in_progress，TOTP 与 SSH 完整接入仍依赖底座验收。HOTP 全部撤销，其他平台迁移排除。当前批准包含本地实现、构建和隔离技术验证，不包含真实设备安装/账号操作；未运行的产品或平台验收不标通过。",
+  "meta": {
+    "planning_role": "child",
+    "planning_stage": "approved",
+    "implementation_approval": {
+      "date": "2026-10-10",
+      "response": "批准",
+      "scope": "公共底座实施及前置 SSH 内存文件访问探针；后续业务依赖底座验收",
+      "device_authorized": false,
+      "account_authorized": false
+    }
+  }
+}

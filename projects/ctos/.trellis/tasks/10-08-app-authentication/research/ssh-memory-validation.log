@@ -1,0 +1,7 @@
+PASS pinned OpenSSH -G: config, nested root-relative Include, lexical glob
+PASS negative control: unadapted inherited FD is rejected
+PASS native IdentityFile parse and known_hosts append/read/replace/proposal
+PASS ProxyJump parent/exec-child snapshot inheritance and handshake failure cleanup
+PASS ProxyJump owned cancellation and descendant reap
+PASS missing/traversal failure, lock rejection, local descriptor wipe and cleanup
+Could not stat /ctos-memory/home/.ssh: Permission denied

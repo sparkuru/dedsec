@@ -13,6 +13,11 @@
 | Gradle wrapper | Existing repository wrapper, targets Gradle 8.14.3 | Apache-2.0 |
 | Android Gradle Plugin | 8.13.0, Google Maven | Apache-2.0 |
 | AndroidX Test runner / JUnit | 1.6.2 / 4.13.2 | Apache-2.0 / EPL-1.0, test APK only |
+| Bouncy Castle lightweight crypto | `org.bouncycastle:bcprov-jdk18on:1.86`, Maven Central / [官方项目](https://www.bouncycastle.org/download/bouncy-castle-java/) | Bouncy Castle MIT-style license；公共秘密库 Argon2id 实现，不替换全局 JCA provider；随 APK 保留 `assets/licenses/BouncyCastle-LICENSE.html` |
+
+2026-10-10 公共秘密库依赖：固定为官方当前稳定 1.86；实际 Gradle 下载的 `bcprov-jdk18on-1.86.jar` SHA-256 为 `2af190b300cbb0b35e248ccf5f4a06b6072030aeb3da7a98ec73abe5b4cb371f`；完整许可证资源 SHA-256 为 `57339d5c1ec182e43aadb829882987c3eab8fd2cf8d74f2db0ee23c6acdcf6be`，来源为 [官方固定版本许可证](https://raw.githubusercontent.com/bcgit/bc-java/r1rv86/LICENSE.html)。AES-256-GCM 使用 Android/JVM JCA，Argon2id 使用上述轻量 API。JUnit 4.13.2 同时用于新增宿主 JVM 测试，仍不是运行时依赖。兼容性及实际验收另记，不从依赖解析推定设备通过。
+
+SSH 内存文件研究另固定 OpenSSH 10.0p2 官方源码及 hash，见 [探针来源与复现](../.trellis/tasks/10-08-app-authentication/research/ssh-memory-results.md)。该依赖只在 `/tmp` 的 Linux/glibc 研究构建使用，未打入 APK，不作为 Android 原生客户端选版或兼容性通过的结论。
 
 2026-09-26 移除直接的 Xposed API 与 AndroidX Core 接收器依赖，删除本地 Xposed API jar。Flutter Android 插件仍可能传递依赖 AndroidX Core；不再供系统桥接使用。
 

@@ -1,0 +1,44 @@
+{
+  "id": "authenticator",
+  "name": "authenticator",
+  "title": "第三方 Authenticator：离线 TOTP 与 ctOS 加密备份",
+  "description": "离线 TOTP 接入统一秘密库，支持相机/图片/手动添加及 ctOS 自身加密备份；与 SSH 共用公共秘密配套，HOTP/其他平台迁移排除，规划待最终审阅。",
+  "status": "planning",
+  "dev_type": "fullstack",
+  "scope": "authenticator",
+  "package": null,
+  "priority": "P2",
+  "creator": "ctos",
+  "assignee": "ctos",
+  "createdAt": "2026-10-08",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "antitrust",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [
+    "design/authenticator.md",
+    "design/plan.md",
+    ".trellis/tasks/10-08-app-authentication/prd.md",
+    "design/app-authentication.md"
+  ],
+  "notes": "2026-10-10 用户在最新完整规划摘要后回复“批准”。先启动公共统一秘密库/认证底座实施，并前置协调 SSH 无明文磁盘文件访问探针；公共底座已 in_progress，TOTP 与 SSH 完整接入仍依赖底座验收。HOTP 全部撤销，其他平台迁移排除。当前批准包含本地实现、构建和隔离技术验证，不包含真实设备安装/账号操作；未运行的产品或平台验收不标通过。",
+  "meta": {
+    "clipboard_scope_update": {
+      "date": "2026-10-10",
+      "decision": "仅主动复制TOTP并标敏感，清理由用户自理；无剪贴板清理设置/跟踪/探针"
+    },
+    "planning_stage": "approved",
+    "implementation_approval": {
+      "date": "2026-10-10",
+      "response": "批准",
+      "scope": "公共底座实施及前置 SSH 内存文件访问探针；后续业务依赖底座验收",
+      "device_authorized": false,
+      "account_authorized": false
+    }
+  }
+}

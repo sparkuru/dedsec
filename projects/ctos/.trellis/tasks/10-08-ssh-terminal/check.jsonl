@@ -1,0 +1,7 @@
+{"file":".trellis/spec/frontend/terminal-interaction.md","reason":"本机单输入、IME/Tab/历史及输出复制回归；SSH 按父 R2/AC2 验证输入/方向键送远端、窗口和会话隔离，不设特定远端程序兼容验收。"}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"按客户端路线选择 native/Python/Android 检查。"}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"秘密不进入日志/协议输出；状态与远端文本分离。"}
+{"file":".trellis/spec/trellis-plus/validation.md","reason":"真实检查、设备授权及 human-required 审阅边界。"}
+{"file":".trellis/tasks/10-08-ssh-terminal/design.md","reason":"完整 SSH 技术规划：配置/认证契约、禁止本地执行与绕过信任、转发暴露确认、远端输入职责、后台服务和技术关卡；实施前使用获批准版。"}
+{"file":"design/app-authentication.md","reason":"统一主口令/KDF/密文库/会话/设备快捷/设置/ctOS 完整备份/隐私配套权威契约；先验收底座，再分别接入 TOTP 和 SSH，最新完整规划已于 2026-10-10 批准，公共底座先行实施。"}
+{"file":".trellis/tasks/10-08-ssh-terminal/prd.md","reason":"SSH R1–R11/AC1–AC10 保留客户端与信任/输入/转发要求，R10/R11 改为统一秘密库，统一模型最新规划已批准。"}

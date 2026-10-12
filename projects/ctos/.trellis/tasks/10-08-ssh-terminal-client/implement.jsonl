@@ -1,0 +1,6 @@
+{"file":".trellis/spec/backend/host-bridge.md","reason":"Android 宿主接口、线程与资源所有权。"}
+{"file":".trellis/spec/backend/error-handling.md","reason":"认证取消/不可用/失败的稳定结果及回收。"}
+{"file":".trellis/spec/trellis-plus/validation.md","reason":"实际平台验证、设备授权及人工审阅。"}
+{"file":"design/app-authentication.md","reason":"统一主口令/KDF/密文库/会话/设备快捷/设置/ctOS 完整备份/隐私配套权威契约；先验收底座，再分别接入 TOTP 和 SSH，最新完整规划已于 2026-10-10 批准，公共底座先行实施。"}
+{"file":".trellis/tasks/10-08-ssh-terminal/design.md","reason":"完整 SSH 技术规划：配置/认证契约、禁止本地执行与绕过信任、转发暴露确认、远端输入职责、后台服务和技术关卡；实施前使用获批准版。"}
+{"file":".trellis/tasks/10-08-ssh-terminal/prd.md","reason":"SSH R1–R11/AC1–AC10 保留客户端与信任/输入/转发要求，R10/R11 改为统一秘密库，统一模型最新规划已批准。"}

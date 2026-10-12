@@ -2,7 +2,15 @@
 
 最新源码 APK：运行 [`./preview.sh`](../preview.sh)，完成 arm64 release 编译后输出 APK 绝对路径和 `adb install` 命令；需要 Docker，具体检查见 [验证记录](verification.md)。
 
+2026-10-12 用户确认修复效果，并授权提交所有相关task文件；公共底座的阶段实现/测试/spec/design与四个相关任务文件纳入本轮提交。底座仍in_progress，其他任务仍planning，未完成验收保留；见 [task check](../.trellis/tasks/10-08-app-authentication/check.md)。
+
+2026-10-12 恢复公共底座：已修复系统认证前提交 AAD 导致的快捷登记失败。已有安全锁屏的 Android11 开发板上，同一独立UID真实空库流程旧实现失败、修复后1项95.811秒通过，涵盖登记/快捷解锁/关闭保护/主口令回退。106 JVM、analyze、lint与构建验签通过；主包 `71d00e7c…` 已覆盖安装并读回一致，用户现有库开启及快捷解锁也实测成功，结束为已锁定/快捷已开启。API28/29、生物及其他开放项仍未验收，task继续in_progress，见 [验证](verification.md#2026-10-12-安全锁屏开发板快捷认证修复与实测)。
+
 2026-10-11 最新交付：四入口2秒双返回已实现，提示位于底部导航/安全区上方，普通Snackbar自动排在其上方；16定向/154全量、analyze/格式与arm64/v2验签通过，APK `981ef814…`。用户报告实机验收通过，并在下方提示交付后回复“可以提交当前 task”，本任务提交与收尾已获批准。用户反馈与agent检查分别记录，公共秘密库继续暂停，未替换dist或操作设备，见 [验证](verification.md#2026-10-11-退出提示移至下方)。
+
+2026-10-10 继续任务：修复typed写入最终期限和SSH最后主机核验使会话失效后的凭据/私钥释放边界；106 JVM、138 Flutter重新执行通过，analyze无问题、lint0错误/3既有警告。新增独立UID真实快捷认证手动夹具，本轮仅本地准备，成功认证仍未实测；此前安装ca85不含本轮修复。见 [验证](verification.md#2026-10-10-继续任务本地效果边界修复与手动认证夹具)，任务仍in_progress。
+
+2026-10-10 当前实施：公共秘密库宿主/Flutter、SSH 文件图、同名导出确认/失败精确清理及恢复审阅已实现。Bridge生命周期修复后104 JVM、35定向通过，此前未变138 Flutter全量未重跑。主包 ca85已安装配置B Android11板，6项生命周期53.408秒通过；独立UID实际release UI空库完整流程1项235.79秒通过，覆盖创建/改口令/锁定、新导出/同名取消/覆盖、双方错误口令/取消/确认恢复及来源口令解锁。测试文件/目录/授权/两fixture包已清理，生产公开库尚未创建、后台30秒保持；此前原包17平台/真实provider六阶段另记。成功快捷认证、API28/29、真实锁屏/进程死亡、非空混合恢复与SSH业务仍开放，任务in_progress，未提交/归档/替换dist。用户撤销剪贴板清理，保留主动复制/敏感标记，清理由用户自理。见 [公共契约](app-authentication.md#2026-10-10-当前实现与未完成验收)、[验证](verification.md) 和 [task check](../.trellis/tasks/10-08-app-authentication/check.md)。
 
 2026-10-06 文案补充：顶部移除 `SYSTEM OBSERVATORY`，概览标签简化为 `DEVICE`；当前源码 analyze、103 项 Flutter 测试及格式检查通过。用户追加要求后已构建 arm64 release 包 `b7e67386…`，签名与校验和通过，未安装到设备。见 [验证记录](verification.md#2026-10-06-两处显示文案精简) 与 [变更历史](changelog.md#2026-10-06--显示文案精简)。
 
@@ -21,6 +29,9 @@
 | [当前架构](architecture.md) | 已实现的组件、数据流与执行边界 |
 | [Portable 五项工具与 HFTP](portable-tools.md) | 模块边界、SDK v2、文件能力、认证加密与后台文件服务 |
 | [Portable 工作台与 SDK](portable-workbench.md) | 内置 Python、终端工具、运行包清单和脚本扩展契约 |
+| [App 统一秘密库与公共认证](app-authentication.md) | 先行底座：主口令、加密库/会话/设置/设备快捷/备份/隐私配套；2026-10-12 恢复推进，API30凭证快捷实测通过，保留 in_progress/其余待测关卡，TOTP 与 SSH 共同依赖 |
+| [SSH 终端规划](ssh-terminal.md) | APK 内客户端、OpenSSH config/一键连接和统一秘密库接入；planning，尚未实现 |
+| [第三方 Authenticator 规划](authenticator.md) | 离线 TOTP 及统一秘密库 TotpAdapter；工作台入口、兼容边界、相机/图片扫码与条目体验，planning |
 | [兼容性](compatibility.md) | 设备差异、已验证范围与未验证项 |
 | [验证记录](verification.md) | 检查结果、实机证据及复验方式 |
 | [依赖来源](dependencies.md) | 工具链、版本、来源和许可证 |

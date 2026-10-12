@@ -1,5 +1,18 @@
 # ctOS Mainline
 
+## 2026-10-12 用户确认效果并授权相关任务提交
+
+- **Authorization:** 用户回复“效果可以；提交所有相关 task 文件”，当前成果提交已获授权，不再次请求确认。
+- **Scope:** 公共秘密库实现/测试/spec/design，以及app-authentication、Authenticator、SSH父任务和客户端任务的规划/研究/验收文件；仅ctOS，不推送或更改设备。
+- **Status:** 用户确认当前实际效果，不替代未测平台/业务AC；底座active/in_progress，其他三个task保持planning。阶段成果提交后记录session，保留未完成关卡，不归档。
+
+## 2026-10-12 恢复公共底座与快捷认证修复
+
+- **Authorization:** 用户设置开发板安全锁屏并授权自行继续测试；仅本轮目标192.168.9.14:5555，不改系统安全设置或操作真实SSH账号，凭证不持久化。
+- **Result:** 认证绑定Cipher的AAD移至认证成功后的guard与doFinal之间；同一真实空库流程旧版失败/修复后1项95.811秒通过，登记/快捷解锁/关闭保护/真实认证解密/主口令回退均通过。106JVM、analyze、lint0错误3既有警告与构建/v2验签通过。
+- **Delivery:** 主包71d00e7c已覆盖安装、读回一致，UID10131；现有用户库正常UI开启/快捷解锁通过，结束锁定/快捷已开。隔离fixture两包已清理，未改主口令/重建库/导入导出/dist。
+- **Next:** 当前指针10-08-app-authentication，active/in_progress；API28/29/生物、真实锁屏/进程死亡/非空混合及正式业务/native联合验收仍开放，不启动TOTP/SSH，不提交/归档。详见 [验证](../design/verification.md#2026-10-12-安全锁屏开发板快捷认证修复与实测)。
+
 ## 2026-10-11 主页双返回提交与收尾
 
 - **Authorization:** 用户在下方提示交付后回复“可以提交当前 task”；当前task提交/归档已获授权，不重新请求确认。
@@ -21,6 +34,38 @@
 - **Current initiative:** `10-10-home-double-back-exit`；四入口根路由首次返回提示，2 秒内再次返回退出到桌面。正常路由/弹窗/键盘返回不计数，切换/覆盖/后台重置。
 - **Evidence:** Trellis implement/check完成；退出提示被浮动Snackbar遮挡的布局红灯经修复通过，14定向/152全量、analyze/格式、arm64构建/v2验签通过。APK SHA256 `7ad103a9cf2684d79b9e582e30a8e7cb6819d29e2eac3a560e03fae9c2637407`，源码/回归/产物与限制见design/verification.md和task check。
 - **Next:** 主页任务保持in_progress / awaiting_device_review，真实Android返回键/手势、IME、桌面与重开需当轮授权验收或用户反馈；未安装/替换dist/提交/归档，不自动恢复公共底座。
+
+## 2026-10-10 本地继续公共底座
+
+- **Authorization:** 用户要求继续已有 task，并回复“暂时没有，先继续本地工作”；本轮只做本地实现/检查及平台夹具准备，没有设备操作。
+- **Current task:** `10-08-app-authentication` 当前指针已恢复，继续 `in_progress`；保留其他旁任务与修改，未启动TOTP/SSH客户端。
+- **Evidence:** 最终写入期限和末次SSH host gate失效释放两个问题经红灯复现修复；106 JVM/138全量Flutter、analyze、正常/fixture lint0错误3既有警告通过。真实快捷认证手动夹具两APK打包/v2验签/固定target通过，尚无真人认证或设备执行。
+- **Next:** 获得已有安全锁屏设备和当轮安装/隔离验证范围后执行已准备的手动夹具；本地结果不替代API28/29、真实进程死亡、非空业务及SSH/native联合验收。详见 [验证](../design/verification.md#2026-10-10-继续任务本地效果边界修复与手动认证夹具)。历史ca85安装包不含此次修复；未提交/归档/替换dist。
+
+## 2026-10-10 统一秘密库实施批准
+
+- **Authorization:** 原“批准”授权底座实施与 SSH 内存探针；用户现回复“配置 B”，授权当前 APK/测试包安装及隔离设备验收。唯一当前目标 `192.168.9.14:5555` 已核对为 T-CHIP AIO-3568J / Android 11 API 30 / arm64 / Permissive；不覆盖用户库、操作真实账号或更改系统安全配置。
+- **Current task:** `10-08-app-authentication` 已通过 `task.py start` 进入 `in_progress`；SSH 父任务维护集成，TOTP 与 SSH 客户端仍待底座验收后接入。
+- **Execution:** Android 宿主、Flutter 公共设置/解锁 UI 与隔离 native 文件访问探针按独立文件责任推进；实现与检查遵循 Trellis 子代理流程。
+- **Local evidence:** 公共流程/SSH 文件图/导出事务/恢复审阅已实现，路径 ID 复用与角色持久移除修复后最终104 JVM通过；未变 Flutter analyze/35定向/138全量保持通过，lint 0 errors/5既有warnings。实际字体窄屏/大字/键盘独立审阅，Linux OpenSSH 内存文件六组研究通过；研究不代替Android/native接入。
+- **Scope update:** 2026-10-10 用户明确撤销验证码剪贴板清理，ctOS 仅生成 TOTP 并响应用户主动复制/敏感标记，清理由用户自行处理。清理时长/status/prefs/复制 ID/跟踪及竞态探针移除；后台库超时保留。
+- **Device evidence:** 最终17平台测试32.066秒/真实ExternalStorageProvider1六阶段59.838秒通过，两个额外诊断单列；actual path_id_reused=true。真实provider由own磁盘VaultStore/Journal+合成密文认证验证新建/拒绝/确认/取消与主动注入stage/final半途失败清理和旧恢复，每save freshload；不是生产Flutter导出全流程或真正kill/cloud故障。初轮敏感截图/录屏/最近任务及普通恢复已实测，UI/helper源未变。生产库missing、后台30秒保持。详见design/verification.md和research/device-config-b-validation.md。
+- **Technical gates:** B无安全锁屏，仅快捷early unavailable通过；成功Keystore/凭证/强生物、API28/29、真实锁屏/进程死亡/权限撤销/云provider、非空混合业务恢复及SSH语义/native接入开放。独立UID空库实际release UI+本机SAF完整流程已通过，不代替这些关卡。剪贴板清理已撤销。
+- **Additional evidence:** Bridge关闭/自身timer/旧onStop/迟到picker与0秒失效预览修复后104JVM实际重新执行，analyze/35定向通过，未变138全量未重跑。新ca85/577构建验签/安装读回一致，真实HOME等6项53.408秒通过；旧callback/排序注入/core重建分列，不代表SCREEN_OFF/真实kill/生产SSH。own6套资源及默认test清理，生产missing/后台30保持；正常Main的Rootauto/active和alias维护如实记录。
+- **Next:** 当前授权B的Bridge6项和独立UID空库完整UI/SAF 1项235.79秒均通过并精确清理。成功Keystore/凭证/强生物仍需已有锁屏设备；API28/29、真实锁屏/进程死亡/权限撤销或云provider、非空混合与实际SSH/native业务联合验收开放，不改PIN/访问未授权目标。保持in_progress，未提交/归档。
+- **Artifact:** 生产main SHA256 ca85ec00dd7eb737454d4380e03fc6c6ae45343e3faac9fc68ab77b372116f3e/UID10131保留，默认577及独立fixture两包已卸载；UI mainf358/test83e安装读回与1项235.79秒结果分别记录。旧a309/cb829/b7c90/c4e817按原版本历史解释。完整报告见research/flutter-ui-config-b.md与research/bridge-lifecycle-config-b.md，未替换dist/提交/归档。
+- **Toolchain:** `./hako flutter --version` 已验证可用；容器调用需要 sandbox escalation，已通过自动审查。未替换 dist current APK；本轮已按配置 B 连接并核对设备，安装/实跑结果另记。
+
+## 2026-10-10 统一秘密库、TOTP 与 SSH 规划待审（批准前记录）
+
+- **Mode / Authorization:** guided；持续仅规划，未获代码、构建、设备或账号操作授权，不运行 task.py start。
+- **Tasks:** [统一秘密库](tasks/10-08-app-authentication/prd.md)、[Authenticator](tasks/10-08-authenticator/prd.md)、[SSH 接入](tasks/10-08-ssh-terminal-client/prd.md) 与 [SSH 父任务](tasks/10-08-ssh-terminal/prd.md) 均 planning / awaiting_final_review；ID/原树关系保留。
+- **Scope:** 用户撤销 HOTP 的全部设计/实现，只保留已确定离线 TOTP（相机/图片/手动、条目/时间码/复制）与 ctOS 自身完整加密备份，其他平台迁移排除；已确定 SSH 客户端/config/Include/ProxyJump/信任/转发/手动 Stop 范围保留。
+- **Base:** 唯一主口令/KDF/密文文件与受管 SSH 文件对象/设备生物或锁屏快捷/共同秘密库设置/使用会话/管理认证解密/改口令/完整导入导出事务/敏感窗口与复制 helper。前台共享、锁屏/手动即锁/重启锁定；后台默认 30 秒可选（0 即锁），验证码复制默认 30 秒可调且仅尽力清理本次 clip，两项设置独立。
+- **Dependencies:** 先交付并验收公共底座，再由 TOTP 与 SSH 分别接入；TOTP 页面不是 SSH 的依赖。SSH 父任务管理完整需求和最终集成，不是另一份业务实现；真实依赖写在子 task，而非由父子树位置推导。
+- **Technical gates:** native 无明文磁盘文件视图/Include/ProxyJump/信任写回探针宜在底座接口冻结前验证；密码库/KDF/资源上限、API 28/29 与 30+ 真实认证/Keystore、窗口及剪贴板竞争需定向验证。不满足既定行为回规划，不静默降级。
+- **Progress:** PRD/design/implement 与 JSONL 已按剩余确定范围整理；产品实现、算法/平台探针和真实设备验收均未开始；2026-10-10 文档/元数据/真实上下文/链接及 diff 检查通过。历史 HOTP 讨论与曾暂定状态见 design/changelog.md 和任务 check.md，以本节最新撤销决定为准。
+- **Next:** 对最新完整规划进行共同最终审阅；只有后续明确实施授权才开始公共底座，当前不推进实现。
 
 ## 2026-10-06 Flutter 优化交付
 

@@ -1,0 +1,6 @@
+{"file":"design/authenticator.md","reason":"离线 TOTP、相机/图片/手动添加与仅 ctOS 加密备份范围和兼容性；HOTP 已撤销，仅按当前确定范围验收。"}
+{"file":"design/app-authentication.md","reason":"统一主口令/KDF/密文库/会话/设备快捷/设置/ctOS 完整备份/隐私配套权威契约；先验收底座，再分别接入 TOTP 和 SSH，最新完整规划已于 2026-10-10 批准，公共底座先行实施。"}
+{"file":".trellis/tasks/10-08-authenticator/design.md","reason":"便携主口令库、设备快捷材料、覆盖事务及公共认证先行依赖；未通过最终审阅"}
+{"file":"design/constraints.md","reason":"本地处理、权限与设备操作范围、导出和敏感数据边界"}
+{"file":".trellis/spec/backend/host-bridge.md","reason":"Android 宿主拥有受保护操作，MethodChannel 契约与生命周期"}
+{"file":".trellis/spec/frontend/state-management.md","reason":"Flutter 页面状态、异步结果与前后台生命周期"}
