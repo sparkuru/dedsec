@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 16
-- **Last Active**: 2026-10-11
+- **Total Sessions**: 18
+- **Last Active**: 2026-10-12
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~378 | Active |
+| `journal-1.md` | ~575 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,9 +29,15 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 18 | 2026-10-12 | 提交公共秘密库阶段成果及四个相关task文件 | `bb50bc8` | `antitrust` |
+| 17 | 2026-10-12 | 恢复公共底座并修复实机快捷认证AAD时序 | - | `antitrust` |
 | 16 | 2026-10-11 | 提交并归档主页双返回退出任务 | `a46a296` | `antitrust` |
 | 15 | 2026-10-11 | 用户验收反馈后将退出提示移至下方 | - | `antitrust` |
 | 14 | 2026-10-11 | 暂停公共底座并实现主页双返回退出 | - | `antitrust` |
+| 13 | 2026-10-10 | 公共底座效果边界修复与手动认证本地准备 | - | `antitrust` |
+| 12 | 2026-10-10 | Bridge生命周期与独立UID UI和SAF实测 | - | `antitrust` |
+| 11 | 2026-10-10 | 配置 B 秘密库实机验证与导出恢复修复 | - | `antitrust` |
+| 10 | 2026-10-10 | 统一秘密库公共事务与导出恢复本地检查 | - | `antitrust` |
 | 9 | 2026-10-06 | 全 Flutter 界面优化验收与交付 | `9ff29de` | `antitrust` |
 | 8 | 2026-09-28 | 完成产品体验父任务集成与归档 | `3e78ad3`, `d620fe0` | `antitrust` |
 | 7 | 2026-09-28 | 界面与终端可用性整理及归档 | `ca04b04`, `949a0f6` | `antitrust` |

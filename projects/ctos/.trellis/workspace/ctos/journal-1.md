@@ -289,7 +289,140 @@
 
 - 当前任务已按计划归档；后续新需求另行确定范围。
 
----
+
+## Session 10: 统一秘密库公共事务与导出恢复本地检查
+
+**Date**: 2026-10-10
+**Task**: 统一秘密库公共事务与导出恢复本地检查
+**Branch**: `antitrust`
+
+### Summary
+
+撤销剪贴板清理；补齐公共 SSH 文件图、同名导出确认/精确补偿、来源与目标恢复审阅；本地检查及 arm64 APK 已冻结，设备及生产 SSH 联合验收未运行。
+
+### Main Changes
+
+- 验证码仅主动复制并标敏感，清理由用户处理；不读取/监听/清空剪贴板。
+- 公共图复用共同加密事务；导出保护原文件、保留真实清理/恢复回执，恢复投影绑定来源/目标/provider及本次确认。
+
+### Git Commits
+
+(No commits - planning session)
+
+### Testing
+
+- [OK] 101 JVM、35定向/138全量Flutter通过；analyze/lint无错误（5既有警告），10仪器夹具编译；实际窄屏大字渲染独立审阅。
+- [OK] arm64 APK 6c0f00e61f7ad90bcd2e31b675027e619987cd191ec302c1c589946d55d8739b 构建/v2验签通过，未安装或替换dist。
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 取得当前设备/安装授权后执行隔离夹具与SAF/Keystore/屏幕保护验收；生产SSH语义/native及业务接入仍联合验收。任务in_progress，无提交或归档。
+
+
+## Session 11: 配置 B 秘密库实机验证与导出恢复修复
+
+**Date**: 2026-10-10
+**Task**: 配置 B 秘密库实机验证与导出恢复修复
+**Branch**: `antitrust`
+
+### Summary
+
+配置 B 当前安装；路径 ID 复用/持久角色移除修复；104 JVM、17 平台及真实 SAF 六阶段通过，精确清理完成；认证成功/API28/29/SSH及未测故障仍开放。
+
+### Main Changes
+
+- 修复合法历史路径标识复用、删除角色持久移除及旧文件恢复顺序；当前角色冲突仍拒绝，已验证 final 保留。
+- 测试-only固定系统picker、framework ResultReceiver、精确grant撤销/目录marker；首轮崩溃残留按证据确认后精确清理。
+
+### Git Commits
+
+(No commits - planning session)
+
+### Testing
+
+- [OK] 104 JVM 全通过、lint 0 errors/5既有warnings、release与测试APK编译/v2签名通过；未变Flutter此前35定向/138全量保持通过。
+- [OK] B Android11/API30：17平台32.066秒、真实ExternalStorageProvider1六阶段59.838秒通过；preflight1及cleanup1仅作诊断。主a309安装读回一致，测试包/授权/文件精确清理，仅保留空ctos parent。
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 等待已有安全锁屏设备信息和人工系统认证，未获新目标前不访问其他设备或改PIN；API28/29、生产流程/真正kill/cloud/撤权、SSH语义/native和业务联合验收继续开放。
+
+
+## Session 12: Bridge生命周期与独立UID UI和SAF实测
+
+**Date**: 2026-10-10
+**Task**: Bridge生命周期与独立UID UI和SAF实测
+**Branch**: `antitrust`
+
+### Summary
+
+当前ca85 Bridge生命周期修复及6项B实测通过；独立UID实际release UI空库完整E2E1项235.790秒通过并精确清理。成功系统认证等关卡仍开放，task in_progress。
+
+### Main Changes
+
+- 修复Bridge关闭/自身timer/迟到picker及0秒预览清理，保留fresh locked请求；同步可执行规范。
+- 增加显式独立UID夹具，复用实际release Flutter/Main/Bridge；修正输入焦点/广告动作、lazy列表、活动系统窗口、来源primary标题、新目录自动导航、native文件row边界及成功恢复freshUUID语义oracle。
+
+### Git Commits
+
+(No commits - implementation remains in progress)
+
+### Testing
+
+- [OK] 修复后104 JVM、analyze/35定向、lint0错误/5既有警告、release与测试包编译/v2签名通过；未变138全量为此前结果未重跑。
+- [OK] B ca85/577：6项Bridge生命周期53.408秒通过。独立UI f358/83e：完整空库E2E1项235.790秒通过，连续原始阶段日志齐全；probe/管理/历版失败和readonly分别记录。
+- [OK] 精确自有备份/空叶目录/授权/两fresh fixture包清理，postreadonly0.175及14源SHA稳定；生产ca85读回、公库尚未创建/快捷不可用未开/后台30保持。
+
+### Status
+
+[IN PROGRESS] **当前验证切片通过；公共底座任务仍在实施/验收中**
+
+### Next Steps
+
+- 已有安全锁屏设备上的成功CryptoObject/Keystore与API28/29关卡待验；不设临时PIN或访问未授权目标。
+- 真实SCREEN_OFF/进程死亡/撤权或云provider、非空混合及TOTP/SSH业务联合仍开放，任务in_progress；未提交/归档/替换dist。
+
+
+## Session 13: 公共底座效果边界修复与手动认证本地准备
+
+**Date**: 2026-10-10
+**Task**: 公共底座效果边界修复与手动认证本地准备
+**Branch**: `antitrust`
+
+### Summary
+
+继续已有公共底座任务，本轮仅本地；两个红灯复现问题已修复，106 JVM/138 Flutter与正常及fixture lint通过。手动认证夹具打包验签，成功系统认证仍待已有安全锁屏设备，任务in_progress。
+
+### Main Changes
+
+- 最终typed写入guard复核期限；末次SSH host gate后复核会话/取消/到期再释放凭据或私钥。
+- 新增显式opt-in独立UID真实系统认证手动夹具，人工认证等待不读取accessibility roots；同步设计/spec/任务与主线记录。
+
+### Git Commits
+
+(No commits - implementation remains in progress)
+
+### Testing
+
+- [OK] 106 JVM、138 Flutter全量实际通过；analyze无问题，正常与fixture lint0错误/3既有警告。
+- [OK] 两fixture APK打包/v2验签/固定target核验、正常instrumentation编译通过；8 Markdown/164本地目标和task JSON/JSONL有效，diff检查通过。
+
+### Status
+
+[IN PROGRESS] **本地修复与夹具准备通过；公共底座平台及业务验收仍开放**
+
+### Next Steps
+
+- 任务仍in_progress；获得已有安全锁屏设备与当轮安装/隔离验收范围后运行手动认证单项，继续API28/29/真实kill及业务联合关卡；未提交/归档/替换dist。
+
 
 ## Session 14: 暂停公共底座并实现主页双返回退出
 
@@ -376,3 +509,67 @@
 ### Next Steps
 
 - 等待用户选择下一工作；不恢复暂停底座或push
+
+
+## Session 17: 恢复公共底座并修复实机快捷认证AAD时序
+
+**Date**: 2026-10-12
+**Task**: 恢复公共底座并修复实机快捷认证AAD时序
+**Branch**: `antitrust`
+
+### Summary
+
+本板API30凭证真实快捷空库E2E旧版红/修复绿；主包已安装并验证现有库快捷开启解锁；任务仍in_progress，跨平台及其余验收开放。
+
+### Main Changes
+
+- AAD仅在系统认证成功及最终guard后提交，认证绑定Cipher与材料绑定保持；新增独立UID诊断。
+
+### Git Commits
+
+(No commits - implementation remains in progress)
+
+### Testing
+
+- [OK] 106 JVM、analyze、lint及构建验签通过；同板真实E2E 1项95.811秒通过；主包设备读回及现有库公开UI通过。
+
+### Status
+
+[IN PROGRESS] **API30凭证分支已实测；整个底座验收未完成**
+
+### Next Steps
+
+- 继续API28/29、生物、真实锁屏事件/进程死亡、非空混合与正式业务/native联合验收；不开始两个业务或归档底座。
+
+
+## Session 18: 提交公共秘密库阶段成果及四个相关task文件
+
+**Date**: 2026-10-12
+**Task**: 提交公共秘密库阶段成果及四个相关task文件
+**Branch**: `antitrust`
+
+### Summary
+
+用户确认效果并授权提交所有相关task文件；106个实现/测试/spec/design/关联task文件已提交，底座仍in_progress，其余3个相关task仍planning，不归档不push。
+
+### Main Changes
+
+- 提交统一加密库、设备认证、管理导出恢复、公共UI、测试及规范；包含四task规划/研究/验收文件。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `bb50bc8` | (see git log) |
+
+### Testing
+
+- [OK] 复用已冻结106JVM/analyze/lint及实机快捷E2E与现有库UI结果；本轮范围复核、JSON/JSONL目标和暂存diffcheck通过，未重跑产品或设备测试。
+
+### Status
+
+[OK] **本轮提交完成；底座任务仍 in_progress，其他相关任务仍 planning**
+
+### Next Steps
+
+- 继续底座开放验收项，保留当前task指针与业务规划状态。
