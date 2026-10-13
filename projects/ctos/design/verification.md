@@ -1,5 +1,83 @@
 # Verification
 
+2026-10-13 用户回复“效果不错；可以提交验收；然后继续做下一项”，接受当前交付并批准提交/归档。下方执行日志、产物及未测边界继续按各自阶段解释；用户反馈不替代未执行的平台/账号/跨设备/混合测试，也不据归档标全部AC通过。
+
+## 2026-10-13 Authenticator TOTP 开发板自动验收（进行中）
+
+用户随后明确要求“帮我安装、自动测试”，目标为 `192.168.9.14:5555`。本节是该授权后的设备证据；下方“本地实现与最终产物”保留此前阶段结果。**安装及本轮自动验收完成：7项非copy原生检查通过，用户专项批准后的原生复制1项/6.616秒通过，最终fresh真实Flutter UI非copy全流程1项/72.734秒通过。当前task仍为in_progress / human-required，硬件相机及其他未测产品AC保持开放；不是全部平台/账号验收完成。**
+
+设备核对为 AIO-3568J、Android11/API30、arm64，Keyguard secure=true、当前未锁定；CameraManager 公开能力及系统只读报告均为0相机。最终主包 SHA256 **`3bc762d9e6463ab9612393b9382923f4a29f613ceec3dbe4d9159aae0078f252`**，**32,935,473字节**，`./preview.sh` 28.3秒，arm64/v2/1 signer验签通过，覆盖安装后 base.apk 读回一致。此前c704及相机恢复修复版bd866（32,934,137字节）均为中间安装阶段。主包只核验公开概览/工作台，不打开用户真实秘密库或服务账号，不修改用户安全、Root设置。
+
+自动验收采用显式 opt-in `secretsFixture` 独立UID，固定fixture/test包、无shared UID、`SecretsFixtureApplication`及Root自动启动关闭前置约束。原生测试使用独立内存密文库/UUID私有路径，实际Flutter流程使用fresh fixture库与公开RFC合成种子；图片仅创建本轮精确UUID自有PNG。测试没有读取生产私有库/Keystore别名、未选图库内容或原剪贴板。**自动审批拒绝包含全局剪贴板覆盖的执行**，理由是通用“安装、自动测试”未明确批准该副作用；未重试或绕过。平台copy方法在任何复制/读取前要求 `ctosTotpClipboardCopy=true`，UI复制也默认关闭；专项批准之前所有实际执行没有剪贴板读写。用户随后明确“允许覆盖，完成复制测试”，单项原生复制实际通过，见下方补充；没有原内容读取/保存/监听/恢复/清空或定时清理。
+
+| 实际执行 | 结果与范围 |
+| --- | --- |
+| `TotpPlatformTest` 显式选取7个非copy方法 | **7项通过，62.548秒**。真实Android Bitmap离线多QR、无效码/图片上限/取消；真实Bridge typed预览/新增/重命名/删除、取消/锁定/注入预览期限与迟到读抑制；非空纯TOTP密文恢复；实际窗口FLAG_SECURE及0相机公开能力。日志 `platform-without-copy-run-1.log` |
+| 真实release Flutter UI run1 `7756af71-aa02-49cc-b389-49796f510ca6` | **失败，19.792秒**：同名列表/添加动作造成driver在commit完成前核验。修复为确切列表路由/已启用条目动作的有界等待，未降低产品断言。只读自有失败状态检查 **1项/2.004秒通过**：1条/gen1，密文SHA `3ff4a2e01f3565d7df6c390b85bfc2cbab95fc624230c1f021554f8aaa17bda6`，自身持久授权0；日志 `ui-image-without-copy-run-1.log`、`failed-ui-owned-inspection-1.log` |
+| 真实release Flutter UI run2 `fb90694e-4460-47f4-bea4-7bd0b6813027` | **失败，50.308秒**：创建/拒绝快捷邀请、手动预览取消/明确保存、RFC当前码/倒计时、重命名保留身份/ID/种子、真实Home宽限返回及实际锁库/主口令返回均通过；相机无硬件打开失败后的恢复提示未呈现。只读自有状态检查 **1项/2.020秒通过**：1条已重命名/gen1，密文SHA `93543e6fe3a98ee7ab32119ed22cf634501b8cfe2519a7bcd12ce155934c311c`，自身持久授权0；日志 `ui-image-without-copy-run-2.log`、`camera-failure-scoped-logcat-2.log`、`failed-ui-owned-inspection-2.log` |
+| 修复后真实release Flutter UI run3 `194d0477-054a-41ca-93a4-db37b9bc9072` | **失败，45.858秒**：前述手动/管理/真实生命周期阶段保持通过，且**真实无硬件相机失败恢复通过**；随后DocumentsUI搜索字段的driver资源namespace断言失败，尚未进入图片确认。精确自有PNG已删除；日志 `ui-image-without-copy-run-3.log`、`ui-phases-3.log` |
+| run3精确只读核清 | **1项/2.065秒通过**，已重命名1条/gen1，密文SHA `9a3bdc27b49637836d3994be7e34fc2b5f7ea148d9f066b875717bf82976b01c`，持久授权0，认证前检查无sidecar/日志/快捷包装；`failed-ui-owned-inspection-3.log`。随后只卸载两个精确fixture包并fresh重装 |
+| 真实UI run4 `1162c6aa-3d2e-4d85-a0cc-46f1ca7107e3` | **失败，39.747秒**：搜索框及精确UUID输入通过，但Instrumentation发送Enter到跨UID DocumentsUI被系统INJECT_EVENTS边界拒绝。改用现有UiAutomation，每次按下/释放前重验准确搜索框/窗口/焦点/查询，不申请权限。PNG精确删除；只读核清**1项/1.997秒通过**，已重命名1条/gen1，密文SHA `03798988a7a8ee9cb4773eb7c0680b6f560634733cf622bcb158f4b8bec130d6`，持久授权0；日志 `ui-image-without-copy-run-4.log`、`failed-ui-owned-inspection-4.log`。核清后精确卸载两个fixture包 |
+| 真实UI run5 `cf2acdd4-9979-4f1a-8e88-38e609ac9f9f` | **失败，39.770秒**：UiAutomation Enter DOWN已接受，随后driver要求搜索框继续focused的UP检查失败；该轮未记录逐项布尔值，不能冒称只捕获focus变化。修正为DOWN保留focus、配对UP保留精确原窗口/owner/资源/角色/查询而允许focus变化，并加入无原始文本的逐项布尔诊断。PNG精确删除；只读核清**1项/1.995秒通过**，已重命名1条/gen1，密文SHA `62b81139d0b0c70954c15ba34ea9e7a8440a45893f1964969850b12d67a49401`，持久授权0，随后精确卸载fixture；日志 `ui-image-without-copy-run-5.log`、`failed-ui-owned-inspection-5.log` |
+| 真实UI run6 `7320559f-979b-42bc-b49d-2f3ed6df4be0` | **失败，49.945秒**：配对搜索成功，实际诊断为全部精确绑定布尔值true、仅focused=false；driver文件标题用错资源namespace，未选择图片。公开本机item_doc_grid/list布局及已有管理fixture证明文件标题为 `android:id/title`，精确修正两处，UUID/行归属/边界/窗口核验保持。PNG精确删除；只读核清**1项/2.022秒通过**，1条已重命名/gen1，密文SHA `883e86fde9393495164b5cd8a7c12eb5ef2debc440126c91296be298623532b7`，持久授权0，随后只卸载两个fixture；日志 `ui-image-without-copy-run-6.log`、`failed-ui-owned-inspection-6.log` |
+| 真实UI run7 `189af0eb-91aa-4d6f-9e51-4006db65f3b9` | **失败，50.198秒**：改正标题资源后仍无可见精确图片标题，尚未选择图片。PNG精确删除；只读核清与限定picker诊断**1项/2.442秒通过**，1条已重命名/gen1，密文SHA `bd45423407dd0afb17f296d46b26e41fa6296f37105d9e497de2d9454e0a6c55`，持久授权0。选择器保留精确UUID查询，固定“图片”标签可见、roots_list不可见，标题full/stem均0；这些布尔值不证明当前根目录或文件不存在。公开本机菜单确认列表切换 `sub_menu_list`，接续测试使用标准列表视图保留严格文件名核验；日志 `ui-image-without-copy-run-7.log`、`failed-ui-owned-inspection-7.log`、`ui-phases-inspection-7.log` |
+| 真实UI run8 `cadf6c22-0fdb-4289-a5e2-f3fa873f0fd7` | **失败，62.264秒**：标准列表模式通过，完整UUID标题/原item_root行归属/窗口/边界与点击均通过，随后真实Flutter“确认账号”20秒等待失败。PNG精确删除，未确认保存图片候选。源码另暴露成功native预览先于Dart前台恢复时因 `!visible` 被取消的路径；run8未抓精确结果/焦点回调时序或固定错误诊断，不能把该路径推定为唯一实机原因。随后修复有界同请求前台交接，并增加相关回归；日志 `ui-image-without-copy-run-8.log`、`ui-phases-8.log` |
+
+相机问题的源码因果：Main原生 `onResume` 已放行pending结果，但Flutter固定3.35.7的LifecycleChannel在窗口未获焦点时仍为 `inactive`；添加页catch曾仅在 `visible=true` 保存错误，存在丢失恢复提示的路径。run2有真实camera打开失败日志，但未记录精确焦点/方法回调时序，不能冒称捕获了每一步竞态。产品修复仅按mounted/request revision/cancel/leaving核验保留稳定映射的非敏感错误；成功秘密预览仍需visible，未放宽原生会话/快照/发布guard。新增3项“错误先于恢复、相机会话变化/取消”widget回归，修复后 **217 Flutter全量、82定向、analyze无问题**；证据 `flutter-camera-fix-checks.log`。原生源码未改，**122 JVM与45真实字体场景仍是此前c704阶段结果，未在本次Flutter增量后重跑**。
+
+修复后fixture main SHA256 `00294450c54a6ff646c0c9db1edc9b5193c1d5dc9be2ce79527e282bbb4a01b5`，fixture main/test构建与v2验签通过，fixture lint **0错误/3既有警告**，日志 `camera-fixed-artifacts-build-sign.log`。run3测试包不可变副本 `fixture-tests-fixed.apk` SHA256 **`8b3d0de79a9e668c5ff9336b9e622eeb10b27f7922849a362dbdc010b087f2f5`**；`tests-camera-inspection.apk` 的ad6e…是run2只读检查包，不混用作UI证据。DocumentsUI本机公开APK资源表核验搜索编辑框 `0x7f09013f` 对应 `com.android.documentsui:id/search_src_text`，仅修正driver精确owner资源匹配，不跳过搜索/选择/多候选必需路径。
+
+前台交接增量：成功native预览元数据先于Dart恢复时，添加页在同请求、revision、epoch和当前路由条件下最多等待3秒；等待中不渲染秘密。Timer与单调时钟共同界定上限，原生120秒期限不续期，UI期限扣除等待时间。取消、锁定、事件失效、覆盖/离开使请求退场；超时给稳定错误并允许新请求重试。新增4个widget测试覆盖6种情形，旧bd866源码运行新增回归实际失败，新实现 **221 Flutter全量、86定向（33业务+53公共）、analyze无问题**。日志 `preview-handoff-red-regression.log`、`preview-handoff-green-final.log`；7个产品Dart文件冻结清单 `final-handoff-product-dart.sha256`。本次未重跑此前122 JVM或45字体场景。
+
+run8失败状态只读认证 **1项/2.016秒通过**，1条/gen1，密文SHA `b7fc4e05e25ac6c6f03a10da1aa0cb8665fd439784278989603f9a944803330e`，持久授权0。核清后仅卸载两fixture包，再fresh运行修复后的产物。
+
+run9 `fe187afc-3053-4121-b465-bbefd4d89b93` **失败，59.296秒**：实际进入双QR确认页，预览密文不变、未选择前确认禁用、明确选择Alpha并提交均通过；driver随后等待Alpha操作按钮失败。精确PNG删除，库保留核清。新增严格image_commit只读白名单检查 **1项/2.029秒通过**，认证后恰有原基线与所选Alpha、无Beta或其他条目，gen1，密文SHA `c823a6e1fd48e429fecdc31a83d1748f9df1a54f4c6835be686b7738fe6113b5`，持久授权0、检查前后密文逐字不变。不能据此推定实际进入了成功回执或其焦点时序。日志 `ui-image-without-copy-run-9.log`、`failed-ui-owned-inspection-9.log`、`ui-inspection-phases-9.log`。
+
+最终fixture主包 `1efe858b4e185f7699dd53ea787f0960eaa3cf1b08553ce40d051038cf716ceb`；合并构建30秒、v2验签和lint0错误/3既有警告通过，日志 `preview-handoff-artifacts-build-sign.log`。run9测试包为 `2226898b610d424342a7e13ca8bc4aaf88358109e70d7883e79038642ed5f39b`；其后的 `38686de43a91c113452ffae95f86fb205cba16d6d20d111c0919104491d1b706` 为run9只读核清及run10的中间driver包。初次run10命令opt-in参数名错误，0.046秒在Before安全门跳过，未创建库；`ui-optin-argument-skip.log` **不计通过**。修正参数后run10 `864d391c-bfdf-43a1-b9c6-26a151e27ab3` **失败，60.320秒**，保存后固定诊断为列表标题可见、添加页与成功回执均不可见、会话前台且解锁；Alpha操作节点未找到。其图片精确删除，状态待核清；`ui-image-without-copy-run-10.log`、`ui-phases-10.log`。
+
+run10只读核清 **1项/2.028秒通过**，恰有原基线和所选Alpha、无Beta/其他条目，gen1，密文SHA `1f3b05170285c59fd454e808c30b61bb4b007c07e5726737077000a1fa952c97`，持久授权0、检查前后密文字节相等；日志 `failed-ui-owned-inspection-10.log`、`ui-inspection-phases-10.log`。核清后精确卸载两fixture包并fresh重装。列表等待加入有界语义滚动，每个动作重新绑定确切Authenticator列表/窗口且无Add/编辑/确认/ACK；目标继续要求实际visible/enabled Button、精确tooltip、自身CLICK。成功ACK的支持也收紧到原窗口内fresh唯一精确标题/指定成功文案/Button，先严格认证恰有已选条目并检查FLAG_SECURE，再直接CLICK；无同名后继按钮等待，未知/失败/不确定ACK不接受。独立源码review通过。
+
+**最终真实UI run11 `0e8e24b3-87b6-4691-b358-0fb87a297d9b`：1项/72.734秒通过，无skip。** 实际release Flutter/MethodChannel/宿主路径覆盖创建合成库并拒绝快捷邀请；手动预览取消密文不变、明确确认保存；独立HMAC核对RFC当前码/倒计时；重命名保留原ID/身份/种子；实际Home宽限清码/返回刷新、共享手动锁库隐藏/主口令返回；0硬件相机失败恢复；系统DocumentsUI列表模式与完整UUID文件选择，真实双QR预览密文不变、未选择前确认禁用、明确单选Alpha保存、无Beta/其他条目，原图摘要不变/无自身持久grant；删除Alpha后原基线保持；基线删除取消保持、确认移除；后台0秒实际Home锁库/空库主口令返回、恢复30秒并最终空库锁定、回工作台FLAG_SECURE释放。成功ACK分支本次**未触发**，不记该分支实机通过。日志 `ui-image-without-copy-run-11.log`、`ui-phases-11.log`。
+
+最终test APK **`16a07a30ee407e567985f938a1a700d5f6441147c8829a019906bc2de44c7225`**，766,625字节，9秒增量编译及v2/1 signer通过（`list-scroll-ack-driver-build.log`、`final-fixture-test-signature.log`）；fixture主包1efe…，33,485,469字节。两包设备base.apk读回均逐字哈希匹配，文件 `installed-final-fixture-main.apk`、`installed-final-fixture-test.apk`；最终源码清单 `final-device-fixture-source.sha256` 匹配，driver SHA `41e3c8ad6b7284d515975c6cc10af71eed2be37bd7c2ac2985a8fbbb321d92fb`、helper `ae65bc10071a32d040a5111d80b58b315a93739026872d5f6631736e9af3b4bb`。正式主包及7个产品Dart冻结哈希保持3bc…，最终再次读回 `final-production-readback.apk` 一致。
+
+最终清理：成功夹具断言空库/已锁、后台恢复30秒和Root自动启动关闭，未登记快捷；实际工作台窗口不再保护；After核验本轮精确自有MediaStore URI owner/name/mime后删除1行、随后成功query返回0行，摘要内存擦除/自有activity结束/会话锁定。随后只卸载 `.secretsfixture.test` 与 `.secretsfixture`，两次Success、`pm path`均空（退出1），正式`im.majo.ctos`仍在且哈希不变。证据 `cleanup-fixture-main-path.txt`、`cleanup-fixture-test-path.txt`、`final-production-path.txt`。所有失败run创建的自有图片均精确删除，失败库认证后才卸载；无批量图库/生产数据清理。本阶段未读写剪贴板，随后专项复制单项另记；真实库/账号未访问；未提交/归档/替换dist。
+
+**后续复制专项批准与实测：** 用户回答“允许覆盖，完成复制测试”，明确授权用公开合成当前TOTP替换开发板全局剪贴板，不读取/保存/恢复/清空原内容；此前自动审批拒绝因而已有新的具体授权，并非绕过。重新fresh安装同一1efe主夹具/16a07测试包，显式仅选 `TotpPlatformTest#explicitNativeCopyWritesOnlyTheOwnedSyntheticCurrentCodeWithSensitiveHint` 并传 `ctosTotpClipboardCopy=true`。**1项/6.616秒通过，无skip**，`platform-explicit-copy-run-1.log`：真实Main/Bridge `secrets.totpCopy` 成功回执后才首次读取自身clip，label/item数量、已知RFC种子在实际前后墙钟窗口的当前码和 `android.content.extra.IS_SENSITIVE=true` 均断言通过；不输出代码，不读原内容、不保存/恢复/清空/监听。采用独立内存库，无生产库或真实账号；不是实际Flutter复制按钮E2E。After worker终止/库锁定/内存擦除/自有Activity结束/精确UUID空目录删除/专用prefs删除通过。随后两fixture再卸载Success，pm path均空、正式安装路径保持；证据 `copy-cleanup-fixture-main-path.txt`、`copy-cleanup-fixture-test-path.txt`、`copy-final-production-path.txt`。没有重复全类测试或全UI，也没有清理剪贴板；内容由用户自行处理。
+
+证据边界：原生EventChannel是实际codec/Bridge上的loopback测试，不是Dart订阅；期限检查注入自有deadline而非真实等待120秒；窗口后台是注入Bridge lifecycle，证明真实FLAG而非实际Home、截图/录屏/最近任务。UI的Home/锁库是实际Android事件，但不能代替真实锁屏或进程死亡。原生Bitmap输入为自有file URI，非SAF；非空密文恢复为同设备独立内存纯TOTP目标，非跨设备或混合SSH。同UID自有MediaStore图片通过真实系统选择/解码，不证明跨UID grant强制/撤销；图片预览取消未做真实UI验证（手动取消、原生取消及widget图片取消另有证据）。相机硬件成功扫描因0设备**不支持/未测**，本轮成功恢复不代替首次权限拒绝验收。实际断网/墙钟跳变、真实Flutter复制按钮E2E、服务MFA/账号、API28/29、生物、真实进程死亡、非空跨设备/混合SSH/native与每跳信任恢复均开放，缺失生产SSH provider继续失败关闭。未提交、归档或替换dist。
+
+所有本节相对日志均位于 `/tmp/ctos-totp-device-20261013/`，属于临时原始证据，不保证清理或环境更换后持久；持久结论与未测边界以本节和 [task check](../.trellis/tasks/10-08-authenticator/check.md) 为准。
+
+## 2026-10-13 Authenticator TOTP 本地实现与最终产物
+
+用户要求检查当前实现，并明确“复用现有 task，先 TOTP 后 SSH（推荐）”。已恢复原 `10-08-authenticator` 并完成工作台入口、相机/图片/手动添加、列表/倒计时/宿主复制/重命名/删除及公共秘密库接入；本轮授权本地实施、检查与构建，未安装设备或操作真实账号。公共API30凭证快捷成功属于原日期/原包证据，底座仍in_progress及未测关卡保持。
+
+本轮用户另更正当前开发板入口为 `192.168.9.14:5555`，已同步AGENTS、design/constraints及Trellis验证spec；此前询问中的 `.13` 来源于旧AGENTS错误。地址记录更正不等于已连接/安装或平台验收通过。
+
+本地检查均使用既有 `./hako` Docker入口（Flutter3.35.7/Dart3.9.2、项目固定Android工具链），没有更新宿主全局工具链。初始sandbox拒绝Docker socket后，在当前任务授权范围经自动审查批准执行同一入口；不是产品检查失败，也没有自动审批拒绝未解决。
+
+| 检查 | 实际结果与证据 |
+| --- | --- |
+| `./hako flutter test --reporter expanded` | 最终 **214项**通过，17秒；`/tmp/ctos-totp-flutter-full.log` |
+| `./hako flutter test test/authenticator_test.dart test/secrets_ui_test.dart --reporter expanded` | **79项**通过（26新增业务+53公共秘密库）；`/tmp/ctos-totp-flutter-focused.log` |
+| `./hako flutter analyze`、Dart格式/diff | analyze无问题（4.9秒），格式及diff通过；`/tmp/ctos-totp-flutter-analyze.log`，7个最终产品Dart文件SHA清单 `/tmp/ctos-totp-flutter-source.sha256` 在最终APK构建后全部匹配 |
+| `./hako bash -lc 'cd android && ./gradlew :app:testReleaseUnitTest :app:lintRelease --console=plain'` | **122 JVM项**（106原有+16新增）通过，XML汇总0failures/0errors/0skipped；lint **0错误/3个既有警告**，在Collector包可见性、Gradle更新提示及旧API备份规则；`/tmp/ctos-totp-native-final-unicode.log`，XML与lint位于 `build/app/` |
+| `./hako bash -lc 'cd android && ./gradlew :app:assembleReleaseAndroidTest --console=plain'` | instrumentation APK编译通过，**未执行设备测试**；`/tmp/ctos-totp-instrumentation-compile.log` |
+| `./hako flutter test build/authenticator-evidence/preview_test.dart --reporter expanded` | **45真实字体PNG场景**通过，5种尺寸/字号/键盘配置×9状态，0渲染异常；主会话/独立check审阅窄屏列表、2倍字体手动操作、横屏候选确认及不确定结果。`build/authenticator-evidence/matrix.json` 与PNG同目录，日志 `/tmp/ctos-totp-flutter-render.log` |
+| `./preview.sh` | 最终arm64 release成功，Gradle30.8秒，**32,934,089字节**；`/tmp/ctos-totp-final-build.log` |
+| `./hako bash -lc '"$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs build/app/outputs/flutter-apk/app-release.apk'` | **v2=true，1 signer**，现有开发证书SHA256 `8d36c8be418174cb4cda0b897ff3e32b2da6f84032819726e8e5671872df52ef`；`/tmp/ctos-totp-final-signature.log` |
+
+最终APK：`build/app/outputs/flutter-apk/app-release.apk`，SHA256 **`c704ff362ea8402709833217025e800a298917c698183bf6a4550388c40e85eb`**。ZIP核验只有arm64-v8a原生ABI，三份ZXing完整LICENSE/NOTICE与源资产逐字一致；依赖固定core3.5.4/Embedded4.3.0，来源/哈希见 [dependencies](dependencies.md)。没有替换 `dist`、提交或归档。
+
+本轮新增宿主验证覆盖支持参数RFC向量、前导零/窗口/2038之后、严格URI/UTF8/Base32、真实生成的多QR图离线读取、资源上限、预览种子清理/取消/期限/代次、条目命名空间和新ID不覆盖、重命名保留内容、最终publication无store读取、5000次只读轮询及淘汰后的写入拒绝。Flutter覆盖严格投影、永久read命名空间重试/取消、公共入口有效性、事件EOF/损坏及重连、路由/生命周期/锁定/迟到结果、墙钟跳变/刷新迟到、明确选择/提交/取消/不确定回执、长名称及等待取消期间双击复制只提交一次。
+
+独立review发现的事件EOF残留旧码、淘汰读取ID可写、预览revision未绑实际快照以及最终锁内资源清理已由owner修复；额外窄屏大字Base32提示/计数重叠、长名称对话框和双击复制也修复并补回归。最终复核没有剩余具体源码阻塞。临时渲染driver曾在延迟构建目标的ensureVisible失败，仅调整夹具，不将其记为产品失败；最终driver SHA256 `9bc582f9f466b8e0b9ec9c5ec2cb1ae221748e6c35e02bd8535004e09fe4470e`。图片内容均为合成账号和代码，没有真实种子/服务凭据。
+
+**验收分类：human-required，task保持in_progress。** 相机硬件/权限生命周期、真实图片provider/临时授权退场、实际Bitmap与安全窗口/截图/录屏/最近任务、ROM敏感复制、断网设备发码及非空TOTP跨设备备份恢复尚未执行；mock、JVM和渲染不能代替。真实MFA绑定/登录需服务账号另授；混合SSH/native文件与每跳信任恢复仍依后续SSH provider和Android探针，当前缺失时生产相关恢复继续拒绝。公共API28/29、生物、真实进程死亡也不在本轮宣称通过。逐项AC见 [task check](../.trellis/tasks/10-08-authenticator/check.md)，下一步仅在当前设备授权后安装核验上述场景，SSH按用户顺序继续已有规划。
+
+`/tmp/`日志及被忽略的build预览是本轮临时原始证据，不保证跨机器/清理后存在；持久结论和未测边界以本节、领域文档及task check为准。
+
 ## 2026-10-12 最终概览文案收敛与提交
 
 工作提交`5e67227`包含本任务35个相关代码/测试/夹具/spec/design/任务文件；按用户授权正常归档并清除当前指针。下方测试结果及未测边界继续按其日期/APK解释，原公共底座仍未全量验收。

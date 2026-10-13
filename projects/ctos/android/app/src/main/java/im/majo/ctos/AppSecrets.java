@@ -126,6 +126,8 @@ final class AppSecrets {
     }
 
     private final Store store;
+    final Object publicationLock = new Object();
+    volatile long contentRevision;
     final VaultSession session;
     private final VaultSession.Clock clock;
     private ImportPreview preview;
@@ -429,6 +431,63 @@ final class AppSecrets {
         }
     }
 
+    synchronized VaultOperation beginTotpList() throws VaultException {
+        return beginMutation(VaultOperation.Consumer.TOTP, VaultOperation.Purpose.TOTP_LIST, "totp-list", "", "");
+    }
+    synchronized Map<String, Object> totpList(VaultOperation operation, long unixSeconds) throws VaultException {
+        verifyOperation(operation, VaultOperation.Consumer.TOTP, VaultOperation.Purpose.TOTP_LIST, "totp-list", "", "");
+        List<Map<String, Object>> entries = new ArrayList<>();
+        try (Verified verified = sessionManifest()) {
+            for (VaultManifest.Entry entry : verified.manifest.entries) {
+                if (entry.type == VaultManifest.EntryType.TOTP) entries.add(VaultCollections.map(
+                        "entryId", entry.id, "identity", entry.identity, "label", entry.label,
+                        "code", generateTotp(entry.secret, unixSeconds)));
+            }
+            protectedEffect(operation);
+            return VaultCollections.map("entries", entries, "unixSeconds", unixSeconds);
+        }
+    }
+    synchronized VaultOperation beginTotpRename(String id) throws VaultException {
+        try (Verified verified = sessionManifest()) { findEntry(verified.manifest, id, VaultManifest.EntryType.TOTP); }
+        return beginMutation(VaultOperation.Consumer.TOTP, VaultOperation.Purpose.TOTP_RENAME, id, "", "");
+    }
+    synchronized void renameTotp(VaultOperation operation, String id, String label, EffectGuard guard) throws VaultException {
+        TotpInput.metadata(label, false);
+        verifyOperation(operation, VaultOperation.Consumer.TOTP, VaultOperation.Purpose.TOTP_RENAME, id, "", "");
+        try (Verified verified = sessionManifest()) {
+            VaultManifest.Entry old = findEntry(verified.manifest, id, VaultManifest.EntryType.TOTP);
+            VaultManifest.Entry replacement = new VaultManifest.Entry(old.type, old.id, old.identity, label,
+                    old.algorithm, old.digits, old.period, old.secret);
+            List<VaultManifest.Entry> entries = new ArrayList<>();
+            for (VaultManifest.Entry entry : verified.manifest.entries) entries.add(entry == old ? replacement : entry);
+            try (VaultManifest next = new VaultManifest(entries, verified.manifest.files)) { commitManifest(operation, verified, next, guard); }
+            finally { VaultCodec.wipe(replacement.secret); }
+        }
+    }
+    synchronized void checkTotpPending(VaultOperation operation) throws VaultException {
+        if (operation == null || operations.get(operation.requestId) != operation || operation.consumed
+                || operation.purpose != VaultOperation.Purpose.TOTP_SAVE || operation.consumer != VaultOperation.Consumer.TOTP) throw denied();
+        protectedEffect(operation);
+    }
+    synchronized long totpPublication(VaultOperation operation) throws VaultException {
+        protectedEffect(operation); return contentRevision;
+    }
+    void publishTotp(long epoch, long revision, long deadline, EffectGuard owner, EffectGuard publish) throws VaultException {
+        synchronized (publicationLock) { synchronized (session) {
+            owner.check(); session.assertEpoch(epoch);
+            if (!session.foreground() || !session.unlocked() || contentRevision != revision || clock.now() >= deadline)
+                throw new VaultException("VAULT_CHANGED", "The TOTP context changed or expired");
+            publish.check();
+        } }
+    }
+    synchronized void addTotp(VaultOperation operation, String id, String identity, String label, byte[] seed,
+            EffectGuard guard) throws VaultException {
+        try (Verified verified = sessionManifest()) {
+            if (verified.manifest.entries.stream().anyMatch(entry -> entry.id.equals(id))) throw denied();
+        }
+        saveTotp(operation, id, identity, label, seed, guard);
+    }
+
     synchronized VaultOperation beginTotpSave(String id) throws VaultException {
         return beginMutation(VaultOperation.Consumer.TOTP, VaultOperation.Purpose.TOTP_SAVE, id, "", "");
     }
@@ -579,22 +638,28 @@ final class AppSecrets {
         if (unixSeconds < 0) throw new VaultException("PARAMETERS", "Invalid code time");
         try (Verified verified = sessionManifest()) {
             VaultManifest.Entry entry = findEntry(verified.manifest, entryId, VaultManifest.EntryType.TOTP);
-            try {
+            String code = generateTotp(entry.secret, unixSeconds);
+            protectedEffect(operation);
+            return code;
+        }
+    }
+
+    static String generateTotp(byte[] seed, long unixSeconds) throws VaultException {
+        if (unixSeconds < 0) throw new VaultException("PARAMETERS", "Invalid code time");
+        try {
                 Mac mac = Mac.getInstance("HmacSHA1");
-                mac.init(new SecretKeySpec(entry.secret, "HmacSHA1"));
+                mac.init(new SecretKeySpec(seed, "HmacSHA1"));
                 byte[] digest = mac.doFinal(ByteBuffer.allocate(8).putLong(unixSeconds / 30).array());
                 try {
                     int offset = digest[digest.length - 1] & 15;
                     int binary = (digest[offset] & 127) << 24 | (digest[offset + 1] & 255) << 16
                             | (digest[offset + 2] & 255) << 8 | digest[offset + 3] & 255;
                     String code = String.format(java.util.Locale.ROOT, "%06d", binary % 1000000);
-                    protectedEffect(operation);
                     return code;
                 } finally { VaultCodec.wipe(digest); }
             } catch (java.security.GeneralSecurityException error) {
                 throw new VaultException("VAULT_FAILED", "Unable to generate a code");
             }
-        }
     }
 
     synchronized VaultOperation beginSshCredential(String entryId, String target, String connectionId) throws VaultException {
@@ -779,7 +844,13 @@ final class AppSecrets {
     }
 
     private void commit(VaultEnvelope envelope, byte[] quick, EffectGuard guard) throws VaultException {
-        try { store.commit(envelope.encode(), quick, guard); }
+        try { store.commit(envelope.encode(), quick, new EffectGuard() {
+            @Override public void check() throws VaultException { guard.check(); }
+            @Override public void beforeCommit() throws VaultException {
+                guard.beforeCommit();
+                synchronized (publicationLock) { contentRevision++; }
+            }
+        }); }
         catch (IOException error) { throw new VaultException("VAULT_IO", "Unable to save the vault; previous data retained"); }
         catch (VaultException error) {
             if (error.code.equals("VAULT_COMMIT_UNCERTAIN")) { session.lock(); operations.clear(); cancelPreview(); }

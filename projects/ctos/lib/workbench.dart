@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'authenticator/page.dart';
 import 'workbench/api.dart';
 import 'workbench/models.dart';
 import 'workbench/script_page.dart';
@@ -121,6 +122,24 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
             '本机工具与任务',
             style: Theme.of(context).textTheme.bodyMedium?.copyWith(
               color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: 20),
+          Card(
+            margin: EdgeInsets.zero,
+            child: ListTile(
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 16,
+                vertical: 12,
+              ),
+              leading: const Icon(Icons.password),
+              title: const Text('Authenticator'),
+              subtitle: const Text('离线验证码'),
+              trailing: const Icon(Icons.arrow_forward, size: 20),
+              onTap: () => showAuthenticator(
+                context,
+                canOpen: () => mounted && widget.active,
+              ),
             ),
           ),
           if (loading) ...[

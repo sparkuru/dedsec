@@ -78,8 +78,11 @@ confirmTrust, EffectGuard)` rechecks the same binding at storage boundaries.
   `fileName`, `locationLabel`, optional `errorCode`, bounded `remaining` rows
   (`role`, `name`, `location`, `state=present/unknown`). A completed export may
   still require cleanup; status alone must not hide remaining rows.
-- Bridge request IDs: single-use `[A-Za-z0-9_-]{1,128}`, one active UI operation,
-  maximum 4096 admitted IDs per bridge, 120-second timeout. Native capabilities
+- Bridge management request IDs: single-use `[A-Za-z0-9_-]{1,128}`, one active UI operation,
+  maximum 4096 admitted IDs per bridge, 120-second timeout. `secrets.totpList`
+  requires the permanently read-only `read_` prefix with a separate rolling128
+  replay set; every management method rejects that prefix even after eviction.
+  Old evicted read IDs only admit a fresh authenticated read, never a write. Native capabilities
   are separate; a UI ID or Boolean trust consent never authenticates a password.
 - Envelope v1: `CTOSVLT1`, 88-byte authenticated header; Argon2id v0x13,
   65536 KiB/3 iterations/4 lanes/32-byte key; AES-256-GCM, 16-byte tag,
@@ -185,9 +188,12 @@ confirmTrust, EffectGuard)` rechecks the same binding at storage boundaries.
   preserving unrelated entries. Real restore review/approval providers and
   trust semantics remain required before enabling mixed import.
   Do not implement a reduced OpenSSH parser or separate KDF/persistence.
-- `SensitiveClipboard.copyCurrentCode(adapter, entryId)` only responds to an
-  explicit user copy, requests current TOTP through the typed adapter and writes
-  it with the sensitive hint. User owns cleanup. No read/listener/clear call,
+- `SensitiveClipboard.copyCode(code)` is an internal effect helper invoked only
+  by explicit `secrets.totpCopy`: worker generation/current snapshot then
+  `AppSecrets.publishTotp` checks request/epoch/revision/deadline and the current
+  wall-clock window at the actual clipboard effect. Never call it with Flutter
+  supplied codes or without the native publication guard. It writes the
+  sensitive hint. User owns cleanup. No read/listener/clear call,
   copy ID, timer, cleanup status/preference or cross-app clipboard probe remains;
   this is the user's 2026-10-10 scope decision. Do not reintroduce them.
 
@@ -459,9 +465,44 @@ App/test IDs are fixed to `im.majo.ctos.secretsfixture` and `.test`, with no sha
 UID. `SecretsFixtureApplication` checks its package before synchronously setting
 only its own `root_access/auto_start=false`; failure aborts startup. Fixture test
 sources/manifest exclude the ordinary fixed-authority/grant helpers. UiAutomation
-does not suppress existing accessibility services or change system settings,
-secure-window flags or clipboard state. Cipher reads are scoped fixture oracles,
+does not suppress existing accessibility services, change system settings or
+disable secure-window protection to capture secrets. Management-only UI checks
+do not touch the clipboard. Physical TOTP copy checks default to disabled and
+require specific current approval to replace the global clipboard, plus the
+exact `ctosTotpClipboardCopy=true` instrumentation opt-in. General install/test
+authorization does not override an automatic approval rejection. An approved
+check may write a synthetic current code and verify only that own write, never inspect
+prior user content or restore/clear/listen to it. Cipher reads are scoped fixture oracles,
 not substitutes for the tested UI actions.
+
+`TotpUiFlowTest#freshFixtureTotpUiFlow` additionally requires
+`ctosTotpUiFixture=true`; `ctosTotpImageUi=true` opts into an API29+ exact owned
+UUID MediaStore PNG. Select only its exact filename in foreground DocumentsUI.
+Search editors bind `android:id/search_src_text` or the actual picker package's
+`:id/search_src_text`, an editable enabled visible EditText in the active window
+with advertised SET_TEXT. Never fall back to arbitrary editable nodes or coordinates.
+Cross-app search submission uses the existing UiAutomation session, not
+Instrumentation's own-app input API. Before Enter DOWN, refresh the exact
+focused active-picker editor and own UUID query. After that accepted DOWN,
+paired UP refreshes the same editor/query in the original picker window; focus
+may have cleared during submission. Other role/resource/owner/visibility guards
+remain; require both injections to succeed. Do not request INJECT_EVENTS, Root
+or system settings changes.
+Selecting same-UID owned media proves real picker/decode flow, not cross-UID
+temporary grant enforcement. Cleanup verifies exact URI ownership and deletion.
+Image-grid layouts can hide titles. Use only the known active picker's native
+`:id/sub_menu_list` action and verify its inverse `:id/sub_menu_grid` in the
+same window before strict visible `android:id/title`/UUID selection; never
+replace the exact filename with a thumbnail, coordinates or arbitrary row.
+Failed fixture ciphertext is reconciled read-only against the recorded UUID,
+marker and synthetic profile before uninstalling the two owned packages.
+Image-commit failure reconciliation accepts only that recorded run's baseline
+and at most its one explicitly selected public candidate. Authenticate the
+full profile and require unchanged ciphertext, no sidecars/journal/wrapper or
+persisted grants before cleanup; unknown entries or pending transactions stop
+cleanup. This inspector may neither launch UI nor unlock/mutate the session,
+and is not evidence of a completed UI flow. Fixed-label diagnostics expose only
+booleans/counts, never raw accessibility trees, user inputs or seed-bearing text.
 
 Bind distinct editable nodes by their exact field labels before input; do not
 reuse breadth-first indexes after a semantics rebuild. Refresh the same bound

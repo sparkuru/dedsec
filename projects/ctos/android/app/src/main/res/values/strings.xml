@@ -1,0 +1,4 @@
+<resources>
+    <string name="totp_scan_title">扫描 TOTP 二维码</string>
+    <string name="totp_image_reading">读取所选图片…</string>
+</resources>

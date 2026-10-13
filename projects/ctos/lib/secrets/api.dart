@@ -108,13 +108,12 @@ class SecretRequestOutcome {
 
 /// One foreground operation. Cancellation is also checked at the host commit.
 class SecretRequest {
-  SecretRequest(this.api);
-  static String _newId() => List.generate(
-    24,
-    (_) => Random.secure().nextInt(16).toRadixString(16),
-  ).join();
+  SecretRequest(this.api, {this.readOnly = false}) : _id = _newId(readOnly);
+  final bool readOnly;
+  static String _newId(bool readOnly) =>
+      '${readOnly ? 'read_' : ''}${List.generate(24, (_) => Random.secure().nextInt(16).toRadixString(16)).join()}';
   final SecretVaultApi api;
-  String _id = _newId();
+  String _id;
   String get id => _id;
   bool _cancelled = false;
   bool _used = false, _inFlight = false;
@@ -127,7 +126,7 @@ class SecretRequest {
     if (_cancelled) throw PlatformException(code: 'VAULT_CANCELLED');
     if (_inFlight) throw PlatformException(code: 'BUSY');
     // Host request IDs are single-use, including unsuccessful attempts.
-    if (_used) _id = _newId();
+    if (_used) _id = _newId(readOnly);
     _used = _inFlight = true;
     return _id;
   }

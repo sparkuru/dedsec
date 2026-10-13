@@ -1,5 +1,17 @@
 # Architecture
 
+2026-10-13 实机增量：Android已resume但窗口尚无焦点时，Flutter仍可能inactive；添加页只缓存有效请求的稳定非敏感失败提示，回前台可恢复。成功图片元数据在同请求/epoch/revision/当前路由条件下最多等待3秒，等待中不渲染秘密，恢复后重验可见性并扣除已耗预览时间，不续原生期限；取消/锁库/覆盖/离开使旧请求退场。两项修复共7个widget回归，最终221 Flutter通过；真实0相机恢复及其他设备结果见 [验证](verification.md)。
+
+## Authenticator TOTP（2026-10-13，本地实现完成）
+
+工作台原生路由接入 `lib/authenticator/`，复用公共创建/导入/解锁与设置/安全。`ctos/native` 的 `secrets.totp*` 交由 `AppSecretsBridge`，`ctos/secrets` 仅发会话元数据；Flutter持有账号/当前代码，不接收种子或数据密钥。`TotpInput` 严格校验SHA1/6位/30秒与元数据，`TotpPreviews` 在宿主保留120秒候选票据，明确选择确认后 `TotpVaultAdapter` 以新ID提交公共密文；重命名/删除只作用于自身条目。
+
+`TotpCameraActivity` 和 `TotpImageActivity` 为自有nonexported安全窗口，前者在用户请求后申请相机权限，后者承接系统单张图片选择及临时授权。ZXing随APK离线解码，无缓存图库或外部扫码App。相机真实可见生命周期维持App前台；外部选择器仍按既有后台秒数到期，不用定时豁免。图片数据/URI/种子不进入父Activity结果或Flutter；只返回无种子候选投影。
+
+列表使用永久只读的 `read_` 请求命名空间和128条滚动重放记录，管理请求保留4096条永久记录；淘汰读取不会允许该ID写库。worker核验实际库快照，最终发布以轻量owner/epoch/revision/期限guard防止迟到展示或复制，不在主线程最终锁内做磁盘/core/预览清理。复制由宿主重算并拒绝跨时间窗口，敏感标记沿用公共helper，无读取/清理。前端锁定、覆盖、后台、事件异常/结束或跨时间窗口均移除旧码，事件恢复前保持关闭。
+
+接口与资源边界见 [领域契约](authenticator.md)、[宿主规范](../.trellis/spec/backend/authenticator.md) 和 [呈现规范](../.trellis/spec/frontend/authenticator.md)。[本地验证](verification.md#2026-10-13-authenticator-totp-本地实现与最终产物) 不代表相机、真实provider/临时授权、平台安全窗口/剪贴板或完整混合恢复实测。生产SSH语义与信任审阅provider缺失时继续拒绝相关恢复。
+
 ## 概览与设置（2026-10-12，源码已实现）
 
 最终摘要去掉DEVICE和Android/运行时间副标题；完整设备字段保留。网络/接口/连接副标题为静态内容范围，接口数量/采集来源位于检索框下独立元数据，状态/时间/映射仍由原数据层提供。

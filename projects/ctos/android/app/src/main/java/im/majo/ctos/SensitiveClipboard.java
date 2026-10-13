@@ -11,9 +11,8 @@ final class SensitiveClipboard {
 
     SensitiveClipboard(Context context) { clipboard = context.getSystemService(ClipboardManager.class); }
 
-    void copyCurrentCode(TotpVaultAdapter adapter, String entryId) throws VaultException {
+    void copyCode(String code) throws VaultException {
         if (clipboard == null) throw new VaultException("VAULT_UNAVAILABLE", "Clipboard is unavailable");
-        String code = adapter.currentCode(adapter.request(entryId), entryId);
         ClipData clip = ClipData.newPlainText("ctOS code", code);
         PersistableBundle extras = new PersistableBundle();
         // Literal is supported on old releases and recognized as EXTRA_IS_SENSITIVE on API33+.

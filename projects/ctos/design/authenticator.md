@@ -1,68 +1,49 @@
-# 第三方 Authenticator 规划入口
+# 第三方 Authenticator
 
-2026-10-09，planning / 已确定范围整理完成，待最终审阅。尚未实现 OTP、扫码、秘密库或系统解锁，未绑定/登录真实账号。
+2026-10-13 用户确认效果并授权提交验收、继续下一项，当前TOTP交付按已记录实测边界接受并归档。原产品AC及硬件/跨设备/混合等未测项继续保留在验证与公共/SSH联合关卡；下方in_progress是验收前状态。
 
-[任务 PRD](../.trellis/tasks/10-08-authenticator/prd.md)、[接入设计](../.trellis/tasks/10-08-authenticator/design.md)、[实施计划](../.trellis/tasks/10-08-authenticator/implement.md)、[规划检查](../.trellis/tasks/10-08-authenticator/check.md)。用户持续要求仅规划，未获实施批准。
+2026-10-13 后续设备阶段：用户授权“帮我安装、自动测试”，最终 `3bc762d9…` 已覆盖安装 `192.168.9.14:5555` 并读回一致。已修复相机稳定失败提示及成功图片元数据先于Dart恢复的前台交接问题；成功结果最多等3秒、同请求/epoch/路由守卫保持、等待中不渲染秘密且不续原生期限。221 Flutter/86定向/analyze通过，独立UID原生7项通过，真实无相机恢复通过。系统选图和生命周期完整流程结果见 [设备验证](verification.md)。用户后续明确允许覆盖，原生合成当前码复制/敏感标记1项6.616秒通过；不读取原内容或恢复/清空；真实账号未操作，硬件相机与跨设备/混合SSH关卡保留。下段本地阶段不包含安装的描述按当时状态解释。
 
-## 用户已确定与公共责任
+2026-10-13：用户批准复用现有 task、先 TOTP 后 SSH，本任务已恢复 `in_progress`。下述 TOTP 业务已接入源码；本轮为本地实现、测试、真实字体渲染及 APK 构建，不包含设备安装或真实服务账号操作。最终检查及产物见 [验证记录](verification.md) 和 [任务检查](../.trellis/tasks/10-08-authenticator/check.md)。公共底座仍保留未测平台/联合验收，不能据此标全量完成。
 
-首版离线 TOTP、相机扫码/本机图片读码/手动添加标准服务条目、条目管理/代码/倒计时/复制，无云同步。用户选择自己设置的主口令、加密备份及导入覆盖、可开启关闭的设备系统认证快捷解锁，并明确要求该模型应用到 SSH，降低不同实现的理解/维护难度。
+[需求](../.trellis/tasks/10-08-authenticator/prd.md)、[技术设计](../.trellis/tasks/10-08-authenticator/design.md)、[实施计划](../.trellis/tasks/10-08-authenticator/implement.md)。10-08/09 的规划、讨论与撤销决定保留在任务检查历史，不作为当前源码现状。
 
-公共契约只维护在 [App 统一秘密库与认证](app-authentication.md)：一个主口令、一个类型化加密库、一套 KDF/持久化/设备包装/内存会话/设置和迁移流程。库内可保存 TOTP 种子及用户主动保存的 SSH 密码/私钥口令；Authenticator 是 OTP 业务调用方，SSH 是身份绑定/远端认证调用方，不各自实现另一套库或解锁流程。
+## 当前入口与能力
 
-```text
-统一首次设置 / 主口令或生物快捷解锁 / 关闭快捷方式 / 加密迁移
-                              ↓
-                   App 统一秘密库及使用会话
-                   ├─ Authenticator：TOTP 条目与代码
-                   └─ SSH：匹配身份的保存凭据与认证
-```
+工作台有独立 Authenticator 入口，先进入公共秘密库创建/导入/解锁，再回到验证器。有效前台会话复用，无验证器专属主口令。设置按钮进入同一秘密库管理页；主导航仍为概览/工作台/终端/设置，普通页面不增加登录墙。
 
-首次需要秘密的功能路由到公共设置/导入，再询问设备快捷解锁；有效统一会话中业务操作仍检查 consumer/条目/目标/代次。关闭快捷方式须本次手动输入主口令认证解密，成功后移除本设备包装材料并锁定，保留整个库，所有秘密业务回到主口令路径；普通信息/App/Root/HFTP 功能不因此新增口令墙。
+| 能力 | 当前实现 |
+| --- | --- |
+| 账号列表 | 名称、账号身份、6位验证码、文字倒计时及进度；有效前台路由定时刷新，后台/锁定/路由覆盖移除旧码 |
+| 手动添加 | 发行方/账号/Base32密钥，或用户手输otpauth URI；宿主校验后清空输入并显示无种子确认投影 |
+| 图片添加 | 系统选择单张图片、宿主离线多QR解码；多候选明确选择一个并确认，不整图自动批量加入 |
+| 相机添加 | 用户点击后请求相机权限；ctOS自有非exported安全窗口扫描，不调外部扫码App；拒绝或不可用保留图片/手动 |
+| 管理 | 宿主新UUID添加，不覆盖已有账号；重命名保留身份/种子，删除明确确认，不能操作SSH命名空间 |
+| 主动复制 | 宿主重新生成当前码，最终会话/期限/快照及时间窗口核验后复制并标敏感；无读取/监听/清理/跟踪 |
+| 设置与备份 | 复用设置/安全的唯一主口令、快捷、后台保留、改口令和完整加密导入导出，不另建格式或库 |
 
-导出先重新输入当前主口令认证解密，再生成统一主口令加密包；另一设备用来源口令完整验证、预览确认覆盖后提交；失败/取消保护旧库，成功清理旧会话/设备材料，新设备重新登记。不自动合并，设备生物/Keystore 材料不迁移。2026-10-09 已确认受管 SSH config/Include/私钥/关联公钥或证书/信任同包加密保护与恢复，导入先校验引用/身份/路径并单独审阅信任，不执行配置或绕过指纹变化检查。
+## 统一秘密与生命周期
 
-## 可行性与标准兼容
+[App公共秘密契约](app-authentication.md) 拥有 Argon2id、AES-GCM、持久化、会话、设备材料、库代次和完整恢复事务。TOTP adapter只管理自身条目/种子及代码，Flutter不获得种子/数据密钥；不经Python、Shell、通用工具历史或文件共享库。主口令/管理输入只供指定认证解密请求使用，托管/系统副本尽力清理，不承诺物理彻底擦除或抵御Root/同UID进程攻破。
 
-验证码核心较小，主要工程量在公共秘密设施、条目/扫码、使用和恢复体验。TOTP 根据共享密钥/时间生成代码，可离线运行；服务对开放第三方 TOTP 的入口通常不按验证器品牌审批，这是基于标准及注册流程的推断，不是所有 MFA 的承诺。算法依据 [RFC 6238](https://www.rfc-editor.org/rfc/rfc6238)；仅实现 TOTP，不实现其他 OTP 类型。
+一个主口令及类型化库同时容纳TOTP和已受管SSH对象。共享前台会话；后台保留默认30秒、可设0..86400秒，0即锁；锁屏/手动/重启锁定。实际相机Activity可见时仍属ctOS前台，但Main业务不能在非resumed时发布秘密；没有定时保活例外。外部图片选择器适用既有后台规则，超时/0秒锁定导致原请求失效，需重新解锁/选取或使用手动路径，不复活旧票据。
 
-服务二维码通常含 otpauth URI，来自 [Google Key URI Format](https://github.com/google/google-authenticator/wiki/Key-Uri-Format)，不是 RFC 6238 定义的注册协议。解析 Base32、issuer/label、algorithm/digits/period；相同密钥但参数不同会不匹配。历史页面的客户端忽略参数说明不能当作当前 Google App 实测。
+进入敏感路由先取得窗口owner，再构造内容；移除页面并等待帧后释放自身owner，嵌套路由不误清其他保护。读取结果绑定请求/会话/内容revision，锁库、换代、覆盖、取消、事件流断开或损坏均抑制旧结果；事件流恢复前不重新显示代码。跨30秒窗口或墙钟跳变时先隐藏旧码，即使宿主刷新仍未完成；复制不使用Flutter缓存值。
 
-| 服务/入口 | 官方声明 | 本任务边界 |
-| --- | --- | --- |
-| [GitHub TOTP](https://docs.github.com/en/authentication/securing-your-account-with-two-factor-authentication-2fa/configuring-two-factor-authentication) | 用户可选 TOTP app、扫码/手动；SHA-1/6 位/30 秒 | 标准互操作预期，未 ctOS 实测；GitHub Mobile 是另一机制 |
-| [GitLab OTP](https://docs.gitlab.com/user/profile/account/two_factor_authentication/) | 支持多种 OTP app 与二维码/手动 | 外部 IdP/组织策略另核对 |
-| [AWS IAM](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_mfa.html) / [Identity Center](https://docs.aws.amazon.com/singlesignon/latest/userguide/mfa-types.html) | 虚拟验证器使用 TOTP，Identity Center 接受合规应用 | 不替代 FIDO/安全密钥或组织规则 |
-| [Microsoft Entra OATH](https://learn.microsoft.com/en-us/entra/identity/authentication/concept-authentication-oath-tokens) | 第三方 TOTP 可用，不支持 HOTP | [管理员可禁用第三方令牌](https://learn.microsoft.com/en-us/entra/identity/authentication/how-to-mfa-manage-oath-tokens) |
+## 添加、扫码与资源边界
 
-所有服务结论来自官方资料及标准推断，没有 ctOS 登录结果。网站写“Google Authenticator”需检查实际密钥/URI/专用注册流程。[Microsoft 推送/数字匹配/免密](https://learn.microsoft.com/en-us/entra/identity/authentication/concept-authentication-authenticator-app)、Passkey/WebAuthn、短信/邮件及指定合规设备不由 TOTP 替代。
+算法依据 [RFC6238](https://www.rfc-editor.org/rfc/rfc6238)，注册入口依据 [Key URI Format](https://github.com/google/google-authenticator/wiki/Key-Uri-Format)。首版只支持SHA-1/6位/30秒TOTP：类型、重复/未知参数、issuer与label前缀、UTF8及Base32残余位/填充均严格校验；不支持组合明确拒绝，不静默按默认生成另一种代码。HOTP、Google批量迁移、其他验证器专有备份、推送/数字匹配、Passkey/FIDO2、短信/邮件及自动向其他应用填码均排除。
 
-## 代码证据及业务边界
+相机与图片使用 [APK内固定ZXing依赖及完整LICENSE/NOTICE](dependencies.md)，无网络模型、首次下载或上传识别。图片URI和短期授权属于专用非exported读取Activity，不传播到父Activity/Flutter，不持久授权或扫描图库；只读用户选择的图片，不改/删原图、不创建barcode图片缓存。外部provider是否能断网取到原图由provider决定，ctOS不主动联网取图，外部原件也不因此成为加密副本。
 
-- pubspec.yaml 现为 Flutter/xterm；Manifest 未声明 Camera/生物认证，未找到自有 OTP/Keystore 实现。新增库/权限/许可证需后续审查。
-- MainActivity.java:52 为宿主 MethodChannel，ToolFiles.java:20 为私有工具文件 broker；可参考交互但不能将工具共享库当秘密库。
-- Manifest:14 allowBackup=false 及 data_extraction_rules.xml 排除只是配置，不是所有 ROM/迁移路径的实测保护。
-- App Shell/Python 同 UID、Root/进程攻破和托管内存副本风险按公共权威契约记录；私有目录不是同 UID 秘密沙箱。
-- TotpAdapter 在宿主的固定操作中读取自己的种子并生成短期代码，Flutter 不长期持有种子/数据密钥，不启动 Python/Shell 来算验证码。TOTP 计时展示需对时间/前后台变化重算，不用冻结倒计时代替当前代码。
+URI上限8192字符、种子10..128字节、元数据512UTF8字节；图片10MiB、单边8192、1600万像素、最多16个QR候选。预览为宿主短期随机票据，绑定候选/操作/快照/会话，120秒到期清理；UI只显示账号及受支持参数。明确选中并确认后才保存，取消/锁定/超时/库变化/迟到均不能添加。解码取消可先退出UI并拒绝晚到数据，不对任意provider阻塞I/O的绝对结束时限作承诺。
 
-2026-10-09 用户确认首版包含从手机图片读取二维码（AUTH-13）。使用系统选择器只读取用户明确选中的图片，在宿主离线有界解码，不申请全图库读取、不扫描整个图库、不自动保存种子图片或修改外部原图。仓库已有 `ToolFiles.java:98` 的 ACTION_OPEN_DOCUMENT 用户选文件入口，但二维码识别尚未实现；图片与相机共用标准 otpauth 校验和条目确认流程，识别结果不会自动提交、打开网址或执行命令。多二维码只列合规候选供明确选择，不自动整图批量加入；无有效码/不支持内容/损坏或超限有可恢复反馈，取消/失败不创建或覆盖条目。
+## 备份、依赖与实测边界
 
-种子/完整 otpauth URI 仅作为宿主受管短期添加请求，返回 UI 的确认投影不包含原始种子；不进入导航参数、日志/通用历史/诊断或明文缓存。图片选取/解码/预览的迟到结果绑定原请求和库代次，锁定/取消/库覆盖后不能提交；清理临时 URI 使用授权/内存图片/待添加秘密，不持久保留源授权用于扫描或同步。文件读入字节/解码像素/尺寸/候选数量/耗时设技术上限，先检查再分配；离线库/所需模型随 APK 提供，不依赖首次使用下载、上传识别或云接口。相机授权拒绝仍可用图片/手动路径，不阻塞普通功能。系统选文件 provider 能否在断网读取原图需分开说明，ctOS 不主动网络取图；用户外部原图仍由用户保管，导入不会使其自动成为加密副本。
+导出、改主口令、关闭快捷及导入目标认证仍必须本次真实主口令解密，既有会话/系统成功布尔值不能跳过。来源完整验证、元数据预览、明确覆盖后原子提交；不自动合并。旧备份仍用旧口令，设备Keystore/生物材料不迁移。来源或目标含SSH时需要生产SSH语义和信任审阅provider；目前缺失时继续拒绝，不能用空validator伪造混合恢复成功。
 
-首版已确定基础参数为 SHA-1/6 位/30 秒；algorithm/digits/period 明确解析和校验，不支持组合拒绝并提示，不静默按默认生成。其他算法/位数/周期扩展不作为本次必交付范围。按 RFC 6238 支持组合向量/时间窗口/前导零/2038 后时间验证。扫码库离线工作、图片读码已纳入，Google 批量迁移和其他验证器备份格式排除。
+当前本地测试涵盖支持参数的RFC向量、前导零/窗口/2038之后、严格输入、真实生成的多QR图、条目/预览/取消/效果边界、只读ID长期刷新及Flutter路由/事件/时间/交互。真实字体预览覆盖窄屏、大字、软键盘及横屏；这些不等于相机硬件、实际系统选择器、临时授权退场、截图/录屏/最近任务或ROM剪贴板实测。
 
-## 截图保护与验证码敏感复制已确认
+真实服务绑定/登录仍需账号授权，并按实际服务与组织策略记录；标准互操作不承诺所有MFA通用。API28/29、生物、真实进程死亡、非空TOTP跨设备恢复与混合SSH/native恢复等关卡保留开放。按用户顺序后续推进 [SSH客户端](ssh-terminal.md)，TOTP页面不是SSH技术依赖，二者复用同一底座。
 
-仓库当前仅有普通复制入口：`lib/workbench/result_card.dart:32`、`lib/terminal_interaction.dart:404`；未发现 FLAG_SECURE 或专用敏感剪贴板处理，这些是实现现状，不能当作新增隐私规则已经实现。Android [敏感 Activity 保护](https://developer.android.com/security/fraud-prevention/activities) 提供 FLAG_SECURE 阻止系统截图/不安全显示及减少后台截图暴露，但不是 Root/同 UID 或所有 ROM 的安全保证。2026-10-09 用户已确认验证码/口令输入等秘密库敏感页面使用安全窗口、禁止系统截图/录屏并隐藏最近任务中的秘密，普通 ctOS 页面保留截图。统一生命周期及先保护后展示/移除秘密后释放规则只维护在公共 BASE-13；实施后逐平台验证路由切换/系统选择器/返回及后台预览，不能把安全标记状态泄漏到无关页面。
-
-2026-10-10 用户撤销验证码剪贴板清理，取代 2026-10-09 默认 30 秒/可调尽力清理约定。TOTP adapter 只在有效会话/条目检查后响应用户主动复制当前时间码，公共 BASE-14/helper 附敏感标记；清理由用户自理。删除清理设置/复制 ID/跟踪/读取/监听/定时器/补清及相关竞态探针，不提供剪贴板清理入口。普通输出复制及后台库超时不变，具体职责见 [公共契约](app-authentication.md)。
-
-## 入口与共同设置已确认
-
-当前导航为概览/信息/工作台/终端（`lib/main.dart:720` 至各 NavigationDestination），工作台由 `lib/workbench.dart:14` 的 WorkbenchPage 管理现有工具入口，没有独立全局设置 tab。2026-10-09 用户确认 Authenticator 放工作台的独立入口，进入 Flutter/Android 宿主支持的验证器页面；公共秘密库管理集中到一页，从验证器/SSH 都可进入，管理主口令、快捷解锁、后台保留、验证码复制保留及加密导入导出。公共页面只实现一次，不将验证器作为 Python 脚本或普通工具共享库操作；入口已确认（公共 BASE-15），首次设置/导入/解锁完成回原业务，取消无半成品，导航不停止已建立 SSH 或替代管理授权。
-
-## 依赖、验收与规划状态
-
-先交付 [公共底座 task](../.trellis/tasks/10-08-app-authentication/prd.md)，再 TOTP 接入；不依赖 SSH 客户端完成。公共认证系统授权与统一库使用会话分别管理，业务目标检查逐次执行，库已解锁不自动授权任意秘密操作；2026-10-09 已确认前台跨功能共享、后台保留秒数可配置（默认 30、0 即锁）、锁屏/手动即锁与进程重启锁定，共用公共底座设置。
-
-产品范围为离线 TOTP、相机/图片/手动添加和 ctOS 完整加密备份；用户已撤销 HOTP 与验证码清理，其他平台专有迁移仍排除。主口令管理/设备快捷/共同设置/跨页面会话/后台保留秒数/敏感页面保护/主动复制全部引用公共契约。验收覆盖支持组合的 RFC 6238 向量、断网及时间窗口/前后台、扫码无效/超限/取消、认证失败及完整恢复、两个消费者共用底座；真实服务绑定/登录需实施时另获账号授权，未测不标通过。平台/native 关卡按技术契约验证。公共底座已实施，TOTP 业务仍 planning，依底座验收接入；本业务没有设备或账号实测。
+具体可执行接口与测试要求：[宿主规范](../.trellis/spec/backend/authenticator.md)、[前端规范](../.trellis/spec/frontend/authenticator.md)。

@@ -65,6 +65,8 @@ chaquopy {
 flutter { source '../..' }
 dependencies {
     implementation 'org.bouncycastle:bcprov-jdk18on:1.86'
+    implementation 'com.google.zxing:core:3.5.4'
+    implementation 'com.journeyapps:zxing-android-embedded:4.3.0'
     testImplementation 'junit:junit:4.13.2'
     androidTestImplementation 'androidx.test:runner:1.6.2'
     androidTestImplementation 'junit:junit:4.13.2'

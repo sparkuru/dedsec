@@ -1,5 +1,19 @@
 # ctOS Mainline
 
+2026-10-13 当前授权：用户确认TOTP效果并批准提交验收/继续下一项；先完成TOTP工作提交、归档和journal，再复用10-08-ssh-terminal-client启动Android native无明文磁盘文件访问探针及原定SSH集成。serial范围仅此已规划SSH任务；不操作真实SSH账号、用户库或未经本任务授权的设备。TOTP未测边界和共享底座in_progress保持；下方同日TOTP in_progress/SSH planning为验收前历史。
+
+## 2026-10-13 恢复既有 TOTP 与 SSH 任务
+
+- **Subsequent device authorization:** 用户在地址更正后明确“帮我安装、自动测试”。当前`.14`核对AIO-3568J/Android11/API30/arm64，secure=true但当前未锁；最终3bc762d9前台交接修复主包覆盖安装、读回一致。实际0相机失败恢复通过，221Flutter/86定向/analyze及独立UID7项原生通过；系统双二维码选图与管理/生命周期全流程1项72.734秒通过，临时测试包/自有图片已清理，具体失败/核清/修复按验证记录。fixture主包1efe858b，不操作真实库/账号/系统安全。复制最初被自动审批拒绝；随后用户明确允许覆盖，原生合成复制/敏感标记1项6.616秒通过且再清理两个fixture包；0相机不能证明硬件扫码。下方初轮授权/本地检查为历史。
+
+- **Mode / Authorization:** 用户要求检查实现并继续推迟的任务，随后明确“复用现有 task，先 TOTP 后 SSH（推荐）”。复用已存在且已审阅的规划，本轮先恢复 TOTP 本地实施、测试与构建；无本轮设备安装或真实账号授权。
+- **Current task:** `10-08-authenticator` 已启动为 `in_progress`。SSH 父/客户端仍 planning，后续按用户确定顺序接续，不创建重复 task。
+- **Base pulse:** 工作区初始干净，最新代码提交 `5e67227`；公共库/共同管理及 TOTP SHA1/6/30 核心已实现，API30锁屏凭证快捷曾成功实测。底座仍 `in_progress`，API28/29、生物、真实进程死亡、混合 SSH/native 恢复等开放关卡保持，不据用户“秘密库完成”概括标记全量验收。
+- **Dependency boundary:** 按既有合同/联合验收拆分和本轮明确授权接入 TOTP，不要求尚未存在的 SSH 业务先验收才实施 TOTP；生产 SSH validator/reviewer 缺失时继续拒绝相关恢复。
+- **Local result:** Authenticator 相机/图片/手动添加、条目列表/倒计时/复制/管理及公共库接入完成；214 Flutter、122 JVM、79定向、analyze、lint0错误3既有警告和45真实字体场景通过，最终arm64/v2 APK `c704ff362ea8402709833217025e800a298917c698183bf6a4550388c40e85eb`。独立复核无剩余具体源码阻塞；完整证据在 `design/verification.md` 和 task check。
+- **Next action:** implementation_complete，review=human-required；当前设备已授权安装/自动验收，本轮非copy真实系统选图及清理完成；原生复制已获专项批准并通过；Flutter复制按钮E2E/硬件相机/真实服务账号/跨设备混合关卡另记。SSH随后按已有规划先验证Android native无明文文件视图，不提交/归档当前未验收task。
+- **Current board correction:** 用户于本轮更正开发板入口为 `192.168.9.14:5555`，已同步AGENTS/constraints/validation spec，替代错误 `.13` 默认入口；地址更正本身不是安装/验收证据。
+
 ## 2026-10-12 最终概览文案收敛与提交批准
 
 - **Authorization:** 用户要求“不建task；在当前task一起完成；完成后提交”，后续“继续任务”保留该授权；不重复提交许可。

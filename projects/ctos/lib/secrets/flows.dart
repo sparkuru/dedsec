@@ -45,12 +45,19 @@ Future<T?> showSensitiveSecretRoute<T>(
   required SecretVaultApi api,
   required WidgetBuilder builder,
   Future<void> Function(T?)? onPopped,
+  bool Function()? canOpen,
 }) async {
   final navigator = Navigator.of(context);
+  final origin = ModalRoute.of(context);
+  if (origin?.isCurrent == false || canOpen?.call() == false) return null;
   final owner = await api.acquireProtection();
   PageRoute<T>? route;
   try {
-    if (!context.mounted || !navigator.mounted) return null;
+    if (!context.mounted ||
+        !navigator.mounted ||
+        origin?.isCurrent == false ||
+        canOpen?.call() == false)
+      return null;
     route = MaterialPageRoute<T>(builder: builder);
     final result = await _pushSecretRoute(navigator, route);
     if (onPopped != null) await onPopped(result);
@@ -501,10 +508,11 @@ class _SecretPasswordPageState extends State<_SecretPasswordPage>
 Future<bool> ensureSecretVaultUnlocked(
   BuildContext context, {
   SecretVaultApi api = const SecretVaultApi(),
+  bool Function()? canOpen,
 }) async {
+  bool current() => context.mounted && (canOpen?.call() ?? true);
   var status = await api.status();
-  if (!context.mounted || !(ModalRoute.of(context)?.isCurrent ?? true))
-    return false;
+  if (!current() || !(ModalRoute.of(context)?.isCurrent ?? true)) return false;
   if (status.unlocked)
     return _secretVaultReady(context, api, status.generation);
   if (!status.exists) {
@@ -529,7 +537,7 @@ Future<bool> ensureSecretVaultUnlocked(
         ],
       ),
     );
-    if (!context.mounted || choice == null) return false;
+    if (!current() || choice == null) return false;
     if (choice == 'import') {
       if (!await importSecretVault(context, api: api, exists: false))
         return false;
@@ -542,15 +550,14 @@ Future<bool> ensureSecretVaultUnlocked(
       );
       if (result == null || result['errorCode'] != null) return false;
     }
-    if (!context.mounted) return false;
+    if (!current()) return false;
     await offerSecretQuickUnlock(context, api: api);
     status = await api.status();
   }
-  if (!context.mounted) return false;
+  if (!current()) return false;
   if (status.unlocked)
     return _secretVaultReady(context, api, status.generation);
-  if (!context.mounted || !(ModalRoute.of(context)?.isCurrent ?? true))
-    return false;
+  if (!current() || !(ModalRoute.of(context)?.isCurrent ?? true)) return false;
   while (status.quickUnlockEnabled) {
     final request = SecretRequest(api);
     _SecretQuickUnlockResult? result;
@@ -565,7 +572,7 @@ Future<bool> ensureSecretVaultUnlocked(
       if (result?.unlocked != true) await request.cancel();
     }
     if (result == null ||
-        !context.mounted ||
+        !current() ||
         !(ModalRoute.of(context)?.isCurrent ?? true))
       return false;
     if (result.unlocked)
@@ -592,25 +599,24 @@ Future<bool> ensureSecretVaultUnlocked(
         ],
       ),
     );
-    if (!context.mounted ||
+    if (!current() ||
         choice == null ||
         !(ModalRoute.of(context)?.isCurrent ?? true))
       return false;
     if (!choice) break;
     status = await api.status();
-    if (!context.mounted || !(ModalRoute.of(context)?.isCurrent ?? true))
+    if (!current() || !(ModalRoute.of(context)?.isCurrent ?? true))
       return false;
     if (status.unlocked)
       return _secretVaultReady(context, api, status.generation);
   }
-  if (!context.mounted || !(ModalRoute.of(context)?.isCurrent ?? true))
-    return false;
+  if (!current() || !(ModalRoute.of(context)?.isCurrent ?? true)) return false;
   final result = await showSecretPasswordFlow(
     context,
     api: api,
     action: SecretFormAction.unlock,
   );
-  if (result == null || !context.mounted) return false;
+  if (result == null || !current()) return false;
   return _secretVaultReady(
     context,
     api,

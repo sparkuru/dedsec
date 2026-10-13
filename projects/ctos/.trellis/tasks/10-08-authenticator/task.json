@@ -2,8 +2,8 @@
   "id": "authenticator",
   "name": "authenticator",
   "title": "第三方 Authenticator：离线 TOTP 与 ctOS 加密备份",
-  "description": "离线 TOTP 接入统一秘密库，支持相机/图片/手动添加及 ctOS 自身加密备份；与 SSH 共用公共秘密配套，HOTP/其他平台迁移排除，规划待最终审阅。",
-  "status": "planning",
+  "description": "复用统一秘密库实现离线TOTP；2026-10-13恢复原任务，后续已授权当前开发板安装及隔离合成自动验收，真实服务账号仍未授权。",
+  "status": "completed",
   "dev_type": "fullstack",
   "scope": "authenticator",
   "package": null,
@@ -11,7 +11,7 @@
   "creator": "ctos",
   "assignee": "ctos",
   "createdAt": "2026-10-08",
-  "completedAt": null,
+  "completedAt": "2026-10-13",
   "branch": null,
   "base_branch": "antitrust",
   "worktree_path": null,
@@ -24,9 +24,19 @@
     "design/authenticator.md",
     "design/plan.md",
     ".trellis/tasks/10-08-app-authentication/prd.md",
-    "design/app-authentication.md"
+    "design/app-authentication.md",
+    "lib/authenticator/",
+    "test/authenticator_test.dart",
+    "android/app/src/test/java/im/majo/ctos/TotpTest.java",
+    ".trellis/spec/backend/authenticator.md",
+    ".trellis/spec/frontend/authenticator.md",
+    "design/verification.md",
+    "design/dependencies.md",
+    "android/app/src/androidTestSecretsFixture/java/im/majo/ctos/TotpPlatformTest.java",
+    "android/app/src/androidTestSecretsFixture/java/im/majo/ctos/TotpUiFlowTest.java",
+    "android/app/src/androidTestSecretsFixture/java/im/majo/ctos/TotpFixtureUi.java"
   ],
-  "notes": "2026-10-10 用户在最新完整规划摘要后回复“批准”。先启动公共统一秘密库/认证底座实施，并前置协调 SSH 无明文磁盘文件访问探针；公共底座已 in_progress，TOTP 与 SSH 完整接入仍依赖底座验收。HOTP 全部撤销，其他平台迁移排除。当前批准包含本地实现、构建和隔离技术验证，不包含真实设备安装/账号操作；未运行的产品或平台验收不标通过。",
+  "notes": "2026-10-13复用原task先TOTP后SSH；后续安装/自动测试获授权。最终3bc762d9前台交接修复版安装.14读回一致，221Flutter/86定向/analyze通过，旧实现实际RED。原生7项非copy62.548秒及最终fresh真实UI1项72.734秒通过；自有PNG/两fixture包清理，正式包仍一致。复制初轮自动审批拒绝后，用户专项批准允许覆盖；原生合成当前码复制/写后自身读回/敏感标记1项6.616秒通过，再清理两fixture。未读原内容/保存/监听/恢复/清空。真实账号、0硬件相机、图片预览取消/crossUIDgrant/跨设备混合等仍开放；in_progress/human-required，未提交/归档/替换dist。 用户随后确认效果不错并批准提交验收/继续下一项，当前交付按已记录实测边界完成归档；未测范围不转为通过，共享底座仍in_progress，随后复用SSH客户端task。",
   "meta": {
     "clipboard_scope_update": {
       "date": "2026-10-10",
@@ -34,11 +44,93 @@
     },
     "planning_stage": "approved",
     "implementation_approval": {
-      "date": "2026-10-10",
-      "response": "批准",
-      "scope": "公共底座实施及前置 SSH 内存文件访问探针；后续业务依赖底座验收",
-      "device_authorized": false,
-      "account_authorized": false
+      "date": "2026-10-13",
+      "response": "复用现有 task，先 TOTP 后 SSH（推荐）",
+      "scope": "既定离线 TOTP 本地实施/测试/构建；SSH后续按已有规划推进",
+      "device_authorized": true,
+      "account_authorized": false,
+      "device_authorization": {
+        "date": "2026-10-13",
+        "response": "帮我安装、自动测试",
+        "target": "192.168.9.14:5555",
+        "scope": "覆盖安装、独立测试库与合成账号的自动设备验收；不修改用户真实库、系统安全或服务账号"
+      },
+      "clipboard_authorization": {
+        "date": "2026-10-13",
+        "response": "允许覆盖，完成复制测试",
+        "target": "192.168.9.14:5555",
+        "scope": "one synthetic current TOTP global clipboard overwrite and own post-write verification; no prior read/save/restore/clear/listen"
+      }
+    },
+    "implementation_complete": true,
+    "review_classification": "human-required",
+    "local_validation": {
+      "date": "2026-10-13",
+      "flutter_tests": 221,
+      "focused_tests": 86,
+      "jvm_tests": 122,
+      "real_font_scenes": 45,
+      "analyze": "passed",
+      "android_lint": "0 errors, 3 existing warnings",
+      "jvm_and_font_evidence": "122 JVM and 45 font scenes ran at c704 local stage; unchanged native/layout not rerun after Flutter stable-error and bounded handoff fixes",
+      "instrumentation": "native 7 noncopy passed 62.548s, separately authorized 1 copy passed 6.616s; final fresh release Flutter UI 1 noncopy passed 72.734s, no skip",
+      "apk_sha256": "3bc762d9e6463ab9612393b9382923f4a29f613ceec3dbe4d9159aae0078f252",
+      "apk_path": "build/app/outputs/flutter-apk/app-release.apk",
+      "signature": "v2, 1 signer"
+    },
+    "pending_validation": [
+      "actual release Flutter copy-button E2E (native Bridge global synthetic write/readback/sensitive hint passed after specific approval)",
+      "hardware camera and first permission denial (current board has 0 cameras)",
+      "real image-preview cancellation and cross-UID temporary grant enforcement/revocation",
+      "screenshots/recording/recents, actual device network-off/clock change, API28/29/biometric/process death",
+      "nonempty TOTP cross-device backup/restore and authorized service MFA binding/login",
+      "SSH/native mixed restore after production provider integration"
+    ],
+    "current_device": {
+      "board_adb_serial": "192.168.9.14:5555",
+      "confirmed_by_user": "2026-10-13",
+      "address_correction_only": false,
+      "installed_this_session": true,
+      "model": "AIO-3568J",
+      "api": 30,
+      "android": "11",
+      "abi": "arm64-v8a",
+      "main_apk_sha256": "3bc762d9e6463ab9612393b9382923f4a29f613ceec3dbe4d9159aae0078f252",
+      "installed_readback_matches": true,
+      "camera_count": 0
+    },
+    "device_validation": {
+      "status": "authorized_checks_complete_remaining_acceptance_open",
+      "scope": "independent UID synthetic TOTP tests",
+      "fixture_main_sha256": "1efe858b4e185f7699dd53ea787f0960eaa3cf1b08553ce40d051038cf716ceb",
+      "fixture_test_sha256": "16a07a30ee407e567985f938a1a700d5f6441147c8829a019906bc2de44c7225",
+      "native_noncopy_tests_passed": 7,
+      "native_duration_seconds": 62.548,
+      "clipboard_test": "passed 1 test 6.616s after explicit global overwrite approval; synthetic current code and own post-write content/sensitive-hint verification; no prior read/save/restore/clear/listen; not Flutter-button E2E",
+      "real_account_used": false,
+      "ui_tests_passed": 1,
+      "ui_duration_seconds": 72.734,
+      "ui_run_id": "0e8e24b3-87b6-4691-b358-0fb87a297d9b",
+      "ui_skipped": 0,
+      "image_flow": "actual system picker, two QR candidates, no preview auto-persist, explicit Alpha-only commit/delete, original digest unchanged",
+      "grant_limit": "same UID owned MediaStore input, persisted grants 0; cross-UID enforcement/revoke not proven",
+      "success_ack_branch": "static-reviewed only; not triggered in final real UI run",
+      "fixture_installed_readbacks_match": true,
+      "owned_image_removed_verified": true,
+      "fixture_packages_uninstalled_verified": true,
+      "final_production_readback_matches": true,
+      "native_copy_tests_passed": 1,
+      "copy_duration_seconds": 6.616,
+      "copy_fixture_packages_uninstalled_verified": true
+    },
+    "human_review": {
+      "date": "2026-10-13",
+      "response": "效果不错；可以提交验收；然后继续做下一项",
+      "result": "accepted_current_delivery_with_documented_validation_limits",
+      "submit_authorized": true,
+      "archive_authorized": true,
+      "next_task": "10-08-ssh-terminal-client",
+      "scope_limits": "documented hardware/platform/account/cross-device/mixed validation remains unmeasured, no blanket pass"
     }
   }
 }

@@ -1,6 +1,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.USE_BIOMETRIC" />
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
@@ -16,6 +18,8 @@
         android:dataExtractionRules="@xml/data_extraction_rules" android:theme="@style/AppTheme">
         <meta-data android:name="flutterEmbedding" android:value="2" />
         <service android:name=".HftpService" android:exported="false" android:foregroundServiceType="dataSync" />
+        <activity android:name=".TotpCameraActivity" android:exported="false" android:excludeFromRecents="true" />
+        <activity android:name=".TotpImageActivity" android:exported="false" android:excludeFromRecents="true" />
         <activity android:name=".MainActivity" android:exported="true" android:launchMode="singleTop"
             android:hardwareAccelerated="true" android:windowSoftInputMode="adjustResize"
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode">

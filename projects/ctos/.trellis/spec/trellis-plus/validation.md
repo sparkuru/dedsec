@@ -1,9 +1,30 @@
 # ctOS Validation Profile
 
-脱敏重放约定：执行命令前设置 `PROJECT_ROOT` 为项目绝对路径、`EVIDENCE_DIR` 为独立临时证据目录，并重建所列历史夹具；原始机器路径不保留。`PHONE_ADB_SERIAL` / `BOARD_ADB_SERIAL` 须设置为当前授权并确认的目标，`TARGET-PHONE`、`TARGET-BOARD` 与 PHONE / WINDOWS / TEST-CLIENT 地址占位符仅表示设备和 LAN 角色；具体标识有意省略，不是当前探测出的连接配置，不能直接用于访问。完整约定见 [验证记录](../../../design/verification.md)。
+历史证据脱敏重放约定：执行命令前设置 `PROJECT_ROOT` 为项目绝对路径、`EVIDENCE_DIR` 为独立临时证据目录，并重建所列历史夹具；原始机器路径不保留。`PHONE_ADB_SERIAL` / `BOARD_ADB_SERIAL` 须设置为当前授权并确认的目标，`TARGET-PHONE`、`TARGET-BOARD` 与 PHONE / WINDOWS / TEST-CLIENT 地址占位符仅表示设备和 LAN 角色；历史具体标识有意省略，不是当前探测出的连接配置，不能直接用于访问。当前开发板入口见下节；完整历史约定见 [验证记录](../../../design/verification.md)。
 
 - ownership: project-shared
 - source: project-authored
+
+## Current development board
+
+User-corrected on 2026-10-13: `BOARD_ADB_SERIAL=192.168.9.14:5555`.
+The former `192.168.9.13:5555` entry is obsolete. This current endpoint is
+explicit project configuration; historical role placeholders below remain
+historical and do not replace it or grant installation authorization.
+
+```bash
+BOARD_ADB_SERIAL=192.168.9.14:5555
+adb connect "$BOARD_ADB_SERIAL"
+adb -s "$BOARD_ADB_SERIAL" shell getprop ro.product.model
+adb -s "$BOARD_ADB_SERIAL" shell getprop ro.build.version.sdk
+```
+
+Before authorized device work, verify transport and identity; unreachable,
+offline, unauthorized or unexpected identity means stop the device action,
+not fall back to another online target. Every subsequent command uses
+`adb -s "$BOARD_ADB_SERIAL"`. Do not use bare `adb shell` or the obsolete
+address. Current task authorization remains required for installation or
+state changes; recording this address alone does not establish a device pass.
 
 ## Checks by changed surface
 

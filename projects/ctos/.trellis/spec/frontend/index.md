@@ -10,6 +10,7 @@ work through the Android host APIs.
 | [Components](./component-guidelines.md) | Widget composition, theme, layout, accessible actions, and main-entry back confirmation |
 | [State Management](./state-management.md) | Widget-owned state and async lifecycle |
 | [App Secrets](./app-secrets.md) | Shared password flows, one-use requests, sensitive routes and outcome feedback |
+| [Authenticator](./authenticator.md) | Protected business routes, typed previews, event health, code freshness and current-copy flows |
 | [Type Safety](./type-safety.md) | Dart models and MethodChannel JSON boundaries |
 | [Quality](./quality-guidelines.md) | Flutter checks and representative tests |
 | [Connection Snapshots](./connection-snapshots.md) | Native payload, freshness, clone alias, and search contracts |

@@ -5,7 +5,7 @@ import java.util.UUID;
 /** Opaque module-only capability. There is no MethodChannel constructor or serialization. */
 final class VaultOperation {
     enum Consumer { TOTP, SSH }
-    enum Purpose { TOTP_CODE, TOTP_SAVE, TOTP_DELETE, SSH_CREDENTIAL, SSH_FILES, SSH_PRIVATE_KEY,
+    enum Purpose { TOTP_CODE, TOTP_LIST, TOTP_RENAME, TOTP_SAVE, TOTP_DELETE, SSH_CREDENTIAL, SSH_FILES, SSH_PRIVATE_KEY,
         SSH_SAVE, SSH_DELETE, SSH_TRUST_UPDATE, SSH_BUNDLE_WRITE }
     final String requestId = UUID.randomUUID().toString();
     final Consumer consumer;

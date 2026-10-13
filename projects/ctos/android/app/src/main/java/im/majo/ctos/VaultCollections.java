@@ -26,4 +26,10 @@ final class VaultCollections {
     static Map<String, Object> map(String key, Object value) {
         return Collections.singletonMap(key, Objects.requireNonNull(value));
     }
+    static Map<String, Object> map(String key, Object value, Object... pairs) {
+        if (pairs.length % 2 != 0) throw new IllegalArgumentException("Unpaired map fields");
+        Map<String, Object> result = new HashMap<>(); result.put(key, Objects.requireNonNull(value));
+        for (int i = 0; i < pairs.length; i += 2) result.put((String) pairs[i], Objects.requireNonNull(pairs[i + 1]));
+        return Collections.unmodifiableMap(result);
+    }
 }

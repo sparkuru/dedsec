@@ -1,6 +1,14 @@
 # ctOS 信息入口
 
+2026-10-13 用户已确认TOTP效果并批准提交验收、继续下一项：当前Authenticator交付收尾归档，实测及未测边界保留，下一项复用已有SSH客户端task，从Android native OpenSSH无明文磁盘文件访问关卡继续。下方同日in_progress/未提交为验收前阶段。
+
+2026-10-13 当前设备阶段：用户授权“帮我安装、自动测试”，最终前台交接修复版 `3bc762d9…` 已安装 `192.168.9.14:5555` 并读回一致，221 Flutter/86定向/analyze与独立UID7项原生验证通过。真实系统双二维码选图与管理/生命周期全流程1项72.734秒通过，临时测试包/自有图片已清理，详情见 [设备验证](verification.md)。相机失败提示和成功预览均已补前台交接保护；该板0相机。此前复制自动审批拒绝已由用户专项批准解决，原生合成复制/敏感标记1项6.616秒通过，真实账号/跨设备混合恢复等仍开放。下方本地c704/214阶段按当时状态解释。
+
+2026-10-13：[Authenticator](authenticator.md) 已按用户“复用原 task、先 TOTP 后 SSH”完成本地实现：工作台入口、相机/图片/手动添加、条目/倒计时/主动复制及公共库接入。214 Flutter、122 JVM、analyze、lint与45真实字体场景通过，最终arm64 APK `c704ff36…` 构建/v2验签通过；[本轮验证及未测项](verification.md#2026-10-13-authenticator-totp-本地实现与最终产物)。原task保持 `in_progress`，设备/真实账号及跨设备混合恢复尚未验收；[公共底座](app-authentication.md) 未测关卡不标完成。SSH仍planning，随后按既定顺序推进。下方10-12“无current/业务planning”均为历史。
+
 最新源码 APK：运行 [`./preview.sh`](../preview.sh)，完成 arm64 release 编译后输出 APK 绝对路径和 `adb install` 命令；需要 Docker，具体检查见 [验证记录](verification.md)。
+
+当前开发板入口：`192.168.9.14:5555`（用户2026-10-13更正），执行要求见 [约束](constraints.md) 和 [验证spec](../.trellis/spec/trellis-plus/validation.md#current-development-board)。
 
 2026-10-12 最终交付：摘要DEVICE/Android运行行已移除，四分类范围描述统一、接口来源/数量保留。188全量/84真字体场景、analyze/格式及arm64/v2验签通过；25bcdf7c…已安装开发板读回一致，最终分类布局实测通过。按用户授权提交`5e67227`并[归档本任务](../.trellis/tasks/archive/2026-10/10-12-overview-settings/check.md)，当前指针已清除；[最终验证](verification.md#2026-10-12-最终概览文案收敛与提交)，既有成功认证/共享快照写盘等证据边界保留。下方current/in_progress描述为提交前各阶段历史。
 
@@ -36,7 +44,7 @@
 | [Portable 工作台与 SDK](portable-workbench.md) | 内置 Python、终端工具、运行包清单和脚本扩展契约 |
 | [App 统一秘密库与公共认证](app-authentication.md) | 先行底座：主口令、加密库/会话/设置/设备快捷/备份/隐私配套；2026-10-12 恢复推进，API30凭证快捷实测通过，保留 in_progress/其余待测关卡，TOTP 与 SSH 共同依赖 |
 | [SSH 终端规划](ssh-terminal.md) | APK 内客户端、OpenSSH config/一键连接和统一秘密库接入；planning，尚未实现 |
-| [第三方 Authenticator 规划](authenticator.md) | 离线 TOTP 及统一秘密库 TotpAdapter；工作台入口、兼容边界、相机/图片扫码与条目体验，planning |
+| [第三方 Authenticator](authenticator.md) | 离线 SHA1/6位/30秒 TOTP、工作台入口与公共秘密库；修复版已安装当前开发板，本轮非copy隔离自动验收完成，账号及未测平台关卡保留 |
 | [兼容性](compatibility.md) | 设备差异、已验证范围与未验证项 |
 | [验证记录](verification.md) | 检查结果、实机证据及复验方式 |
 | [依赖来源](dependencies.md) | 工具链、版本、来源和许可证 |

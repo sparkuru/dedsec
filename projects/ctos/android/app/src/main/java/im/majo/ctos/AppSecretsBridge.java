@@ -14,6 +14,8 @@ import android.os.Looper;
 import android.os.SystemClock;
 import io.flutter.plugin.common.MethodCall;
 import io.flutter.plugin.common.MethodChannel;
+import io.flutter.plugin.common.EventChannel;
+import io.flutter.plugin.common.BinaryMessenger;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -21,10 +23,8 @@ import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -37,10 +37,16 @@ final class AppSecretsBridge implements AutoCloseable {
     private final AppAuthentication authentication;
     private final SensitiveWindow window;
     private final SharedPreferences preferences;
-    private final Set<String> usedRequests = new HashSet<>();
+    private final VaultRequestAdmission admission = new VaultRequestAdmission();
+    private final TotpPreviews totpPreviews;
+    private final TotpVaultAdapter totpAdapter;
+    private final SensitiveClipboard clipboard;
+    private EventChannel events;
+    private EventChannel.EventSink eventSink;
     private volatile Request active;
     private volatile boolean closed;
     private volatile boolean resumed;
+    private boolean cameraVisible;
     private long backgroundVersion;
     private Runnable backgroundLock;
     private static Object exportLeaseOwner;
@@ -71,18 +77,26 @@ final class AppSecretsBridge implements AutoCloseable {
         char[] targetPassword;
         byte[] output;
         byte[] binding;
+        VaultOperation totpRead;
+        VaultOperation totpCapture;
+        final long deadline = SystemClock.elapsedRealtime() + 120000;
+        TotpCameraActivity.Capture camera;
+        TotpImageActivity.Capture image;
+        String totpPreview;
+        long totpRevision = -1, codeWindow = -1;
 
         Request(String id, MethodCall call, MethodChannel.Result result, long epoch) throws VaultException {
             this.id = id;
             Map<String, Object> safe = new HashMap<>();
-            for (String name : VaultCollections.list("action", "previewId", "confirmTrust", "reviewBinding", "fileName", "exportId", "overwrite", "recoveryId")) {
+            for (String name : VaultCollections.list("action", "previewId", "confirmTrust", "reviewBinding", "fileName", "exportId", "overwrite", "recoveryId", "issuer", "account", "entryId", "label", "candidateId")) {
                 Object value = call.argument(name);
                 if (value != null) safe.put(name, value);
             }
-            for (String name : VaultCollections.list("password", "confirmation", "currentPassword", "newPassword", "sourcePassword", "targetPassword")) {
+            for (String name : VaultCollections.list("password", "confirmation", "currentPassword", "newPassword", "sourcePassword", "targetPassword", "secret", "uri")) {
                 Object value = call.argument(name);
                 if (value != null) {
-                    if (!(value instanceof String) || ((String) value).length() > 1024) throw parameters();
+                    int maximum = name.equals("uri") ? TotpInput.MAX_URI : 1024;
+                    if (!(value instanceof String) || ((String) value).length() > maximum) throw parameters();
                     passwords.put(name, ((String) value).toCharArray());
                 }
             }
@@ -96,6 +110,8 @@ final class AppSecretsBridge implements AutoCloseable {
             if (sourcePassword != null) Arrays.fill(sourcePassword, '\0');
             if (targetPassword != null) Arrays.fill(targetPassword, '\0');
             VaultCodec.wipe(output);
+            if (camera != null) { TotpCameraActivity.release(camera); camera = null; }
+            if (image != null) { TotpImageActivity.release(image); image = null; }
         }
         void cancel() { phase.cancel(); }
     }
@@ -128,9 +144,26 @@ final class AppSecretsBridge implements AutoCloseable {
         catch (VaultException ignored) { /* Corrupt settings retain the safe default. */ }
         window = new SensitiveWindow(activity);
         authentication = new AppAuthentication(activity, main, worker, vault);
+        totpPreviews = new TotpPreviews(vault, SystemClock::elapsedRealtime);
+        totpAdapter = new TotpVaultAdapter(vault);
+        clipboard = new SensitiveClipboard(activity);
         IntentFilter filter = new IntentFilter(Intent.ACTION_SCREEN_OFF);
         if (Build.VERSION.SDK_INT >= 33) activity.registerReceiver(screenOff, filter, Context.RECEIVER_NOT_EXPORTED);
         else activity.registerReceiver(screenOff, filter);
+    }
+
+    void attachEvents(BinaryMessenger messenger) {
+        events = new EventChannel(messenger, "ctos/secrets");
+        events.setStreamHandler(new EventChannel.StreamHandler() {
+            @Override public void onListen(Object arguments, EventChannel.EventSink sink) { eventSink = sink; emitState(); }
+            @Override public void onCancel(Object arguments) { eventSink = null; }
+        });
+    }
+    private void emitState() {
+        main.post(() -> {
+            if (!closed && eventSink != null) eventSink.success(VaultCollections.map("epoch", vault.session.epoch(),
+                    "unlocked", vault.session.unlocked(), "foreground", vault.session.foreground()));
+        });
     }
 
     boolean handle(MethodCall call, MethodChannel.Result result) {
@@ -148,7 +181,7 @@ final class AppSecretsBridge implements AutoCloseable {
                 case "secrets.cancel": {
                     String id = text(call, "requestId");
                     if (active != null && active.id.equals(id)) active.cancel();
-                    worker.execute(() -> { vault.cancelRequest(id); if (id.equals(preparedRequestId)) discardPrepared(); });
+                    worker.execute(() -> { vault.cancelRequest(id); totpPreviews.cancelRequest(id); if (id.equals(preparedRequestId)) discardPrepared(); });
                     authentication.cancel(id);
                     if (active != null && active.id.equals(id) && !active.exporting()) finish(active, null,
                             new VaultException("VAULT_CANCELLED", "Operation was cancelled"));
@@ -168,6 +201,11 @@ final class AppSecretsBridge implements AutoCloseable {
                     String previewId = text(call, "previewId");
                     worker.execute(() -> { vault.cancelPreview(previewId); main.post(() -> result.success(null)); });
                     return true;
+                case "secrets.totpCancel": {
+                    String preview = text(call, "previewId");
+                    worker.execute(() -> { totpPreviews.cancel(preview); main.post(() -> result.success(null)); });
+                    return true;
+                }
                 case "secrets.status":
                     worker.execute(() -> respondStatus(result));
                     return true;
@@ -188,16 +226,16 @@ final class AppSecretsBridge implements AutoCloseable {
                 default: break;
             }
             if (!VaultCollections.set("secrets.create", "secrets.unlock", "secrets.changePassword", "secrets.quickUnlock",
-                    "secrets.exportPreview", "secrets.exportCommit", "secrets.exportCancel", "secrets.exportRecover", "secrets.importPreview", "secrets.importCommit").contains(call.method)) {
+                    "secrets.exportPreview", "secrets.exportCommit", "secrets.exportCancel", "secrets.exportRecover", "secrets.importPreview", "secrets.importCommit",
+                    "secrets.totpList", "secrets.totpManualPreview", "secrets.totpImagePreview", "secrets.totpCameraPreview",
+                    "secrets.totpCommit", "secrets.totpRename", "secrets.totpDelete", "secrets.totpCopy").contains(call.method)) {
                 result.notImplemented();
                 return true;
             }
             if (active != null) throw new VaultException("BUSY", "A vault operation is already active");
             String id = text(call, "requestId");
-            if (!id.matches("[A-Za-z0-9_-]{1,128}") || usedRequests.contains(id)) throw parameters();
-            // Bounded admission, no unbounded replay cache or mutation queue.
-            if (usedRequests.size() >= 4096) throw new VaultException("VAULT_EXPIRED", "Reopen the app to start a new operation");
-            usedRequests.add(id);
+            boolean read = call.method.equals("secrets.totpList");
+            admission.admit(id, read);
             Request request = new Request(id, call, result, vault.session.epoch());
             active = request;
             request.timeout = () -> {
@@ -231,6 +269,56 @@ final class AppSecretsBridge implements AutoCloseable {
             if (request.call.method.equals("secrets.exportCancel") || request.call.method.equals("secrets.exportRecover")) exportNavigationGuard(request);
             else guard(request);
             switch (request.call.method) {
+                case "secrets.totpList": {
+                    request.totpRead = vault.beginTotpList();
+                    Map<String, Object> entries = vault.totpList(request.totpRead, System.currentTimeMillis() / 1000);
+                    request.totpRevision = vault.totpPublication(request.totpRead);
+                    request.codeWindow = ((Number) entries.get("unixSeconds")).longValue() / 30;
+                    main.post(() -> finish(request, entries, null)); return;
+                }
+                case "secrets.totpManualPreview": {
+                    TotpInput input;
+                    if (request.passwords.containsKey("uri")) input = TotpInput.uri(new String(request.passwords.get("uri")));
+                    else input = TotpInput.manual(text(request.call, "issuer"), text(request.call, "account"), new String(request.passwords.getOrDefault("secret", new char[0])));
+                    Map<String, Object> preview = totpPreviews.prepare(request.id, VaultCollections.list(input), 0, requestGuard(request));
+                    request.totpPreview = (String) preview.get("previewId");
+                    request.totpRevision = totpPreviews.publication();
+                    expireTotpPreview(request.id);
+                    main.post(() -> finish(request, preview, null)); return;
+                }
+                case "secrets.totpImagePreview":
+                case "secrets.totpCameraPreview":
+                    openTotpPicker(request); return;
+                case "secrets.totpCommit": {
+                    String entry = totpPreviews.commit(text(request.call, "previewId"), text(request.call, "candidateId"), requestGuard(request));
+                    main.post(() -> finish(request, VaultCollections.map("entryId", entry), null)); return;
+                }
+                case "secrets.totpRename": {
+                    String id = text(request.call, "entryId");
+                    vault.renameTotp(vault.beginTotpRename(id), id, text(request.call, "label"), requestGuard(request)); break;
+                }
+                case "secrets.totpDelete": {
+                    String id = text(request.call, "entryId");
+                    totpAdapter.delete(totpAdapter.deleteRequest(id), id, requestGuard(request)); break;
+                }
+                case "secrets.totpCopy": {
+                    String id = text(request.call, "entryId");
+                    request.totpRead = totpAdapter.request(id);
+                    long seconds = System.currentTimeMillis() / 1000;
+                    String code = vault.totpCode(request.totpRead, id, seconds);
+                    request.codeWindow = seconds / 30;
+                    request.totpRevision = vault.totpPublication(request.totpRead);
+                    main.post(() -> {
+                        try {
+                            vault.publishTotp(request.epoch, request.totpRevision, request.deadline, () -> publicationGuard(request), () -> {
+                                clipboard.copyCode(code);
+                                request.completed = true;
+                                request.result.success(VaultCollections.map("copied", true));
+                            });
+                            cleanupRequest(request, false);
+                        } catch (VaultException failure) { finish(request, null, failure); }
+                    }); return;
+                }
                 case "secrets.create":
                     withPasswords(request, "password", "confirmation", (password, confirmation) ->
                             vault.create(password, confirmation, requestGuard(request)));
@@ -338,8 +426,91 @@ final class AppSecretsBridge implements AutoCloseable {
 
     private void guard(Request request) throws VaultException {
         if (closed || request.phase.cancelled() || active != request) throw new VaultException("VAULT_CANCELLED", "Operation was cancelled");
+        if (SystemClock.elapsedRealtime() >= request.deadline) throw new VaultException("VAULT_TIMED_OUT", "Operation timed out");
         vault.session.assertEpoch(request.epoch);
         if (!resumed || !vault.session.foreground()) throw new VaultException("VAULT_FOREGROUND_REQUIRED", "Return to the app to continue");
+    }
+
+    private void openTotpPicker(Request request) throws VaultException {
+        request.totpCapture = vault.beginTotpSave(java.util.UUID.randomUUID().toString());
+        main.post(() -> {
+            try {
+                guard(request);
+                request.picker = true; request.uiCode = VaultUiRequests.allocate();
+                Intent intent;
+                if (request.call.method.equals("secrets.totpCameraPreview")) {
+                    request.camera = new TotpCameraActivity.Capture(request.id, () -> {
+                        if (closed || active != request || request.phase.cancelled() || SystemClock.elapsedRealtime() >= request.deadline)
+                            throw new VaultException("VAULT_CANCELLED", "Scanner expired");
+                        vault.session.assertEpoch(request.epoch);
+                        if (!vault.session.unlocked()) throw new VaultException("VAULT_LOCKED", "Unlock again");
+                    }, visible -> onCameraVisibility(request, visible));
+                    TotpCameraActivity.install(request.camera);
+                    intent = new Intent(activity, TotpCameraActivity.class).putExtra("requestId", request.id);
+                } else {
+                    request.image = new TotpImageActivity.Capture(request.id, () -> {
+                        if (closed || active != request || request.phase.cancelled() || SystemClock.elapsedRealtime() >= request.deadline)
+                            throw new VaultException("VAULT_CANCELLED", "Image read expired");
+                        vault.session.assertEpoch(request.epoch);
+                        if (!vault.session.unlocked()) throw new VaultException("VAULT_LOCKED", "Unlock again");
+                    });
+                    TotpImageActivity.install(request.image);
+                    intent = new Intent(activity, TotpImageActivity.class).putExtra("requestId", request.id);
+                }
+                activity.startActivityForResult(intent, request.uiCode);
+            } catch (Exception failure) {
+                finish(request, null, failure instanceof VaultException ? (VaultException) failure
+                        : new VaultException("TOTP_IMAGE", "Image picker or camera is unavailable"));
+            }
+        });
+    }
+
+    private void onCameraVisibility(Request request, boolean visible) {
+        if (active != request || closed) return;
+        cameraVisible = visible && active == request && !closed && !request.phase.cancelled();
+        if (cameraVisible || resumed) { vault.session.foreground(true); cancelBackgroundLock(); }
+        else { vault.session.foreground(false); scheduleBackgroundLock(); }
+        emitState();
+    }
+    private void expireTotpPreview(String requestId) {
+        main.postDelayed(() -> { if (!closed) worker.execute(() -> totpPreviews.cancelRequest(requestId)); }, 120000);
+    }
+
+    private void finishTotpPicker(Request request, int resultCode, Intent data) {
+        request.picker = false;
+        worker.execute(() -> {
+            try {
+                guard(request); vault.checkTotpPending(request.totpCapture);
+                List<TotpInput> inputs;
+                int invalid;
+                if (request.call.method.equals("secrets.totpCameraPreview")) {
+                    TotpCameraActivity.Capture capture = request.camera;
+                    if (capture == null) throw new VaultException("VAULT_CANCELLED", "Scanner cancelled");
+                    synchronized (capture) {
+                        if (capture.failure != null) throw capture.failure;
+                        if (resultCode != Activity.RESULT_OK || capture.input == null) throw new VaultException("VAULT_CANCELLED", "Scanner cancelled");
+                        inputs = VaultCollections.list(capture.input); capture.input = null;
+                    }
+                    invalid = 0;
+                } else {
+                    TotpImageActivity.Capture capture = request.image;
+                    if (capture == null) throw new VaultException("VAULT_CANCELLED", "Image selection cancelled");
+                    synchronized (capture) {
+                        if (capture.failure != null) throw capture.failure;
+                        if (resultCode != Activity.RESULT_OK || capture.decoded == null) throw new VaultException("VAULT_CANCELLED", "Image selection cancelled");
+                        inputs = capture.decoded.inputs; invalid = capture.decoded.invalid; capture.decoded = null;
+                    }
+                }
+                try {
+                    vault.checkTotpPending(request.totpCapture);
+                    Map<String, Object> preview = totpPreviews.prepare(request.id, inputs, invalid, requestGuard(request));
+                    request.totpPreview = (String) preview.get("previewId");
+                    request.totpRevision = totpPreviews.publication();
+                    expireTotpPreview(request.id);
+                    main.post(() -> finish(request, preview, null));
+                } catch (VaultException failure) { for (TotpInput input : inputs) input.close(); throw failure; }
+            } catch (VaultException failure) { main.post(() -> finish(request, null, failure)); }
+        });
     }
 
     private AppSecrets.EffectGuard requestGuard(Request request) {
@@ -386,6 +557,9 @@ final class AppSecretsBridge implements AutoCloseable {
 
     private void finishPickerResult(Request request, int resultCode, Intent data) {
         if (active != request || request.phase.cancelled() || request.completed) return;
+        if (request.call.method.equals("secrets.totpImagePreview") || request.call.method.equals("secrets.totpCameraPreview")) {
+            finishTotpPicker(request, resultCode, data); return;
+        }
         request.picker = false;
         if (resultCode != Activity.RESULT_OK || data == null || data.getData() == null) {
             if (request.exporting()) worker.execute(() -> exportFailure(request, new VaultException("VAULT_CANCELLED", "Cancelled")));
@@ -591,17 +765,46 @@ final class AppSecretsBridge implements AutoCloseable {
 
     private void finish(Request request, Object value, VaultException error) {
         if (request.completed) return;
+        if (error == null && (request.totpRead != null || request.totpPreview != null)) {
+            try {
+                vault.publishTotp(request.epoch, request.totpRevision, request.deadline, () -> publicationGuard(request), () -> {
+                    request.completed = true; request.result.success(value);
+                });
+                cleanupRequest(request, false);
+            }
+            catch (VaultException invalid) { finishUnchecked(request, null, invalid); }
+            return;
+        }
+        finishUnchecked(request, value, error);
+    }
+
+    private void publicationGuard(Request request) throws VaultException {
+        guard(request);
+        if (request.codeWindow >= 0 && System.currentTimeMillis() / 30000 != request.codeWindow)
+            throw new VaultException("TOTP_TIME_CHANGED", "Code time changed; refresh and retry");
+    }
+
+    private void finishUnchecked(Request request, Object value, VaultException error) {
         if (error != null && VaultCollections.set("VAULT_CANCELLED", "VAULT_TIMED_OUT", "VAULT_CHANGED",
                 "VAULT_FOREGROUND_REQUIRED", "VAULT_EXPIRED", "VAULT_FAILED").contains(error.code)) {
             error = request.phase.interrupted(error);
         }
         if (error != null && error.code.equals("VAULT_COMMIT_UNCERTAIN")) invalidateVault();
         request.completed = true;
+        cleanupRequest(request, error != null);
+        if (error != null) request.result.error(error.code, error.getMessage(), null);
+        else request.result.success(value);
+    }
+
+    private void cleanupRequest(Request request, boolean failed) {
+        if (request.camera != null) onCameraVisibility(request, false);
+        if (failed) worker.execute(() -> totpPreviews.cancelRequest(request.id));
+        vault.cancelOperation(request.totpCapture);
         if (request.timeout != null) main.removeCallbacks(request.timeout);
         request.clear();
         if (active == request) active = null;
-        if (error != null) request.result.error(error.code, error.getMessage(), null);
-        else request.result.success(value);
+        worker.execute(totpPreviews::retireInvalid);
+        emitState();
     }
 
     void onResume() {
@@ -611,9 +814,11 @@ final class AppSecretsBridge implements AutoCloseable {
         vault.session.foreground(true);
         resumed = true;
         worker.execute(vault::cleanupInvalidatedContexts);
+        worker.execute(totpPreviews::retireInvalid);
         cancelBackgroundLock();
         window.background(false);
         authentication.onResume();
+        emitState();
         Request request = active;
         if (request != null && request.pendingPickerResult != null) {
             Runnable callback = request.pendingPickerResult;
@@ -627,13 +832,15 @@ final class AppSecretsBridge implements AutoCloseable {
         resumed = false;
         authentication.onPause();
         window.background(true);
-        vault.session.foreground(false);
+        // A same-app camera transition hands visibility to onStart/onStop; ordinary pauses
+        // and external pickers retain the shared background policy.
+        if (!cameraVisible && !(active != null && active.camera != null && active.picker)) vault.session.foreground(false);
         scheduleBackgroundLock();
     }
 
     void onStop() {
         if (closed) return;
-        vault.session.foreground(false);
+        if (!cameraVisible) vault.session.foreground(false);
         scheduleBackgroundLock();
     }
 
@@ -648,6 +855,7 @@ final class AppSecretsBridge implements AutoCloseable {
         // while keeping new requests admitted from an already-locked, unchanged context alive.
         worker.execute(() -> {
             vault.cleanupInvalidatedContexts();
+            totpPreviews.retireInvalid();
             if (preparedExport != null && preparedEpoch != vault.session.epoch()) discardPrepared();
         });
         long version = backgroundVersion;
@@ -670,6 +878,7 @@ final class AppSecretsBridge implements AutoCloseable {
     private void cancelActive() {
         cancelActiveRequest();
         worker.execute(this::discardPrepared);
+        worker.execute(totpPreviews::close);
     }
 
     private void cancelActiveRequest() {
@@ -693,6 +902,8 @@ final class AppSecretsBridge implements AutoCloseable {
         cancelActive();
         authentication.cancel(null);
         activity.unregisterReceiver(screenOff);
+        if (events != null) events.setStreamHandler(null);
+        eventSink = null;
         worker.shutdown();
     }
 
@@ -700,6 +911,8 @@ final class AppSecretsBridge implements AutoCloseable {
         // Key/epoch revocation is immediate and never waits for the file/crypto owner's monitor.
         vault.session.lock();
         worker.execute(vault::cleanupInvalidatedContexts);
+        worker.execute(totpPreviews::close);
+        emitState();
     }
 
     private interface PasswordOperation { void run(char[] first, char[] second) throws VaultException; }

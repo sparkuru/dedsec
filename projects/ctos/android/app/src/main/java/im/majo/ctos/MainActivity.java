@@ -46,6 +46,7 @@ public final class MainActivity extends FlutterActivity {
         toolFiles = new ToolFiles(this);
         hftpBridge = new HftpBridge(this);
         appSecrets = new AppSecretsBridge(this);
+        appSecrets.attachEvents(engine.getDartExecutor().getBinaryMessenger());
         new EventChannel(engine.getDartExecutor().getBinaryMessenger(), "ctos/terminal").setStreamHandler(
                 new EventChannel.StreamHandler() {
                     @Override public void onListen(Object arguments, EventChannel.EventSink sink) { terminalSink = sink; }
