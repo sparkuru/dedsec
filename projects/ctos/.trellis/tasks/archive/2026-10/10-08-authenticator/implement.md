@@ -10,11 +10,11 @@
 
 ## 本轮执行状态
 
-步骤1–4本地实现及质量检查完成；步骤5的本地取消/代次/时间/公共流程回归已通过，平台及混合业务联合验收仍开放；步骤6未执行。最终214 Flutter、122 JVM、79定向、analyze、lint0错误3既有警告、45真实字体场景及最终arm64/v2通过，APK `c704ff36…`。详见 [check](check.md) 与 [项目验证](../../../design/verification.md#2026-10-13-authenticator-totp-本地实现与最终产物)。原task仍in_progress，review=human-required，不提交/归档。
+步骤1–4本地实现及质量检查完成；步骤5的本地取消/代次/时间/公共流程回归已通过，平台及混合业务联合验收仍开放；步骤6未执行。最终214 Flutter、122 JVM、79定向、analyze、lint0错误3既有警告、45真实字体场景及最终arm64/v2通过，APK `c704ff36…`。详见 [check](check.md) 与 [项目验证](../../../../../design/verification.md#2026-10-13-authenticator-totp-本地实现与最终产物)。原task仍in_progress，review=human-required，不提交/归档。
 
 ## Dependencies
 
-复用 [统一秘密库底座](../10-08-app-authentication/implement.md) 已实现/审阅的公共合同与适用独立关卡接入 TOTP；未测公共平台和业务联合验收保留开放，不将底座标完成；不依赖 SSH 客户端。共同初始化/设置/密文/快捷/迁移归底座，业务复用 BASE-01..15，不另建 KDF/库/解锁页。
+复用 [统一秘密库底座](../../../10-08-app-authentication/implement.md) 已实现/审阅的公共合同与适用独立关卡接入 TOTP；未测公共平台和业务联合验收保留开放，不将底座标完成；不依赖 SSH 客户端。共同初始化/设置/密文/快捷/迁移归底座，业务复用 BASE-01..15，不另建 KDF/库/解锁页。
 
 ## Ordered Work
 

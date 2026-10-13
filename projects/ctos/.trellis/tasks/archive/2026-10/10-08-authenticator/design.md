@@ -8,7 +8,7 @@
 
 实际执行边界：初轮自动审批拒绝全局剪贴板覆盖后，现场执行先关闭copy；用户随后明确“允许覆盖，完成复制测试”，仅选原生copy单项并设置true，实际6.616秒通过，不读原内容/保存/监听/恢复/清空；`ctosTotpClipboardCopy=true` 仅可在用户明确批准该副作用后使用。同UID自有MediaStore图片可以验证真实系统选图/离线解码/明确单选与源图不改，不能证明跨UID临时授权强制或撤销。失败检查只认证精确run UUID合成密文，不改变库，不读取剪贴板或生产数据。
 
-2026-10-13：用户确认复用现有 task、先 TOTP 后 SSH，恢复本地实施。业务契约见 [领域规划](../../../design/authenticator.md) 和 [PRD](prd.md)，统一秘密契约只在 [公共底座](../../../design/app-authentication.md) 维护。
+2026-10-13：用户确认复用现有 task、先 TOTP 后 SSH，恢复本地实施。业务契约见 [领域规划](../../../../../design/authenticator.md) 和 [PRD](prd.md)，统一秘密契约只在 [公共底座](../../../../../design/app-authentication.md) 维护。
 
 Flutter 拥有工作台验证器入口、相机/系统选图交互、手动添加、条目管理/代码/倒计时；Android TotpAdapter 校验标准 TOTP 参数、管理种子并生成短期代码。支持已确定基础 SHA-1/6 位/30 秒，不支持类型/参数明确拒绝。AppSecrets/AppAuthentication 拥有 KDF/密文/设备材料/库代次/使用会话，不由 TOTP 重复实现。
 

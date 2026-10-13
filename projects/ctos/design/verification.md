@@ -47,7 +47,7 @@ run10只读核清 **1项/2.028秒通过**，恰有原基线和所选Alpha、无B
 
 证据边界：原生EventChannel是实际codec/Bridge上的loopback测试，不是Dart订阅；期限检查注入自有deadline而非真实等待120秒；窗口后台是注入Bridge lifecycle，证明真实FLAG而非实际Home、截图/录屏/最近任务。UI的Home/锁库是实际Android事件，但不能代替真实锁屏或进程死亡。原生Bitmap输入为自有file URI，非SAF；非空密文恢复为同设备独立内存纯TOTP目标，非跨设备或混合SSH。同UID自有MediaStore图片通过真实系统选择/解码，不证明跨UID grant强制/撤销；图片预览取消未做真实UI验证（手动取消、原生取消及widget图片取消另有证据）。相机硬件成功扫描因0设备**不支持/未测**，本轮成功恢复不代替首次权限拒绝验收。实际断网/墙钟跳变、真实Flutter复制按钮E2E、服务MFA/账号、API28/29、生物、真实进程死亡、非空跨设备/混合SSH/native与每跳信任恢复均开放，缺失生产SSH provider继续失败关闭。未提交、归档或替换dist。
 
-所有本节相对日志均位于 `/tmp/ctos-totp-device-20261013/`，属于临时原始证据，不保证清理或环境更换后持久；持久结论与未测边界以本节和 [task check](../.trellis/tasks/10-08-authenticator/check.md) 为准。
+所有本节相对日志均位于 `/tmp/ctos-totp-device-20261013/`，属于临时原始证据，不保证清理或环境更换后持久；持久结论与未测边界以本节和 [task check](../.trellis/tasks/archive/2026-10/10-08-authenticator/check.md) 为准。
 
 ## 2026-10-13 Authenticator TOTP 本地实现与最终产物
 
@@ -74,7 +74,7 @@ run10只读核清 **1项/2.028秒通过**，恰有原基线和所选Alpha、无B
 
 独立review发现的事件EOF残留旧码、淘汰读取ID可写、预览revision未绑实际快照以及最终锁内资源清理已由owner修复；额外窄屏大字Base32提示/计数重叠、长名称对话框和双击复制也修复并补回归。最终复核没有剩余具体源码阻塞。临时渲染driver曾在延迟构建目标的ensureVisible失败，仅调整夹具，不将其记为产品失败；最终driver SHA256 `9bc582f9f466b8e0b9ec9c5ec2cb1ae221748e6c35e02bd8535004e09fe4470e`。图片内容均为合成账号和代码，没有真实种子/服务凭据。
 
-**验收分类：human-required，task保持in_progress。** 相机硬件/权限生命周期、真实图片provider/临时授权退场、实际Bitmap与安全窗口/截图/录屏/最近任务、ROM敏感复制、断网设备发码及非空TOTP跨设备备份恢复尚未执行；mock、JVM和渲染不能代替。真实MFA绑定/登录需服务账号另授；混合SSH/native文件与每跳信任恢复仍依后续SSH provider和Android探针，当前缺失时生产相关恢复继续拒绝。公共API28/29、生物、真实进程死亡也不在本轮宣称通过。逐项AC见 [task check](../.trellis/tasks/10-08-authenticator/check.md)，下一步仅在当前设备授权后安装核验上述场景，SSH按用户顺序继续已有规划。
+**验收分类：human-required，task保持in_progress。** 相机硬件/权限生命周期、真实图片provider/临时授权退场、实际Bitmap与安全窗口/截图/录屏/最近任务、ROM敏感复制、断网设备发码及非空TOTP跨设备备份恢复尚未执行；mock、JVM和渲染不能代替。真实MFA绑定/登录需服务账号另授；混合SSH/native文件与每跳信任恢复仍依后续SSH provider和Android探针，当前缺失时生产相关恢复继续拒绝。公共API28/29、生物、真实进程死亡也不在本轮宣称通过。逐项AC见 [task check](../.trellis/tasks/archive/2026-10/10-08-authenticator/check.md)，下一步仅在当前设备授权后安装核验上述场景，SSH按用户顺序继续已有规划。
 
 `/tmp/`日志及被忽略的build预览是本轮临时原始证据，不保证跨机器/清理后存在；持久结论和未测边界以本节、领域文档及task check为准。
 

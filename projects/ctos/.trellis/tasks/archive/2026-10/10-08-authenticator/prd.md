@@ -8,7 +8,7 @@
 
 ## Goal
 
-在 ctOS 内提供离线 TOTP 验证器，与 SSH 共用一个主口令、统一秘密库和设备快捷解锁/设置/备份流程，减少理解与维护成本。领域入口为 [Authenticator](../../../design/authenticator.md)，公共契约为 [统一秘密库与认证](../../../design/app-authentication.md)。
+在 ctOS 内提供离线 TOTP 验证器，与 SSH 共用一个主口令、统一秘密库和设备快捷解锁/设置/备份流程，减少理解与维护成本。领域入口为 [Authenticator](../../../../../design/authenticator.md)，公共契约为 [统一秘密库与认证](../../../../../design/app-authentication.md)。
 
 ## Background
 
@@ -53,7 +53,7 @@ HOTP 及其计数/发码/校准/恢复全部撤销；验证码剪贴板清理及
 
 ## Scope and Dependencies
 
-复用 [统一秘密库底座](../10-08-app-authentication/prd.md) 已实现且已审阅的公共合同与适用平台证据接入 TOTP；不依赖 [SSH 客户端](../10-08-ssh-terminal-client/prd.md) 完成，两个业务可分别推进。共同初始化/设置/KDF/密文/设备包装/导入导出由底座拥有，本 task 负责 TOTP 业务及集成验收。
+复用 [统一秘密库底座](../../../10-08-app-authentication/prd.md) 已实现且已审阅的公共合同与适用平台证据接入 TOTP；不依赖 [SSH 客户端](../../../10-08-ssh-terminal-client/prd.md) 完成，两个业务可分别推进。共同初始化/设置/KDF/密文/设备包装/导入导出由底座拥有，本 task 负责 TOTP 业务及集成验收。
 
 ## Technical Validation and Artifact Status
 

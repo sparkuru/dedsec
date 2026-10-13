@@ -64,4 +64,4 @@
 - 用户要求将 Authenticator 主口令/便携库/可选设备快捷/覆盖迁移模型应用到 SSH，降低理解和维护成本。公共底座扩展为 AppSecrets + AppAuthentication，SSH 只保留类型化身份 adapter/native 秘密通道，R10/R11 和 AC9/AC10 已更新，其余 R/AC 客户端行为保留。
 - 主口令格式、KDF、设备包装、库会话及迁移不再在 SSH 重复实现；旧设备-only 不迁移/每连接系统弹窗方案被统一公共会话取代，库会话锁定/复用与备份外部资源边界仍待收敛。
 - 四 task 全部 planning / requirements_reconvergence，任务 ID/树关系保留，依赖顺序公共底座 → TOTP/SSH。原完整最终审阅候选失效；无实现/构建/设备或真实凭据使用。
-- 本轮共同文档检查结果见 [Authenticator 共同规划检查](../10-08-authenticator/check.md) 和公共底座规划；不将历史 awaiting_final_review 当作当前授权或已收敛结论。
+- 本轮共同文档检查结果见 [Authenticator 共同规划检查](../archive/2026-10/10-08-authenticator/check.md) 和公共底座规划；不将历史 awaiting_final_review 当作当前授权或已收敛结论。

@@ -47,7 +47,7 @@
 
 ## Scope and Dependencies
 
-此 task 是两个业务 task 的先行共享底座，不依赖 SSH 客户端或 TOTP 页面代码；可用两个受限测试 adapter 独立验收。现有父子结构保留不代表仅供 SSH 使用；实施顺序先底座，再 [Authenticator](../10-08-authenticator/prd.md) / [SSH 接入](../10-08-ssh-terminal-client/prd.md)。初次库 UI/设置/加密迁移归底座，两业务仅接入入口和受限操作。
+此 task 是两个业务 task 的先行共享底座，不依赖 SSH 客户端或 TOTP 页面代码；可用两个受限测试 adapter 独立验收。现有父子结构保留不代表仅供 SSH 使用；实施顺序先底座，再 [Authenticator](../archive/2026-10/10-08-authenticator/prd.md) / [SSH 接入](../10-08-ssh-terminal-client/prd.md)。初次库 UI/设置/加密迁移归底座，两业务仅接入入口和受限操作。
 
 验收分层（2026-10-10 消除循环）：本 task 先验证公共容器、类型化/审批接口、图事务、会话、管理流程及适用独立平台关卡。上述 AC 中真实 SSH transport 锁库存续、生产配置/信任解析、另一设备恢复后可连接和双方业务导航，保留原目标并在客户端接入后的联合验收补证据，统一追踪于 SSH 父任务及各业务 task；不要求尚不存在的消费者先通过这些场景，才允许开发消费者。公共接口具备接入条件不等于这些联合 AC 已通过，本 task 当前不据此标 completed；消费者实施仍需底座适用独立关卡审阅与既有任务授权，真实设备/账号另按当前授权。
 

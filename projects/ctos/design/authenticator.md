@@ -4,9 +4,9 @@
 
 2026-10-13 后续设备阶段：用户授权“帮我安装、自动测试”，最终 `3bc762d9…` 已覆盖安装 `192.168.9.14:5555` 并读回一致。已修复相机稳定失败提示及成功图片元数据先于Dart恢复的前台交接问题；成功结果最多等3秒、同请求/epoch/路由守卫保持、等待中不渲染秘密且不续原生期限。221 Flutter/86定向/analyze通过，独立UID原生7项通过，真实无相机恢复通过。系统选图和生命周期完整流程结果见 [设备验证](verification.md)。用户后续明确允许覆盖，原生合成当前码复制/敏感标记1项6.616秒通过；不读取原内容或恢复/清空；真实账号未操作，硬件相机与跨设备/混合SSH关卡保留。下段本地阶段不包含安装的描述按当时状态解释。
 
-2026-10-13：用户批准复用现有 task、先 TOTP 后 SSH，本任务已恢复 `in_progress`。下述 TOTP 业务已接入源码；本轮为本地实现、测试、真实字体渲染及 APK 构建，不包含设备安装或真实服务账号操作。最终检查及产物见 [验证记录](verification.md) 和 [任务检查](../.trellis/tasks/10-08-authenticator/check.md)。公共底座仍保留未测平台/联合验收，不能据此标全量完成。
+2026-10-13：用户批准复用现有 task、先 TOTP 后 SSH，本任务已恢复 `in_progress`。下述 TOTP 业务已接入源码；本轮为本地实现、测试、真实字体渲染及 APK 构建，不包含设备安装或真实服务账号操作。最终检查及产物见 [验证记录](verification.md) 和 [任务检查](../.trellis/tasks/archive/2026-10/10-08-authenticator/check.md)。公共底座仍保留未测平台/联合验收，不能据此标全量完成。
 
-[需求](../.trellis/tasks/10-08-authenticator/prd.md)、[技术设计](../.trellis/tasks/10-08-authenticator/design.md)、[实施计划](../.trellis/tasks/10-08-authenticator/implement.md)。10-08/09 的规划、讨论与撤销决定保留在任务检查历史，不作为当前源码现状。
+[需求](../.trellis/tasks/archive/2026-10/10-08-authenticator/prd.md)、[技术设计](../.trellis/tasks/archive/2026-10/10-08-authenticator/design.md)、[实施计划](../.trellis/tasks/archive/2026-10/10-08-authenticator/implement.md)。10-08/09 的规划、讨论与撤销决定保留在任务检查历史，不作为当前源码现状。
 
 ## 当前入口与能力
 

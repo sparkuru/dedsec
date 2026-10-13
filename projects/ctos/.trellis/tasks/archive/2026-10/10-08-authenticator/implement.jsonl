@@ -1,9 +1,9 @@
 {"file": "design/authenticator.md", "reason": "离线 TOTP、相机/图片/手动添加与仅 ctOS 加密备份范围和兼容性；HOTP 已撤销，仅按当前确定范围验收。"}
 {"file": "design/app-authentication.md", "reason": "统一秘密/KDF/密文/会话/管理/迁移权威合同；复用已有实现及适用证据接入TOTP，平台/混合联合验收保持开放，避免业务循环依赖。"}
-{"file": ".trellis/tasks/10-08-authenticator/design.md", "reason": "2026-10-13已批准接入设计：离线扫码/严格参数/无种子投影/资源上限/当前平台边界与UI约束"}
-{"file": "design/constraints.md", "reason": "检查任务授权、秘密与导出边界，无隐式设备授权"}
-{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "后续宿主算法、存储、生命周期及设备验收要求"}
-{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "后续验证码页面和用户交互验证要求"}
+{"file": ".trellis/tasks/archive/2026-10/10-08-authenticator/design.md", "reason": "2026-10-13已批准接入设计：离线扫码/严格参数/无种子投影/资源上限/当前平台边界与UI约束"}
+{"file": "design/constraints.md", "reason": "本地处理、权限与设备操作范围、导出和敏感数据边界"}
+{"file": ".trellis/spec/backend/host-bridge.md", "reason": "Android 宿主拥有受保护操作，MethodChannel 契约与生命周期"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "Flutter 页面状态、异步结果与前后台生命周期"}
 {"file": ".trellis/spec/backend/app-secrets.md", "reason": "复用现有共同库/会话/窗口/请求最终效果及本地和设备验证边界"}
 {"file": ".trellis/spec/frontend/app-secrets.md", "reason": "复用现有共同库/会话/窗口/请求最终效果及本地和设备验证边界"}
 {"file": ".trellis/spec/trellis-plus/validation.md", "reason": "复用现有共同库/会话/窗口/请求最终效果及本地和设备验证边界"}

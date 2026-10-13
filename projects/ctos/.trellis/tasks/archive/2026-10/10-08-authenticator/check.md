@@ -9,7 +9,7 @@
 - 原生7个非copy检查 **62.548秒全部通过**：真实Android Bitmap多QR/输入边界、typed Bridge预览与管理、取消/锁定/注入期限/迟到读抑制、非空纯TOTP密文恢复、实际FLAG_SECURE与0相机能力。EventChannel为实际codec上的loopback、后台为注入Bridge事件、恢复目标为独立内存；不冒称Dart流/Home/跨设备恢复。
 - 修复相机稳定失败提示与成功图片元数据先于Dart恢复的交接。成功metadata在同请求/revision/epoch/当前路由下最多等3秒，等待不渲染秘密；Timer+单调时钟有界，取消/锁库/覆盖/离开退场，原生期限不续期、UI期限扣除耗时。新增7个widget回归，旧源码运行新回归实际RED；最终 **221 Flutter全量、86定向（33业务+53公共）、analyze无问题**。构建/fixture lint0错误3既有警告/v2通过。
 - 此前 **122 JVM与45真实字体场景**为c704初轮结果，原生/布局未变，本次Flutter交接增量后没有重跑；不混为本次全量。
-- 真实UI run1–10的失败、修复、逐次精确认证和回收详见 [设备证据](../../../design/verification.md#2026-10-13-authenticator-totp-开发板自动验收进行中)。真实手动预览取消/保存/RFC码倒计时、重命名保留ID/内容、实际Home宽限、锁库隐藏/主口令返回、0硬件相机恢复均已有分阶段通过。run9/10都认证了恰有基线与所选Alpha、无Beta/其他条目；不据失败后的cipher认证标完整UI通过。
+- 真实UI run1–10的失败、修复、逐次精确认证和回收详见 [设备证据](../../../../../design/verification.md#2026-10-13-authenticator-totp-开发板自动验收进行中)。真实手动预览取消/保存/RFC码倒计时、重命名保留ID/内容、实际Home宽限、锁库隐藏/主口令返回、0硬件相机恢复均已有分阶段通过。run9/10都认证了恰有基线与所选Alpha、无Beta/其他条目；不据失败后的cipher认证标完整UI通过。
 - run10 `864d391c-bfdf-43a1-b9c6-26a151e27ab3` **60.320秒失败**于图片确认后的目标操作节点等待，固定诊断列表标题可见、Add/成功ACK均不可见；精确PNG删除。只读核清 **1项/2.028秒通过**：2条/gen1，cipher `1f3b05170285c59fd454e808c30b61bb4b007c07e5726737077000a1fa952c97`，持久授权0、密文前后逐字不变。核清后只卸载两fixture包，fresh重装。
 - 最终driver严格列表等待补有界语义滚动；只在精确列表/窗口且无Add/编辑/确认/ACK时滚动，目标仍需实际可见enabledButton/准确tooltip/自身CLICK。成功ACK仅在指定文案、完整已提交2条oracle及真实FLAG后fresh绑定原窗口title/body/Button直接点击；不接受未知/错误/不确定回执。源码独立复核通过。fixture主包 **`1efe858b4e185f7699dd53ea787f0960eaa3cf1b08553ce40d051038cf716ceb`**，最终test **`16a07a30ee407e567985f938a1a700d5f6441147c8829a019906bc2de44c7225`**，仅test增量编译9秒/v2通过。最终fresh run11 `0e8e24b3-87b6-4691-b358-0fb87a297d9b` **1项/72.734秒通过，无skip**；成功ACK分支没有触发，不计实机通过。主包及两fixture包base.apk读回哈希匹配。
 - 全局复制初轮被自动审批拒绝，理由是通用安装/自动测试未明确覆盖该副作用；当时未重试或绕过，真实UI全部copy=false。随后用户明确“允许覆盖，完成复制测试”，fresh夹具仅选原生copy单项/true，**1项6.616秒通过，无skip**：真实Bridge写入公开合成当前TOTP，成功回执后仅核对自身内容/label/敏感标记，未读原内容/保存/监听/恢复/清空。After自有资源释放通过、两fixture再卸载并确认pm path空，正式路径不变；不是实际Flutter复制按钮E2E。
@@ -40,7 +40,7 @@
 - 最终 **214 Flutter**、**79定向**（26业务+53公共）、analyze无问题、Dart格式和diff通过；**122 JVM**（106原有+16新增）0failures/errors/skipped；Android lint0错误3既有警告；instrumentation APK编译通过，未执行设备测试。
 - **45真实字体场景**通过，独立check及主会话审阅窄屏/大字/键盘/横屏。事件EOF、读取ID重放、预览快照、最终锁内资源清理、窄屏提示、长名称及双击复制问题均已修复并复核，无剩余具体源码阻塞。
 - 主会话使用 `./preview.sh` 从冻结源码刷新最终arm64 APK，30.8秒，32,934,089字节；v2=true/1 signer，开发证书及7个产品Dart文件SHA清单匹配。APK `build/app/outputs/flutter-apk/app-release.apk` SHA256 **`c704ff362ea8402709833217025e800a298917c698183bf6a4550388c40e85eb`**，ZIP三份ZXing LICENSE/NOTICE匹配、native ABI仅arm64。此前owner包为中间产物，不作为最终交付。
-- 命令、日志、夹具hash及测试范围统一记录在 [项目验证](../../../design/verification.md#2026-10-13-authenticator-totp-本地实现与最终产物)。task/JSONL、spec、设计索引/架构/兼容/依赖/变更历史同步；未安装设备、操作账号、替换dist、提交或归档。
+- 命令、日志、夹具hash及测试范围统一记录在 [项目验证](../../../../../design/verification.md#2026-10-13-authenticator-totp-本地实现与最终产物)。task/JSONL、spec、设计索引/架构/兼容/依赖/变更历史同步；未安装设备、操作账号、替换dist、提交或归档。
 - 最终文档检查：22份已修改/新增Markdown中的307个本地链接存在；已变JSON/JSONL可解析、上下文路径存在；in_progress/human-required、当前开发板`.14`及AGENTS不再使用`.13`执行默认值断言通过，`git diff --check`通过。地址修正只改文档，不重复产品测试。
 
 | 产品AC | 当前证据及仍待执行 |

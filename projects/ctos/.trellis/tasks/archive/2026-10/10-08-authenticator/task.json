@@ -15,7 +15,7 @@
   "branch": null,
   "base_branch": "antitrust",
   "worktree_path": null,
-  "commit": null,
+  "commit": "566ca51",
   "pr_url": null,
   "subtasks": [],
   "children": [],
@@ -131,6 +131,7 @@
       "archive_authorized": true,
       "next_task": "10-08-ssh-terminal-client",
       "scope_limits": "documented hardware/platform/account/cross-device/mixed validation remains unmeasured, no blanket pass"
-    }
+    },
+    "execution_engine": "OpenAI Codex"
   }
 }
