@@ -639,3 +639,106 @@
 ### Next Steps
 
 - 本任务已完成；等待用户选择下一工作，不自动开始公共底座剩余验收、TOTP或SSH。
+
+
+## Session 21: Restore Authenticator TOTP and correct development board
+
+**Date**: 2026-10-13
+**Task**: Restore Authenticator TOTP and correct development board
+**Branch**: `antitrust`
+
+### Summary
+
+复用原 task，按先 TOTP 后 SSH 授权完成本地 TOTP 实现和最终 APK；校验/渲染通过，平台及账号验收开放。用户更正开发板为192.168.9.14:5555，已同步AGENTS/constraints/validation spec；未安装、提交或归档。
+
+### Main Changes
+
+- 工作台验证器、离线相机/图片/手动候选确认、公共密文条目/倒计时/主动复制/重命名/删除；新的宿主/前端可执行spec及设计落点同步。
+- 只读ID永久命名空间、事件EOF/迟到/时间窗口fail-closed、实际快照revision及轻量最终发布保护；修复大字布局/长名称/双击复制。
+
+### Git Commits
+
+(No commits - planning session)
+
+### Testing
+
+- [OK] 214 Flutter、79定向、122 JVM、analyze及格式通过；Android lint0错误3既有警告，instrumentation仅编译。45真实字体场景通过。
+- [OK] 最终arm64 APK SHA256 c704ff362ea8402709833217025e800a298917c698183bf6a4550388c40e85eb；v2/1 signer，三份ZXing许可证资产及7个产品Dart文件SHA匹配。22 Markdown/307本地链接、JSON/JSONL及diff通过。
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 当前Authenticator in_progress/implementation_complete/human-required；当前开发板.14仅更正地址，平台/非空跨设备备份及账号MFA需当前操作授权。底座未测关卡保持。
+- 按用户既定順序后续复用SSH客户端task，先Android/Bionic无普通磁盘明文文件视图和每跳配置/信任技术关卡；不得悄悄降级或伪造混合恢复。
+
+
+## Session 22: TOTP 开发板安装与隔离自动验收
+
+**Date**: 2026-10-13
+**Task**: TOTP 开发板安装与隔离自动验收
+**Branch**: `antitrust`
+
+### Summary
+
+当前.14安装读回一致；221 Flutter与7原生/1真实UI通过，复制与其余关卡开放
+
+### Main Changes
+
+- 修复稳定失败提示和成功图片metadata先于Dart恢复的前台交接；同请求/epoch/路由3秒有界等待、不渲染等待秘密、不续原生期限。
+- 最终主包3bc762d9已安装192.168.9.14:5555读回一致；独立UID公开RFC夹具和精确UUID图片，真实库/账号未操作。
+
+### Git Commits
+
+(No commits - planning session)
+
+### Testing
+
+- [OK] 221全量/86定向/analyze通过，旧实现新回归实际RED；122 JVM/45字体是初轮未重跑证据。
+- [OK] 7项非copy原生62.548秒；用户后续专项批准覆盖，原生复制单项6.616秒通过，仅核对自身写后内容/敏感标记，不读原内容/保存/恢复/清空/监听。fresh真实Flutter UI非copy1项72.734秒无skip，系统双QR明确单选、发码/管理、Home/锁库及最终空库/窗口释放通过。
+- [OK] 正式和两fixture APK读回哈希匹配；自有PNG精确删除query0，两个fixture包卸载pm path空，正式包最终读回仍3bc。
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 真实Flutter复制按钮E2E仍未执行；原生单项通过仅适用于当前ROM/公开合成账号，保留其余平台与业务验收。
+- Task保持in_progress/human-required；0硬件相机、首次权限拒绝、图片取消/跨UIDgrant、截图/录屏/最近任务、真实账号/跨设备混合恢复等开放；SSH随后复用现有planning任务。未提交/归档/替换dist。
+
+
+## Session 23: TOTP 验收提交与归档
+
+**Date**: 2026-10-13
+**Task**: TOTP 验收提交与归档
+**Branch**: `antitrust`
+
+### Summary
+
+用户确认当前效果并批准提交验收/继续SSH；55个相关文件提交566ca51，任务按实测边界完成归档
+
+### Main Changes
+
+- 原生7项、专项复制1项和最终真实UI72.734秒通过；用户human-required反馈已取得，保留全部未测范围。
+- 工作提交含实现/spec/design/任务及设备地址修正，归档独立提交含任务搬迁/commit元数据和必要链接迁移；不提交SSH研究或忽略的构建/证据产物。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `566ca51` | (see git log) |
+
+### Testing
+
+- [OK] 源码/APK未再改，沿用已复核221 Flutter/86定向/analyze及设备原日志；archive本地链接/JSONL/context/状态/work-commit检查和diffcheck通过。
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 按用户既定先TOTP后SSH顺序复用10-08-ssh-terminal-client，先Android native OpenSSH无明文磁盘文件访问探针；真实设备/账号按新任务当前授权执行。
