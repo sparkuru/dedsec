@@ -801,3 +801,38 @@
 ### Status
 
 [OK] **Completed**
+
+
+## Session 26: SSH native-owned session handle and Android JNI synthetic gate
+
+**Date**: 2026-10-15
+**Task**: SSH native-owned session handle and Android JNI synthetic gate
+**Branch**: `antitrust`
+
+### Summary
+
+完成 G3.7 native-owned SSH session/key/view boundary：opaque view handle 的 borrow/revoke/deferred destroy、native parsed host-key ownership、真实五入口 JNI registry 与 Android synthetic lifecycle gate；task 保持 in_progress，完整 SSH 仍开放。
+
+### Main Changes
+
+- 新增 ssh_view_handle registry、native host-key/view borrow ownership 与 session JNI owner-thread bridge
+- 补齐 host/native/normal/fixture/device 质量证据、设计/spec、handoff 和 task metadata
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `8c0a615` | (see git log) |
+
+### Testing
+
+- [OK] hako normal gate：view/native/callback pass，JUnit 189/0/0/0，production gate pass，archive=83，APK dd962567…
+- [OK] 授权 .14 fixture：SshNativeSessionPlatformTest 与 SshFileViewPlatformTest 各 1 项 status=0；UID 10193/10194 已卸载，正式 APK hash 保持
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 从 8c0a615 继续 packet protocol/host proof/auth/typed credential 与更广泛 ARM runtime；先读 handoff 顶部和当前 spec
