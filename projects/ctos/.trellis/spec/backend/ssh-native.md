@@ -7,10 +7,147 @@ caller boundary, using the approved parent PRD/design and existing
 AppSecrets/SshVaultAdapter contracts. The normal APK production archive is
 rebuilt from the pinned OpenSSH 10.6p1 source with `-fPIC`; old fixture objects
 and stock high-level callers are not valid inputs. The client is not yet a
-complete Android product: JNI/Java session orchestration, runtime/ARM
-execution, userauth, typed credentials, PTY, forwarding, service/UI, device
-and external SSH remain open gates. Missing semantic/trust/runtime providers
-must keep the product path fail-closed.
+complete Android product: the Java session-owner seam exists, but its
+production JNI entrypoints are deliberately fail-closed until a native-owned
+handle/view-borrow protocol exists. Runtime/ARM execution, userauth, typed
+credentials, PTY, forwarding, service/UI, device and external SSH remain open
+gates. Missing semantic/trust/runtime providers must keep the product path
+fail-closed.
+
+## G3.6: Java/JNI session-owner fail-closed seam
+
+### 1. Scope / Trigger
+
+- Trigger: add the Java owner contract above the G3.5 same-process native C
+  boundary without pretending that Java opaque tokens are borrowed C pointers.
+- Scope: `SshNativeSession`, its callback claim, the public-view token access,
+  normal JNI symbol closure, and JVM ownership tests. This section does not
+  authorize Android runtime, device, credentials, or external SSH.
+- The current JNI implementation is intentionally a fail-closed placeholder:
+  every production entrypoint throws `java.io.IOException` until the native
+  handle/borrow contract below is implemented.
+
+### 2. Signatures
+
+Java owner seam:
+
+```java
+static SshNativeSession open(
+    SshNativeCallbackAdapter callback,
+    SshPublicFileLease view,
+    int socketFd,
+    byte[] hostKeyBlob,
+    byte[] expectedFingerprint,
+    String candidateId,
+    int stepBudget) throws VaultException;
+
+void cancel() throws VaultException; // the only cross-thread operation
+StepResult step() throws VaultException; // owner thread only
+void verifyHostKey(byte[] hostKeyBlob) throws VaultException; // owner thread only
+void close() throws VaultException; // owner thread only, retryable
+```
+
+JNI symbols in `ssh_session_jni.c`:
+
+```text
+Native.open(...) -> long
+Native.step(...) -> int[8]
+Native.verifyHostKey(...) -> void
+Native.close(...) -> void
+Native.destroy(...) -> void
+```
+
+The current implementation of all five JNI methods throws `IOException` and
+returns no native handle/result. `NativeSessionClaim` is the package-private
+capability pairing one callback adapter with one opening/owned session.
+
+### 3. Contracts
+
+- The thread that opens the callback is the session owner. Only it may call
+  native open, step, host-key verification, close, or destroy. `cancel` may be
+  requested by another thread; it sets cancellation and the owner thread
+  passes it into the next native step.
+- `beginNativeSessionOpen()` rejects closed, closing, cancelled, wrong-thread,
+  expired, or already-opening/owned bindings. A successful begin creates one
+  `NativeSessionClaim`; success changes it to owned, while every failed open
+  clears it.
+- Open validates the live role, active exact public view, socket and bounded
+  inputs before calling the binding. The native binding receives cloned host-key
+  and fingerprint arrays; Java wipes both in `finally`. A failed binding open
+  must leave the caller's original FD, callback and view available.
+- Close is staged and retryable:
+  `nativeBinding.close` (native C callback/KEX/socket close) →
+  `callback.nativeClientClosed(claim)` bookkeeping →
+  `callback.releaseRoleAfterNativeClient()` → `view.close()` →
+  `nativeBinding.destroy()`. A completed stage is not repeated; an uncompleted
+  stage remains pending after an exception.
+- `verifyHostKey` and `step` re-check the live role/deadline and fail closed on
+  cancellation, expiry, malformed result, native error or linkage failure.
+  `StepResult` has exactly eight bounded scalar fields; application byte pipes
+  do not cross this seam.
+- Production JNI may be enabled only after native code owns a session handle,
+  owns or safely clones the parsed host key, and pins a view snapshot/borrow
+  until native close releases it. Java token values must never be cast to
+  `struct sshkey *` or `ctos_ssh_view *` pointers.
+
+### 4. Validation & Error Matrix
+
+| Condition | Required result |
+| --- | --- |
+| Wrong thread for open/step/verify/close/destroy | `SSH_SESSION_THREAD`; no native call |
+| Cross-thread cancel | callback cancellation is recorded; next owner step returns `SSH_SESSION_CANCELLED` |
+| Expired/closed role or revoked view | `SSH_SESSION_EXPIRED`/typed vault error; no native step/verify |
+| Second session on one callback | `SSH_CALLBACK_SESSION`; first claim remains owner |
+| Failed native open | `SSH_SESSION_NATIVE`; claim is released; caller FD/callback/view remain caller-owned |
+| Invalid key/fingerprint/identifier/budget | `SSH_SESSION_REQUIRED`; no native call |
+| Native close or role/view/destroy failure | `SSH_SESSION_CLEANUP` or underlying typed error; completed stages remain done and later stages are retryable |
+| JNI bridge sees no native-owned handle/view borrow contract | `IOException` from every JNI entrypoint; never dereference a Java token |
+| AArch64 cross-link without qemu/device | record `runtime=not-run`; never report Android runtime pass |
+
+### 5. Good / Base / Bad Cases
+
+- Good: fake binding observes owner-thread calls, one claim, wiped key inputs,
+  failed-open resource preservation, deadline/cancel rejection and ordered
+  close retries; production JNI remains visibly fail-closed.
+- Base: normal APK contains the five JNI symbols and links the production
+  OpenSSH archive, but JVM-only session tests use a fake binding and native
+  runtime is `not-run`.
+- Bad: reinterpret a `long viewToken` as `ctos_ssh_view *`, let a worker thread
+  call native close, release the Java role before native callback/KEX cleanup,
+  or call a Java runtime pass based only on cross-link/fake binding evidence.
+
+### 6. Tests Required
+
+- `SshNativeSessionTest`: owner-thread enforcement, cross-thread cancellation,
+  one-claim exclusivity, failed-open ownership preservation, host-key/fingerprint
+  wipe, deadline before step/verify, native close retry, view failure retry and
+  exact close ordering.
+- `:app:testReleaseUnitTest` must report 0 skipped/failures/errors, including
+  the twelve session-owner tests; `testSshCallbackAdapterHost` must retain
+  callback gate=20.
+- `compileSshFiles`, production source/object gate, all Release ABIs, lint and
+  APK ZIP/symbol scans must show the session JNI symbols while excluding fixture
+  caller objects and forbidden stock high-level symbols.
+- Before replacing the fail-closed JNI methods, add an authorized Android ARM
+  test that proves native handle ownership, view revoke/borrow lifetime,
+  partial I/O/EAGAIN/EOF/cancel/deadline, host proof and close/destroy retry.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```java
+Native.open(roleToken, viewToken, socketFd, hostKeyBlob);
+// C casts viewToken to struct ctos_ssh_view * and retains borrowed Java input.
+```
+
+#### Correct
+
+```text
+Java claim -> native-owned session handle + pinned view snapshot/borrow
+           -> owner-thread native close releases callback/KEX/socket
+           -> Java releases claim, role, view, then destroys tombstone
+```
 
 ## G3.5: production source/object closure and native C caller
 

@@ -1,6 +1,29 @@
 # ctOS 信息入口
 
-2026-10-15 SSH当前最新窄增量：已把受管 hostfile issuer、KEX guard 与真实 pinned
+2026-10-15 SSH当前最新窄增量（G3.6）：在 G3.5 production native C boundary 之上新增
+Java `SshNativeSession` owner seam。打开、step、host-key verify、close/destroy 只能由
+callback event-loop owner thread 驱动，`cancel` 是唯一允许跨线程的操作；
+`SshNativeCallbackAdapter.NativeSessionClaim` 保证一个 callback binding 同时只有一个
+native session。close 顺序为 native close（由 C boundary 负责 callback/KEX/socket）→
+Java callback claim bookkeeping → role release → public-view release → native tombstone
+destroy；每个阶段失败都保留可重试状态，失败 open 不消费 caller socket、callback 或 view。
+host-key/fingerprint 进入 native binding 前复制，调用后清零。
+
+生产 JNI 符号已接入 normal `libctos_ssh_files.so`，但 `ssh_session_jni.c` 当前对
+`open/step/verifyHostKey/close/destroy` 统一抛 `IOException`：现有 C API 仍接收借用的
+`struct sshkey *`/`ctos_ssh_view *`，在 native-owned handle、view snapshot/borrow 和
+取消/关闭协议冻结前不能安全把 Java opaque token 当作 C 指针。JVM seam 使用 fake
+`NativeBinding` 验证 owner-thread、claim、期限、清零和 retry 合同，不等于 Android
+runtime/JNI/OpenSSH session 通过。
+
+当前固定证据：full gate 的 JVM 为 **189/0/0/0**，`SshNativeSessionTest` 为 12 项，
+callback host=20，production native 为 `gate=pass runtime=not-run`（原因是无
+`qemu-aarch64`），严格 `compileSshFiles`、三 ABI Release、lint、assemble 全部通过；
+production archive 仍为 83 个成员，session JNI symbols 可见且 forbidden=0；APK SHA256
+为 `21d16325b242427c2ccfbb7aa9cf42c6ca359700dc7b7f52995a95de06b94e72`。未使用设备
+`192.168.9.14:5555`、真实 vault、凭据或外部 SSH；task 保持 `in_progress`。
+
+2026-10-15 SSH上一窄增量（G3.5）：已把受管 hostfile issuer、KEX guard 与真实 pinned
 OpenSSH source/object closure 接入 normal `compileSshFiles`。新增固定 runner
 `android-production-openssh-build.sh`：校验 G1 baseline/tree/patch hash，在临时构建目录用
 OpenSSH 自带 `libssh-pic.a` 目标以 `-fPIC` 重编完整 10.6p1 `libssh` 成员，替换项目
@@ -100,7 +123,7 @@ NEWKEYS proof 及完整 SSH 仍开放，task 保持 `in_progress`/未完成。
 | [Portable 五项工具与 HFTP](portable-tools.md) | 模块边界、SDK v2、文件能力、认证加密与后台文件服务 |
 | [Portable 工作台与 SDK](portable-workbench.md) | 内置 Python、终端工具、运行包清单和脚本扩展契约 |
 | [App 统一秘密库与公共认证](app-authentication.md) | 先行底座：主口令、加密库/会话/设置/设备快捷/备份/隐私配套；2026-10-12 恢复推进，API30凭证快捷实测通过，保留 in_progress/其余待测关卡，TOTP 与 SSH 共同依赖 |
-| [SSH 终端规划](ssh-terminal.md) | APK 内客户端、OpenSSH config/一键连接和统一秘密库接入；in_progress，G0/G1/G2 fixture/host 证据已记录，managed AppSecrets known_hosts CAS provider 与 production native C caller 已接入，Android runtime/JNI/Java 编排仍开放 |
+| [SSH 终端规划](ssh-terminal.md) | APK 内客户端、OpenSSH config/一键连接和统一秘密库接入；in_progress，managed AppSecrets known_hosts CAS provider、production native C caller 与 Java owner seam 已接入，但 production JNI 当前 fail-closed，Android runtime/完整 SSH 仍开放 |
 | [SSH 终端接管档案](handoff-ssh-terminal-client.md) | 下一 session 的当前提交、证据、授权边界、阻塞与可执行接管步骤 |
 | [第三方 Authenticator](authenticator.md) | 离线 SHA1/6位/30秒 TOTP、工作台入口与公共秘密库；修复版已安装当前开发板，本轮非copy隔离自动验收完成，账号及未测平台关卡保留 |
 | [兼容性](compatibility.md) | 设备差异、已验证范围与未验证项 |

@@ -1,5 +1,31 @@
 # SSH 客户端阶段检查
 
+## 2026-10-15 Java/JNI session-owner fail-closed seam（G3.6）
+
+本轮复核了 Java/C/JNI 的 ownership 边界，并修正 session owner 必须持有
+`NativeSessionClaim` 的集成缺口：callback claim 现在从 begin-open 贯穿到 native close
+后的 bookkeeping，第二个 session 会被拒绝；failed open 会释放 opening claim，因而
+同一 callback 可在 caller 保留资源的前提下重试。关闭阶段按 native close、callback claim
+release bookkeeping、role、view、native destroy 分段记录，失败可重试；跨线程只允许
+cancel，native I/O/verify/close 仍 owner-thread-only。
+
+`ssh_session_jni.c` 已进入 normal compile closure，但故意让五个 JNI entrypoint 抛
+`IOException`。这是对现有 borrowed `struct sshkey *`/`ctos_ssh_view *` API 的安全边界，
+不是 runtime 失败被隐藏：JVM tests 使用 fake binding，Android JNI/OpenSSH session 尚未
+执行。必须先有 native-owned handle、key ownership、view snapshot/borrow/revoke 与
+close/destroy 协议，才可打开真实 JNI。
+
+验证：定向 `SshNativeSessionTest` 通过；full command 的 `BUILD SUCCESSFUL`、JUnit
+**189/0/0/0**、callback host=20、`SSH_PRODUCTION_OPENSSH_BUILD gate=pass
+fixture=excluded`、`SSH_NATIVE_CLIENT_BUILD gate=pass runtime=not-run
+reason=qemu-aarch64-unavailable`、strict compile/lint/三 ABI Release/assemble 均通过。
+APK SHA256 为 `21d16325b242427c2ccfbb7aa9cf42c6ca359700dc7b7f52995a95de06b94e72`；
+session JNI symbols 可见、forbidden=0，production archive=83 members。
+
+边界：无 qemu、设备、真实 vault、凭据或外部 SSH；task 仍
+`in_progress`/`implementation_complete=false`。下一检查必须在真实 native-owned JNI
+协议落地后重新覆盖 Android runtime，不得把 fake binding 或 cross-link 当 runtime pass。
+
 ## 2026-10-15 production PIC OpenSSH closure 与 native C caller（G3.5）
 
 本轮质量复核修复了两个真实构建/ownership 问题：`libssh.a` 的基线对象是 `-fPIE` 而非

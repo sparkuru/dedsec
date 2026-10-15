@@ -7,7 +7,8 @@ import java.util.HashMap;
 import java.util.Map;
 
 /** Owned native bootstrap view. No descriptor, pointer or content channel API. */
-final class SshPublicFileLease implements AutoCloseable, VaultSession.Revocation, SshRoleContext.PublicView {
+final class SshPublicFileLease implements AutoCloseable, VaultSession.Revocation,
+        SshRoleContext.PublicView {
     private static final int MAGIC = 0x43535056;
     private static final int MAX_WIRE = VaultEnvelope.MAX_PLAINTEXT;
     private long token;
@@ -123,6 +124,16 @@ final class SshPublicFileLease implements AutoCloseable, VaultSession.Revocation
         if (!active) throw new VaultException("VAULT_CHANGED", "The SSH file view was revoked");
         try { return Native.summary(token); }
         catch (IOException | LinkageError failure) { throw unavailable(); }
+    }
+
+    /**
+     * Internal session-owner handle. It is only a token for the native lease;
+     * callers never receive the mapped view, descriptor, or file body.
+     */
+    synchronized long nativeToken() throws VaultException {
+        if (!active || token <= 0) throw new VaultException("VAULT_CHANGED",
+                "The SSH file view was revoked");
+        return token;
     }
 
     @Override public boolean active() { return active; }

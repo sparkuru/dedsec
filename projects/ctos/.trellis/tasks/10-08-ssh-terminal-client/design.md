@@ -1,5 +1,32 @@
 # SSH 客户端与公共认证集成设计
 
+## G3.6 Java/JNI session-owner fail-closed seam（2026-10-15，runtime 未验收）
+
+`SshNativeSession` 是同进程 production boundary 上的 Java owner 对象。它记录创建
+callback 的 event-loop thread，并只允许该线程执行 native `open`、bounded `step`、
+host-key `verifyHostKey`、`close` 和 tombstone `destroy`；`cancel` 可从其他线程发起，
+但不在该线程执行 native I/O。`SshNativeCallbackAdapter.NativeSessionClaim` 在 open
+之前占用 callback binding，在成功后转成 owned；同一 binding 的第二次 open 失败。
+
+open 先检查 role/view/callback/deadline/socket/输入边界，再取 public-view token 和
+callback token。native binding 失败时释放 claim，但保留 caller 的 socket、callback 与
+view；成功后 session 持有 claim。host-key blob/fingerprint 以 clone 传入，finally 中
+清零。close 的 Java 层顺序固定为：`nativeBinding.close`（native C 内部负责 callback、
+KEX、socket）→ `nativeClientClosed(claim)` bookkeeping → `releaseRoleAfterNativeClient`
+→ `view.close` → `nativeBinding.destroy`。每个已完成阶段用独立布尔状态记录，失败时
+保留未完成阶段供 owner thread 重试。
+
+`ssh_session_jni.c` 先只实现稳定的 fail-closed entrypoint：`Native.open/step/
+verifyHostKey/close/destroy` 均抛 `IOException`。原因是现有 C API 参数中有借用的
+`struct sshkey *` 与 `ctos_ssh_view *`，Java token 不能直接解释为这些指针；必须先设计
+native-owned session handle、key ownership、view snapshot/borrow/revoke 和 close/destroy
+生命周期，再把 JNI 绑定切换为真实调用。故 fake `NativeBinding` 测试是 Java contract
+证据，不是 JNI 或 Android runtime 证据。
+
+本增量的 gate 为 189/0/0/0 JVM（其中 `SshNativeSessionTest` 12 项）、callback host=20、
+native `runtime=not-run`，strict `compileSshFiles`、三 ABI Release、lint、assemble
+通过；APK SHA256 为 `21d16325b242427c2ccfbb7aa9cf42c6ca359700dc7b7f52995a95de06b94e72`。
+
 ## G3.5 Production PIC OpenSSH closure 与 native C boundary（2026-10-15，runtime 未验收）
 
 normal `compileSshFiles` 现在消费一个由固定 G1 baseline 生成的 production archive，而

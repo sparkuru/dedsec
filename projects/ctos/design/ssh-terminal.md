@@ -1,6 +1,23 @@
 # SSH 终端规划入口
 
-2026-10-15 当前最新窄增量：已完成从 managed hostfile issuer 到 normal APK 的 pinned
+2026-10-15 当前最新窄增量（G3.6）：已在 production `ssh_native_client` C boundary 之上
+加入 package-private `SshNativeSession`。owner event-loop thread 独占 `open/step/
+verifyHostKey/close/destroy`，`cancel` 可从其他线程请求；callback 的
+`NativeSessionClaim` 防止同一 binding 重复拥有 session。成功 close 的 Java 顺序是
+native close 完成后记录 callback claim 已释放，再 release role、close public view、
+destroy native tombstone；失败阶段保持可重试，failed open 保留 caller FD/callback/view。
+host-key blob 和 fingerprint 均为 bounded clone，并在 native binding 调用后清零。
+
+这是 Java ownership contract，不是 Android runtime pass。生产 `SshNativeSession$Native_*`
+JNI entrypoints 已链接，但 `ssh_session_jni.c` 由于当前 C API 只有借用的 `sshkey`/
+`ctos_ssh_view` 指针，故全部 fail-closed 抛 `IOException`；在 native-owned session handle、
+view snapshot/borrow 和关闭协议具备前不得把 Java token 强转指针。JVM fake binding
+验证了 12 项 session seam，完整 JUnit 为 **189/0/0/0**；callback=20、native
+`runtime=not-run`、三 ABI Release/lint/assemble/strict compile 通过，APK SHA256
+`21d16325b242427c2ccfbb7aa9cf42c6ca359700dc7b7f52995a95de06b94e72`，production archive
+仍为 83 members。没有 qemu/device/真实 vault/凭据/外部 SSH；task 保持 `in_progress`。
+
+2026-10-15 上一窄增量（G3.5）：已完成从 managed hostfile issuer 到 normal APK 的 pinned
 OpenSSH source/object closure 与 native C caller 接入。Gradle `compileSshProductionObjects`
 调用固定 hash runner，在临时目录用 pinned 10.6p1 `libssh-pic.a` 源码目标重编全部 PIC
 成员，替换 stream-writer/KEX guard 对象并加入 PIC PKCS#11/SK closure；生产归档 83 个

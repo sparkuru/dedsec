@@ -1,5 +1,21 @@
 # Changelog
 
+## 2026-10-15 — Java session-owner seam and fail-closed JNI (G3.6)
+
+- 新增 `SshNativeSession` Java ownership seam：owner event-loop thread 独占
+  `open/step/verifyHostKey/close/destroy`，`cancel` 可跨线程；callback
+  `NativeSessionClaim` 防止同一 callback binding 同时被两个 native session 占用。
+- 固化 native-first close 与可重试资源顺序：native close 后记录 callback claim 释放，
+  再 release role、public view，最后 destroy native tombstone；failed open 释放 opening
+  claim 但不消费 caller FD/callback/view；host-key/fingerprint copy 在调用后清零。
+- 将 `ssh_session_jni.c` 加入 normal JNI build，但五个 production JNI entrypoint 暂时
+  统一抛 `IOException` fail-closed。现有 C API 的 borrowed `sshkey`/`ctos_ssh_view`
+  指针尚无 native-owned handle/view-borrow 协议，故不把 Java token 冒充为指针。
+- JVM session seam 定向测试及 full gate 通过：189/0/0/0（其中 session seam 12 项）、callback host=20、native
+  runtime=not-run、strict compile/lint/三 ABI Release/assemble 通过；APK SHA256
+  `21d16325b242427c2ccfbb7aa9cf42c6ca359700dc7b7f52995a95de06b94e72`，archive=83。
+  未执行 qemu、设备、真实 vault、凭据或外部 SSH；task 保持 `in_progress`。
+
 ## 2026-10-15 — production PIC OpenSSH closure and native caller boundary
 
 - 将 `ssh_hostfile_issuer.c`、`ssh_kex_guard.c` 与 `ssh_native_client.c` 接入 normal

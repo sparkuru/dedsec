@@ -1,6 +1,23 @@
 # OpenSSH 终端与统一秘密库接入
 
-2026-10-15 G3.5 已将 pinned OpenSSH 10.6p1 的完整 PIC source/object closure 与
+2026-10-15 G3.6 已增加 Java/JNI session-owner seam，但不宣称 Android runtime 已通过。
+`SshNativeSession` 让 owner event-loop thread 独占 `open/step/verifyHostKey/close/destroy`，
+只允许 `cancel` 跨线程；`NativeSessionClaim` 保证一个 callback binding 只能同时拥有
+一个 session。failed open 必须清掉 opening claim 且不消费 caller FD、callback 或 view；
+close 必须按 native close → callback claim bookkeeping → role → view → native destroy
+顺序执行，任一失败可在 owner thread 重试。host-key/fingerprint 只能以 bounded clone
+进入 binding 并在调用后清零。
+
+生产 `ssh_session_jni.c` 已被 normal `compileSshFiles` 链接并导出五个 JNI entrypoint，
+但因为当前 C client 仍要求借用 `struct sshkey *`/`ctos_ssh_view *`，它们现在全部抛
+`IOException` fail-closed；缺少 native-owned handle、view snapshot/borrow 和完整关闭
+协议前不得宣称 production JNI/session。fake `NativeBinding` 的 session tests 只证明
+Java ownership contract。当前证据为 189/0/0/0 JVM、callback=20、native
+`runtime=not-run`、strict compile/lint/三 ABI Release/assemble 通过，APK
+`21d16325b242427c2ccfbb7aa9cf42c6ca359700dc7b7f52995a95de06b94e72`；task 仍
+`in_progress`，`implementation_complete=false`。
+
+2026-10-15 上一阶段 G3.5 已将 pinned OpenSSH 10.6p1 的完整 PIC source/object closure 与
 `ssh_native_client` C caller 接入 normal APK。production archive 固定为 83 个成员，含
 PIC PKCS#11/SK 对象并排除 stock high-level caller；native open/step/verify/close 的
 ownership 与 managed host evidence contract 已有 cross-link/normal-link 证据。当前尚未

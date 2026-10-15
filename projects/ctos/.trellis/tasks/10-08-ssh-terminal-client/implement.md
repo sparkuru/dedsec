@@ -1,6 +1,27 @@
 # SSH 接入实施计划
 
-## 2026-10-15 当前窄增量：production PIC OpenSSH closure 与 native C caller（G3.5）
+## 2026-10-15 当前窄增量：Java/JNI session-owner fail-closed seam（G3.6）
+
+- [x] 新增 `SshNativeSession` owner-thread state machine：只有创建 callback 的线程可
+  `open/step/verifyHostKey/close/destroy`，`cancel` 可跨线程；step/verify 在 role
+  过期、取消或错误结果时 fail-closed。
+- [x] 在 `SshNativeCallbackAdapter` 增加 `NativeSessionClaim`，约束 opening/owned
+  互斥；failed open 释放 claim 并保留 caller FD、callback、role 与 view；成功 close
+  后才允许 role release。
+- [x] 固化 Java close retry 顺序：native close → callback bookkeeping → role release
+  → view release → native destroy；每个阶段可独立重试，host-key/fingerprint clone
+  后清零。
+- [x] 将 `ssh_session_jni.c` 纳入 normal `compileSshFiles` 并导出五个 JNI symbol，
+  但因 C API 的 borrowed key/view pointer 尚无安全 native handle/borrow contract，
+  五个入口统一抛 `IOException`，保持 production fail-closed。
+- [x] 定向 session test 及 full gate：`SshNativeSessionTest` 12 项；全量 JUnit
+  **189/0/0/0**，callback=20，native `runtime=not-run`，strict compile/lint/三 ABI
+  Release/assemble 通过；APK SHA256 为
+  `21d16325b242427c2ccfbb7aa9cf42c6ca359700dc7b7f52995a95de06b94e72`。
+- [ ] 设计并实现 native-owned session/key/view handle 与 JNI borrow/revoke/close 协议，
+  再替换 fail-closed JNI binding；未满足前不得进行 Android runtime 或设备验证。
+
+## 2026-10-15 上一窄增量：production PIC OpenSSH closure 与 native C caller（G3.5）
 
 本轮已把 hostfile issuer、KEX guard 与 `ssh_native_client.[ch]` 接入 normal
 `compileSshFiles`，但没有把 fixture `ssh_pinned_client`/launcher 或 Java UI 接口带入生产。

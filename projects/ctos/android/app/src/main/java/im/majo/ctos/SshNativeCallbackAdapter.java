@@ -68,6 +68,18 @@ final class SshNativeCallbackAdapter implements AutoCloseable {
         Invocation(long serial) { this.serial = serial; }
     }
 
+    /** Private capability held by exactly one native session owner. */
+    static final class NativeSessionClaim {
+        private final SshNativeCallbackAdapter owner;
+        private boolean opening;
+        private boolean owned;
+
+        private NativeSessionClaim(SshNativeCallbackAdapter owner) {
+            this.owner = owner;
+            this.opening = true;
+        }
+    }
+
     private static final class HostVerification {
         final SshHostKeyAuthority.Evidence evidence;
         final SshHostKeyAuthority.Proof proof;
@@ -152,6 +164,8 @@ final class SshNativeCallbackAdapter implements AutoCloseable {
     private boolean closing;
     private boolean closed;
     private boolean roleReleased;
+    private boolean nativeSessionOpening;
+    private boolean nativeSessionOwned;
     private String failureCode;
     private SshHostKeyAuthority.Proof hostProof;
     private SshKexProof kexProof;
@@ -591,7 +605,7 @@ final class SshNativeCallbackAdapter implements AutoCloseable {
 
     void cancel() throws VaultException {
         synchronized (stateLock) {
-            if (closed) return;
+            if (closed || closing) return;
             cancelled = true;
             if (failureCode == null) failureCode = "SSH_CALLBACK_CANCELLED";
         }
@@ -606,8 +620,100 @@ final class SshNativeCallbackAdapter implements AutoCloseable {
 
     @Override public void close() throws VaultException {
         closeNative();
+        releaseRoleAfterNativeClient();
+    }
+
+    NativeSessionClaim beginNativeSessionOpen() throws VaultException {
+        synchronized (stateLock) {
+            if (Thread.currentThread() != eventLoopThread) {
+                throw new VaultException("SSH_CALLBACK_THREAD",
+                        "SSH session ownership must begin on the callback event-loop thread");
+            }
+            if (closed || closing || cancelled) {
+                throw new VaultException("SSH_CALLBACK_CLOSING",
+                        "The SSH callback binding is not available for a session");
+            }
+            if (nativeSessionOpening || nativeSessionOwned) {
+                throw new VaultException("SSH_CALLBACK_SESSION",
+                        "The SSH callback binding already has a native session");
+            }
+            role.requireActive(clock);
+            nativeSessionOpening = true;
+            return new NativeSessionClaim(this);
+        }
+    }
+
+    void finishNativeSessionOpen(NativeSessionClaim claim, boolean owned) {
+        synchronized (stateLock) {
+            if (claim == null || claim.owner != this || !claim.opening
+                    || !nativeSessionOpening) return;
+            claim.opening = false;
+            nativeSessionOpening = false;
+            if (owned) {
+                claim.owned = true;
+                nativeSessionOwned = true;
+            }
+        }
+    }
+
+    /**
+     * Records that the owning native SSH client already closed this callback.
+     * The native client performs callback release as part of its own close
+     * order, so this method must never call Native.close a second time.
+     */
+    void nativeClientClosed() throws VaultException {
+        markNativeClientClosed();
+    }
+
+    void nativeClientClosed(NativeSessionClaim claim) throws VaultException {
+        synchronized (stateLock) {
+            if (claim == null || claim.owner != this || !claim.owned || !nativeSessionOwned) {
+                throw new VaultException("SSH_CALLBACK_SESSION",
+                        "The native session does not own this callback binding");
+            }
+        }
+        markNativeClientClosed();
+        synchronized (stateLock) {
+            claim.owned = false;
+            nativeSessionOwned = false;
+        }
+    }
+
+    private void markNativeClientClosed() throws VaultException {
+        synchronized (stateLock) {
+            if (Thread.currentThread() != eventLoopThread) {
+                failureCode = "SSH_CALLBACK_THREAD";
+                throw new VaultException(failureCode,
+                        "SSH callback cleanup must run on its event-loop thread");
+            }
+            if (inCallback) {
+                failureCode = "SSH_CALLBACK_REENTRANT";
+                throw new VaultException(failureCode,
+                        "SSH callback cleanup cannot re-enter a callback");
+            }
+            if (closed) return;
+            closing = false;
+            cancelled = true;
+            closed = true;
+            hostProof = null;
+            kexProof = null;
+            nativeCallback = 0;
+            if (failureCode == null) failureCode = "SSH_CALLBACK_CLOSING";
+        }
+        if (candidateHandoff != null) candidateHandoff.close();
+    }
+
+    /** Native role release is retried independently after native client close. */
+    void releaseRoleAfterNativeClient() throws VaultException {
         synchronized (stateLock) {
             if (roleReleased) return;
+            if (!closed || nativeSessionOpening || nativeSessionOwned) throw new VaultException("SSH_CALLBACK_CLEANUP",
+                    "The native SSH client has not closed its callback");
+            if (Thread.currentThread() != eventLoopThread) {
+                failureCode = "SSH_CALLBACK_THREAD";
+                throw new VaultException(failureCode,
+                        "SSH callback cleanup must run on its event-loop thread");
+            }
         }
         try {
             SshNativeRoleBootstrap.release(issued, registry, roleRelease);
@@ -628,6 +734,11 @@ final class SshNativeCallbackAdapter implements AutoCloseable {
                 failureCode = "SSH_CALLBACK_REENTRANT";
                 throw new VaultException(failureCode, "SSH callback cleanup cannot re-enter a callback");
             }
+            if (nativeSessionOpening || nativeSessionOwned) {
+                failureCode = "SSH_CALLBACK_SESSION";
+                throw new VaultException(failureCode,
+                        "The native SSH session owns this callback binding");
+            }
             closing = true;
             cancelled = true;
             if (failureCode == null) failureCode = "SSH_CALLBACK_CLOSING";
@@ -645,19 +756,31 @@ final class SshNativeCallbackAdapter implements AutoCloseable {
             throw new VaultException("SSH_CALLBACK_CLEANUP",
                     "The SSH callback cleanup is unconfirmed");
         }
-        synchronized (stateLock) {
-            closing = false;
-            closed = true;
-            hostProof = null;
-            kexProof = null;
-        }
-        if (candidateHandoff != null) candidateHandoff.close();
+        nativeClientClosed();
     }
 
     String lastFailureCode() { synchronized (stateLock) { return failureCode; } }
     SshHostKeyAuthority.Proof hostProof() { synchronized (stateLock) { return hostProof; } }
     SshKexProof kexProof() { synchronized (stateLock) { return kexProof; } }
     Thread eventLoopThread() { return eventLoopThread; }
+    long nativeCallbackToken() {
+        synchronized (stateLock) { return nativeCallback; }
+    }
+    long roleToken() { return issued.token; }
+    int ownerUid() { return issued.ownerUid; }
+    long deadline() { return role.deadline; }
+    String host() { return role.host; }
+    boolean ownsPublicView(SshRoleContext.PublicView candidate) {
+        synchronized (stateLock) { return role.ownsPublicView(candidate); }
+    }
+
+    void requireNativeSessionLive() throws VaultException {
+        synchronized (stateLock) {
+            if (closed) throw new VaultException("SSH_CALLBACK_CLOSED",
+                    "The SSH callback binding is closed");
+            role.requireActive(clock);
+        }
+    }
 
     private static SshHostKeyAuthority.Classification classification(int value) throws VaultException {
         switch (value) {

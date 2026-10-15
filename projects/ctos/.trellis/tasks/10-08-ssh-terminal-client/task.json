@@ -77,6 +77,10 @@
     "android/app/src/main/cpp/ssh_native_client.h",
     "android/app/src/main/cpp/ssh_native_client.c",
     "android/app/src/test/cpp/ssh_native_client_test.c",
+    "android/app/src/main/java/im/majo/ctos/SshNativeSession.java",
+    "android/app/src/test/java/im/majo/ctos/SshNativeSessionTest.java",
+    "android/app/src/main/java/im/majo/ctos/SshRoleContext.java",
+    "android/app/src/main/cpp/ssh_session_jni.c",
     "android/app/src/main/cpp/ssh_hostfile_issuer.c",
     "android/app/src/main/cpp/ssh_hostfile_issuer.h",
     "android/app/src/test/cpp/ssh_hostfile_issuer_test.c",
@@ -90,7 +94,7 @@
     "android/app/src/test/cpp/ssh_pinned_client_test.c",
     "design/verification.md"
   ],
-  "notes": "2026-10-15 G3.5 已将 pinned OpenSSH 10.6p1 的完整 PIC source/object closure 与 ssh_native_client C caller 接入 normal compileSshFiles；production runner 在 scratch build 中重编 libssh-pic.a，纳入 PIC ssh-pkcs11.o/ssh-sk-client.o，archive evidence 为 83 members，并排除 stock high-level caller symbols。native open/setup 失败保留 caller 原 FD/callback，成功使用 CLOEXEC duplicate；close 顺序为 callback release、KEX unbind/OpenSSH free、原 FD，release/close 失败可重试。固定 runner run.aqN1F2bD 输出 SSH_HOSTFILE_CALLER_BUILD gate=pass runtime=not-run normal_apk=fixture-caller-not-wired；production native gate=pass runtime=not-run；JVM 177/0/0/0、callback gate=20、strict compile/lint/Release 通过，APK SHA256 为 805fc28679aa56be85fa3be75a1608701273908a02f7fb04dddb717c4e1b601e。hako 无 qemu-aarch64，ARM binary 未运行；fixture caller 仍排除 normal APK，Android runtime/JNI/Java session orchestration、typed credential/userauth、PTY/forward/service/UI、设备、外部 SSH 和完整客户端仍开放，implementation_complete=false，fixture transport 不得升级为 production。",
+  "notes": "2026-10-15 G3.6 已在 G3.5 production native C boundary 之上增加 SshNativeSession Java owner seam：owner event-loop thread 独占 open/step/verifyHostKey/close/destroy，cancel 唯一允许跨线程；SshNativeCallbackAdapter.NativeSessionClaim 保证一个 callback binding 只能同时拥有一个 session。failed open 清除 opening claim 且不消费 caller FD/callback/view；close 顺序为 native close、callback claim bookkeeping、role release、view release、native destroy，各阶段可重试，host-key/fingerprint clone 后清零；production open 还要求 role 与 exact SshPublicFileLease identity 相同，active claim 禁止 direct callback close。ssh_session_jni.c 已进入 normal compileSshFiles 并导出五个 JNI symbol，但因为当前 C API 仍要求借用 struct sshkey/ctos_ssh_view 指针，五个入口统一抛 IOException fail-closed；fake NativeBinding 只证明 Java contract，不代表 Android runtime/JNI/OpenSSH session。SshNativeSessionTest=12，JVM 189/0/0/0、callback=20、SSH_PRODUCTION_OPENSSH_BUILD gate=pass fixture=excluded、SSH_NATIVE_CLIENT_BUILD gate=pass runtime=not-run reason=qemu-aarch64-unavailable、strict compile/lint/三 ABI Release/assemble 通过，APK SHA256 为 21d16325b242427c2ccfbb7aa9cf42c6ca359700dc7b7f52995a95de06b94e72。production archive=83，fixture caller 排除 normal APK；无 qemu/device/真实 vault/凭据/外部 SSH，implementation_complete=false，下一步是冻结 native-owned session/key/view handle 协议后再启用真实 JNI。",
   "local_docker_ssh_smoke": {
     "date": "2026-10-14",
     "state": "device_to_ephemeral_docker_ssh_public_key_login_pass_cleaned",
@@ -118,7 +122,7 @@
       "g2_device_scope": "2026-10-13用户明确允许在192.168.9.14:5555安装已审查两份独立SSH G2 APK、仅合成上游内存文件/跳板及owned127.0.0.1两个随机listener测试、结束卸载；不覆盖正式ctOS，不操作真实库/Root/剪贴板/系统设置或外部SSH账号。",
       "account_authorized": false
     },
-    "implementation_phase": "G3_production_native_caller",
+    "implementation_phase": "G3_java_jni_session_owner_fail_closed",
     "implementation_complete": false,
     "g0_local_check": {
       "date": "2026-10-13",

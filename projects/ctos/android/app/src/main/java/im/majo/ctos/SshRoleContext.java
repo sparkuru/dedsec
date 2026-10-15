@@ -113,6 +113,11 @@ final class SshRoleContext implements AutoCloseable {
             throw new VaultException("SSH_ROLE_EXPIRED", "The SSH role has expired");
     }
 
+    /** The native session must use the exact view that issued this role. */
+    synchronized boolean ownsPublicView(PublicView candidate) {
+        return publicView == candidate;
+    }
+
     /**
      * A registry slot may be reclaimed only after the role is closed, its
      * public view is revoked, or its monotonic deadline has passed. A failed

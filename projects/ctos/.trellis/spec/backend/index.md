@@ -11,7 +11,7 @@ general database. Use these guides for work below the Flutter presentation layer
 | [Persistence](./persistence.md) | Current preferences/files and limits on adding durable state |
 | [App Secrets](./app-secrets.md) | Shared vault, typed consumers, post-authentication AAD, guarded own-UID diagnostics, atomic/uncertain effects and platform gates |
 | [Authenticator](./authenticator.md) | Strict TOTP input, host-only add tickets, scoped image/camera, read admission and guarded publication |
-| [SSH Native Gates](./ssh-native.md) | Opt-in synthetic Android gates, pinned PIC OpenSSH source/object closure, production native C caller, public-file view, bounded native role bootstrap, synchronous attached JNI callback, managed typed-secret handoff, concrete managed known_hosts/AppSecrets CAS, Java role/trust contract, and native-client boundaries |
+| [SSH Native Gates](./ssh-native.md) | Opt-in synthetic Android gates, pinned PIC OpenSSH source/object closure, production native C caller, Java/JNI session-owner fail-closed seam, public-file view, bounded native role bootstrap, synchronous attached JNI callback, managed typed-secret handoff, concrete managed known_hosts/AppSecrets CAS, Java role/trust contract, and native-client boundaries |
 | [Error Handling](./error-handling.md) | Typed snapshot states, channel errors, and runtime failures |
 | [Logging](./logging-guidelines.md) | Protocol stdout, bounded HFTP diagnostics, and secret-safe logs |
 | [Quality](./quality-guidelines.md) | Layer-specific checks and tests |

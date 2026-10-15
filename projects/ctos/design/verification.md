@@ -1,5 +1,45 @@
 # Verification
 
+## 2026-10-15 — Java session-owner seam with fail-closed production JNI (G3.6)
+
+本轮新增 `SshNativeSession`、`SshNativeSessionTest`、`ssh_session_jni.c`，并把 JNI
+source 纳入 normal `compileSshFiles`。Java owner 只允许创建 session 的 event-loop
+thread 调用 `open/step/verifyHostKey/close/destroy`；`cancel` 可跨线程设置取消并由
+owner thread 把取消传入下一次 native step。`SshNativeCallbackAdapter.NativeSessionClaim`
+把 callback binding 的 opening/owned 状态与 session 绑定，保证一个 callback 同时只有一个
+session；failed open 清掉 claim 并保留 caller socket、callback 和 public view。close
+先完成 native C close，再做 callback claim bookkeeping、role release、view release、
+native destroy，失败阶段可重试。Java host-key/fingerprint 输入为私有 bounded copy，
+调用后清零。
+
+生产 JNI entrypoints 已出现在 normal APK 的 native symbol 表，但当前故意 fail-closed：
+`ssh_session_jni.c` 的 `open/step/verifyHostKey/close/destroy` 都抛 `java.io.IOException`。
+原因是现有 `ctos_ssh_native_client` 接口还要求借用 `struct sshkey *` 和
+`ctos_ssh_view *`，而 Java 侧只有 opaque token；尚未存在可证明 revoke/close 顺序的
+native-owned handle、view snapshot/borrow 协议。JVM 测试使用 fake `NativeBinding`，
+因此不能外推 JNI、Android ABI、OpenSSH protocol 或设备 runtime。
+
+验证命令：
+
+```text
+./hako bash -lc 'cd android && ./gradlew :app:testReleaseUnitTest --tests im.majo.ctos.SshNativeSessionTest --console=plain --rerun-tasks'
+./hako bash -lc 'cd android && ./gradlew :app:testSshNativeClientHost :app:testSshCallbackAdapterHost :app:testReleaseUnitTest :app:lintRelease :app:assembleRelease --rerun-tasks --console=plain'
+```
+
+结果：定向 `SshNativeSessionTest` 通过；full gate `BUILD SUCCESSFUL`，JUnit XML 汇总
+**189 tests / 0 skipped / 0 failures / 0 errors**，callback host=20，
+`SSH_NATIVE_CLIENT_BUILD gate=pass runtime=not-run reason=qemu-aarch64-unavailable`，
+production build `SSH_PRODUCTION_OPENSSH_BUILD gate=pass fixture=excluded`。三 ABI
+Release、strict `compileSshFiles`、lint 和 assemble 通过。APK SHA256 为
+`21d16325b242427c2ccfbb7aa9cf42c6ca359700dc7b7f52995a95de06b94e72`；ZIP 仍只有生产
+`lib/arm64-v8a/libctos_ssh_files.so`。native symbol scan 看到
+`Java_im_majo_ctos_SshNativeSession_00024Native_{open,step,verifyHostKey,close,destroy}`，
+forbidden=0，production archive members=83。
+
+本轮没有使用 qemu、`192.168.9.14:5555`、真实 vault、凭据、设备或外部 SSH。JNI/runtime
+session、userauth/typed credential、PTY/forward、foreground service/UI 和完整 SSH 仍未验收。
+task 保持 `in_progress` / `implementation_complete=false`。
+
 ## 2026-10-15 — production PIC OpenSSH closure and native C caller
 
 本轮把上一窄增量的 issuer/callback seam 提升为 normal APK 的 source/object closure 与

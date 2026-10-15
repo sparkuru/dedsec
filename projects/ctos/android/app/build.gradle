@@ -208,7 +208,7 @@ tasks.register('compileSshFiles', Exec) {
         'src/main/cpp/ssh_role_bootstrap.c', 'src/main/cpp/ssh_role_bootstrap.h',
         'src/main/cpp/ssh_role_jni.c',
         'src/main/cpp/ssh_callback_adapter.c', 'src/main/cpp/ssh_callback_adapter.h',
-        'src/main/cpp/ssh_callback_jni.c', sshProductionSources,
+        'src/main/cpp/ssh_callback_jni.c', 'src/main/cpp/ssh_session_jni.c', sshProductionSources,
         sshProductionArchive)
     dependsOn 'compileSshProductionObjects'
     outputs.file(sshFilesOutput)
@@ -232,6 +232,7 @@ tasks.register('compileSshFiles', Exec) {
             'src/main/cpp/ssh_file_view.c', 'src/main/cpp/ssh_file_io.c', 'src/main/cpp/ssh_file_jni.c',
             'src/main/cpp/ssh_role_bootstrap.c', 'src/main/cpp/ssh_role_jni.c',
             'src/main/cpp/ssh_callback_adapter.c', 'src/main/cpp/ssh_callback_jni.c',
+            'src/main/cpp/ssh_session_jni.c',
             'src/main/cpp/ssh_hostfile_issuer.c', 'src/main/cpp/ssh_kex_guard.c',
             'src/main/cpp/ssh_native_client.c',
             '-Wl,--start-group', productionArchive.absolutePath,
