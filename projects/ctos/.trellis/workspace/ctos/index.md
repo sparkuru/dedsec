@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 24
+- **Total Sessions**: 25
 - **Last Active**: 2026-10-15
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~781 | Active |
+| `journal-1.md` | ~803 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 25 | 2026-10-15 | SSH Java owner seam and fail-closed JNI checkpoint | `297c328`, `aa9d69f` | `antitrust` |
 | 24 | 2026-10-15 | SSH managed provider and OpenSSH fixture checkpoint | `6dc6b34`, `19281bf` | `antitrust` |
 | 23 | 2026-10-13 | TOTP 验收提交与归档 | `566ca51` | `antitrust` |
 | 22 | 2026-10-13 | TOTP 开发板安装与隔离自动验收 | - | `antitrust` |

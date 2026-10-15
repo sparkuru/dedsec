@@ -779,3 +779,25 @@
 
 - 新 session 先读取 handoff，然后闭合 production OpenSSH source/object 和同进程 caller/event loop
 - 保持 ssh_native_client 在 production provider/caller 未闭合前 ENOTSUP；完成后再做 .14 合成 runtime 验证
+
+
+## Session 25: SSH Java owner seam and fail-closed JNI checkpoint
+
+**Date**: 2026-10-15
+**Task**: SSH Java owner seam and fail-closed JNI checkpoint
+**Branch**: `antitrust`
+
+### Summary
+
+完成 G3.6 SshNativeSession owner-thread/claim/close-retry seam、exact public-view identity guard、step-result bounds 与 fail-closed ssh_session_jni.c；同步 backend spec、设计/验证/changelog、task metadata 与 handoff。定向测试及 full Android gate 通过：189 JVM/0 skipped/failures/errors、callback host=20、production/native runtime=not-run、三 ABI Release/lint/assemble 通过，APK SHA256 21d16325...。task 保持 in_progress；下一步冻结 native-owned session/key/view handle 与 JNI borrow/revoke 协议，未执行设备/真实 vault/凭据/外部 SSH。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `297c328` | (see git log) |
+| `aa9d69f` | (see git log) |
+
+### Status
+
+[OK] **Completed**
