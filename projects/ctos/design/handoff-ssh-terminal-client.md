@@ -2,12 +2,12 @@
 
 - 目标与完成判据：在 ctOS 同一个 APK 内完成受管 OpenSSH SSH 客户端；production caller、事件循环、主机信任/凭据、认证、PTY、转发、服务/UI 与 Android 运行时联合验收均通过，且所有未测边界有明确证据。
 - 范围与权限：只在 `projects/ctos` 内工作。允许 `.14`（`192.168.9.14:5555`）上的合成/隔离 SSH 测试和已授权的真实秘密库操作；不使用真实外部 SSH 账号，不把账号、密码、token、私钥写入代码、任务或日志；不 push。
-- 当前状态：G3.5 实质代码 checkpoint 为 `df73a64`（父提交 `6dc6b34`）；当前 G3.6 Java owner seam 已实现但尚未提交。task `10-08-ssh-terminal-client` 仍为 `in_progress`，`implementation_complete=false`；normal APK 已包含 production native OpenSSH closure/C caller 与 Java JNI symbols，但 JNI native binding 仍 fail-closed。
+- 当前状态：G3.6 Java owner seam 已提交为 `297c328`（父 checkpoint `df73a64`）。task `10-08-ssh-terminal-client` 仍为 `in_progress`，`implementation_complete=false`；normal APK 已包含 production native OpenSSH closure/C caller 与 Java JNI symbols，但 JNI native binding 仍 fail-closed。
 - 已完成：managed `known_hosts` AppSecrets/CAS provider、一次性 native→managed candidate handoff、同步 JNI callback/role bridge、hostfile issuer、production PIC OpenSSH source/object closure、`ssh_native_client` C boundary、pinned caller fixture、`SshNativeSession` Java owner/claim/retry seam、host/Gradle/Release/normal-APK exclusion 质量门。
 - 未完成：native-owned session/key/view handle 与 JNI borrow/revoke protocol；真实 Android JNI/runtime/JVM-to-native session；userauth/typed credential、PTY、forward、foreground service、UI；设备/ARM runtime 和外部 SSH 验收。
 - 下一步：先冻结并实现安全的 native-owned handle/view snapshot/borrow 生命周期，再替换当前 fail-closed JNI binding；完成后才安排 `.14` 合成 runtime 验证。
 - 阻塞与停止条件：不得把 AArch64 cross-link、fixture `ssh_api` 内存流、host/fixture runner 或历史 Docker smoke 当作 Android runtime/production SSH pass。没有 runtime 生命周期、清理、授权范围或外部账号证据时停止，不接真实外部 SSH 账号。
-- 工作状态：workspace `/home/wkyuu/cargo/repo/06-dedsec/projects/ctos`；branch `antitrust`；最近已提交实质代码 checkpoint `df73a64`；当前 G3.6 code/docs increment 未提交，完成提交后必须把本字段和 task commit 一并更新，最终保持 clean。
+- 工作状态：workspace `/home/wkyuu/cargo/repo/06-dedsec/projects/ctos`；branch `antitrust`；最近实质代码 checkpoint `297c328`；handoff/task metadata follow-up 已提交，工作树 clean。
 - 环境：Android module 在 `android/`；hako/Docker 调用可能需要提升权限；容器内没有 `qemu-aarch64`，因此 AArch64 fixture 只能 link，不能在本机 runtime 执行。
 - 最近更新：2026-10-15
 - 最后验证：G3.6 full gate 返回 production `gate=pass fixture=excluded`、native `gate=pass runtime=not-run reason=qemu-aarch64-unavailable`；189 JVM/0 skipped/0 failures/0 errors、callback=20、strict compile/lint/三 ABI Release assemble 通过；session JNI symbols 可见、forbidden=0、archive=83；APK SHA256 `21d16325b242427c2ccfbb7aa9cf42c6ca359700dc7b7f52995a95de06b94e72`。
@@ -16,7 +16,7 @@
 
 | 项 | 值 / 描述 | 状态 | 证据来源 |
 | --- | --- | --- | --- |
-| 当前 work commit | `df73a64`（G3.5 checkpoint） | 确认 | `git show --stat df73a64` |
+| 当前 work commit | `297c328`（G3.6 Java/JNI owner seam checkpoint；父 `df73a64`） | 确认 | `git show --stat 297c328` |
 | managed provider | `SshManagedKnownHostsProvider` + `AppSecrets` guarded CAS | 确认 | `android/app/src/main/java/im/majo/ctos/SshManagedKnownHostsProvider.java`; `design/verification.md` |
 | candidate handoff | exact role/hop/target/connection/host/port/key/digest/body，一次性、清零 | 确认 | `SshKnownHostsCandidateHandoff.java`; `ssh_callback_adapter.[ch]`; `design/ssh-terminal.md` |
 | hostfile issuer | pinned upstream parser + project-owned stream writer，production source and fixture evidence | 确认 | `ssh_hostfile_issuer.[ch]`; production/G3 runners |
@@ -71,8 +71,8 @@
 
 ## 下一步行动
 
-- **提交 G3.5 checkpoint** — 状态：已完成
-  - 结果：`df73a64` 已提交本轮 intended code/test/runner/spec/design/task 变更；未 push，task 仍保持 `in_progress`。
+- **提交 G3.6 checkpoint** — 状态：已完成
+  - 结果：`297c328` 已提交本轮 intended code/test/spec/design/task 变更；未 push，task 仍保持 `in_progress`。
 - **实现 Java/JNI production session owner** — 状态：已完成当前安全增量
   - 前置条件：复用现有 role/view/callback contracts，不新增明文文件、CLI、fork/exec 或外部账号。
   - 结果：Java owner/claim/cleanup seam 与 fake binding tests 已完成；真实 JNI 明确保持 fail-closed，未把此项误报成 runtime。
@@ -90,8 +90,8 @@
 
 ## 接管验证
 
-- 环境检查：`git status --short` → 当前应能看到 G3.6 code/docs increment，不能覆盖 G3.5 已提交内容；提交收口后应为空。
-- 状态检查：`git show --stat --oneline df73a64` → G3.5 checkpoint；当前增量路径为 `SshNativeSession.java`、`SshNativeSessionTest.java`、`ssh_session_jni.c`、callback/lease/role/build 与入口文档。
+- 环境检查：`git status --short` → metadata follow-up 提交完成后应为空；G3.6 code/docs 已由 `297c328` 保存。
+- 状态检查：`git show --stat --oneline 297c328` → G3.6 checkpoint；内容包括 `SshNativeSession.java`、`SshNativeSessionTest.java`、`ssh_session_jni.c`、callback/lease/role/build 与入口文档。
 - 最小验证：`jq -e . .trellis/tasks/10-08-ssh-terminal-client/task.json` → JSON 有效；metadata 保持 `in_progress` 与 `implementation_complete=false`；full G3.6 gate 为 189/0/0/0。
 - 接管判据：Java seam 的 ownership 证据与 fail-closed JNI 边界已读到；只有 native-owned handle/view contract 落地且验证通过，才可开始 Android runtime integration。
 - 接管后更新：完成 native handle、runtime 或改变授权/设备范围后，先更新本档案顶部摘要、关键事实、假设台账和下一步，再继续实现。
@@ -104,7 +104,7 @@
 - `.trellis/tasks/10-08-ssh-terminal-client/research/android-production-openssh-build.sh`（时间=2026-10-15）→ 支撑 pinned PIC source/object closure、83-member archive 与 symbol gate。
 - `.trellis/tasks/10-08-ssh-terminal-client/research/android-hostfile-issuer-build.sh`（时间=2026-10-15）→ 支撑 pinned manifest/patch/object/link/exclusion runner。
 - `.trellis/tasks/10-08-ssh-terminal-client/task.json`（时间=2026-10-15）→ 支撑授权范围、当前 implementation phase 和 run ID。
-- `git show --stat df73a64`（cwd=ctOS，时间=2026-10-15）→ 支撑本轮 production code checkpoint 内容。
+- `git show --stat 297c328`（cwd=ctOS，时间=2026-10-15）→ 支撑 G3.6 production Java owner/fail-closed JNI checkpoint 内容；父 G3.5 checkpoint 为 `df73a64`。
 
 ## 已修正 / 历史结论
 
