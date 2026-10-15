@@ -15,7 +15,43 @@
 
 static int slice_is(struct ctos_ssh_slice value, const char *literal) {
     size_t length = strlen(literal);
-    return value.length == length && memcmp(value.data, literal, length) == 0;
+    return value.data != NULL && value.length == length
+        && memcmp(value.data, literal, length) == 0;
+}
+
+static int view_slices_are_safe(const struct ctos_ssh_view *view) {
+    if (view == NULL || view->count == 0 || view->count > CTOS_SSH_VIEW_FILES
+        || view->uuid.data == NULL || view->uuid.length != 16U
+        || view->binding.data == NULL || view->binding.length != 32U
+        || view->request.data == NULL || view->request.length == 0
+        || view->request.length > 128U || view->connection.data == NULL
+        || view->connection.length == 0 || view->connection.length > 512U
+        || view->root.data == NULL || view->root.length == 0
+        || view->root.length > 512U) {
+        errno = EACCES;
+        return -1;
+    }
+    for (unsigned int index = 0; index < view->count; index++) {
+        const struct ctos_ssh_file *file = &view->files[index];
+        if (file->id.data == NULL || file->id.length == 0
+            || file->id.length > 128U || file->path.data == NULL
+            || file->path.length == 0 || file->path.length > 512U
+            || file->identity.data == NULL || file->identity.length == 0
+            || file->identity.length > 512U || file->body.length > CTOS_SSH_VIEW_FILE_BYTES
+            || (file->body.length != 0 && file->body.data == NULL)
+            || file->ref_count > CTOS_SSH_VIEW_FILES) {
+            errno = EACCES;
+            return -1;
+        }
+        for (unsigned int ref = 0; ref < file->ref_count; ref++) {
+            if (file->refs[ref].data == NULL || file->refs[ref].length == 0
+                || file->refs[ref].length > 512U) {
+                errno = EACCES;
+                return -1;
+            }
+        }
+    }
+    return 0;
 }
 
 static int managed_known_hosts_root(const struct ctos_ssh_view *view) {
@@ -23,7 +59,8 @@ static int managed_known_hosts_root(const struct ctos_ssh_view *view) {
     static const unsigned char known_hosts_path[] = "ssh/known_hosts";
     const struct ctos_ssh_file *root;
 
-    if (view == NULL || !slice_is(view->root, (const char *)root_path)) {
+    if (view_slices_are_safe(view) != 0
+        || !slice_is(view->root, (const char *)root_path)) {
         errno = EACCES;
         return -1;
     }
@@ -85,7 +122,8 @@ static int valid_candidate_id(const char *value) {
 static int same_slice_text(struct ctos_ssh_slice slice, const char *value) {
     size_t length;
     if (value == NULL || bounded_text(value, CTOS_SSH_ROLE_CONNECTION_ID_BYTES, &length) != 0
-        || slice.length != length || memcmp(slice.data, value, length) != 0) {
+        || slice.data == NULL || slice.length != length
+        || memcmp(slice.data, value, length) != 0) {
         errno = EACCES;
         return -1;
     }

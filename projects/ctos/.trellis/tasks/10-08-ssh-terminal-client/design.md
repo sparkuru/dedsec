@@ -1,5 +1,30 @@
 # SSH 客户端与公共认证集成设计
 
+## G3.5 Production PIC OpenSSH closure 与 native C boundary（2026-10-15，runtime 未验收）
+
+normal `compileSshFiles` 现在消费一个由固定 G1 baseline 生成的 production archive，而
+不是 ignored fixture 输出目录：runner 在 scratch build 中调用 pinned OpenSSH 10.6p1
+`libssh-pic.a` source target，以 `-fPIC` 重编 archive 的完整 `libssh` 成员；再以项目
+stream-writer/KEX guard patch 替换 hostfile/kex 对象，并把 PIC `ssh-pkcs11.o` 与
+`ssh-sk-client.o` 加入同一归档。archive evidence 必须列出 83 个成员、source/object hash
+和 symbols，并拒绝 `ssh_connect`、`ssh_login`、`ssh_userauth2`、`ssh_proxy_*` defined
+caller；Gradle 每次任务重新生成，不读取旧 fixture objects。
+
+`ssh_native_client_open(config, &client)` 的 config 绑定 live role/PID/UID/deadline、
+`CLOEXEC|O_NONBLOCK|SOCK_STREAM` descriptor、same-thread callback environment、managed
+view/`ssh/known_hosts`、host key/fingerprint、host/candidate identity 和 bounded step
+budget。所有 admission/setup 检查在 socket attach 前完成；attach 使用 `F_DUPFD_CLOEXEC`
+duplicate，所以失败返回 `-1` 时 caller 原 FD 与预打开 callback 仍由 caller 关闭。成功
+后 native owns 原 FD 与 duplicate；`step` 只做 bounded socket turn。`close` 先回滚未完成
+candidate，再关闭 callback binding，之后 KEX unbind/`ssh_free`，最后关闭原 FD；callback
+release 或原 FD close 失败不 tombstone，允许同 owner/environment 重试；`destroy` 只接受
+closed tombstone。
+
+本增量的实测为 production cross-link/normal APK build：G3 fixture caller 仍不入 normal
+APK，ARM binary 因 hako 无 `qemu-aarch64` 未执行；Android runtime/JNI/Java session
+orchestration、userauth/typed credentials、PTY/forward/service/UI、设备及外部 SSH 仍是
+后续关卡，task 保持 `in_progress`。
+
 ## G3.4 Pinned OpenSSH caller fixture seam（2026-10-15，production 未接入）
 
 在 managed known_hosts provider、HostEvidence/CAS、one-shot candidate handoff 和
@@ -27,7 +52,7 @@ fmemopen，避免错误路径 FILE 泄漏；replacement scratch 使用有界堆�
 normal APK exclusion。最新结果为 build/ssh-native-g3/run.3PZSbIzM/：
 SSH_HOSTFILE_CALLER_BUILD gate=pass runtime=not-run normal_apk=not-wired；
 callback=20、native boundary=27、JVM=177/0/0/0；normal Release APK SHA256 为
-67668e34e2bba40359e43e048404ffeb5645629a130f86e86b2d855a170ffff9。hako 无
+805fc28679aa56be85fa3be75a1608701273908a02f7fb04dddb717c4e1b601e。hako 无
 qemu-aarch64，ARM fixture 未运行；caller/issuer/OpenSSH/KEX object 未进入
 compileSshFiles 或 normal APK。
 

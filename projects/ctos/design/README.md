@@ -1,15 +1,23 @@
 # ctOS 信息入口
 
-2026-10-15 SSH当前最新窄增量：新增仍限于 host/fixture 的 pinned OpenSSH 10.6p1 caller
-`ssh_pinned_client.[ch]`。它在真实 `ssh_api` 同进程 `socketpair` 上附着 caller-owned FD，
-执行 bounded nonblocking read/append → `ssh_packet_next` → partial write/consume，注册
-host verifier；KNOWN/NEW 先经 issuer 与 HostEvidence，NEW 在后续 evidence/CAS/protocol
-检查失败时回滚精确 candidate，KEX `done` 后只回调一次 session digest。固定 runner
-`run.3PZSbIzM` 的 `SSH_HOSTFILE_CALLER_BUILD gate=pass runtime=not-run normal_apk=not-wired`、
-host callback=20、native boundary=27、JVM=177/0/0/0、strict compile/lint/Release 及
-APK `67668e34e2bba40359e43e048404ffeb5645629a130f86e86b2d855a170ffff9` 通过；hako 无
-`qemu-aarch64`，未运行 ARM fixture。production caller 仍未进入 normal APK，认证、PTY、
-forward/service/UI、设备与外部 SSH 仍未验收，task 保持 `in_progress`。
+2026-10-15 SSH当前最新窄增量：已把受管 hostfile issuer、KEX guard 与真实 pinned
+OpenSSH source/object closure 接入 normal `compileSshFiles`。新增固定 runner
+`android-production-openssh-build.sh`：校验 G1 baseline/tree/patch hash，在临时构建目录用
+OpenSSH 自带 `libssh-pic.a` 目标以 `-fPIC` 重编完整 10.6p1 `libssh` 成员，替换项目
+stream-writer/KEX guard 对象，并纳入 PIC `ssh-pkcs11.o`/`ssh-sk-client.o`；最终归档
+83 个成员，排除 stock 高层 caller。`ssh_native_client.[ch]` 现提供同进程 bounded
+socket event-loop C boundary；open 失败保留 caller FD/callback，成功 close 先释放
+callback，再解绑/释放 OpenSSH，最后释放原 FD，callback 失败可重试。
+
+当前固定证据为 G3 fixture `run.aqN1F2bD`：`SSH_HOSTFILE_CALLER_BUILD gate=pass
+runtime=not-run normal_apk=fixture-caller-not-wired`；生产 `testSshNativeClientHost`
+为 `gate=pass runtime=not-run`，callback host=20，JUnit=177/0/0/0，strict
+`compileSshFiles`、三 ABI Release、lint、assemble 全部通过；APK SHA256 为
+`805fc28679aa56be85fa3be75a1608701273908a02f7fb04dddb717c4e1b601e`，ZIP 只有生产
+`lib/arm64-v8a/libctos_ssh_files.so`（无 pinned fixture caller）。hako 无
+`qemu-aarch64`，ARM binary、`192.168.9.14:5555`、真实 vault、凭据与外部 SSH 均未使用。
+生产 C caller 已链接但尚无 Android runtime/JNI/Java 会话编排；认证、typed credential、
+PTY、forward、service/UI、设备与外部 SSH 仍未验收，task 保持 `in_progress`。
 
 2026-10-15 SSH上一窄增量：在既有 managed `AppSecrets` known_hosts provider
 之上冻结独立的 opaque、同步、one-shot native→managed candidate handoff。
@@ -92,7 +100,7 @@ NEWKEYS proof 及完整 SSH 仍开放，task 保持 `in_progress`/未完成。
 | [Portable 五项工具与 HFTP](portable-tools.md) | 模块边界、SDK v2、文件能力、认证加密与后台文件服务 |
 | [Portable 工作台与 SDK](portable-workbench.md) | 内置 Python、终端工具、运行包清单和脚本扩展契约 |
 | [App 统一秘密库与公共认证](app-authentication.md) | 先行底座：主口令、加密库/会话/设置/设备快捷/备份/隐私配套；2026-10-12 恢复推进，API30凭证快捷实测通过，保留 in_progress/其余待测关卡，TOTP 与 SSH 共同依赖 |
-| [SSH 终端规划](ssh-terminal.md) | APK 内客户端、OpenSSH config/一键连接和统一秘密库接入；in_progress，G0/G1/G2 fixture/host 证据已记录，managed AppSecrets known_hosts CAS provider 已验证，生产 caller 仍未接入 |
+| [SSH 终端规划](ssh-terminal.md) | APK 内客户端、OpenSSH config/一键连接和统一秘密库接入；in_progress，G0/G1/G2 fixture/host 证据已记录，managed AppSecrets known_hosts CAS provider 与 production native C caller 已接入，Android runtime/JNI/Java 编排仍开放 |
 | [SSH 终端接管档案](handoff-ssh-terminal-client.md) | 下一 session 的当前提交、证据、授权边界、阻塞与可执行接管步骤 |
 | [第三方 Authenticator](authenticator.md) | 离线 SHA1/6位/30秒 TOTP、工作台入口与公共秘密库；修复版已安装当前开发板，本轮非copy隔离自动验收完成，账号及未测平台关卡保留 |
 | [兼容性](compatibility.md) | 设备差异、已验证范围与未验证项 |

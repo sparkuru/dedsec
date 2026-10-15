@@ -1,5 +1,13 @@
 # OpenSSH 终端与统一秘密库接入
 
+2026-10-15 G3.5 已将 pinned OpenSSH 10.6p1 的完整 PIC source/object closure 与
+`ssh_native_client` C caller 接入 normal APK。production archive 固定为 83 个成员，含
+PIC PKCS#11/SK 对象并排除 stock high-level caller；native open/step/verify/close 的
+ownership 与 managed host evidence contract 已有 cross-link/normal-link 证据。当前尚未
+完成 Android runtime/JNI/Java session orchestration、userauth/typed credential、PTY、
+forward、service/UI、设备或外部 SSH 验收；task 仍 `in_progress`，
+`implementation_complete=false`。
+
 2026-10-15 dedicated native→managed known_hosts handoff 增量已完成：在已冻结
 HostEvidence/CAS seam 与 `SshManagedKnownHostsProvider` 之间新增独立 synchronous
 one-shot C/JNI/managed receiver。handoff 绑定 exact role/hop/target/connection/host/port/

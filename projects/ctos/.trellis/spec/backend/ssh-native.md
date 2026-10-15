@@ -2,11 +2,118 @@
 
 ## Current scope
 
-The production SSH client is not implemented. `10-08-ssh-terminal-client`
-owns its integration, using the approved parent PRD/design and the existing
-AppSecrets/SshVaultAdapter contracts. The Linux OpenSSH memory-file study is
-historical feasibility evidence, not an Android client, sandbox or provider.
-Missing production SSH semantic/trust providers must keep restore fail-closed.
+`10-08-ssh-terminal-client` now owns a production source/object and native C
+caller boundary, using the approved parent PRD/design and existing
+AppSecrets/SshVaultAdapter contracts. The normal APK production archive is
+rebuilt from the pinned OpenSSH 10.6p1 source with `-fPIC`; old fixture objects
+and stock high-level callers are not valid inputs. The client is not yet a
+complete Android product: JNI/Java session orchestration, runtime/ARM
+execution, userauth, typed credentials, PTY, forwarding, service/UI, device
+and external SSH remain open gates. Missing semantic/trust/runtime providers
+must keep the product path fail-closed.
+
+## G3.5: production source/object closure and native C caller
+
+### 1. Scope / Trigger
+
+- Trigger: `compileSshFiles` now links a real pinned OpenSSH caller and the
+  hostfile/KEX provider seam into the normal APK.
+- Scope: only the same-process native boundary and normal-link closure are
+  implemented. `ssh_pinned_client` and other opt-in fixture callers remain
+  excluded from the APK.
+
+### 2. Signatures
+
+```c
+int ctos_ssh_native_client_open(
+    const struct ctos_ssh_native_client_config *,
+    struct ctos_ssh_native_client **);
+int ctos_ssh_native_client_step(
+    struct ctos_ssh_native_client *,
+    struct ctos_ssh_native_client_step *);
+int ctos_ssh_native_client_verify_host_key(
+    struct ctos_ssh_native_client *, const void *opaque_host_key);
+int ctos_ssh_native_client_close(struct ctos_ssh_native_client *);
+int ctos_ssh_native_client_destroy(struct ctos_ssh_native_client *);
+```
+
+The fixed production builder is
+`.trellis/tasks/10-08-ssh-terminal-client/research/android-production-openssh-build.sh`.
+Gradle must run `compileSshProductionObjects` before `compileSshFiles` and
+must consume only its generated archive/include output.
+
+### 3. Contracts
+
+- `config` binds live role, current PID/UID, future BOOTTIME deadline,
+  `CLOEXEC|O_NONBLOCK|O_RDWR|SOCK_STREAM` descriptor, same-thread callback
+  token/environment, managed view, `ssh/known_hosts` path, host/candidate
+  identity, host public key/fingerprint and a step budget no larger than
+  `CTOS_SSH_NATIVE_CLIENT_MAX_STEP_BYTES`.
+- All admission/setup checks run before OpenSSH attaches a descriptor. A
+  successful open attaches a `F_DUPFD_CLOEXEC` duplicate and the native client
+  owns both the duplicate and original descriptor. A failed open leaves the
+  original descriptor and pre-opened callback caller-owned.
+- One `step` performs a bounded nonblocking socket read, OpenSSH input/packet
+  processing, and bounded output write/consume. Non-empty application input or
+  output pipes are rejected; OpenSSH owns transport bytes.
+- Host verification consumes the managed public view through the pinned
+  hostfile issuer, rechecks HostEvidence/CAS binding, and rolls back a handed
+  off NEW candidate on later failure. KEX completion emits one session digest
+  callback only.
+- `close` is event-loop-owner synchronous: candidate abort, callback release,
+  KEX unbind/OpenSSH free, then original descriptor close. A release/close
+  failure leaves a retryable non-tombstone. `destroy` accepts only a closed
+  tombstone.
+- The production archive must be source-recompiled PIC, contain the complete
+  pinned `libssh` member set plus PIC `ssh-pkcs11.o`/`ssh-sk-client.o`, and
+  define no `ssh_connect`, `ssh_login`, `ssh_userauth2`, or `ssh_proxy_*` stock
+  caller.
+
+### 4. Validation & Error Matrix
+
+| Condition | Required result |
+| --- | --- |
+| Null/malformed config, stale role/view, wrong owner/deadline, bad socket or missing trust input | `-1`; `*client == NULL`; original FD and callback remain caller-owned |
+| Non-empty step input/output pipe | `-1`, `EINVAL`, zero progress |
+| Cancel, expired deadline, EOF, protocol/I/O failure | terminal error; no further progress; candidate rollback if needed |
+| Step after close | `-1`, `ENOENT` |
+| Step after terminal completion/failure | `-1`, `EALREADY` |
+| Callback release failure | `-1`; client remains retryable with OpenSSH and original FD still attached |
+| Original-FD close failure | `-1`; client remains retryable with the original FD handle retained for another close attempt |
+| Baseline hash/tree/patch drift, non-PIC or incomplete archive, stock caller symbol | production builder fails before APK link |
+| Missing qemu/Android runtime | report `runtime=not-run`; never count cross-link as runtime pass |
+
+### 5. Good / Base / Bad Cases
+
+- Good: fixed source/tree hashes, 83-member PIC archive, explicit PKCS#11/SK
+  closure, no stock high-level symbols, normal APK shared link succeeds.
+- Base: AArch64 host cross-link and JVM/build gates pass; ARM execution and
+  Android/JNI session orchestration remain unverified.
+- Bad: copy G1 `-fPIE` objects into a shared `.so`, omit the explicit
+  `ssh-pkcs11`/`ssh-sk-client` definitions, or wire `ssh_pinned_client` into
+  `compileSshFiles`.
+
+### 6. Tests Required
+
+- Run the fixed production builder and inspect baseline/source/object/member/
+  symbol evidence; assert PIC archive build and high-level caller exclusion.
+- Run `:app:testSshNativeClientHost` as an AArch64 cross-link and assert the
+  explicit `runtime=not-run` boundary when qemu is unavailable.
+- Run callback host, JVM, strict `compileSshFiles`, all Release ABIs, lint,
+  assemble, APK ZIP scan and `git diff --check`; assert 0 JVM failures/errors/
+  skips and no fixture caller objects.
+- Before claiming runtime, add an authorized Android ARM execution test for
+  partial I/O/EAGAIN/EOF/cancel/deadline, host proof, KEX completion, close
+  retry and JNI/Java session ownership. Build success alone is insufficient.
+
+### 7. Wrong vs Correct
+
+Wrong: extract the ignored G1 `libssh.a`/fixture objects and link them directly
+into `libctos_ssh_files.so`, or close the callback after `ssh_free`.
+
+Correct: rebuild the pinned source closure with `-fPIC`, add the measured
+PKCS#11/SK PIC objects, reject stock high-level symbols, and close the same
+thread callback before KEX unbind/OpenSSH free and descriptor release.
 
 ## G0: synthetic Android memory and managed exec
 

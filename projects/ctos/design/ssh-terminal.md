@@ -1,14 +1,21 @@
 # SSH 终端规划入口
 
-2026-10-15 当前最新窄增量：在 hostfile issuer seam 之上新增 fixture-only 的 pinned
-OpenSSH caller `ssh_pinned_client.[ch]`。它使用真实 `ssh_api` 的同进程 socketpair 和
-patched KEX closure，执行 bounded nonblocking partial read/write、EAGAIN、EOF、cancel、
-deadline、host verifier、KNOWN/NEW evidence、candidate rollback 与 KEX session digest callback。
-`run.3PZSbIzM` 固定 runner 为 `SSH_HOSTFILE_CALLER_BUILD gate=pass runtime=not-run
-normal_apk=not-wired`；最新 normal APK SHA256 为
-`67668e34e2bba40359e43e048404ffeb5645629a130f86e86b2d855a170ffff9`，JVM=177、host
-callback=20、native boundary=27。没有 `qemu-aarch64`，所以 ARM fixture 未执行；production
-caller、认证/PTY/forward/service/UI、设备与外部 SSH 仍未接入，task 保持 `in_progress`。
+2026-10-15 当前最新窄增量：已完成从 managed hostfile issuer 到 normal APK 的 pinned
+OpenSSH source/object closure 与 native C caller 接入。Gradle `compileSshProductionObjects`
+调用固定 hash runner，在临时目录用 pinned 10.6p1 `libssh-pic.a` 源码目标重编全部 PIC
+成员，替换 stream-writer/KEX guard 对象并加入 PIC PKCS#11/SK closure；生产归档 83 个
+成员，defined symbols 不含 `ssh_connect`/`ssh_login`/`ssh_userauth2`/`ssh_proxy_*`。
+`ssh_native_client` 在 normal `libctos_ssh_files.so` 中实现同进程 bounded nonblocking
+read/append/packet/write、host evidence/KEX callback 和 close retry；成功 close 顺序为
+callback → KEX unbind/OpenSSH free → 原 caller FD，open 失败不消费原 FD/callback。
+
+实测：G3 fixture `run.aqN1F2bD` 为 `SSH_HOSTFILE_CALLER_BUILD gate=pass runtime=not-run
+normal_apk=fixture-caller-not-wired`；生产 native host 为 `gate=pass runtime=not-run`，
+callback=20，JVM=177/0/0/0，strict `compileSshFiles`、三 ABI Release、lint、assemble
+通过，APK SHA256 `805fc28679aa56be85fa3be75a1608701273908a02f7fb04dddb717c4e1b601e`。
+没有 qemu/ARM runtime、设备、真实 vault、凭据或外部 SSH；C caller 虽已进入生产库，
+Android runtime/JNI/Java 会话编排、认证/typed credential、PTY/forward/service/UI 仍未完成，
+task 保持 `in_progress`。
 
 2026-10-15 上一窄增量：已实现 host/fixture-only 的 pinned OpenSSH hostfile issuer seam。
 issuer 要求 public view 以 `ssh/config` 为 `CTOS_SSH_CONFIG` root 并引用

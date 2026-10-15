@@ -1,5 +1,34 @@
 # SSH 客户端阶段检查
 
+## 2026-10-15 production PIC OpenSSH closure 与 native C caller（G3.5）
+
+本轮质量复核修复了两个真实构建/ownership 问题：`libssh.a` 的基线对象是 `-fPIE` 而非
+shared-library-safe `-fPIC`，因此 production runner 改为在 scratch build 中调用 pinned
+OpenSSH `libssh-pic.a` source target 重编全闭包；同时 `libssh.a` 对
+`pkcs11_key_free`/`pkcs11_sign`/`sshsk_sign` 的引用通过 PIC `ssh-pkcs11.o` 与
+`ssh-sk-client.o` 纳入归档。native open 改用 CLOEXEC duplicate，保证 attach/setup
+失败不消费 caller 原 FD；close 仍保持 callback release → KEX unbind/OpenSSH free → 原 FD，
+release failure 保留 client 供同线程重试。
+
+验证结果：
+
+- G3 固定 runner `run.aqN1F2bD`：`SSH_HOSTFILE_CALLER_BUILD gate=pass runtime=not-run
+  normal_apk=fixture-caller-not-wired`；pinned fixture caller 仍排除 normal APK。
+- `:app:testSshNativeClientHost`：`SSH_NATIVE_CLIENT_BUILD gate=pass runtime=not-run`；
+  无 `qemu-aarch64`，所以只完成 AArch64 cross-link。
+- `:app:testSshCallbackAdapterHost`：callback gate=20。
+- `:app:testReleaseUnitTest :app:compileSshFiles :app:lintRelease :app:assembleRelease`：
+  `BUILD SUCCESSFUL`；JUnit **177/0/0/0**，三 ABI Release native build 通过。
+- APK SHA256：`805fc28679aa56be85fa3be75a1608701273908a02f7fb04dddb717c4e1b601e`；ZIP
+  只有生产 `lib/arm64-v8a/libctos_ssh_files.so`，production archive evidence 为 83
+  members，未发现 stock high-level caller symbols。
+- runner `bash -n`、ShellCheck 与 `git diff --check` 通过；没有设备、真实 vault、凭据或
+  外部 SSH 操作。
+
+本轮证明 source/object/normal-link 与 native C lifecycle boundary，未证明 Android runtime、
+JNI/Java caller、userauth/typed credential、PTY/forward/foreground service/UI 或外部 SSH；
+task 继续 `in_progress`/`implementation_complete=false`。
+
 ## 2026-10-15 pinned OpenSSH caller fixture seam（G3.4）
 
 主会话对 G3.4 变更做了完整复核，并修正了一个 native 错误路径：

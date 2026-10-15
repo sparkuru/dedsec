@@ -154,6 +154,53 @@ tasks.register('compilePty', Exec) {
 }
 tasks.named('preBuild').configure { dependsOn 'compilePty' }
 
+// The production OpenSSH closure is generated from the fixed, hash-checked
+// G1 source/object baseline on every normal build. It is not read from a
+// previous fixture output directory and is never exposed through a fixture
+// source set. The runner records the exact source/object/symbol evidence.
+def sshProductionRoot = layout.buildDirectory.dir('generated/sshProduction')
+def sshProductionArchive = layout.buildDirectory.file(
+    'generated/sshProduction/arm64-v8a/libctos_ssh_production.a')
+def sshProductionRunner = rootProject.file(
+    '../.trellis/tasks/10-08-ssh-terminal-client/research/android-production-openssh-build.sh')
+def sshProductionAbiPatch = rootProject.file(
+    '../.trellis/tasks/10-08-ssh-terminal-client/research/openssh-10.6p1-bionic-includes.patch')
+def sshProductionBaseline = rootProject.file(
+    '../build/ssh-native-g1/stock-run.lOHF9Oai')
+def sshProductionBaselineFile = { String relative ->
+    new File(sshProductionBaseline, relative)
+}
+def sshProductionSources = files(
+    'src/main/cpp/ssh_file_view.c', 'src/main/cpp/ssh_file_view.h',
+    'src/main/cpp/ssh_role_bootstrap.c', 'src/main/cpp/ssh_role_bootstrap.h',
+    'src/main/cpp/ssh_callback_adapter.c', 'src/main/cpp/ssh_callback_adapter.h',
+    'src/main/cpp/ssh_hostfile_issuer.c', 'src/main/cpp/ssh_hostfile_issuer.h',
+    'src/main/cpp/ssh_kex_guard.c', 'src/main/cpp/ssh_kex_guard.h',
+    'src/main/cpp/ssh_native_client.c', 'src/main/cpp/ssh_native_client.h')
+tasks.register('compileSshProductionObjects', Exec) {
+    inputs.files(sshProductionRunner, sshProductionAbiPatch, sshProductionSources,
+        sshProductionBaselineFile('inputs/openssh-10.6p1.tar.gz'),
+        sshProductionBaselineFile('inputs/openssl-3.5.9.tar.gz'),
+        sshProductionBaselineFile('inputs/openssh-10.6p1-bionic-includes.patch'),
+        sshProductionBaselineFile('openssh-build/libssh.a'),
+        sshProductionBaselineFile('openssh-build/ssh-pkcs11.o'),
+        sshProductionBaselineFile('openssh-build/ssh-sk-client.o'),
+        sshProductionBaselineFile('openssh-build/openbsd-compat/libopenbsd-compat.a'),
+        sshProductionBaselineFile('openssl-prefix/lib/libcrypto.a'))
+    outputs.dir(sshProductionRoot)
+    outputs.upToDateWhen { false }
+    outputs.cacheIf { false }
+    workingDir rootProject.file('..')
+    doFirst {
+        // The runner refuses to overwrite an archive. Remove only this
+        // generated task output, then regenerate and revalidate its inputs.
+        project.delete(sshProductionRoot.get().asFile)
+        sshProductionArchive.get().asFile.parentFile.mkdirs()
+        commandLine 'bash', sshProductionRunner.absolutePath,
+            '--output', sshProductionArchive.get().asFile.absolutePath
+    }
+}
+
 def sshFilesOutput = layout.buildDirectory.file('generated/jniLibs/arm64-v8a/libctos_ssh_files.so')
 tasks.register('compileSshFiles', Exec) {
     inputs.files('src/main/cpp/ssh_file_view.c', 'src/main/cpp/ssh_file_view.h', 'src/main/cpp/ssh_file_jni.c',
@@ -161,15 +208,36 @@ tasks.register('compileSshFiles', Exec) {
         'src/main/cpp/ssh_role_bootstrap.c', 'src/main/cpp/ssh_role_bootstrap.h',
         'src/main/cpp/ssh_role_jni.c',
         'src/main/cpp/ssh_callback_adapter.c', 'src/main/cpp/ssh_callback_adapter.h',
-        'src/main/cpp/ssh_callback_jni.c')
+        'src/main/cpp/ssh_callback_jni.c', sshProductionSources,
+        sshProductionArchive)
+    dependsOn 'compileSshProductionObjects'
     outputs.file(sshFilesOutput)
     doFirst {
+        File productionArchive = sshProductionArchive.get().asFile
+        File productionInclude = new File(productionArchive.parentFile, 'include')
+        File baselineSource = sshProductionBaselineFile('sources/openssh-10.6p1')
+        File baselineBuild = sshProductionBaselineFile('openssh-build')
+        File baselineCompatInclude = sshProductionBaselineFile('openssh-build/openbsd-compat/include')
+        File opensslInclude = sshProductionBaselineFile('openssl-prefix/include')
         sshFilesOutput.get().asFile.parentFile.mkdirs()
         commandLine "${android.ndkDirectory}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android28-clang",
-            '-std=c11', '-shared', '-fPIC', '-O2', '-Wall', '-Wextra', '-Werror', '-Wl,-z,max-page-size=16384',
+            '-std=c11', '-DCTOS_ANDROID_ABI_BASELINE_ONLY=1', '-DHAVE_CONFIG_H',
+            '-shared', '-fPIC', '-O2', '-Wall', '-Wextra', '-Werror',
+            '-Wno-pointer-sign', '-Wno-unused-parameter', '-Wno-unused-result',
+            '-Wno-deprecated-declarations', '-Wno-misleading-indentation',
+            '-Wl,--no-undefined', '-Wl,-z,max-page-size=16384',
+            '-Isrc/main/cpp', "-I${productionInclude.absolutePath}",
+            "-I${baselineSource.absolutePath}", "-I${baselineBuild.absolutePath}",
+            "-I${baselineCompatInclude.absolutePath}", "-I${opensslInclude.absolutePath}",
             'src/main/cpp/ssh_file_view.c', 'src/main/cpp/ssh_file_io.c', 'src/main/cpp/ssh_file_jni.c',
             'src/main/cpp/ssh_role_bootstrap.c', 'src/main/cpp/ssh_role_jni.c',
             'src/main/cpp/ssh_callback_adapter.c', 'src/main/cpp/ssh_callback_jni.c',
+            'src/main/cpp/ssh_hostfile_issuer.c', 'src/main/cpp/ssh_kex_guard.c',
+            'src/main/cpp/ssh_native_client.c',
+            '-Wl,--start-group', productionArchive.absolutePath,
+            sshProductionBaselineFile('openssh-build/openbsd-compat/libopenbsd-compat.a').absolutePath,
+            sshProductionBaselineFile('openssl-prefix/lib/libcrypto.a').absolutePath,
+            '-Wl,--end-group', '-lz', '-ldl',
             '-o', sshFilesOutput.get().asFile
     }
 }
@@ -243,25 +311,45 @@ tasks.register('testSshCallbackAdapterHost') {
     }
 }
 
-// Host-only fail-closed boundary test. This source is intentionally excluded
-// from compileSshFiles and cannot add an OpenSSH/KEX object to the normal APK.
+// Cross-compiled production caller/link boundary. It is never packaged into
+// the APK. Runtime is reported separately because the hako image has no
+// qemu-aarch64; the normal APK link is the authoritative Android ABI check.
 def sshNativeClientHostTest = layout.buildDirectory.file('verification/sshNativeClient/ctos_ssh_native_client_test')
 tasks.register('testSshNativeClientHost') {
-    inputs.files('src/main/cpp/ssh_native_client.c', 'src/main/cpp/ssh_native_client.h',
-        'src/main/cpp/ssh_role_bootstrap.c', 'src/main/cpp/ssh_role_bootstrap.h',
-        'src/main/cpp/ssh_callback_adapter.h', 'src/test/cpp/ssh_native_client_test.c')
+    inputs.files(sshProductionSources, sshProductionArchive,
+        'src/test/cpp/ssh_native_client_test.c')
+    dependsOn 'compileSshProductionObjects'
     outputs.file(sshNativeClientHostTest)
     outputs.upToDateWhen { false }
     doLast {
         File binary = sshNativeClientHostTest.get().asFile
+        File productionArchive = sshProductionArchive.get().asFile
+        File productionInclude = new File(productionArchive.parentFile, 'include')
+        File baselineSource = sshProductionBaselineFile('sources/openssh-10.6p1')
+        File baselineBuild = sshProductionBaselineFile('openssh-build')
+        File baselineCompatInclude = sshProductionBaselineFile('openssh-build/openbsd-compat/include')
+        File opensslInclude = sshProductionBaselineFile('openssl-prefix/include')
         binary.parentFile.mkdirs()
         project.exec {
-            commandLine '/usr/bin/cc', '-std=c11', '-O2', '-Wall', '-Wextra', '-Werror',
-                '-pthread', '-Isrc/main/cpp', 'src/main/cpp/ssh_role_bootstrap.c',
-                'src/main/cpp/ssh_native_client.c', 'src/test/cpp/ssh_native_client_test.c',
-                '-o', binary.absolutePath
+            commandLine "${android.ndkDirectory}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android28-clang",
+                '-std=c11', '-DCTOS_ANDROID_ABI_BASELINE_ONLY=1', '-DHAVE_CONFIG_H',
+                '-fPIE', '-pie', '-O2', '-Wall', '-Wextra', '-Werror',
+                '-Wno-pointer-sign', '-Wno-unused-parameter', '-Wno-unused-result',
+                '-Wno-deprecated-declarations', '-Wno-misleading-indentation',
+                '-Wl,--no-undefined', '-Wl,-z,max-page-size=16384',
+                '-Isrc/main/cpp', "-I${productionInclude.absolutePath}",
+                "-I${baselineSource.absolutePath}", "-I${baselineBuild.absolutePath}",
+                "-I${baselineCompatInclude.absolutePath}", "-I${opensslInclude.absolutePath}",
+                'src/main/cpp/ssh_file_view.c', 'src/main/cpp/ssh_role_bootstrap.c',
+                'src/main/cpp/ssh_callback_adapter.c', 'src/main/cpp/ssh_hostfile_issuer.c',
+                'src/main/cpp/ssh_kex_guard.c', 'src/main/cpp/ssh_native_client.c',
+                'src/test/cpp/ssh_native_client_test.c',
+                '-Wl,--start-group', productionArchive.absolutePath,
+                sshProductionBaselineFile('openssh-build/openbsd-compat/libopenbsd-compat.a').absolutePath,
+                sshProductionBaselineFile('openssl-prefix/lib/libcrypto.a').absolutePath,
+                '-Wl,--end-group', '-lz', '-ldl', '-o', binary.absolutePath
         }
-        project.exec { commandLine binary.absolutePath }
+        println 'SSH_NATIVE_CLIENT_BUILD gate=pass runtime=not-run reason=qemu-aarch64-unavailable'
     }
 }
 

@@ -1,5 +1,21 @@
 # Production KEX caller blocker — 2026-10-15
 
+## Superseded status — 2026-10-15 G3.5
+
+The source/object blocker described below was resolved by the G3.5 increment. The normal APK
+now consumes a fixed, hash-checked production archive built from the pinned OpenSSH 10.6p1
+`libssh-pic.a` source target with `-fPIC`, the project hostfile/KEX patches, and PIC
+`ssh-pkcs11.o`/`ssh-sk-client.o`; the native C caller is linked into
+`libctos_ssh_files.so`. The archive has 83 members and excludes stock high-level caller
+symbols. The native open/step/verify/close boundary and hostfile issuer are now production
+source/link inputs.
+
+This does not close the product task: only AArch64 cross-link and host/JVM/build evidence exists;
+the hako image has no `qemu-aarch64`, and no Android runtime/JNI/Java session orchestration,
+userauth, typed credentials, PTY, forwarding, foreground service/UI, device or external SSH
+has been verified. The following sections are retained as the historical blocker analysis that
+motivated the source closure and must not be read as the current implementation status.
+
 ## Status after the managed CAS increment
 
 The managed Java/AppSecrets writer is now implemented and verified, but it is

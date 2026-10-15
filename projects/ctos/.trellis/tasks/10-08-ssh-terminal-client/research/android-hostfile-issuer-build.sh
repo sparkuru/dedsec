@@ -105,6 +105,15 @@ run_stage() {
         >"$run_dir/logs/$name.log" 2>&1
 }
 
+on_exit() {
+    local exit_status=$?
+    if ((exit_status != 0)); then
+        printf 'issuer fixture stopped at %s; evidence retained at %s\n' \
+            "${stage:-unknown}" "${run_dir:-none}" >&2
+    fi
+    exit "$exit_status"
+}
+
 main() {
     if [[ $# == 1 && ("$1" == --help || "$1" == -h) ]]; then
         usage
@@ -116,7 +125,7 @@ main() {
     local baseline=$2
     local stage=preflight
     run_dir=''
-    trap 'status=$?; if ((status != 0)); then printf "issuer fixture stopped at %s; evidence retained at %s\\n" "${stage:-unknown}" "${run_dir:-none}" >&2; fi; exit "$status"' EXIT
+    trap on_exit EXIT
 
     for tool in bash realpath sha256sum timeout mkdir mktemp cp find grep sort xargs patch awk; do
         require_command "$tool"
@@ -169,9 +178,11 @@ main() {
         "$run_dir/upstream" "$run_dir/upstream/guarded"
     [[ "$(realpath -e -- "$run_dir")" == "$run_dir" ]] || die 'run directory is not canonical'
     printf 'baseline=%s\n' "$baseline" >"$run_dir/evidence/scope.txt"
-    printf 'scope=issuer-and-pinned-client-hostfile-fixture-only\n' >>"$run_dir/evidence/scope.txt"
-    printf 'normal_apk=not_wired\n' >>"$run_dir/evidence/scope.txt"
-    printf 'runtime=not_run_without_qemu_aarch64\n' >>"$run_dir/evidence/scope.txt"
+    {
+        printf 'scope=issuer-and-pinned-client-fixture-with-shared-production-issuer\n'
+        printf 'normal_apk=production-closure-wired;fixture-pinned-client-not-wired\n'
+        printf 'runtime=not_run_without_qemu_aarch64\n'
+    } >>"$run_dir/evidence/scope.txt"
     baseline_manifest "$baseline" "$run_dir/evidence/baseline.sha256"
     fixed_hash "$run_dir/evidence/baseline.sha256" "$BASELINE_TREE_SHA"
     sha256sum -- "$STREAM_PATCH" "$PROJECT_CPP/ssh_hostfile_issuer.c" \
@@ -199,19 +210,23 @@ main() {
         || die 'KEX guard patch is absent after application'
     for forbidden in add_host_to_hostfile hostfile_replace_entries hostfile_create_user_ssh_dir \
         ssh_connect ssh_login ssh_userauth2 ssh_proxy_ fork execv; do
-        ! grep -Fq "$forbidden" "$PROJECT_CPP/ssh_hostfile_issuer.c" \
-            && ! grep -Fq "$forbidden" "$PROJECT_CPP/ssh_pinned_client.c" \
-            && ! grep -Fq "$forbidden" "$PROJECT_TEST_CPP/ssh_pinned_client_test.c" \
-            || die "issuer/caller fixture must not use forbidden $forbidden"
+        if grep -Fq "$forbidden" "$PROJECT_CPP/ssh_hostfile_issuer.c" \
+            || grep -Fq "$forbidden" "$PROJECT_CPP/ssh_pinned_client.c" \
+            || grep -Fq "$forbidden" "$PROJECT_TEST_CPP/ssh_pinned_client_test.c"; then
+            die "issuer/caller fixture must not use forbidden $forbidden"
+        fi
     done
     local normal_ssh_inputs
     normal_ssh_inputs=$(sed -n "/tasks.register('compileSshFiles', Exec)/,/^}/p" \
         "$PROJECT_ROOT/android/app/build.gradle")
     [[ -n "$normal_ssh_inputs" ]] \
         || die 'normal compileSshFiles input block is missing'
-    for forbidden_source in ssh_hostfile_issuer.c ssh_pinned_client.c ssh_kex_guard.c; do
-        ! grep -Fq "$forbidden_source" <<<"$normal_ssh_inputs" \
-            || die "fixture source is wired into the normal compileSshFiles input: $forbidden_source"
+    if grep -Fq 'ssh_pinned_client.c' <<<"$normal_ssh_inputs"; then
+        die 'fixture source is wired into the normal compileSshFiles input: ssh_pinned_client.c'
+    fi
+    for required_source in ssh_hostfile_issuer.c ssh_kex_guard.c ssh_native_client.c; do
+        grep -Fq "$required_source" <<<"$normal_ssh_inputs" \
+            || die "normal compileSshFiles is missing production source: $required_source"
     done
 
     local cc="$NDK_BIN/aarch64-linux-android28-clang"
@@ -313,7 +328,7 @@ main() {
         printf 'qemu_aarch64=missing_runtime_not_run\n' >>"$run_dir/evidence/scope.txt"
     fi
     printf 'run_dir=%s\n' "$run_dir"
-    printf 'SSH_HOSTFILE_CALLER_BUILD gate=pass runtime=not-run normal_apk=not-wired\n'
+    printf 'SSH_HOSTFILE_CALLER_BUILD gate=pass runtime=not-run normal_apk=fixture-caller-not-wired\n'
 }
 
 main "$@"

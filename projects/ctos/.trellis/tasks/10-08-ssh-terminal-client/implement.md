@@ -1,5 +1,28 @@
 # SSH 接入实施计划
 
+## 2026-10-15 当前窄增量：production PIC OpenSSH closure 与 native C caller（G3.5）
+
+本轮已把 hostfile issuer、KEX guard 与 `ssh_native_client.[ch]` 接入 normal
+`compileSshFiles`，但没有把 fixture `ssh_pinned_client`/launcher 或 Java UI 接口带入生产。
+`compileSshProductionObjects` 通过固定 runner 校验 G1 baseline/tree/patch hash，在临时目录
+以 pinned OpenSSH 10.6p1 自带 `libssh-pic.a` source target 重编完整 `libssh` 成员，应用
+project-owned hostfile/KEX patch，并以 PIC 编译 `ssh-pkcs11.o`/`ssh-sk-client.o`；最终
+archive evidence 83 members，defined symbols 排除 stock high-level caller。
+
+`ssh_native_client` 现绑定 live role、managed public view、host key/fingerprint、callback
+environment 与 owned socket；step 是 bounded nonblocking socket turn，verifier 复用 issuer
+和 HostEvidence/CAS，KEX 完成只回调一次。open 使用 CLOEXEC duplicate，使 admission/setup
+失败保留 caller 原 FD 与 callback；close 顺序为 callback release、KEX unbind/OpenSSH free、
+原 FD close，release 失败保留完整 client 可重试。native host 仅交叉编译，未运行 ARM binary。
+
+固定结果：G3 `run.aqN1F2bD` 为
+`SSH_HOSTFILE_CALLER_BUILD gate=pass runtime=not-run normal_apk=fixture-caller-not-wired`；
+production native `gate=pass runtime=not-run`、callback=20、JVM=177/0/0/0、strict
+`compileSshFiles`/三 ABI Release/lint/assemble 全部通过，APK SHA256
+`805fc28679aa56be85fa3be75a1608701273908a02f7fb04dddb717c4e1b601e`。ShellCheck、bash -n、
+diff 检查通过。当前仍未完成 Android runtime/JNI/Java 会话编排、userauth/typed credential、
+PTY/forward/service/UI、设备与外部 SSH；task 继续 `in_progress`，`implementation_complete=false`。
+
 ## 2026-10-15 当前窄增量：pinned OpenSSH caller fixture seam（G3.4，production 未接入）
 
 已新增 `ssh_pinned_client.[ch]` 与 `ssh_pinned_client_test.c`，但只放在固定的

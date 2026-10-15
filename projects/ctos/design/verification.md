@@ -1,5 +1,42 @@
 # Verification
 
+## 2026-10-15 — production PIC OpenSSH closure and native C caller
+
+本轮把上一窄增量的 issuer/callback seam 提升为 normal APK 的 source/object closure 与
+native C caller。固定 production runner 校验 G1 baseline/tree/patch hash，在 scratch build
+目录执行 OpenSSH 10.6p1 `libssh-pic.a` source target 的 `-fPIC` 重编，应用项目-owned
+hostfile stream-writer/KEX guard patch，编译 PIC `ssh-pkcs11.o`/`ssh-sk-client.o`，生成
+83-member production archive，并记录 sources/objects/symbols；defined symbols 没有
+`ssh_connect`、`ssh_login`、`ssh_userauth2` 或 `ssh_proxy_*`。
+
+native caller 现在使用同进程 OpenSSH `ssh_api`：bounded `recv(MSG_DONTWAIT)` → input
+append → packet turn → bounded `send(MSG_NOSIGNAL)`/output consume；host verifier 复用
+managed public view/issuer/evidence，NEW candidate 失败回滚，KEX session digest 只回调一次。
+open 失败不消费 caller 原 FD 或预打开 callback（OpenSSH 使用 CLOEXEC duplicate）；close
+失败可重试，顺序为 callback release → KEX unbind/OpenSSH free → 原 FD close。这里是
+production C/link boundary，不是 Android runtime/JNI/Java session 完成证据。
+
+固定命令：
+
+```text
+./hako bash -lc 'bash /app/.trellis/tasks/10-08-ssh-terminal-client/research/android-hostfile-issuer-build.sh --baseline /app/build/ssh-native-g1/stock-run.lOHF9Oai'
+./hako bash -lc 'cd android && ./gradlew :app:testSshNativeClientHost :app:testSshCallbackAdapterHost :app:testReleaseUnitTest :app:lintRelease :app:assembleRelease --rerun-tasks --console=plain'
+```
+
+结果：G3 fixture `build/ssh-native-g3/run.aqN1F2bD/` 为
+`SSH_HOSTFILE_CALLER_BUILD gate=pass runtime=not-run normal_apk=fixture-caller-not-wired`；
+`:app:testSshNativeClientHost` 为 `SSH_NATIVE_CLIENT_BUILD gate=pass runtime=not-run`，
+callback host gate=20，JUnit **177 tests / 0 skipped / 0 failures / 0 errors**。严格
+`compileSshFiles`、arm64-v8a/armeabi-v7a/x86_64 Release native build、lint 和 assemble
+均 `BUILD SUCCESSFUL`；APK SHA256 为
+`805fc28679aa56be85fa3be75a1608701273908a02f7fb04dddb717c4e1b601e`。ZIP 只发现生产
+`lib/arm64-v8a/libctos_ssh_files.so`，未发现 pinned caller、fixture KEX/hostfile object
+或 stock high-level caller；Shell runner `bash -n`、ShellCheck、`git diff --check` 通过。
+
+没有使用 `qemu-aarch64`、`192.168.9.14:5555`、真实 vault、凭据、设备或外部 SSH。ARM
+binary 未执行；Android runtime/JNI/Java caller、userauth/typed credential、PTY/forward、
+foreground service/UI 仍是开放关卡，task 保持 `in_progress`。
+
 ## 2026-10-15 — pinned OpenSSH caller fixture seam
 
 在 hostfile issuer、managed HostEvidence/CAS 和 one-shot candidate handoff 之上新增

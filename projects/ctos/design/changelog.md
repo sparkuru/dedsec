@@ -1,5 +1,26 @@
 # Changelog
 
+## 2026-10-15 — production PIC OpenSSH closure and native caller boundary
+
+- 将 `ssh_hostfile_issuer.c`、`ssh_kex_guard.c` 与 `ssh_native_client.c` 接入 normal
+  `compileSshFiles`；native caller 现在在同一 event-loop owner 上执行受界定的 socket
+  read/append/packet/partial-write turn，并把 managed host evidence、candidate rollback
+  和 KEX completion 接到既有 callback contract。
+- 新增固定 `android-production-openssh-build.sh`。它校验 G1 baseline/tree/source patch
+  hash，在临时 build tree 调用 pinned OpenSSH 10.6p1 的 `libssh-pic.a` source target
+  以 `-fPIC` 重编全部生产对象，替换项目 hostfile/KEX 对象，并加入 PIC
+  `ssh-pkcs11.o`/`ssh-sk-client.o`；不消费旧 fixture object，archive evidence 为 83
+  个成员且定义符号排除 stock `ssh_connect`/`ssh_login`/`ssh_userauth2`/`ssh_proxy_*`。
+- 修正 native ownership：open 的 admission/setup 失败保留 caller 原 FD 与预打开 callback，
+  成功 attach 使用 CLOEXEC duplicate；close 先 callback release，再 KEX unbind/OpenSSH
+  free，最后关闭原 FD，callback release 失败保留完整 client 供同线程重试。
+- 固定 hako G3 runner `run.aqN1F2bD` 通过（fixture caller 仍不接入 normal APK），生产
+  host `gate=pass runtime=not-run`、callback host=20、JUnit **177/0/0/0**、严格
+  `compileSshFiles`/三 ABI Release/lint/assemble 通过；APK SHA256 为
+  `805fc28679aa56be85fa3be75a1608701273908a02f7fb04dddb717c4e1b601e`。无
+  `qemu-aarch64`、设备、真实 vault、凭据或外部 SSH；Android runtime/JNI/Java 会话、认证、
+  PTY、forward、service/UI 仍开放。
+
 ## 2026-10-15 — pinned OpenSSH caller fixture seam
 
 - 新增仍限于 host/fixture 的 `ssh_pinned_client.[ch]` 与真实 `ssh_api` socketpair 回归：

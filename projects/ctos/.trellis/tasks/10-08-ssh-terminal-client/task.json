@@ -84,12 +84,13 @@
     ".trellis/tasks/10-08-ssh-terminal-client/research/production-kex-caller-blocker-20261015.md",
     ".trellis/tasks/10-08-ssh-terminal-client/research/openssh-10.6p1-hostfile-stream-writer.patch",
     ".trellis/tasks/10-08-ssh-terminal-client/research/android-hostfile-issuer-build.sh",
+    ".trellis/tasks/10-08-ssh-terminal-client/research/android-production-openssh-build.sh",
     "android/app/src/main/cpp/ssh_pinned_client.c",
     "android/app/src/main/cpp/ssh_pinned_client.h",
     "android/app/src/test/cpp/ssh_pinned_client_test.c",
     "design/verification.md"
   ],
-  "notes": "2026-10-15 当前 G3.4 仍限于 host/fixture：新增 pinned OpenSSH 10.6p1 caller seam，使用真实 ssh_api socketpair 执行 bounded partial read/write、EAGAIN、EOF、cancel、deadline、host verifier、KNOWN/NEW HostEvidence、NEW candidate rollback 与 KEX session-digest callback；issuer/caller 错误路径关闭临时 fmemopen 并清零 scratch/body，replacement scratch 使用有界堆分配，owned socket 要求 FD_CLOEXEC|O_NONBLOCK|SOCK_STREAM。固定 runner run.3PZSbIzM 输出 SSH_HOSTFILE_CALLER_BUILD gate=pass runtime=not-run normal_apk=not-wired；runner exclusion 检查已限定正式 compileSshFiles 输入闭包。JVM 177/0/0/0、native client gate=27、callback gate=20、strict compile/lint/Release 通过，APK SHA256 为 67668e34e2bba40359e43e048404ffeb5645629a130f86e86b2d855a170ffff9。hako 无 qemu-aarch64，ARM fixture 未运行；normal APK 排除 issuer/pinned caller/OpenSSH/KEX objects，ssh_native_client 生产边界继续 ENOTSUP。production caller/event loop、typed credential、auth/PTY/forward/service/UI、Android runtime、设备、外部 SSH 和完整客户端仍开放，implementation_complete=false，fixture transport 不得升级为 production。",
+  "notes": "2026-10-15 G3.5 已将 pinned OpenSSH 10.6p1 的完整 PIC source/object closure 与 ssh_native_client C caller 接入 normal compileSshFiles；production runner 在 scratch build 中重编 libssh-pic.a，纳入 PIC ssh-pkcs11.o/ssh-sk-client.o，archive evidence 为 83 members，并排除 stock high-level caller symbols。native open/setup 失败保留 caller 原 FD/callback，成功使用 CLOEXEC duplicate；close 顺序为 callback release、KEX unbind/OpenSSH free、原 FD，release/close 失败可重试。固定 runner run.aqN1F2bD 输出 SSH_HOSTFILE_CALLER_BUILD gate=pass runtime=not-run normal_apk=fixture-caller-not-wired；production native gate=pass runtime=not-run；JVM 177/0/0/0、callback gate=20、strict compile/lint/Release 通过，APK SHA256 为 805fc28679aa56be85fa3be75a1608701273908a02f7fb04dddb717c4e1b601e。hako 无 qemu-aarch64，ARM binary 未运行；fixture caller 仍排除 normal APK，Android runtime/JNI/Java session orchestration、typed credential/userauth、PTY/forward/service/UI、设备、外部 SSH 和完整客户端仍开放，implementation_complete=false，fixture transport 不得升级为 production。",
   "local_docker_ssh_smoke": {
     "date": "2026-10-14",
     "state": "device_to_ephemeral_docker_ssh_public_key_login_pass_cleaned",
@@ -117,7 +118,7 @@
       "g2_device_scope": "2026-10-13用户明确允许在192.168.9.14:5555安装已审查两份独立SSH G2 APK、仅合成上游内存文件/跳板及owned127.0.0.1两个随机listener测试、结束卸载；不覆盖正式ctOS，不操作真实库/Root/剪贴板/系统设置或外部SSH账号。",
       "account_authorized": false
     },
-    "implementation_phase": "G3_managed_known_hosts_cas_provider",
+    "implementation_phase": "G3_production_native_caller",
     "implementation_complete": false,
     "g0_local_check": {
       "date": "2026-10-13",
