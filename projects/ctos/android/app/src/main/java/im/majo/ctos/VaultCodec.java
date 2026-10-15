@@ -13,6 +13,8 @@ import java.util.Arrays;
 
 final class VaultCodec {
     static final class SecretBuffer extends java.io.ByteArrayOutputStream {
+        SecretBuffer() { super(); }
+        SecretBuffer(int capacity) { super(capacity); }
         @Override public void close() { wipe(buf); reset(); }
     }
     private VaultCodec() { }

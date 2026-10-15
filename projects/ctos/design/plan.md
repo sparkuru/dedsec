@@ -1,5 +1,41 @@
 # ctOS 产品与实施规划
 
+2026-10-15 SSH当前最新窄增量：在 managed known_hosts CAS provider 之上，已完成仍限于
+host/fixture 的 pinned OpenSSH caller seam。它使用真实 `ssh_api` 附着受管 socket FD，覆盖
+bounded partial I/O/EAGAIN、host issuer/evidence、NEW candidate rollback、KEX/NEWKEYS 到
+单次 digest callback；固定 AArch64 PIE runner 为 `gate=pass runtime=not-run
+normal_apk=not-wired`，最新 APK `67668e34…` 只含正常生产 JNI library。该 caller 未接入
+normal APK，production event loop、认证、PTY/forward/service/UI、设备与外部 SSH 仍开放。
+
+2026-10-15 SSH上一窄增量：managed known_hosts CAS provider 之上已冻结独立的 opaque
+one-shot native→managed candidate handoff。C/JNI 只同步转移受 role/hop/target/
+connection/host/port/key-type/fingerprint、base/replacement digest 和 candidate ID 绑定的
+bounded body；JNI/managed/native 均在成功和失败路径清零，CSHR metadata wire 不变。receiver
+只接受同一 provider-owned snapshot，成功后仍必须经原 guarded AppSecrets CAS 才能返回
+`COMMITTED`。完整门禁为 JVM **177/0/0/0**、native client **27**、callback **20**、strict
+compile/lint/Release 通过，APK `3a6228f4…` 且普通包排除 boundary/fixture。pinned
+production OpenSSH hostfile caller 仍未实现，KEX/auth/PTY/forward/service/UI、设备
+和外部 SSH 继续开放。
+
+2026-10-15 前一窄增量：已实现 role/hop/target-bound HostEvidence/CAS
+native↔Java seam：KNOWN 仅返回 `CAS_NOT_REQUIRED`，NEW 需要 exact proposal、显式
+approval 与 exact CAS `COMMITTED`，classification/key type/fingerprint/base/replacement
+digest 均绑定并由 C/JNI 复验。host gate=15、166 JVM、strict compile/lint/Release
+通过。具体受管 known_hosts file view/CAS writer 已在下一窄增量接入；真实 OpenSSH
+caller、KEX/auth/PTY/forward/service/UI 和设备验证仍开放；task 继续 `in_progress`。
+
+2026-10-15 前一窄增量：source map 已确认生产 known_hosts issuer/CAS 尚未形成可编译
+native-facing contract，本轮只加入 `ssh_native_client.[ch]` fail-closed boundary。它
+校验 role/PID/UID、CLOEXEC/NONBLOCK socket、callback environment/token、deadline 和
+bounded step，缺 provider 返回 `ENOTSUP`，不调用 OpenSSH/KEX/JNI/credential；严格
+host gate=27，普通 APK 未纳入该 boundary。provider/CAS 合同冻结前，不把它写成生产
+caller；真实 transport、设备和完整 SSH 仍开放。
+
+2026-10-14 SSH前一阶段：同进程、无 fork/exec 的 KEX-only launcher 仍仅在独立 opt-in fixture/host seam；用户已确认同进程 topology、当前 native event-loop 线程同步附着 JNI callback，以及受管 config/known_hosts 文件视图 + exact trust proposal/CAS + typed private-key handoff 方向。adapter 契约与 bounded managed-provider handoff 已编入正常 `libctos_ssh_files.so`；NEW proposal 绑定 role/hop，typed bytes 绑定 host/KEX proof，host callback `gate=11`、162 JVM、lint、Release 构建通过。具体 file/CAS provider、ARM、设备、外部 SSH、vault、真实 OpenSSH event loop/caller/auth/PTY/forward/service/UI 仍开放。
+下一生产切片是把已实现的 managed file/trust provider 接到真实 OpenSSH caller；fixture 的 `ssh_api` 内存流及 control framing 不得升级为生产 transport。
+
+2026-10-13 G2构建前阶段（历史）：SSH执行入口为10-08-ssh-terminal-client（in_progress）；用户专项批准后的G0在`.14`独立UID/API30/Permissive/4KiB真实1项1.693秒通过，raw memfd可用/ASharedMemory不满足文件形态，夹具已清理。G1 Android OpenSSH10.6p1/OpenSSL3.5.9 ABI兼容基线编译通过，当前实施G2可信合成上游文件/ProxyJump夹具，尚未构建或设备验证。真实库操作已允许，当前未访问；远程账号未授权，生产客户端、完整crypto/runtime与后续政策/协议关卡开放。TOTP工作566ca51已提交归档；共享底座仍in_progress，未测平台与混合业务继续联合验证。
+
 2026-10-13 用户确认TOTP效果，授权提交验收并继续下一项。当前TOTP交付按已记录实测范围完成收尾；未测平台/账号/跨设备/混合关卡继续保留。下一项复用SSH客户端task，先Android native内存文件访问探针，再按原计划推进完整集成，不自动降级为明文磁盘临时文件。
 
 2026-10-13 后续：当前`.14`开发板安装/隔离自动测试已获授权，最终前台交接修复版3bc762d9…安装读回一致，221 Flutter/86定向/analyze及7项原生实测通过；系统双二维码选图与管理/生命周期全流程1项72.734秒通过，临时测试包/自有图片已清理，真实账号/硬件相机/跨设备混合恢复保留，用户已专项批准全局覆盖，原生合成复制/敏感标记1项6.616秒通过。见 [当前验证](verification.md)。TOTP任务保持in_progress，SSH按既定顺序随后接续；以下初轮“设备另授”以本段后续授权为准。

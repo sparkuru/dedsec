@@ -1,6 +1,52 @@
 # ctOS Mainline
 
-2026-10-13 当前授权：用户确认TOTP效果并批准提交验收/继续下一项；先完成TOTP工作提交、归档和journal，再复用10-08-ssh-terminal-client启动Android native无明文磁盘文件访问探针及原定SSH集成。serial范围仅此已规划SSH任务；不操作真实SSH账号、用户库或未经本任务授权的设备。TOTP未测边界和共享底座in_progress保持；下方同日TOTP in_progress/SSH planning为验收前历史。
+2026-10-15 SSH当前窄增量：在 hostfile issuer seam 之上新增 host/fixture-only pinned
+OpenSSH 10.6p1 caller `ssh_pinned_client.[ch]`。它绑定 live role、managed public view、
+callback environment 与 caller-owned nonblocking socket，经过真实 `ssh_api` packet loop
+覆盖 partial read/write、EAGAIN、EOF、cancel/deadline、KNOWN/NEW host evidence、candidate
+rollback 和 KEX session digest callback。固定 runner `run.3PZSbIzM` 为
+`SSH_HOSTFILE_CALLER_BUILD gate=pass runtime=not-run normal_apk=not-wired`；normal APK
+SHA256 `67668e34…`，JVM=177/0/0/0、callback=20、native boundary=27，仍不含 fixture
+OpenSSH objects。hako 无 `qemu-aarch64`，未执行 ARM；production event loop/auth/PTY/
+forward/service/UI、设备和外部 SSH 仍开放，task 继续 `in_progress`。
+
+2026-10-15 SSH上一窄增量：新增 host/fixture-only pinned OpenSSH 10.6p1 hostfile issuer
+seam。它绑定 `ssh/config` root→`ssh/known_hosts` 引用，复用上游 memory-stream parser 和
+source-owned formatter；证书先做 revoked certificate/CA 判定，其他证书按当前 policy
+拒绝；NEW exact body 走既有 one-shot managed handoff。固定 G1 manifest、严格 C11/Werror
+与 AArch64 PIE link runner 通过，但 runtime 因容器无 `qemu-aarch64` 未运行，普通 APK 未接入，
+`ssh_native_client` 仍 `ENOTSUP`，task 继续 `in_progress`。
+
+2026-10-15 SSH上一阶段：在 managed `AppSecrets` known_hosts provider 上接入独立
+native→managed one-shot candidate handoff，并修正 proposal receipt 校验顺序。精确
+snapshot、candidate、proposal 和 proof-aware CAS writer 均绑定 vault UUID/代次/epoch、
+对象 identity、host proof 与 base/replacement digest；`writeBack` 在 proposal 仍开放时
+校验 `CasResult`，随后在 `finally` 清理 proposal，构造失败的 Java body clone 也立即清零。
+177 JVM、native client gate=27、callback gate=20、strict compile/lint/Release 通过，APK
+`3a6228f4…`，普通包排除 host-only/fixture。hostfile issuer 已在 G3.4 fixture seam 接入，
+生产 OpenSSH caller 尚未接入，
+task 继续 `in_progress`。
+
+2026-10-15 SSH前一阶段（provider-only历史）：已把 role/hop/target-bound HostEvidence/CAS
+seam 接到真实 managed `AppSecrets` known_hosts provider。精确 snapshot、一次性 replacement
+candidate、proposal 和 proof-aware CAS writer 均绑定 vault UUID/代次/epoch、对象 identity、
+host proof 与 base/replacement digest；只有 guarded commit 成功才返回 `COMMITTED`。取消路径
+在 Store.commit 持锁时仍可立即 revoke。174 JVM、native client gate=27、callback gate=15、
+strict compile/lint/Release 通过，APK `718c3934…`，普通包排除 host-only/fixture。生产
+OpenSSH caller/hostfile issuer 尚未接入，task 继续 `in_progress`。
+
+2026-10-15 SSH前一窄增量（provider-missing，已被顶部 handoff 取代）：pinned OpenSSH 10.6p1 source map 确认生产 known_hosts
+issuer/CAS native-facing contract 尚未存在；新增 `ssh_native_client.[ch]` 只作为
+fail-closed boundary，校验 role/PID/UID、CLOEXEC/NONBLOCK socket、callback
+environment/token、deadline 和 bounded step，缺 provider 稳定返回 `ENOTSUP`。host-only
+gate=27，普通 APK 不含 boundary 或 fixture OpenSSH object；真实 caller、provider、
+partial I/O、EOF、cancel、close retry、inbound NEWKEYS/JNI proof、设备和完整客户端仍开放。
+
+2026-10-14 SSH前一阶段：同进程、无 fork/exec 的 KEX-only native launcher 仍作为独立 opt-in fixture/host seam 完成；在此基础上，用户确认同步附着 JNI callback 与受管 config/known_hosts + exact trust proposal/CAS + typed private-key handoff 方向，bounded managed-provider handoff 已接入正常 `libctos_ssh_files.so`。role/hop-bound NEW proposal、host/KEX proof、typed request kind、Java/native 清零与 cleanup retry 通过；host gate=11、162 JVM、lint、assembleRelease 通过，最新 APK `f32bbc83…` 仍只有生产 SSH library。具体 file/CAS provider、ARM、设备、外部 SSH、vault、生产 event loop/caller/auth/PTY/转发/服务/UI和联合AC仍开放。
+
+2026-10-13 G2构建前阶段（历史）：TOTP工作566ca51、归档f3762ba、journal74f8324完成；现有10-08-ssh-terminal-client已启动in_progress，父SSH task同为in_progress，仅维护依赖/集成。用户专项批准本轮`.14` G0安装/合成测试/清理：独立UID/API30/4KiB/Permissive实际1项1.693秒通过，rawmemfd完整可用/ASharedMemory文件形态不适用，夹具已卸载，正式APK3bc762d9前后哈希相同。G1 OpenSSH10.6p1/OpenSSL3.5.9 ABI兼容基线编译通过；当前G2合成上游文件/ProxyJump夹具实施中，Java/Gradle边界修补已复审，有效配置与四拒绝分支检查通过。尚无G2完整构建或设备运行；不是生产客户端/完整native gate。
+
+2026-10-13 当前授权：用户确认TOTP并批准提交/归档与继续SSH；随后明确允许本轮开发板G0操作及真实秘密库操作，密码不保存至任务/日志。当前G0只使用合成数据，未访问真实库、远程账号、Root/剪贴板/系统设置；远程真实SSH账号未授权。main串行全部build/device，TOTP未测边界和共享底座in_progress保持；下方同日TOTP in_progress/SSH planning为验收前历史。
 
 ## 2026-10-13 恢复既有 TOTP 与 SSH 任务
 

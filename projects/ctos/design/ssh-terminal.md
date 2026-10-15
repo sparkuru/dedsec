@@ -1,5 +1,74 @@
 # SSH 终端规划入口
 
+2026-10-15 当前最新窄增量：在 hostfile issuer seam 之上新增 fixture-only 的 pinned
+OpenSSH caller `ssh_pinned_client.[ch]`。它使用真实 `ssh_api` 的同进程 socketpair 和
+patched KEX closure，执行 bounded nonblocking partial read/write、EAGAIN、EOF、cancel、
+deadline、host verifier、KNOWN/NEW evidence、candidate rollback 与 KEX session digest callback。
+`run.3PZSbIzM` 固定 runner 为 `SSH_HOSTFILE_CALLER_BUILD gate=pass runtime=not-run
+normal_apk=not-wired`；最新 normal APK SHA256 为
+`67668e34e2bba40359e43e048404ffeb5645629a130f86e86b2d855a170ffff9`，JVM=177、host
+callback=20、native boundary=27。没有 `qemu-aarch64`，所以 ARM fixture 未执行；production
+caller、认证/PTY/forward/service/UI、设备与外部 SSH 仍未接入，task 保持 `in_progress`。
+
+2026-10-15 上一窄增量：已实现 host/fixture-only 的 pinned OpenSSH hostfile issuer seam。
+issuer 要求 public view 以 `ssh/config` 为 `CTOS_SSH_CONFIG` root 并引用
+`ssh/known_hosts`，用 `load_hostkeys_file()` 从 caller-owned memory stream 复用上游解析，
+并以 project-owned `ctos_hostfile_write_entry(FILE *)` 复用上游 formatter；不访问 vault
+pathname，也不调用 pathname-bound writer。非证书分类沿用 `HOST_OK/NEW/CHANGED/REVOKED`，
+证书仍由当前 managed policy 拒绝，但 revoked certificate/CA 先得到 `REVOKED`。NEW 的
+exact body/digest 进入已冻结的 one-shot candidate handoff。
+
+固定 `research/android-hostfile-issuer-build.sh` 已对批准的 G1 baseline 完成 manifest/
+patch/hash、严格 C11/Werror、AArch64 PIE link 和 normal-APK exclusion；结果为
+`SSH_HOSTFILE_ISSUER_BUILD gate=pass runtime=not-run normal_apk=not-wired`。容器没有
+`qemu-aarch64`，所以这只是可复现 source/object fixture 证据，不是 runtime/设备/SSH
+验收。production caller、socket partial I/O、KEX/NEWKEYS、认证、PTY/forward/service/UI
+仍未接入，`ssh_native_client` 继续 `ENOTSUP`，task 保持 `in_progress`。
+
+2026-10-15 最新实现：在 HostEvidence/CAS seam 之上接入了真实 managed
+`known_hosts` provider，并冻结独立的 opaque、同步、one-shot native→managed candidate
+handoff。`snapshotFor` 从 `AppSecrets` 取得精确 public file snapshot；C/JNI handoff
+只接受 exact role/hop/target/connection/host/port/key-type/fingerprint、base/replacement
+digest、candidate ID 和不超过 `MAX_FILE_BYTES` 的 replacement body。managed receiver
+校验 snapshot/provider ownership 后私有复制 body，native temporary 与 JNI array 在成功和
+失败路径清零；现有 metadata-only CSHR wire 不变。原 proposal/CAS 仍按 object identity、
+vault UUID/代次/epoch、host proof 和双 digest 绑定，只有 guarded commit 成功才返回
+`COMMITTED`。完整 Release 门禁：177 JVM、native client gate=27、callback gate=20、strict
+compile/lint/三 ABI assemble；APK `3a6228f4…` 未包含 host-only boundary 或 fixture
+OpenSSH object。
+
+这一步冻结并实现的是 handoff + managed vault writer，不是 production OpenSSH caller：
+pinned hostfile issuer 只在下一层 fixture seam 产生 candidate body，`ssh_native_client` 在
+normal production path 缺少 issuer/caller 时继续
+`ENOTSUP`。真实 OpenSSH event loop、hostfile parser/issuer、KEX/auth/PTY/forward/service/UI、
+设备和外部 SSH 仍未验收，task 保持 `in_progress`。
+
+2026-10-15 前一窄增量：已冻结 role/hop/target-bound HostEvidence/CAS
+native↔Java contract。C/JNI callback 重新校验 classification、key type、fingerprint、
+base/replacement digest 及 bounded result；KNOWN 只返回 `CAS_NOT_REQUIRED`，NEW 必须
+经过 exact proposal、显式 approval 和 exact CAS `COMMITTED`，proposal body 不过 JNI。
+host gate=15、166 JVM、strict compile/lint/Release 通过。当时只有可注入的
+`TrustCasWriter` seam；具体 managed known_hosts CAS provider 已由本页顶部增量接入，
+真实 OpenSSH caller 仍未接入；
+`ssh_native_client` 缺 provider 时继续 `ENOTSUP`，task 保持未完成。
+
+2026-10-15 生产 caller 阻塞复核（前一窄增量，已被顶部 handoff 取代）：pinned OpenSSH 10.6p1 source map 确认 `ssh_api`
+caller API 可用，但当前仍没有可编译的 native-facing known_hosts issuer/candidate
+handoff。Java managed provider/CAS writer 已完成，exact replacement 仍由受管
+caller/测试注入，不能把 Java CAS writer 或 fixture 的 `ssh_api` 内存流当作生产 caller。
+因此 `ssh_native_client` 继续做 fail-closed boundary 和 strict host regression：校验
+live role/PID/UID、CLOEXEC/NONBLOCK 受管 socket、callback token/environment、deadline
+和 bounded step，缺 issuer/handoff 稳定返回 `ENOTSUP`，不猜 fingerprint trust、不创建
+OpenSSH/KEX client、不触发 JNI/credential。host gate=27；普通 APK 未包含该 boundary
+或 fixture OpenSSH object。待 pinned hostfile issuer、一次性 candidate handoff、同构
+source/object manifest 冻结后，才补真实 partial I/O、EOF、cancel/deadline、close retry、
+inbound NEWKEYS/JNI proof，详见任务 [阻塞记录](../.trellis/tasks/10-08-ssh-terminal-client/research/production-kex-caller-blocker-20261015.md)。
+
+2026-10-14 前一窄增量：同进程KEX-only native launcher仍仅作为独立opt-in fixture/host seam；用户已确认同进程 topology 与当前 native event-loop 线程同步附着 JNI callback，adapter 已编入正常 `libctos_ssh_files.so`。当时已实现 bounded managed-provider handoff：生产 NEW host 只能由精确 role/hop-bound proposal 通过，typed password/private-key bytes 只能在匹配 host proof + KEX proof 后经 `SshCredentialBridge` 释放，native/JNI 会清零 Java array 与 caller buffer。adapter 对 role/PID/UID/deadline、JNIEnv/JavaVM、线程、重入、取消、迟到回调及 native-first cleanup fail-closed；host `gate=11`、162 JVM、lint、Release 构建通过。当时真实 OpenSSH event loop/caller、受管 config/known_hosts file view 与 trust CAS 写回、ARM、设备、外部SSH、vault、auth/PTY/forward/service/UI仍未接入。
+下一历史阶段是把已实现的 managed file/provider contract 接到真实 OpenSSH caller；不把 `ssh_api` 内存流或 fixture control transport 视为产品 transport。
+
+2026-10-13 SSH当前增量：Java role/trust/KEX/typed-secret bridge 已完成，bounded native role bootstrap 的 ownership/open/release JNI 已接入正常 `libctos_ssh_files.so`；native 输出清零、跨进程/UID close、stale token、Java registry 配对与失败重试均有回归。150 JVM、lint、host bootstrap 1198/1/1198、固定 KEX native 构建和正常 Release 构建通过；当前 APK `538cae5a…` 包含生产 public-file 与 role JNI。这里只证明 host/fixture seam 和 JNI contract，尚未由生产事件循环调用或接入 native launcher/OpenSSH callback、协议认证/PTY/转发/服务/UI或设备/外部账号；完整客户端仍开放。
+
 2026-10-10 公共接口约束：SSH 受管文件闭包与共同 v1 密文库采用同一上限：128 文件、单文件 1 MiB、文件总量 8 MiB、引用深度 8（完整 manifest 明文 12 MiB）。超限完整拒绝，不截断配置语义；旧父设计 256/16/32 MiB 工程候选已收敛。公共文件图事务由底座实现，生产配置/密钥/信任语义、实际 native 使用及恢复仍由 SSH 接入联合验收。
 
 2026-10-10：最新完整规划已获用户批准，公共底座子任务已进入 in_progress，前置协调 SSH 内存文件访问探针。SSH 客户端完整接入仍待底座验收，父任务保留规划/集成职责；尚未实现或验证 SSH 产品功能。下文保留规划契约，实施证据随实际结果更新。

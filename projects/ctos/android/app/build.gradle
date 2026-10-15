@@ -7,6 +7,59 @@ def secretsFixtureOption = providers.gradleProperty('ctosSecretsUiFixture').orNu
 if (secretsFixtureOption != null && secretsFixtureOption != 'true') {
     throw new GradleException('ctosSecretsUiFixture accepts only true; omit it for the normal application')
 }
+def sshMemoryProbeOption = providers.gradleProperty('ctosSshMemoryProbe').orNull
+if (sshMemoryProbeOption != null && sshMemoryProbeOption != 'true') {
+    throw new GradleException('ctosSshMemoryProbe accepts only true; omit it for normal builds')
+}
+if (sshMemoryProbeOption == 'true' && secretsFixtureOption != 'true') {
+    throw new GradleException('ctosSshMemoryProbe requires ctosSecretsUiFixture=true')
+}
+def sshUpstreamProbeOption = providers.gradleProperty('ctosSshUpstreamProbe').orNull
+if (sshUpstreamProbeOption != null && sshUpstreamProbeOption != 'true') {
+    throw new GradleException('ctosSshUpstreamProbe accepts only true; omit it for normal builds')
+}
+if (sshUpstreamProbeOption == 'true' && secretsFixtureOption != 'true') {
+    throw new GradleException('ctosSshUpstreamProbe requires ctosSecretsUiFixture=true')
+}
+def sshUpstreamBaselineOption = providers.gradleProperty('ctosSshUpstreamBaseline').orNull
+if (sshUpstreamBaselineOption != null && sshUpstreamProbeOption != 'true') {
+    throw new GradleException('ctosSshUpstreamBaseline requires ctosSshUpstreamProbe=true')
+}
+File sshUpstreamBaseline = null
+def sshPolicyProbeOption = providers.gradleProperty('ctosSshPolicyProbe').orNull
+if (sshPolicyProbeOption != null && sshPolicyProbeOption != 'true') {
+    throw new GradleException('ctosSshPolicyProbe accepts only true; omit it for normal builds')
+}
+if (sshPolicyProbeOption == 'true' && secretsFixtureOption != 'true') {
+    throw new GradleException('ctosSshPolicyProbe requires ctosSecretsUiFixture=true')
+}
+if (sshPolicyProbeOption == 'true' && (sshMemoryProbeOption != null || sshUpstreamProbeOption != null)) {
+    throw new GradleException('ctosSshPolicyProbe must be packaged independently of other SSH probes')
+}
+def sshControlProbeOption = providers.gradleProperty('ctosSshControlProbe').orNull
+if (sshControlProbeOption != null && sshControlProbeOption != 'true') {
+    throw new GradleException('ctosSshControlProbe accepts only true; omit it for normal builds')
+}
+if (sshControlProbeOption == 'true' && secretsFixtureOption != 'true') {
+    throw new GradleException('ctosSshControlProbe requires ctosSecretsUiFixture=true')
+}
+if (sshControlProbeOption == 'true' && (sshMemoryProbeOption != null || sshUpstreamProbeOption != null || sshPolicyProbeOption != null)) {
+    throw new GradleException('ctosSshControlProbe must be packaged independently of other SSH probes')
+}
+if (sshUpstreamProbeOption == 'true') {
+    if (sshUpstreamBaselineOption == null || !(sshUpstreamBaselineOption ==~ '/app/build/ssh-native-g1/stock-run\\.[A-Za-z0-9_-]+')) {
+        throw new GradleException('ctosSshUpstreamBaseline must identify one fixed /app/build/ssh-native-g1/stock-run.<id> directory')
+    }
+    sshUpstreamBaseline = new File(sshUpstreamBaselineOption)
+    if (!sshUpstreamBaseline.isDirectory() || sshUpstreamBaseline.canonicalPath != sshUpstreamBaselineOption) {
+        throw new GradleException('ctosSshUpstreamBaseline must be an existing canonical directory without symlinks')
+    }
+    for (File component = sshUpstreamBaseline; component != null; component = component.parentFile) {
+        if (java.nio.file.Files.isSymbolicLink(component.toPath())) {
+            throw new GradleException('ctosSshUpstreamBaseline path must not contain symlinks')
+        }
+    }
+}
 android {
     namespace 'im.majo.ctos'
     compileSdk 36
@@ -47,6 +100,22 @@ android {
         // provider's fixed authority and grants must never be merged into this UID.
         sourceSets.androidTest.manifest.srcFile('src/secretsFixtureTest/AndroidManifest.xml')
         sourceSets.androidTest.java.setSrcDirs([])
+        if (sshMemoryProbeOption == 'true') {
+            sourceSets.secretsFixture.jniLibs.srcDirs += [layout.buildDirectory.dir('generated/sshProbeJniLibs').get().asFile]
+        }
+        if (sshUpstreamProbeOption == 'true') {
+            sourceSets.secretsFixture.jniLibs.srcDirs += [layout.buildDirectory.dir('generated/sshUpstreamProbeJniLibs').get().asFile]
+            sourceSets.secretsFixture.assets.srcDirs += [layout.buildDirectory.dir('generated/sshUpstreamProbeAssets').get().asFile]
+        }
+        if (sshPolicyProbeOption == 'true') {
+            sourceSets.secretsFixture.jniLibs.srcDirs += [layout.buildDirectory.dir('generated/sshPolicyProbeJniLibs').get().asFile]
+            sourceSets.secretsFixture.assets.srcDirs += [layout.buildDirectory.dir('generated/sshPolicyProbeAssets').get().asFile]
+        }
+        if (sshControlProbeOption == 'true') {
+            sourceSets.secretsFixture.jniLibs.srcDirs += [layout.buildDirectory.dir('generated/sshControlProbeJniLibs').get().asFile]
+            sourceSets.secretsFixture.jniLibs.srcDirs += [layout.buildDirectory.dir('generated/sshKexProbeJniLibs').get().asFile]
+            sourceSets.secretsFixture.assets.srcDirs += [layout.buildDirectory.dir('generated/sshKexProbeAssets').get().asFile]
+        }
     }
 }
 chaquopy {
@@ -85,6 +154,27 @@ tasks.register('compilePty', Exec) {
 }
 tasks.named('preBuild').configure { dependsOn 'compilePty' }
 
+def sshFilesOutput = layout.buildDirectory.file('generated/jniLibs/arm64-v8a/libctos_ssh_files.so')
+tasks.register('compileSshFiles', Exec) {
+    inputs.files('src/main/cpp/ssh_file_view.c', 'src/main/cpp/ssh_file_view.h', 'src/main/cpp/ssh_file_jni.c',
+        'src/main/cpp/ssh_file_io.c', 'src/main/cpp/ssh_file_io.h',
+        'src/main/cpp/ssh_role_bootstrap.c', 'src/main/cpp/ssh_role_bootstrap.h',
+        'src/main/cpp/ssh_role_jni.c',
+        'src/main/cpp/ssh_callback_adapter.c', 'src/main/cpp/ssh_callback_adapter.h',
+        'src/main/cpp/ssh_callback_jni.c')
+    outputs.file(sshFilesOutput)
+    doFirst {
+        sshFilesOutput.get().asFile.parentFile.mkdirs()
+        commandLine "${android.ndkDirectory}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android28-clang",
+            '-std=c11', '-shared', '-fPIC', '-O2', '-Wall', '-Wextra', '-Werror', '-Wl,-z,max-page-size=16384',
+            'src/main/cpp/ssh_file_view.c', 'src/main/cpp/ssh_file_io.c', 'src/main/cpp/ssh_file_jni.c',
+            'src/main/cpp/ssh_role_bootstrap.c', 'src/main/cpp/ssh_role_jni.c',
+            'src/main/cpp/ssh_callback_adapter.c', 'src/main/cpp/ssh_callback_jni.c',
+            '-o', sshFilesOutput.get().asFile
+    }
+}
+tasks.named('preBuild').configure { dependsOn 'compileSshFiles' }
+
 def pythonExecutable = layout.buildDirectory.file('generated/jniLibs/arm64-v8a/libctos_python_exec.so')
 tasks.register('compilePythonExecutable', Exec) {
     inputs.file('src/main/cpp/python_exec.c')
@@ -110,3 +200,205 @@ tasks.register('compileHftpRelay', Exec) {
     }
 }
 tasks.named('preBuild').configure { dependsOn 'compileHftpRelay' }
+
+// Host-only contract test; never packaged into the APK or used as an SSH client.
+def sshRoleBootstrapHostTest = layout.buildDirectory.file('verification/sshRoleBootstrap/ctos_ssh_role_bootstrap_test')
+tasks.register('testSshRoleBootstrapHost') {
+    inputs.files('src/main/cpp/ssh_role_bootstrap.c', 'src/main/cpp/ssh_role_bootstrap.h',
+        'src/test/cpp/ssh_role_bootstrap_test.c')
+    outputs.file(sshRoleBootstrapHostTest)
+    outputs.upToDateWhen { false }
+    doLast {
+        File binary = sshRoleBootstrapHostTest.get().asFile
+        binary.parentFile.mkdirs()
+        project.exec {
+            commandLine '/usr/bin/cc', '-std=c11', '-O2', '-Wall', '-Wextra', '-Werror',
+                '-pthread', '-Isrc/main/cpp', 'src/main/cpp/ssh_role_bootstrap.c',
+                'src/test/cpp/ssh_role_bootstrap_test.c', '-o', binary.absolutePath
+        }
+        project.exec { commandLine binary.absolutePath }
+    }
+}
+
+// Host-only state-machine contract test; never packaged into the APK or used
+// as an SSH transport. The JNI target is checked separately by the normal
+// strict Android library build.
+def sshCallbackAdapterHostTest = layout.buildDirectory.file('verification/sshCallbackAdapter/ctos_ssh_callback_adapter_test')
+tasks.register('testSshCallbackAdapterHost') {
+    inputs.files('src/main/cpp/ssh_callback_adapter.c', 'src/main/cpp/ssh_callback_adapter.h',
+        'src/main/cpp/ssh_role_bootstrap.c', 'src/main/cpp/ssh_role_bootstrap.h',
+        'src/test/cpp/ssh_callback_adapter_test.c')
+    outputs.file(sshCallbackAdapterHostTest)
+    outputs.upToDateWhen { false }
+    doLast {
+        File binary = sshCallbackAdapterHostTest.get().asFile
+        binary.parentFile.mkdirs()
+        project.exec {
+            commandLine '/usr/bin/cc', '-std=c11', '-O2', '-Wall', '-Wextra', '-Werror',
+                '-pthread', '-Isrc/main/cpp', 'src/main/cpp/ssh_role_bootstrap.c',
+                'src/main/cpp/ssh_callback_adapter.c', 'src/test/cpp/ssh_callback_adapter_test.c',
+                '-o', binary.absolutePath
+        }
+        project.exec { commandLine binary.absolutePath }
+    }
+}
+
+// Host-only fail-closed boundary test. This source is intentionally excluded
+// from compileSshFiles and cannot add an OpenSSH/KEX object to the normal APK.
+def sshNativeClientHostTest = layout.buildDirectory.file('verification/sshNativeClient/ctos_ssh_native_client_test')
+tasks.register('testSshNativeClientHost') {
+    inputs.files('src/main/cpp/ssh_native_client.c', 'src/main/cpp/ssh_native_client.h',
+        'src/main/cpp/ssh_role_bootstrap.c', 'src/main/cpp/ssh_role_bootstrap.h',
+        'src/main/cpp/ssh_callback_adapter.h', 'src/test/cpp/ssh_native_client_test.c')
+    outputs.file(sshNativeClientHostTest)
+    outputs.upToDateWhen { false }
+    doLast {
+        File binary = sshNativeClientHostTest.get().asFile
+        binary.parentFile.mkdirs()
+        project.exec {
+            commandLine '/usr/bin/cc', '-std=c11', '-O2', '-Wall', '-Wextra', '-Werror',
+                '-pthread', '-Isrc/main/cpp', 'src/main/cpp/ssh_role_bootstrap.c',
+                'src/main/cpp/ssh_native_client.c', 'src/test/cpp/ssh_native_client_test.c',
+                '-o', binary.absolutePath
+        }
+        project.exec { commandLine binary.absolutePath }
+    }
+}
+
+// This directory is never a main source set, even when a previous probe exists.
+if (sshControlProbeOption == 'true') {
+    tasks.register('compileSshKexProbe', Exec) {
+        inputs.files('src/main/cpp/ssh_kex_guard.c', 'src/main/cpp/ssh_kex_guard.h',
+            'src/main/cpp/ssh_role_bootstrap.c', 'src/main/cpp/ssh_role_bootstrap.h', 'src/test/cpp/ssh_kex_test.c',
+            'src/main/cpp/ssh_native_launcher.c', 'src/main/cpp/ssh_native_launcher.h',
+            '../../.trellis/tasks/10-08-ssh-terminal-client/research/android-kex-build.sh',
+            '../../.trellis/tasks/10-08-ssh-terminal-client/research/openssh-10.6p1-kex-guard.patch')
+        outputs.dir(layout.buildDirectory.dir('generated/sshKexProbeJniLibs'))
+        outputs.dir(layout.buildDirectory.dir('generated/sshKexProbeAssets'))
+        commandLine 'bash', '/app/.trellis/tasks/10-08-ssh-terminal-client/research/android-kex-build.sh', '--build'
+    }
+    def sshControlProbe = layout.buildDirectory.file('generated/sshControlProbeJniLibs/arm64-v8a/libctos_ssh_control_probe.so')
+    tasks.register('compileSshControlProbe', Exec) {
+        inputs.files('src/main/cpp/ssh_control.c', 'src/main/cpp/ssh_control.h', 'src/test/cpp/ssh_control_test.c')
+        outputs.file(sshControlProbe)
+        doFirst {
+            sshControlProbe.get().asFile.parentFile.mkdirs()
+            commandLine "${android.ndkDirectory}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android28-clang",
+                '-std=c11', '-fPIE', '-pie', '-O2', '-Wall', '-Wextra', '-Werror', '-Wl,-z,max-page-size=16384',
+                '-Isrc/main/cpp', 'src/main/cpp/ssh_control.c', 'src/test/cpp/ssh_control_test.c', '-o', sshControlProbe.get().asFile
+        }
+    }
+    tasks.matching { it.name == 'preSecretsFixtureReleaseBuild' || it.name == 'preSecretsFixtureDebugBuild' }.configureEach {
+        dependsOn 'compileSshControlProbe', 'compileSshKexProbe'
+    }
+}
+
+if (sshMemoryProbeOption == 'true') {
+    def sshMemoryProbe = layout.buildDirectory.file('generated/sshProbeJniLibs/arm64-v8a/libctos_ssh_memory_probe.so')
+    tasks.register('compileSshMemoryProbe', Exec) {
+        inputs.file('src/main/cpp/ssh_memory_probe.c')
+        outputs.file(sshMemoryProbe)
+        doFirst {
+            sshMemoryProbe.get().asFile.parentFile.mkdirs()
+            commandLine "${android.ndkDirectory}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android28-clang",
+                '-std=c11', '-fPIE', '-pie', '-O2', '-Wall', '-Wextra', '-Werror', '-Wl,-z,max-page-size=16384',
+                'src/main/cpp/ssh_memory_probe.c', '-landroid', '-o', sshMemoryProbe.get().asFile
+        }
+    }
+    tasks.matching { it.name == 'preSecretsFixtureReleaseBuild' || it.name == 'preSecretsFixtureDebugBuild' }.configureEach {
+        dependsOn 'compileSshMemoryProbe'
+    }
+}
+
+// Policy outputs belong only to this opt-in independent fixture.
+if (sshPolicyProbeOption == 'true') {
+    def policyRunner = rootProject.file('../.trellis/tasks/10-08-ssh-terminal-client/research/android-policy-build.sh')
+    def policyPatch = rootProject.file('../.trellis/tasks/10-08-ssh-terminal-client/research/openssh-10.6p1-config-policy.patch')
+    tasks.register('compileSshPolicyProbe', Exec) {
+        inputs.files('src/main/cpp/ssh_config_policy.c', 'src/main/cpp/ssh_config_policy.h', 'src/main/cpp/ssh_config_policy_probe.c',
+            'src/main/cpp/ssh_file_view.c', 'src/main/cpp/ssh_file_view.h', 'src/main/cpp/ssh_file_io.c', 'src/main/cpp/ssh_file_io.h')
+        inputs.files(policyRunner, policyPatch)
+        // The fixed runner validates the full baseline before every build;
+        // no Gradle snapshot/default exclusions can skip that verification.
+        outputs.upToDateWhen { false }
+        outputs.cacheIf { false }
+        outputs.dir(layout.buildDirectory.dir('generated/sshPolicyProbeJniLibs'))
+        outputs.dir(layout.buildDirectory.dir('generated/sshPolicyProbeAssets'))
+        workingDir rootProject.file('..')
+        commandLine 'bash', policyRunner.absolutePath, '--build'
+    }
+    tasks.matching { it.name == 'preSecretsFixtureReleaseBuild' || it.name == 'preSecretsFixtureDebugBuild' }.configureEach {
+        dependsOn 'compileSshPolicyProbe'
+    }
+}
+
+// The three upstream research executables and notices belong only to this
+// opt-in fixture; normal builds cannot discover their stale generated output.
+if (sshUpstreamProbeOption == 'true') {
+    def upstreamRunner = rootProject.file('../.trellis/tasks/10-08-ssh-terminal-client/research/android-upstream-build.sh')
+    def upstreamPatch = rootProject.file('../.trellis/tasks/10-08-ssh-terminal-client/research/openssh-10.6p1-bionic-includes.patch')
+    def upstreamLibraries = layout.buildDirectory.dir('generated/sshUpstreamProbeJniLibs/arm64-v8a')
+    def upstreamNotices = layout.buildDirectory.dir('generated/sshUpstreamProbeAssets/licenses/ssh-upstream')
+    def baselineInput = { String relative, boolean directory ->
+        File input = new File(sshUpstreamBaseline, relative)
+        if ((directory ? !input.isDirectory() : !input.isFile()) || input.canonicalPath != input.absolutePath) {
+            throw new GradleException('Fixed upstream baseline input is missing or noncanonical')
+        }
+        for (File component = input; component != null && component != sshUpstreamBaseline; component = component.parentFile) {
+            if (java.nio.file.Files.isSymbolicLink(component.toPath())) {
+                throw new GradleException('Fixed upstream baseline input must not contain symlinks')
+            }
+        }
+        return input
+    }
+    def baselineTreeInputs = { String relative ->
+        File directory = baselineInput(relative, true)
+        // Include every regular file, including Ant's default exclusions such
+        // as .gitignore, so task inputs match the complete pinned manifest.
+        def members = []
+        def walk = java.nio.file.Files.walk(directory.toPath())
+        try {
+            walk.forEach { path ->
+                String member = sshUpstreamBaseline.toPath().relativize(path).toString()
+                boolean memberDirectory = java.nio.file.Files.isDirectory(path, java.nio.file.LinkOption.NOFOLLOW_LINKS)
+                File verified = baselineInput(member, memberDirectory)
+                if (!memberDirectory) members.add(verified)
+            }
+        } finally {
+            walk.close()
+        }
+        return members.collect { member ->
+            baselineInput(sshUpstreamBaseline.toPath().relativize(member.toPath()).toString(), false)
+        }
+    }
+    tasks.register('compileSshUpstreamProbe', Exec) {
+        inputs.file('src/main/cpp/ssh_upstream_probe.c')
+        inputs.files(upstreamRunner, upstreamPatch)
+        inputs.property('baseline', sshUpstreamBaselineOption)
+        inputs.files([
+            'inputs/openssh-10.6p1.tar.gz', 'inputs/openssl-3.5.9.tar.gz',
+            'inputs/openssh-10.6p1-bionic-includes.patch',
+            'evidence/artifacts.sha256', 'evidence/source-archives.sha256',
+            'evidence/local-patch-inputs.sha256', 'evidence/local-patch-output.sha256',
+            'evidence/source-notices.sha256', 'evidence/local-changes.txt',
+            'evidence/scope.txt', 'evidence/NOTICE-policy.txt',
+            'evidence/openssh-config.h', 'evidence/openssh-Makefile',
+            'openssh-build/config.h', 'openssh-build/Makefile',
+            'openssh-build/libssh.a', 'openssh-build/openbsd-compat/libopenbsd-compat.a',
+            'openssh-build/ssh', 'openssl-prefix/lib/libcrypto.a'
+        ].collect { baselineInput(it, false) })
+        inputs.files(baselineTreeInputs('openssl-prefix'))
+        inputs.files(baselineTreeInputs('sources/openssh-10.6p1'))
+        inputs.files(baselineTreeInputs('evidence/source-notices'))
+        inputs.files(baselineTreeInputs('openssh-build'))
+        for (String name : ['libctos_ssh_upstream_probe.so', 'libctos_ssh_upstream_client.so', 'libctos_ssh_upstream_baseline.so']) {
+            outputs.file(upstreamLibraries.map { it.file(name) })
+        }
+        outputs.dir(upstreamNotices)
+        workingDir rootProject.file('..')
+        commandLine 'bash', upstreamRunner.absolutePath, '--baseline', sshUpstreamBaselineOption
+    }
+    tasks.matching { it.name == 'preSecretsFixtureReleaseBuild' || it.name == 'preSecretsFixtureDebugBuild' }.configureEach {
+        dependsOn 'compileSshUpstreamProbe'
+    }
+}

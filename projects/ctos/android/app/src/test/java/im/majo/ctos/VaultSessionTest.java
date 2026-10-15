@@ -4,6 +4,12 @@ import static org.junit.Assert.*;
 import org.junit.Test;
 
 public final class VaultSessionTest {
+    private static final class Lease implements VaultSession.Revocation {
+        boolean active = true;
+        int revoked;
+        @Override public boolean active() { return active; }
+        @Override public void revoke() { active = false; revoked++; }
+    }
     private long now;
     private VaultSession session() throws Exception {
         VaultSession session = new VaultSession(() -> now);
@@ -85,5 +91,40 @@ public final class VaultSessionTest {
         session.assertEpoch(admitted);
         session.unlock(new byte[32]);
         assertTrue(session.unlocked());
+    }
+
+    @Test public void protectedLeaseRevokesOnDirectLockAndReplacementUnlock() throws Exception {
+        VaultSession session = session();
+        Lease first = new Lease();
+        session.attachRevocation(session.epoch(), first);
+        session.lock();
+        assertFalse(first.active); assertEquals(1, first.revoked);
+        session.lock(); assertEquals(1, first.revoked);
+        session.unlock(new byte[32]);
+        Lease next = new Lease();
+        session.attachRevocation(session.epoch(), next);
+        session.unlock(new byte[32]);
+        assertFalse(next.active); assertEquals(1, next.revoked);
+    }
+
+    @Test public void expiredSessionRevokesLeaseAndRejectsLateRegistration() throws Exception {
+        VaultSession session = session();
+        long epoch = session.epoch();
+        Lease owned = new Lease(); session.attachRevocation(epoch, owned);
+        session.foreground(false); now = 30000;
+        assertFalse(session.unlocked()); assertFalse(owned.active); assertEquals(1, owned.revoked);
+        try { session.attachRevocation(epoch, new Lease()); fail(); }
+        catch (VaultException failure) { assertEquals("VAULT_CHANGED", failure.code); }
+    }
+
+    @Test public void activeLeaseCannotBeReplacedAndClosedLeaseCan() throws Exception {
+        VaultSession session = session();
+        Lease first = new Lease(); session.attachRevocation(session.epoch(), first);
+        Lease second = new Lease();
+        try { session.attachRevocation(session.epoch(), second); fail(); }
+        catch (VaultException failure) { assertEquals("BUSY", failure.code); }
+        assertTrue(first.active); assertTrue(second.active);
+        first.revoke(); session.attachRevocation(session.epoch(), second);
+        session.lock(); assertFalse(second.active); assertEquals(1, first.revoked);
     }
 }

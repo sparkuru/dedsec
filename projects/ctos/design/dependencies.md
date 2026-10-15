@@ -23,6 +23,28 @@
 
 SSH 内存文件研究另固定 OpenSSH 10.0p2 官方源码及 hash，见 [探针来源与复现](../.trellis/tasks/10-08-app-authentication/research/ssh-memory-results.md)。该依赖只在 `/tmp` 的 Linux/glibc 研究构建使用，未打入 APK，不作为 Android 原生客户端选版或兼容性通过的结论。
 
+## 2026-10-13 SSH Android G1 构建输入
+
+以下是本轮独立 stock 构建研究的固定输入，尚未打入正式 APK，不覆盖上方历史 Linux pin 或 Python 自带 OpenSSL。main 实际下载并核对归档 payload、内含版本和许可证；只校验 SHA256，**未做 PGP 验签**。
+
+| 输入 | 官方来源与实际 SHA256 | 内含版本及许可证核对 |
+| --- | --- | --- |
+| OpenSSH10.6p1 发布归档 | [官方归档](https://cdn.openbsd.org/pub/OpenBSD/OpenSSH/portable/openssh-10.6p1.tar.gz)，2,355,244 B；`a9dc9565dffe8640f64d863cd29a32bc4a3dbdec0566a7fc44c5d6ee767d5f39`，匹配[发布说明](https://www.openssh.org/txt/release-10.6)的 SHA256 | `version.h` 实际 SSH_VERSION=OpenSSH_10.6 / SSH_PORTABLE=p1；完整多组成 `LICENCE` 21,140 B，SHA `5bb5b160726ef5756e4f32fe95b35249c294962419650f48d05134b486d27ccb`，不能简写成单一 BSD 许可证 |
+| OpenSSL3.5.9 LTS 发布归档 | [官方 release asset](https://github.com/openssl/openssl/releases/download/openssl-3.5.9/openssl-3.5.9.tar.gz)，53,279,637 B；`603f5602e2eef00d77fbd429d34dcd5822bb301757a1bc9cdb24c670f1eb859a`，与实际取得的[官方 checksum 附件](https://github.com/openssl/openssl/releases/download/openssl-3.5.9/openssl-3.5.9.tar.gz.sha256)一致 | `VERSION.dat` 实际 MAJOR=3/MINOR=5/PATCH=9，release=29 Sep 2026；完整 Apache2.0 `LICENSE.txt` 10,175 B，SHA `7d5450cb2d142651b8afa315b5f238efc805dad827d91ba367d8516bc9d49e7a` |
+
+归档成员已核对为对应单一根目录的普通文件/目录，无绝对路径、`..` 或特殊/link 成员。临时输入位于 ignored `build/ssh-native-g1/input-Y6E5C3fM/`；归档、工具链及后续构建的事实边界见 [阶段检查](../.trellis/tasks/10-08-ssh-terminal-client/check.md) 与 [验证记录](verification.md)。随产品分发前必须保留实际编译组成的完整许可证/声明，静态 libcrypto 也需独立登记，不能据现有 Python 许可宣称已覆盖。
+
+本轮实际兼容基线 `stock-run.lOHF9Oai` 已编译通过，使用NDK27/API28、静态PIC libcrypto及公开NDK zlib。兼容patch SHA256 `ea81738f191e7d9fb70ce0943b45ea06b07c4057d3d0128a694331b3a32f8b89` 修复Bionic头文件顺序、保留真实bzero fallback，并在显式研究守卫下使用公开resolver API；原explicit_bzero实现未改。完整source notices、patch前后hash、配置及失败run均保留。该基线未执行或打入正式APK，不能宣称DNSSEC/主机信任、算法组合或完整客户端通过；G2独立夹具的实际打包/运行另行记录。
+
+2026-10-15 G3.4 fixture caller 继续复用上述 OpenSSH 10.6p1/OpenSSL 3.5.9/NDK27/API28
+baseline，不新增生产第三方依赖。hostfile stream-writer patch SHA256 为
+`a786566e1842996c0282647457f4dd63558cde00bc79ae1ba6bcd552bf30484a`，KEX guard patch
+SHA256 为 `50a59606000dc871f1b29e33eeb6d77fb5da456f40526d2871357758b61f8785`；两者仅供
+`android-hostfile-issuer-build.sh` 的 opt-in AArch64 PIE fixture，未进入 normal APK。
+runner 的完整 source notices、manifest、object closure 与 patch evidence 保留在
+`build/ssh-native-g3/run.3PZSbIzM/`；hako 无 `qemu-aarch64`，ARM runtime 未执行。随产品
+接入前仍需按真实生产 source/object closure 重新核对上游许可证与 notices。
+
 2026-09-26 移除直接的 Xposed API 与 AndroidX Core 接收器依赖，删除本地 Xposed API jar。Flutter Android 插件仍可能传递依赖 AndroidX Core；不再供系统桥接使用。
 
 2026-09-26 Python 包通过 Chaquopy 17.0.0 固定 runtime 3.13.9-0；初始工作台无 pip requirements，当前五项工具依赖见下表。自有 NDK PIE 启动器通过 `Py_BytesMain` 启动 CPython。完整 Python、Chaquopy、OpenSSL 许可证保留在 `android/app/src/main/assets/portable/python/licenses/`，随 APK 分发。追加原生工具必须独立记录来源、版本、哈希、许可证、Bionic/ABI 兼容与实测结果，见 [运行包契约](portable-workbench.md)。
@@ -44,3 +66,5 @@ Flutter transitive packages are pinned in pubspec.lock. 增强采集和 Root PTY
 构建 Python archive SHA-256：`6a8280f4b08d75428eea83955678c51da00c585bb411562cd53f510680becf00`，hako bootstrap 自动校验；不创建宿主全局命令。APK requirements 的 dist-info LICENSE 随资源包保留。加密所需 OpenSSL 及 libffi 仅在受管 LD_LIBRARY_PATH 中加载，参见 [工具设计](portable-tools.md)。
 
 Playwright 1.55.0 仅安装到 /tmp 的验证环境，复用已有 Chromium 1228 可执行文件；不是 App 或项目生产依赖。
+
+2026-10-13真实KEX增量继续使用冻结OpenSSH10.6p1/OpenSSL3.5.9输入与完整许可证；独立control fixture额外保留`assets/licenses/ssh-kex/`原始source-notices、局部patch、输入与基线manifest。正常APK排除此目录和KEX程序，不新增生产第三方依赖。

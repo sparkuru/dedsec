@@ -524,6 +524,81 @@ public final class VaultTest {
                 bytes -> assertEquals("test-only-key", new String(bytes, StandardCharsets.UTF_8)));
     }
 
+    @Test public void sshFileMetadataDescribesPrivateKeyWithoutReleasingItsBody() throws Exception {
+        vault.unlock(PASSWORD, () -> { });
+        SshVaultAdapter ssh = new SshVaultAdapter(vault, (connection, target) -> {
+            throw new VaultException("HOST_KEY", "Unverified fixture host");
+        });
+        VaultOperation operation = ssh.fileRequest("config", "metadata1");
+        AtomicReference<SshFileSnapshot> receipt = new AtomicReference<>();
+        List<byte[]> loans = new ArrayList<>();
+        rejects("VAULT_OPERATION", () -> ssh.useFileSnapshot(operation, "config", "other", snapshot -> fail()));
+        ssh.useFileSnapshot(operation, "config", "metadata1", snapshot -> {
+            receipt.set(snapshot);
+            assertEquals("config", snapshot.rootPath);
+            assertEquals("metadata1", snapshot.connectionId);
+            assertEquals(operation.requestId, snapshot.requestId);
+            assertEquals(operation.vaultId, snapshot.vaultId);
+            assertEquals(operation.generation, snapshot.generation);
+            assertEquals(operation.epoch, snapshot.epoch);
+            assertEquals(operation.deadline, snapshot.deadline);
+            assertArrayEquals(operation.snapshotBinding, snapshot.binding());
+            byte[] changed = snapshot.binding();
+            Arrays.fill(changed, (byte)0);
+            assertArrayEquals(operation.snapshotBinding, snapshot.binding());
+            assertEquals(3, snapshot.metadata.size());
+            SshFileSnapshot.Metadata key = snapshot.metadata.get(1);
+            assertEquals(VaultManifest.FileType.PRIVATE_KEY, key.type);
+            assertEquals("key1", key.id);
+            assertEquals("keys/key", key.path);
+            assertEquals("test-key-identity", key.identity);
+            assertEquals("test-only-key".getBytes(StandardCharsets.UTF_8).length, key.contentBytes);
+            assertTrue(key.references.isEmpty());
+            assertEquals(2, snapshot.publicFiles.size());
+            for (VaultManifest.FileObject file : snapshot.publicFiles) {
+                assertNotEquals(VaultManifest.FileType.PRIVATE_KEY, file.type);
+                assertFalse(Arrays.equals("test-only-key".getBytes(StandardCharsets.UTF_8), file.content));
+                loans.add(file.content);
+            }
+            try { snapshot.metadata.clear(); fail("mutable metadata"); }
+            catch (UnsupportedOperationException expected) { }
+            try { snapshot.publicFiles.clear(); fail("mutable public loan list"); }
+            catch (UnsupportedOperationException expected) { }
+            try {
+                ssh.privateKeyRequest(key.path, key.identity, "target:test@example.invalid:22", "metadata1");
+                fail("Private metadata cannot authorize a key release");
+            } catch (VaultException failure) { assertEquals("HOST_KEY", failure.code); }
+        });
+        for (byte[] loan : loans) assertArrayEquals(new byte[loan.length], loan);
+        assertEquals("test-key-identity", receipt.get().metadata.get(1).identity);
+        rejects("VAULT_OPERATION", () -> ssh.useFiles(operation, "config", "metadata1", files -> fail()));
+    }
+
+    @Test public void sshFileSnapshotClosesBorrowedBodiesWhenReceiverThrows() throws Exception {
+        vault.unlock(PASSWORD, () -> { });
+        SshVaultAdapter ssh = new SshVaultAdapter(vault, (connection, target) -> { });
+        VaultOperation operation = ssh.fileRequest("config", "metadata2");
+        List<byte[]> loans = new ArrayList<>();
+        rejects("FIXTURE", () -> ssh.useFileSnapshot(operation, "config", "metadata2", snapshot -> {
+            for (VaultManifest.FileObject file : snapshot.publicFiles) loans.add(file.content);
+            throw new VaultException("FIXTURE", "Synthetic receiver failure");
+        }));
+        assertEquals(2, loans.size());
+        for (byte[] loan : loans) assertArrayEquals(new byte[loan.length], loan);
+        rejects("VAULT_OPERATION", () -> ssh.useFileSnapshot(operation, "config", "metadata2", snapshot -> fail()));
+    }
+
+    @Test public void sshFileSnapshotRejectsCancelledAndPostValidationLockBeforeReceiver() throws Exception {
+        vault.unlock(PASSWORD, () -> { });
+        SshVaultAdapter ssh = new SshVaultAdapter(vault, (connection, target) -> { });
+        VaultOperation cancelled = ssh.fileRequest("config", "metadata3");
+        ssh.cancel(cancelled);
+        rejects("VAULT_CANCELLED", () -> ssh.useFileSnapshot(cancelled, "config", "metadata3", snapshot -> fail()));
+        VaultOperation locked = ssh.fileRequest("config", "metadata3");
+        vault.attachSshValidator(manifest -> vault.session.lock());
+        rejects("VAULT_CHANGED", () -> ssh.useFileSnapshot(locked, "config", "metadata3", snapshot -> fail()));
+    }
+
     @Test public void lockDuringManifestValidationRejectsPreparedConsumerEffects() throws Exception {
         vault.unlock(PASSWORD, () -> { });
         VaultOperation totp = new TotpVaultAdapter(vault).request("totp1");

@@ -1,0 +1,265 @@
+--- a/readconf.c
++++ b/readconf.c
+@@ -51,6 +51,9 @@
+ #include "sshkey.h"
+ #include "misc.h"
+ #include "readconf.h"
++#ifdef CTOS_SSH_CONFIG_POLICY
++#include "ssh_config_policy.h"
++#endif
+ #include "match.h"
+ #include "kex.h"
+ #include "mac.h"
+@@ -196,14 +199,14 @@
+ 	{ "compressionlevel", oUnsupported },
+ 
+ 	/* Sometimes-unsupported options */
+-#if defined(GSSAPI)
++#if defined(GSSAPI) || defined(CTOS_SSH_CONFIG_POLICY)
+ 	{ "gssapiauthentication", oGssAuthentication },
+ 	{ "gssapidelegatecredentials", oGssDelegateCreds },
+ # else
+ 	{ "gssapiauthentication", oUnsupported },
+ 	{ "gssapidelegatecredentials", oUnsupported },
+ #endif
+-#ifdef ENABLE_PKCS11
++#if defined(ENABLE_PKCS11) || defined(CTOS_SSH_CONFIG_POLICY)
+ 	{ "pkcs11provider", oPKCS11Provider },
+ 	{ "smartcarddevice", oPKCS11Provider },
+ # else
+@@ -869,6 +872,11 @@
+ 			if (r == (negate ? 1 : 0))
+ 				this_result = result = 0;
+ 		} else if (strcasecmp(attrib, "exec") == 0) {
++#ifdef CTOS_SSH_CONFIG_POLICY
++			ctos_ssh_policy_reject(CTOS_POLICY_MATCH_EXEC, filename, linenum);
++			result = -1;
++			goto out;
++#endif
+ 			if ((cmd = expand_match_exec_or_include_path(arg,
+ 			    options, pw, host_arg, original_host,
+ 			    final_pass, 0)) == NULL) {
+@@ -1134,6 +1142,10 @@
+     const char *original_host, const char *remote_command, char *line,
+     const char *filename, int linenum, int *activep, int flags)
+ {
++#ifdef CTOS_SSH_CONFIG_POLICY
++	if (ctos_ssh_policy_prepare() != 0)
++		return -1;
++#endif
+ 	return process_config_line_depth(options, pw, host, original_host,
+ 	    remote_command, line, filename, linenum, activep, flags, NULL, 0);
+ }
+@@ -1558,7 +1570,11 @@
+ 		}
+ 		len = strspn(str, WHITESPACE "=");
+ 		/* XXX use argv? */
++#ifdef CTOS_SSH_CONFIG_POLICY
++		if (parse_jump(str + len, options, 1, *activep) == -1) {
++#else
+ 		if (parse_jump(str + len, options, cmdline, *activep) == -1) {
++#endif
+ 			error("%.200s line %d: Invalid ProxyJump \"%s\"",
+ 			    filename, linenum, str + len);
+ 			goto out;
+@@ -2112,8 +2128,20 @@
+ 			}
+ 			free(p);
+ 			memset(&gl, 0, sizeof(gl));
++#ifdef CTOS_SSH_CONFIG_POLICY
++			if (ctos_ssh_policy_include(arg2, 1, filename, linenum) != 0) {
++				free(arg2);
++				goto out;
++			}
++#endif
+ 			r = glob(arg2, GLOB_TILDE, NULL, &gl);
+ 			if (r == GLOB_NOMATCH) {
++#ifdef CTOS_SSH_CONFIG_POLICY
++				ctos_ssh_policy_reject(CTOS_POLICY_PATH, filename, linenum);
++				free(arg2);
++				globfree(&gl);
++				goto out;
++#endif
+ 				debug("%.200s line %d: include %s matched no "
+ 				    "files",filename, linenum, arg2);
+ 				free(arg2);
+@@ -2130,6 +2158,12 @@
+ 				    "depth %d%s", filename, linenum,
+ 				    gl.gl_pathv[i], depth,
+ 				    oactive ? "" : " (parse only)");
++#ifdef CTOS_SSH_CONFIG_POLICY
++				if (ctos_ssh_policy_include(gl.gl_pathv[i], 0, filename, linenum) != 0) {
++					globfree(&gl);
++					goto out;
++				}
++#endif
+ 				r = read_config_file_depth(gl.gl_pathv[i],
+ 				    pw, host, original_host, remote_command,
+ 				    options, flags | SSHCONF_CHECKPERM |
+@@ -2601,6 +2635,10 @@
+ 		goto out;
+ 	}
+ 
++#ifdef CTOS_SSH_CONFIG_POLICY
++	if (ctos_ssh_policy_options(options, filename, linenum) != 0)
++		goto out;
++#endif
+ 	/* success */
+ 	ret = 0;
+  out:
+@@ -2622,6 +2660,10 @@
+ {
+ 	int active = 1;
+ 
++#ifdef CTOS_SSH_CONFIG_POLICY
++	if (ctos_ssh_policy_prepare() != 0)
++		return -1;
++#endif
+ 	return read_config_file_depth(filename, pw, host, original_host,
+ 	    remote_command, options, flags, &active, want_final_pass, 0);
+ }
+@@ -2638,6 +2680,14 @@
+ 	int linenum;
+ 	int bad_options = 0;
+ 
++#ifdef CTOS_SSH_CONFIG_POLICY
++	if (depth < 0 || depth > 8 ||
++	    ctos_ssh_policy_include(filename, 0, filename, 0) != 0) {
++		ctos_ssh_policy_reject(CTOS_POLICY_PATH, filename, 0);
++		errno = EINVAL;
++		return -1;
++	}
++#endif
+ 	if (depth < 0 || depth > READCONF_MAX_DEPTH)
+ 		fatal("Too many recursive configuration includes");
+ 
+@@ -2676,9 +2726,15 @@
+ 	}
+ 	free(line);
+ 	fclose(f);
+-	if (bad_options > 0)
++	if (bad_options > 0) {
++#ifdef CTOS_SSH_CONFIG_POLICY
++		errno = EINVAL;
++		return -1;
++#else
+ 		fatal("%s: terminating, %d bad configuration options",
+ 		    filename, bad_options);
++#endif
++	}
+ 	return 1;
+ }
+ 
+--- a/ssh.c
++++ b/ssh.c
+@@ -89,6 +89,9 @@
+ #include "log.h"
+ #include "misc.h"
+ #include "readconf.h"
++#ifdef CTOS_SSH_CONFIG_POLICY
++#include "ssh_config_policy.h"
++#endif
+ #include "sshconnect.h"
+ #include "kex.h"
+ #include "mac.h"
+@@ -636,6 +639,10 @@
+ 	struct utsname utsname;
+ 	struct ssh_conn_info *cinfo = NULL;
+ 
++#ifdef CTOS_SSH_CONFIG_POLICY
++	if (ctos_ssh_policy_entry() != 0)
++		return 255;
++#endif
+ 	/* Ensure that fds 0, 1 and 2 are open or directed to /dev/null */
+ 	sanitise_stdfd();
+ 
+@@ -1276,7 +1283,9 @@
+ 	 * If ProxyJump option specified, then construct a ProxyCommand now.
+ 	 */
+ 	if (options.jump_host != NULL) {
++#ifndef CTOS_SSH_CONFIG_POLICY
+ 		char port_s[8];
++#endif
+ 		const char *jumpuser = options.jump_user, *sshbin = argv0;
+ 		int port = options.port, jumpport = options.jump_port;
+ 
+@@ -1294,8 +1303,13 @@
+ 		 * Try to use SSH indicated by argv[0], but fall back to
+ 		 * "ssh" if it appears unavailable.
+ 		 */
++#ifdef CTOS_SSH_CONFIG_POLICY
++		if (strchr(argv0, '/') == NULL || access(argv0, X_OK) != 0)
++			cleanup_exit(255);
++#else
+ 		if (strchr(argv0, '/') != NULL && access(argv0, X_OK) != 0)
+ 			sshbin = "ssh";
++#endif
+ 
+ 		/* Consistency check */
+ 		if (options.proxy_command != NULL &&
+@@ -1303,6 +1317,13 @@
+ 			fatal("inconsistent options: ProxyCommand+ProxyJump");
+ 		/* Never use FD passing for ProxyJump */
+ 		options.proxy_use_fdpass = 0;
++#ifdef CTOS_SSH_CONFIG_POLICY
++		free(options.proxy_command);
++		options.proxy_command = ctos_ssh_policy_proxy_command(sshbin, config,
++		    &options, host, port, debug_flag);
++		if (options.proxy_command == NULL)
++			cleanup_exit(255);
++#else
+ 		snprintf(port_s, sizeof(port_s), "%d", options.jump_port);
+ 		xasprintf(&options.proxy_command,
+ 		    "%s%s%s%s%s%s%s%s%s%s%.*s -W '[%%h]:%%p' %s",
+@@ -1324,6 +1345,7 @@
+ 		    debug_flag, "vvv",
+ 		    /* Mandatory hostname */
+ 		    options.jump_host);
++#endif
+ 		debug("Setting implicit ProxyCommand from ProxyJump: %s",
+ 		    options.proxy_command);
+ 	}
+--- a/sshconnect.c
++++ b/sshconnect.c
+@@ -49,6 +49,9 @@
+ #include "match.h"
+ #include "misc.h"
+ #include "readconf.h"
++#ifdef CTOS_SSH_CONFIG_POLICY
++#include "ssh_config_policy.h"
++#endif
+ #include "dns.h"
+ #include "monitor_fdpass.h"
+ #include "authfile.h"
+@@ -996,12 +999,18 @@
+ 	const char *type, *fail_reason = NULL;
+ 	const struct hostkey_entry *host_found = NULL, *ip_found = NULL;
+ 	int len, cancelled_forwarding = 0, confirmed;
+-	int local = sockaddr_is_local(hostaddr);
+-	int r, want_cert = sshkey_is_cert(host_key), host_ip_differ = 0;
++	int local;
++	int r, want_cert, host_ip_differ = 0;
+ 	int hostkey_trusted = 0; /* Known or explicitly accepted by user */
+ 	struct hostkeys *host_hostkeys, *ip_hostkeys;
+ 	u_int i;
+ 
++#ifdef CTOS_SSH_CONFIG_POLICY
++	if (ctos_ssh_policy_trust() != 0)
++		return -1;
++#endif
++	local = sockaddr_is_local(hostaddr);
++	want_cert = sshkey_is_cert(host_key);
+ 	/*
+ 	 * Force accepting of the host key for loopback/localhost. The
+ 	 * problem is that if the home directory is NFS-mounted to multiple
+@@ -1504,6 +1513,10 @@
+ 	char valid[64], *fp = NULL, *cafp = NULL;
+ 	struct sshkey *plain = NULL;
+ 
++#ifdef CTOS_SSH_CONFIG_POLICY
++	if (ctos_ssh_policy_trust() != 0)
++		return -1;
++#endif
+ 	if ((fp = sshkey_fingerprint(host_key,
+ 	    options.fingerprint_hash, SSH_FP_DEFAULT)) == NULL) {
+ 		error_fr(r, "fingerprint host key");

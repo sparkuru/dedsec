@@ -1,5 +1,18 @@
 # App secrets host contract
 
+The SSH public file loan now has a native-only SshPublicFileLease: no private
+body in its explicit bounded wire, opaque singleton native ownership, and
+revocation bound to both the exact VaultSession epoch and originating
+VaultOperation. Cancel after publication revokes that view; an old operation
+cannot attach a replacement view. Revocation callbacks must not re-enter
+AppSecrets or acquire session locks while holding lease/operation locks.
+The managed `KNOWN_HOSTS` provider/CAS writer is implemented, but it accepts
+only a caller-supplied exact replacement body. The native-facing hostfile
+issuer/candidate handoff, real OpenSSH transport/caller and restore validation
+remain absent; the bounded role/KEX/typed-byte handoff is specified separately
+and is not itself a production caller. See [SSH native contract](ssh-native.md)
+and dated design evidence.
+
 ## 1. Scope / Trigger
 
 Use for `AppSecrets*`, `AppAuthentication`, `Vault*`, TOTP/SSH adapters and their
@@ -42,6 +55,23 @@ connection ID, vault UUID/material generation, session epoch, monotonic deadline
 and ciphertext snapshot digest. It is once-used, cannot be constructed through
 the channel, and is checked again at the actual release/store boundary.
 
+`SshVaultAdapter.useFileSnapshot(operation, rootPath, connectionId, receiver)`
+loans the requested file closure synchronously. `SshFileSnapshot.metadata`
+contains immutable type/ID/path/identity/length/references for every selected
+object, including private-key metadata. `publicFiles` contains only CONFIG,
+PUBLIC_KEY, CERTIFICATE and KNOWN_HOSTS bodies. Both lists follow the same
+snapshot/epoch/deadline/connection/once-use checks as useFiles; all borrowed
+Java content is wiped on callback return or throw. The receiver copies into
+its request-owned native view and revokes it on cancellation/lock. Metadata and
+the ciphertext binding are descriptions, never private-key release authority.
+Private-key bodies still require privateKeyRequest/usePrivateKey and the final
+actual-hop host guard. The bounded native callback seam may use only the
+proof-bound `SshCredentialBridge` overloads; it must recheck the requested kind,
+copy the transient bytes into caller-owned memory and wipe both managed and
+native buffers on failure. Do not expose this snapshot through MethodChannel or
+treat these JVM-only boundary checks as registration of the production SSH
+config/known-hosts provider.
+
 SSH file graph writes use `SshVaultAdapter.bundleRequest(SshBundleProposal)` and
 `commitBundle(VaultOperation, SshBundleProposal, EffectGuard)`, with
 `Purpose.SSH_BUNDLE_WRITE`. Proposal `Change.add/replace/delete` records full
@@ -50,6 +80,10 @@ proposal owns bounded deep copies, canonical path-sorted whole-change digest,
 nonsecret `summary()` and only typed `knownHostsContent(path)` for the native
 trust reviewer. No generic private-key getter. Owners close inputs/proposals and
 wipe returned trust clones. Closed proposals cannot request or commit.
+For the managed known_hosts CAS path, receipt validation occurs while the
+proposal is still open; `writeBack` closes it in `finally` on both success and
+rejection, and no `COMMITTED` receipt is exposed before the guarded AppSecrets
+CAS succeeds.
 
 Native restore hooks are `AppSecrets.attachSshRestoreReviewer(id, version,
 reviewer, approval)`, `SshRestoreReviewer.review(source, authenticatedTarget)`

@@ -5,10 +5,10 @@ import java.security.MessageDigest;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
-import java.util.HashMap;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.nio.ByteBuffer;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
@@ -134,7 +134,10 @@ final class AppSecrets {
     private SshContentValidator sshValidator;
     private RestoreProvider restoreProvider;
     private long restoreRevision;
-    private final Map<String, VaultOperation> operations = new HashMap<>();
+    // Cancellation is intentionally allowed while a commit holds this object's
+    // monitor and is blocked in Store.commit.  A concurrent map lets the
+    // cancellation path revoke the operation without waiting for that commit.
+    private final Map<String, VaultOperation> operations = new ConcurrentHashMap<>();
 
     AppSecrets(Store store, VaultSession.Clock clock) {
         this.store = store;
@@ -556,7 +559,11 @@ final class AppSecrets {
     synchronized VaultOperation beginTrustUpdate(SshTrustProposal proposal) throws VaultException {
         try (Verified verified = sessionManifest()) {
             VaultManifest.FileObject file = findFile(verified.manifest, proposal.path);
-            if (file.type != VaultManifest.FileType.KNOWN_HOSTS || !file.id.equals(proposal.objectId)) throw denied();
+            if (file.type != VaultManifest.FileType.KNOWN_HOSTS || !file.id.equals(proposal.objectId)
+                    || proposal.objectType != null && file.type != proposal.objectType
+                    || proposal.objectIdentity != null && !file.identity.equals(proposal.objectIdentity)) {
+                throw denied();
+            }
             return operation(VaultOperation.Consumer.SSH, VaultOperation.Purpose.SSH_TRUST_UPDATE,
                     proposal.binding, proposal.targetIdentity, proposal.connectionId, verified.envelope);
         }
@@ -570,9 +577,15 @@ final class AppSecrets {
         if (content.length > VaultManifest.MAX_FILE_BYTES) throw VaultException.invalid();
         try (Verified verified = sessionManifest()) {
             VaultManifest.FileObject old = findFile(verified.manifest, proposal.path);
-            if (old.type != VaultManifest.FileType.KNOWN_HOSTS || !MessageDigest.isEqual(baseDigest, VaultCodec.digest(old.content))) {
-                throw new VaultException("VAULT_CHANGED", "Trust content changed; review again");
-            }
+            byte[] currentDigest = VaultCodec.digest(old.content);
+            try {
+                if (old.type != VaultManifest.FileType.KNOWN_HOSTS || !old.id.equals(proposal.objectId)
+                        || proposal.objectType != null && old.type != proposal.objectType
+                        || proposal.objectIdentity != null && !old.identity.equals(proposal.objectIdentity)
+                        || !MessageDigest.isEqual(baseDigest, currentDigest)) {
+                    throw new VaultException("VAULT_CHANGED", "Trust content changed; review again");
+                }
+            } finally { VaultCodec.wipe(currentDigest); }
             VaultManifest.FileObject replacement = new VaultManifest.FileObject(old.type, old.id, old.path, old.identity, content, old.references);
             try {
                 List<VaultManifest.FileObject> files = new ArrayList<>();
@@ -663,9 +676,15 @@ final class AppSecrets {
     }
 
     synchronized VaultOperation beginSshCredential(String entryId, String target, String connectionId) throws VaultException {
+        return beginSshCredential(entryId, target, connectionId, null);
+    }
+
+    synchronized VaultOperation beginSshCredential(String entryId, String target, String connectionId,
+            VaultManifest.EntryType expectedType) throws VaultException {
         try (Verified verified = sessionManifest()) {
             VaultManifest.Entry entry = findSshEntry(verified.manifest, entryId);
-            if (!entry.identity.equals(target) || connectionId.isEmpty()) throw denied();
+            if (!entry.identity.equals(target) || connectionId.isEmpty()
+                    || expectedType != null && entry.type != expectedType) throw denied();
             return operation(VaultOperation.Consumer.SSH, VaultOperation.Purpose.SSH_CREDENTIAL,
                     entryId, target, connectionId, verified.envelope);
         }
@@ -673,11 +692,17 @@ final class AppSecrets {
 
     synchronized void sshCredential(VaultOperation operation, String entryId, String target,
             String connectionId, EffectGuard hostKeyGuard, SshVaultAdapter.CredentialReceiver receiver) throws VaultException {
+        sshCredential(operation, entryId, target, connectionId, null, hostKeyGuard, receiver);
+    }
+
+    synchronized void sshCredential(VaultOperation operation, String entryId, String target,
+            String connectionId, VaultManifest.EntryType expectedType, EffectGuard hostKeyGuard,
+            SshVaultAdapter.CredentialReceiver receiver) throws VaultException {
         verifyOperation(operation, VaultOperation.Consumer.SSH, VaultOperation.Purpose.SSH_CREDENTIAL,
                 entryId, target, connectionId);
         try (Verified verified = sessionManifest()) {
             VaultManifest.Entry entry = findSshEntry(verified.manifest, entryId);
-            if (!entry.identity.equals(target)) throw denied();
+            if (!entry.identity.equals(target) || expectedType != null && entry.type != expectedType) throw denied();
             byte[] credential = entry.secret.clone();
             try { hostKeyGuard.check(); protectedEffect(operation); receiver.receive(credential); }
             finally { VaultCodec.wipe(credential); }
@@ -696,15 +721,41 @@ final class AppSecrets {
 
     synchronized void sshFiles(VaultOperation operation, String rootPath, String connectionId,
             SshVaultAdapter.FileReceiver receiver) throws VaultException {
+        sshFileSnapshot(operation, rootPath, connectionId, snapshot -> receiver.receive(snapshot.publicFiles));
+    }
+
+    synchronized void sshFileSnapshot(VaultOperation operation, String rootPath, String connectionId,
+            SshVaultAdapter.FileSnapshotReceiver receiver) throws VaultException {
         verifyOperation(operation, VaultOperation.Consumer.SSH, VaultOperation.Purpose.SSH_FILES,
                 rootPath, "", connectionId);
         try (Verified verified = sessionManifest()) {
             List<VaultManifest.FileObject> selected = new ArrayList<>();
             selectFiles(verified.manifest, rootPath, new HashSet<>(), selected);
-            // Native-only synchronous loan. Recipients must copy into their request-owned memory view;
-            // close/revoke it on lock/cancel and cannot retain these Java buffers.
+            SshFileSnapshot snapshot = new SshFileSnapshot(operation, selected);
+            // Copy borrowed public bodies to a request-owned native view before returning;
+            // private bodies require the separate, host-verified key operation.
             protectedEffect(operation);
-            receiver.receive(VaultCollections.copyList(selected));
+            receiver.receive(snapshot);
+        }
+    }
+
+    synchronized SshPublicFileLease sshPublicFiles(VaultOperation operation, String rootPath, String connectionId)
+            throws VaultException {
+        SshPublicFileLease[] result = new SshPublicFileLease[1];
+        try {
+            sshFileSnapshot(operation, rootPath, connectionId, snapshot -> {
+                result[0] = SshPublicFileLease.create(snapshot);
+                operation.attachRevocation(result[0]);
+                session.attachRevocation(operation.epoch, result[0]);
+                protectedEffect(operation);
+            });
+            return result[0];
+        } catch (VaultException | RuntimeException | Error failure) {
+            if (result[0] != null) {
+                try { result[0].close(); }
+                catch (VaultException cleanup) { failure.addSuppressed(cleanup); }
+            }
+            throw failure;
         }
     }
 
@@ -712,7 +763,7 @@ final class AppSecrets {
             List<VaultManifest.FileObject> selected) throws VaultException {
         if (!visited.add(path)) return;
         VaultManifest.FileObject file = findFile(manifest, path);
-        if (file.type != VaultManifest.FileType.PRIVATE_KEY) selected.add(file);
+        selected.add(file);
         for (String ref : file.references) selectFiles(manifest, ref, visited, selected);
     }
 
@@ -777,7 +828,11 @@ final class AppSecrets {
         if (operation.cancelled) throw new VaultException("VAULT_CANCELLED", "Secret request was cancelled");
     }
 
-    void cancelOperation(VaultOperation operation) { if (operation != null) operation.cancelled = true; }
+    void cancelOperation(VaultOperation operation) {
+        if (operation == null) return;
+        operation.cancel();
+        if (operations.get(operation.requestId) == operation) operations.remove(operation.requestId);
+    }
 
     private Verified sessionManifest() throws VaultException {
         byte[] key = session.key();

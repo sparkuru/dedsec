@@ -1,0 +1,41 @@
+--- hostfile.c
++++ hostfile.c
+@@ -496,6 +496,18 @@
+ 	return success;
+ }
+ 
++/*
++ * Project-owned caller hook.  Keep the formatter above and the FILE* write
++ * semantics unchanged; the caller owns the stream and may back it with an
++ * anonymous/in-memory object.  In particular, this is not a pathname writer.
++ */
++int
++ctos_hostfile_write_entry(FILE *f, const char *host, const char *ip,
++    const struct sshkey *key, int store_hash)
++{
++	return write_host_entry(f, host, ip, key, store_hash);
++}
++
+ /*
+  * Create user ~/.ssh directory if it doesn't exist and we want to write to it.
+  * If notify is set, a message will be emitted if the directory is created.
+--- hostfile.h
++++ hostfile.h
+@@ -14,6 +14,8 @@
+ #ifndef HOSTFILE_H
+ #define HOSTFILE_H
+ 
++#include <stdio.h>
++
+ typedef enum {
+ 	HOST_OK, HOST_NEW, HOST_CHANGED, HOST_REVOKED, HOST_FOUND
+ }       HostStatus;
+@@ -51,6 +51,8 @@
+ int	 hostfile_read_key(char **, u_int *, struct sshkey *);
+ int	 add_host_to_hostfile(const char *, const char *,
+     const struct sshkey *, int);
++int	 ctos_hostfile_write_entry(FILE *, const char *, const char *,
++    const struct sshkey *, int);
+ 
+ int	 hostfile_replace_entries(const char *filename,
+     const char *host, const char *ip, struct sshkey **keys, size_t nkeys,

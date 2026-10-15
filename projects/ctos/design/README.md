@@ -1,5 +1,54 @@
 # ctOS 信息入口
 
+2026-10-15 SSH当前最新窄增量：新增仍限于 host/fixture 的 pinned OpenSSH 10.6p1 caller
+`ssh_pinned_client.[ch]`。它在真实 `ssh_api` 同进程 `socketpair` 上附着 caller-owned FD，
+执行 bounded nonblocking read/append → `ssh_packet_next` → partial write/consume，注册
+host verifier；KNOWN/NEW 先经 issuer 与 HostEvidence，NEW 在后续 evidence/CAS/protocol
+检查失败时回滚精确 candidate，KEX `done` 后只回调一次 session digest。固定 runner
+`run.3PZSbIzM` 的 `SSH_HOSTFILE_CALLER_BUILD gate=pass runtime=not-run normal_apk=not-wired`、
+host callback=20、native boundary=27、JVM=177/0/0/0、strict compile/lint/Release 及
+APK `67668e34e2bba40359e43e048404ffeb5645629a130f86e86b2d855a170ffff9` 通过；hako 无
+`qemu-aarch64`，未运行 ARM fixture。production caller 仍未进入 normal APK，认证、PTY、
+forward/service/UI、设备与外部 SSH 仍未验收，task 保持 `in_progress`。
+
+2026-10-15 SSH上一窄增量：在既有 managed `AppSecrets` known_hosts provider
+之上冻结独立的 opaque、同步、one-shot native→managed candidate handoff。
+`ctos_ssh_callback_known_hosts_candidate`/JNI 只传 exact role/hop/target/connection/
+host/port/key-type/fingerprint、base/replacement digest、candidate identity 和不超过
+`MAX_FILE_BYTES` 的 body；现有 metadata-only CSHR wire 不变。managed receiver 在
+body digest、snapshot 与 provider ownership 校验后才保留 private clone，后续仍由原
+guarded AppSecrets CAS 才能返回 `COMMITTED`。JVM **177/0/0/0**、native client gate=27、
+callback gate=20、strict compile/lint/Release 通过；APK SHA256 为
+`3a6228f4237380dfc2cd98ccd537c16d4c6e81bc2e64e6205cdd6d556af9ded6`，普通 APK 未包含
+host-only boundary 或 fixture OpenSSH objects。pinned hostfile issuer 已在 fixture seam
+接入但 production caller 尚未接入，仍不实现 OpenSSH/KEX/auth/PTY/forward/service/UI、设备或外部 SSH，task 保持
+`in_progress`。
+
+2026-10-15 前一窄增量：已冻结并实现 role/hop/target-bound HostEvidence/CAS
+native↔Java contract。`SshNativeCallbackAdapter` 的 typed host callback 传递
+classification、key type、SHA256 fingerprint、32-byte base/replacement digest；NEW
+host 必须经过 managed exact proposal、显式 approval 和 exact CAS `COMMITTED`，返回给
+native 的结果只含 bounded metadata/digest/proposal binding，known_hosts body 不过 JNI。
+native C/JNI 会重新校验结果并在失败、取消、期限竞争时清零；host callback gate=15、
+JVM=166、strict compile/lint/Release 通过。这里冻结的是 provider seam，不是具体
+known_hosts file/CAS writer，也不是 OpenSSH caller；`ssh_native_client.[ch]` 仍在缺
+provider 时 fail-closed 返回 `ENOTSUP`，task 保持 `in_progress`/未完成。
+
+2026-10-15 前一窄增量：pinned OpenSSH 10.6p1 source map 确认当前没有可编译的生产
+known_hosts issuer/CAS native-facing contract；新增的 `ssh_native_client.[ch]` 因此只做
+fail-closed boundary，严格校验 live role、PID/UID、CLOEXEC/NONBLOCK socket、callback
+token/environment、deadline 和 bounded step，缺 provider 稳定返回 `ENOTSUP`，不进入
+OpenSSH/KEX/JNI/credential。host-only gate=27，普通 APK 不包含该 boundary 或 fixture
+OpenSSH object；真实 caller、provider、partial I/O/EOF/cancel/close retry、inbound
+NEWKEYS proof 及完整 SSH 仍开放，task 保持 `in_progress`/未完成。
+
+2026-10-14 SSH前一阶段：用户已确认同进程 native event loop 与当前 event-loop 线程同步附着 JNI callback；callback adapter 契约已编入正常 `libctos_ssh_files.so`，并新增 bounded managed-provider handoff：精确 role/hop-bound NEW proposal、host proof + KEX proof 绑定的 typed password/private-key bytes、Java/native 清零与 cleanup retry。严格限制 role/PID/UID/deadline、JNIEnv/JavaVM、线程、重入和取消；host `gate=pass value=11`、162 JVM、lint、Release 构建通过。正常 APK 的 SSH 相关条目仅为生产 `libctos_ssh_files.so`。另从当前 `.14` 用固定 Android arm64 OpenSSH 客户端成功访问本机一次性 Docker SSH pair；该 external smoke test 不等于生产 event loop/caller、具体 config/known_hosts provider/CAS、auth/PTY/forward/service/UI 接入，task 保持 `in_progress`/未完成。
+生产下一步是把已实现的 managed file/provider contract 接到真实 OpenSSH caller；fixture 的 `ssh_api` 内存流与 control framing 仍只属于回归证据。
+
+2026-10-13 SSH当前增量：Java role/trust/KEX/typed-secret bridge 已完成，bounded native role bootstrap 的 ownership/open/release JNI 已接入正常 `libctos_ssh_files.so`；native 输出清零、跨进程/UID close、stale token、Java registry 配对与失败重试均有回归。150 JVM、lint、host bootstrap 1198/1/1198、固定 KEX native 构建和正常 Release 构建通过；当前 APK `538cae5a…` 包含生产 public-file 与 role JNI。这里只证明 host/fixture seam 和 JNI contract，尚未由生产事件循环调用或接入 native launcher/OpenSSH callback、协议认证/PTY/转发/服务/UI或设备/外部账号；完整客户端仍开放。
+
+2026-10-13 G2构建前阶段（历史）：TOTP用户验收交付已提交566ca51、归档f3762ba、journal74f8324，相关实测与未测边界保留。复用SSH客户端task；G0本地检查及用户专项批准后的`.14`独立AppUID **1项1.693秒通过**，仅API30/4KiB/Permissive，raw memfd完整候选可用、ASharedMemory文件形态不适用。夹具已卸载，正式APK/真实库未改。用户允许真实库操作，凭据不记录，远程账号未授权。G1固定OpenSSH10.6p1/OpenSSL3.5.9的Android ABI兼容基线已编译通过；当前实施G2可信合成上游文件与ProxyJump夹具，尚未构建或设备验证，尚无完整生产客户端。见 [SSH阶段验证](verification.md#2026-10-13-ssh-g0-本地实现与构建隔离)。
+
 2026-10-13 用户已确认TOTP效果并批准提交验收、继续下一项：当前Authenticator交付收尾归档，实测及未测边界保留，下一项复用已有SSH客户端task，从Android native OpenSSH无明文磁盘文件访问关卡继续。下方同日in_progress/未提交为验收前阶段。
 
 2026-10-13 当前设备阶段：用户授权“帮我安装、自动测试”，最终前台交接修复版 `3bc762d9…` 已安装 `192.168.9.14:5555` 并读回一致，221 Flutter/86定向/analyze与独立UID7项原生验证通过。真实系统双二维码选图与管理/生命周期全流程1项72.734秒通过，临时测试包/自有图片已清理，详情见 [设备验证](verification.md)。相机失败提示和成功预览均已补前台交接保护；该板0相机。此前复制自动审批拒绝已由用户专项批准解决，原生合成复制/敏感标记1项6.616秒通过，真实账号/跨设备混合恢复等仍开放。下方本地c704/214阶段按当时状态解释。
@@ -43,7 +92,7 @@
 | [Portable 五项工具与 HFTP](portable-tools.md) | 模块边界、SDK v2、文件能力、认证加密与后台文件服务 |
 | [Portable 工作台与 SDK](portable-workbench.md) | 内置 Python、终端工具、运行包清单和脚本扩展契约 |
 | [App 统一秘密库与公共认证](app-authentication.md) | 先行底座：主口令、加密库/会话/设置/设备快捷/备份/隐私配套；2026-10-12 恢复推进，API30凭证快捷实测通过，保留 in_progress/其余待测关卡，TOTP 与 SSH 共同依赖 |
-| [SSH 终端规划](ssh-terminal.md) | APK 内客户端、OpenSSH config/一键连接和统一秘密库接入；planning，尚未实现 |
+| [SSH 终端规划](ssh-terminal.md) | APK 内客户端、OpenSSH config/一键连接和统一秘密库接入；in_progress，G0/G1/G2 fixture/host 证据已记录，managed AppSecrets known_hosts CAS provider 已验证，生产 caller 仍未接入 |
 | [第三方 Authenticator](authenticator.md) | 离线 SHA1/6位/30秒 TOTP、工作台入口与公共秘密库；修复版已安装当前开发板，本轮非copy隔离自动验收完成，账号及未测平台关卡保留 |
 | [兼容性](compatibility.md) | 设备差异、已验证范围与未验证项 |
 | [验证记录](verification.md) | 检查结果、实机证据及复验方式 |

@@ -3,12 +3,17 @@ package im.majo.ctos;
 /** Monotonic foreground session; deadlines are checked at every protected effect. */
 final class VaultSession {
     interface Clock { long now(); }
+    interface Revocation {
+        boolean active();
+        void revoke();
+    }
     private final Clock clock;
     private long backgroundAt = -1;
     private boolean foreground;
     private int timeoutSeconds = 30;
     private long epoch;
     private byte[] key;
+    private Revocation revocation;
 
     VaultSession(Clock clock) { this.clock = clock; }
 
@@ -64,6 +69,18 @@ final class VaultSession {
         VaultCodec.wipe(key);
         key = null;
         epoch++;
+        Revocation owned = revocation;
+        revocation = null;
+        if (owned != null) owned.revoke();
+    }
+
+    synchronized void attachRevocation(long expected, Revocation owned) throws VaultException {
+        assertEpoch(expected);
+        if (key == null || !foreground)
+            throw new VaultException("VAULT_LOCKED", "Unlock the vault first");
+        if (revocation != null && revocation.active())
+            throw new VaultException("BUSY", "An SSH file view is already active");
+        revocation = owned;
     }
 
     private void check() {

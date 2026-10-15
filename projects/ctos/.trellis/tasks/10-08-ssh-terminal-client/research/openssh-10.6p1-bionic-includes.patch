@@ -1,0 +1,86 @@
+--- a/includes.h
++++ b/includes.h
+@@ -173,6 +173,11 @@
+ #include <openssl/opensslv.h> /* For OPENSSL_VERSION_NUMBER */
+ #endif
+ 
++#ifdef __BIONIC__
++/* Local Android ABI baseline: parse Bionic's sentinel attributes before
++ * defines.h installs the OpenBSD compatibility fallback macros. */
++# include <unistd.h>
++#endif
+ #include "defines.h"
+ 
+ #include "platform.h"
+--- a/openbsd-compat/bsd-misc.c
++++ b/openbsd-compat/bsd-misc.c
+@@ -445,7 +445,7 @@
+ 
+ #ifndef HAVE_BZERO
+ void
+-bzero(void *b, size_t n)
++(bzero)(void *b, size_t n)
+ {
+ 	(void)memset(b, 0, n);
+ }
+--- a/openbsd-compat/bsd-misc.h
++++ b/openbsd-compat/bsd-misc.h
+@@ -178,8 +178,11 @@
+ long long llabs(long long);
+ #endif
+ 
+-#if defined(HAVE_DECL_BZERO) && HAVE_DECL_BZERO == 0
+-void bzero(void *, size_t);
++/* A function-like system macro is callable but cannot supply the address
++ * used by explicit_bzero's volatile pointer. Keep the real fallback symbol. */
++#if !defined(HAVE_BZERO) || \
++    (defined(HAVE_DECL_BZERO) && HAVE_DECL_BZERO == 0)
++void (bzero)(void *, size_t);
+ #endif
+ 
+ #ifndef HAVE_RAISE
+--- a/openbsd-compat/getrrsetbyname.c
++++ b/openbsd-compat/getrrsetbyname.c
+@@ -67,7 +67,8 @@
+ #endif
+ #define _THREAD_PRIVATE(a,b,c) (c)
+ 
+-#ifndef HAVE__RES_EXTERN
++#if !defined(HAVE__RES_EXTERN) && \
++    !(defined(__BIONIC__) && defined(CTOS_ANDROID_ABI_BASELINE_ONLY))
+ struct __res_state _res;
+ #endif
+ 
+@@ -192,7 +193,9 @@
+     unsigned int rdtype, unsigned int flags,
+     struct rrsetinfo **res)
+ {
++#if !defined(__BIONIC__) || !defined(CTOS_ANDROID_ABI_BASELINE_ONLY)
+ 	struct __res_state *_resp = _THREAD_PRIVATE(_res, _res, &_res);
++#endif
+ 	int result;
+ 	struct rrsetinfo *rrset = NULL;
+ 	struct dns_response *response = NULL;
+@@ -220,6 +223,14 @@
+ 		goto fail;
+ 	}
+ 
++#if defined(__BIONIC__) && defined(CTOS_ANDROID_ABI_BASELINE_ONLY)
++	/* Research only: public Bionic resolver state is opaque. This does not
++	 * establish EDNS0/DO control or trusted DNSSEC validation of AD bits. */
++	if (res_init() == -1) {
++		result = ERRSET_FAIL;
++		goto fail;
++	}
++#else
+ 	/* initialize resolver */
+ 	if ((_resp->options & RES_INIT) == 0 && res_init() == -1) {
+ 		result = ERRSET_FAIL;
+@@ -235,6 +246,7 @@
+ 	if (_resp->options & RES_USE_EDNS0)
+ 		_resp->options |= RES_USE_DNSSEC;
+ #endif /* RES_USE_DNSEC */
++#endif /* Bionic ABI baseline only */
+ 
+ 	/* make query */
+ 	length = res_query(hostname, (signed int) rdclass, (signed int) rdtype,

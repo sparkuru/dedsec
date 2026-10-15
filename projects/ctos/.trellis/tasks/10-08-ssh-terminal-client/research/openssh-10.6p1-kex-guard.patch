@@ -1,0 +1,93 @@
+--- a/kex.c
++++ b/kex.c
+@@ -24,6 +24,9 @@
+  */
+ 
+ #include "includes.h"
++#ifdef CTOS_SSH_KEX_GUARD
++#include "ssh_kex_guard.h"
++#endif
+ 
+ #include <sys/types.h>
+ #include <errno.h>
+@@ -597,6 +600,10 @@
+ 		kex_proposal_free_entries(prop);
+ 		free(prop);
+ 	}
++	#ifdef CTOS_SSH_KEX_GUARD
++	if ((r = ctos_ssh_kex_complete(ssh)) != 0)
++		return r;
++#endif
+ 	kex->done = 1;
+ 	kex->flags &= ~KEX_INITIAL;
+ 	sshbuf_reset(kex->peer);
+@@ -618,6 +625,10 @@
+ 	}
+ 	if (kex->flags & KEX_INIT_SENT)
+ 		return 0;
++	#ifdef CTOS_SSH_KEX_GUARD
++	if ((r = ctos_ssh_kex_begin(ssh)) != 0)
++		return r;
++#endif
+ 	kex->done = 0;
+ 
+ 	/* generate a random cookie */
+@@ -1238,7 +1249,11 @@
+ 		return SSH_ERR_KEY_TYPE_MISMATCH;
+ 	if (kex->verify_host_key(server_host_key, ssh) == -1)
+ 		return  SSH_ERR_SIGNATURE_INVALID;
+-	return 0;
++#ifdef CTOS_SSH_KEX_GUARD
++	return ctos_ssh_kex_approved(ssh, server_host_key);
++#else
++	return 0;
++#endif
+ }
+ 
+ #if defined(DEBUG_KEX) || defined(DEBUG_KEXDH) || defined(DEBUG_KEXECDH)
+--- a/kexgen.c
++++ b/kexgen.c
+@@ -24,6 +24,9 @@
+  */
+ 
+ #include "includes.h"
++#ifdef CTOS_SSH_KEX_GUARD
++#include "ssh_kex_guard.h"
++#endif
+ 
+ #include <sys/types.h>
+ 
+@@ -233,6 +236,10 @@
+ 	    kex->hostkey_alg, ssh->compat, NULL)) != 0)
+ 		goto out;
+ 
++#ifdef CTOS_SSH_KEX_GUARD
++	if ((r = ctos_ssh_kex_signed(ssh, server_host_key)) != 0)
++		goto out;
++#endif
+ 	if ((r = kex_derive_keys(ssh, hash, hashlen, shared_secret)) != 0 ||
+ 	    (r = kex_send_newkeys(ssh)) != 0)
+ 		goto out;
+--- a/kexgexc.c
++++ b/kexgexc.c
+@@ -25,6 +25,9 @@
+  */
+ 
+ #include "includes.h"
++#ifdef CTOS_SSH_KEX_GUARD
++#include "ssh_kex_guard.h"
++#endif
+ 
+ #ifdef WITH_OPENSSL
+ #include "openbsd-compat/openssl-compat.h"
+@@ -206,6 +209,10 @@
+ 	    hashlen, kex->hostkey_alg, ssh->compat, NULL)) != 0)
+ 		goto out;
+ 
++#ifdef CTOS_SSH_KEX_GUARD
++	if ((r = ctos_ssh_kex_signed(ssh, server_host_key)) != 0)
++		goto out;
++#endif
+ 	if ((r = kex_derive_keys(ssh, hash, hashlen, shared_secret)) != 0 ||
+ 	    (r = kex_send_newkeys(ssh)) != 0)
+ 		goto out;

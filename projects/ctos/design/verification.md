@@ -1,8 +1,459 @@
 # Verification
 
-2026-10-13 用户回复“效果不错；可以提交验收；然后继续做下一项”，接受当前交付并批准提交/归档。下方执行日志、产物及未测边界继续按各自阶段解释；用户反馈不替代未执行的平台/账号/跨设备/混合测试，也不据归档标全部AC通过。
+## 2026-10-15 — pinned OpenSSH caller fixture seam
+
+在 hostfile issuer、managed HostEvidence/CAS 和 one-shot candidate handoff 之上新增
+`ssh_pinned_client.[ch]` fixture caller。它只接受已绑定 live role 的 managed public view、
+expected host fingerprint、callback token/environment、future deadline 和 owned socket；用
+真实 pinned OpenSSH `ssh_api` 完成 `ssh_init`、FD attach、nonblocking packet loop、host
+verifier、partial I/O/EAGAIN、EOF/cancel/deadline 与 KEX completion callback。caller 对
+Java/managed 返回结果重新比对 role/hop/port/classification/outcome/CAS status/connection/
+target/host/key/fingerprint/base/replacement digest；NEW candidate 在后续 host evidence
+失败时显式 abort，避免 accepted candidate 残留。issuer error path 也总是关闭临时
+`fmemopen`，并清理 bounded scratch/body。
+replacement scratch 使用有界堆分配，owned socket 还要求 `FD_CLOEXEC|O_NONBLOCK|SOCK_STREAM`；
+protocol/evidence 错误路径会回滚已 handoff 的 candidate。
+
+固定命令：
+
+```text
+./hako bash -lc 'bash /app/.trellis/tasks/10-08-ssh-terminal-client/research/android-hostfile-issuer-build.sh --baseline /app/build/ssh-native-g1/stock-run.lOHF9Oai'
+```
+
+实际结果：`build/ssh-native-g3/run.3PZSbIzM/`，
+`SSH_HOSTFILE_CALLER_BUILD gate=pass runtime=not-run normal_apk=not-wired`。runner 固定
+G1 archive/tree/object hashes、应用 stream-writer 与 KEX guard patch、严格 C11/Werror 编译
+并分别链接 issuer 与 pinned caller 为 AArch64 PIE，检查 required symbols、stock high-level
+caller 排除和 normal APK 未接入；runner 的 exclusion 检查限定在正式 `compileSshFiles`
+输入闭包，不把 opt-in KEX guard fixture 分支误报为生产接入。hako 没有 `qemu-aarch64`，所以 ARM executable 未运行，
+`runtime=not-run` 不是 runtime pass。
+
+同步质量门：`:app:testSshCallbackAdapterHost` 输出 callback host gate=20，
+`:app:testSshNativeClientHost` 输出 native boundary gate=27；
+`:app:testReleaseUnitTest :app:compileSshFiles :app:lintRelease :app:assembleRelease`
+成功，JUnit XML 汇总 **177 tests / 0 skipped / 0 failures / 0 errors**，Release APK
+SHA256 为 `67668e34e2bba40359e43e048404ffeb5645629a130f86e86b2d855a170ffff9`。normal
+`libctos_ssh_files.so` 的 source/input closure 与 defined symbols 均不包含 issuer、pinned
+caller 或 fixture KEX。没有连接 `192.168.9.14:5555`、真实 vault、外部 SSH 或网络设备。
+
+这一步只完成 host/fixture source-object seam；`ssh_native_client` 生产边界仍保持
+`ENOTSUP`，caller 没有进入 normal APK，也没有实现 userauth、typed credential、PTY、
+forward、service、UI、Android runtime 或生产 event loop。task 继续
+`in_progress`/`implementation_complete=false`。
+
+## 2026-10-15 — pinned hostfile issuer fixture seam
+
+在 managed `known_hosts` CAS/handoff 之上实现并固化了一个仍属 host/fixture 的
+`ssh_hostfile_issuer.[ch]` seam：它只接受 live、role/deadline/connection/host 绑定且以
+`ssh/config` 为 root、明确引用 `ssh/known_hosts` 的 public view；使用 pinned OpenSSH
+10.6p1 `load_hostkeys_file()` 读取 caller-owned memory stream，并通过 source-owned
+`ctos_hostfile_write_entry(FILE *)` 保留上游 known_hosts formatter。issuer 不调用
+`add_host_to_hostfile`、`hostfile_replace_entries` 或 `hostfile_create_user_ssh_dir`，不打开
+vault/host pathname。
+
+非证书 key 保留上游 `HOST_OK/NEW/CHANGED/REVOKED` 到稳定分类的映射；证书仍按当前
+Java policy `CERTIFICATE` fail-closed，但先执行 upstream revocation check，因此被撤销的
+证书或 CA 分类为 `REVOKED`。NEW body 使用 exact public body + 上游 formatter 生成，计算
+base/replacement SHA-256 后只通过既有 synchronous one-shot candidate handoff 传递；callback
+失败会 abort 精确 candidate 并清零 scratch/body。
+
+固定 runner：
+
+```text
+./hako bash -lc 'bash /app/.trellis/tasks/10-08-ssh-terminal-client/research/android-hostfile-issuer-build.sh --baseline /app/build/ssh-native-g1/stock-run.lOHF9Oai'
+```
+
+实际结果：`SSH_HOSTFILE_ISSUER_BUILD gate=pass runtime=not-run normal_apk=not-wired`。
+runner 完成 pinned archive/patch/tree/object manifest、patch application、严格 C11/Werror
+编译与 AArch64 PIE link，并把证据保留在本次 `build/ssh-native-g3/run.8YjiwDnk/`；hako
+容器没有 `qemu-aarch64`，所以没有把 fixture 执行误记为 runtime pass。`compileSshFiles`
+未加入 issuer/OpenSSH object，`ssh_native_client` 仍保持 `ENOTSUP`；未使用
+`192.168.9.14:5555`、真实 vault、外部 SSH 或设备。
+
+这一步尚未完成 production caller：socket partial I/O/EOF/EAGAIN、`ssh_api` event loop、
+KEX/NEWKEYS proof、认证、PTY/forward/service/UI、Android runtime 和外部 SSH 仍开放，task
+继续 `in_progress`/`implementation_complete=false`。
+
+## 2026-10-15 — dedicated native→managed known_hosts candidate handoff
+
+本轮在既有 metadata-only HostEvidence/CSHR 与 managed AppSecrets CAS writer 之间冻结并
+实现独立的 synchronous one-shot handoff：C callback/JNI 只接受 `NEW`、exact role/hop/
+target/connection/host/port/key-type/fingerprint、base/replacement digest、显式 candidate
+ID 和不超过 `MAX_FILE_BYTES` 的 replacement body。`SshKnownHostsCandidateHandoff` 只把
+body 交给同一 concrete provider 的 private candidate clone；现有 CSHR wire 没有增加 body。
+native temporary、JNI array 和 managed input 在成功及每个失败路径清零；cancel/close/expiry、
+duplicate/re-entry、wrong evidence/identity/digest、empty/oversize body 和 failed/uncertain
+CAS 都 fail-closed。`COMMITTED` 仍只由 guarded `AppSecrets` update 成功后的原 CAS writer
+构造，且 handoff 本身不会报告提交结果。
+
+本轮固定 hako 命令：
+
+```text
+./hako bash -lc 'cd android && ./gradlew :app:testSshNativeClientHost :app:testSshCallbackAdapterHost :app:testReleaseUnitTest :app:lintRelease :app:assembleRelease --rerun-tasks --console=plain'
+```
+
+结果：`BUILD SUCCESSFUL`；`SSH_NATIVE_CLIENT ... gate=pass value=27`、
+`SSH_CALLBACK_HOST ... gate=pass value=20`，JUnit **177 tests / 0 failures / 0 errors /
+0 skipped**。严格 `compileSshFiles`、arm64-v8a/armeabi-v7a/x86_64 Release native build、
+lint 和 assemble 全部通过；APK SHA256 为
+`3a6228f4237380dfc2cd98ccd537c16d4c6e81bc2e64e6205cdd6d556af9ded6`。ZIP 检查未发现
+`ssh_native_client`、fixture/OpenSSH/launcher/KEX/host-only boundary 条目；关键词扫描唯一的
+泛化命中是 Kotlin 的 `DebugProbesKt.bin`，不是 SSH/fixture object；普通包排除结论保持不变。
+
+本轮只使用 host/JVM 与容器化本地构建；没有使用 `192.168.9.14:5555`、真实用户 vault、
+外部 SSH 或网络设备。pinned OpenSSH hostfile issuer、production event loop/KEX/auth/
+PTY/forward/service/UI 仍未实现，缺 issuer 时 native client 继续 `ENOTSUP`，task 仍为
+`in_progress`。
+
+## 2026-10-15 — production source/object closure re-audit
+
+继续核对 approved G1 baseline 后确认：`libssh.a` 虽包含 `hostfile.o`、`ssh_api.o`、
+`packet.o`、`sshkey.o` 和 pinned KEX objects，但现有
+`android-upstream-build.sh` 只在 opt-in fixture 中发布 `g2-driver`/`g2-vfs`/
+`g2-baseline`；普通 `compileSshFiles` 不消费这些 ignored `build/` 对象。
+`hostfile.o` 仍依赖 OpenSSH key/buffer/HMAC 以及 `fopen`、`fdopen`、`mkstemp`、`link`、
+`rename` 等未经生产 provider 收窄的文件系统闭包。
+
+本轮测得对象哈希见 [production caller blocker](../.trellis/tasks/10-08-ssh-terminal-client/research/production-kex-caller-blocker-20261015.md#2026-10-15-sourceobject-closure-re-audit)。尚无 project-owned、同 pinned source/object manifest 的 hostfile issuer，故未链接普通 APK，
+未改变 `ssh_native_client` 的 `ENOTSUP` fail-closed 边界；无代码、APK、设备、网络、
+真实 vault 或 commit 变更。
+
+## 2026-10-15 — production caller re-audit continuation（前一窄增量，已被 handoff 取代）
+
+复核 pinned OpenSSH 10.6p1 source map 与当前 managed provider 后，确认 Java
+`AppSecrets` CAS writer 已可用，但 hostfile issuer 和 native→managed exact candidate
+handoff 仍不存在；因此没有链接 OpenSSH caller，也没有改变 normal APK source map。
+
+本轮 focused hako 命令：
+
+```text
+./hako bash -lc 'cd android && ./gradlew :app:testSshNativeClientHost :app:testSshCallbackAdapterHost :app:testReleaseUnitTest --tests im.majo.ctos.SshManagedKnownHostsProviderTest --tests im.majo.ctos.SshProductionBridgeTest --rerun-tasks --console=plain'
+```
+
+结果：`BUILD SUCCESSFUL`；native client gate=27、callback gate=15，选定的 managed
+provider/bridge JVM 测试任务通过，Release `compileSshFiles` 也在该任务图中严格重编通过。
+本轮只更新 blocker/design 记录，没有重新生成或替换 APK，没有设备、真实 vault、外部
+SSH 或网络操作；此前完整 174 JVM/lint/Release APK 结果仍以本节下一段为准。
+
+文档/状态复核同时通过：`task.json` 与两个 task JSONL 文件可解析，当前状态仍为
+`in_progress`/`implementation_complete=false`；scoped design/task/spec 文档的相对文件
+链接和 heading anchors 通过，`git diff --check` 通过。该复核不新增 native/JNI 代码，
+也不替代既有 native client=27、callback=15、JVM=174/0/0/0、strict
+`compileSshFiles`、Release lint/assemble 及 APK hash 证据。
+
+## 2026-10-15 — managed AppSecrets known_hosts CAS provider
+
+本轮把前一节的 HostEvidence/CAS seam 接到真实 managed vault writer，而不是只替换
+injectable test writer：
+
+- `SshManagedKnownHostsProvider.snapshotFor` 通过 `AppSecrets` 的 SSH 文件
+  snapshot 选择唯一的 KNOWN_HOSTS object，复制 path/type/id/identity、vault UUID、
+  generation、epoch、deadline、request ID、snapshot binding 和 32-byte base digest；
+  public body 只在同步 managed callback 内借用，消费后的 `SSH_FILES` operation
+  立即取消。
+- `KnownHostsCandidate` 只接受 caller 提供的 exact replacement bytes，一次性保存
+  replacement digest 和 role/hop/target/evidence/object binding；它不从 fingerprint
+  重新格式化 known_hosts，也不把 body 送进 JNI。
+- `proposalFor` 消费一次 candidate 并产生 object-bound proposal；proof-aware
+  `write` 通过 `SshVaultAdapter.trustRequest/updateTrust` 和 `VaultOperation`
+  绑定 role、host proof、vault snapshot、对象身份、base/replacement digest，最终
+  `AppSecrets.updateTrust` 对 KNOWN_HOSTS type/id/identity 与旧内容 digest 做 CAS，
+  只有底层 guarded commit 返回后才构造 `CasResult.COMMITTED`。
+- 缺 candidate、approval、validator、proof、role/object/digest mismatch、stale
+  generation/epoch、取消或 deadline 均 fail-closed；proposal、candidate、digest 和
+  operation cleanup 均为 one-shot。验证时发现旧的同步取消会与持 vault monitor 的
+  commit 互等，已将 operation 表改为并发映射，并让 cancel 先在 monitor 外 revoke；
+  `afterClaimCancellationIsUncertainAndCannotReopenLockedSession` 回归恢复通过。
+
+本轮固定 hako 质量门：
+
+```text
+:app:testSshNativeClientHost              SSH_NATIVE_CLIENT gate=27
+:app:testSshCallbackAdapterHost          SSH_CALLBACK_HOST gate=15
+:app:testReleaseUnitTest                 174 tests / 0 failures / 0 errors / 0 skipped
+:app:lintRelease :app:assembleRelease    BUILD SUCCESSFUL
+```
+
+JUnit XML 中新增 provider/bridge/CAS 相关回归与既有套件合计 **174 项**。严格
+`compileSshFiles` 和 arm64-v8a、armeabi-v7a、x86_64 Release native build 均通过；
+APK SHA256 为
+`718c3934f3e972a3ac6996ab3a54aeae1116ddc3728fed1f751fdcf2619fe624`。ZIP 检查未发现
+`ssh_native_client`、OpenSSH/launcher/KEX/fixture/probe/host-evidence boundary 条目；
+正常包只保留生产 SSH library 及既有应用内容。
+
+本轮没有使用 `192.168.9.14:5555`、真实用户 vault、外部 SSH 账号或新 Docker endpoint；
+测试使用的是加密 manifest 的 in-memory `AppSecrets.Store`。这里证明的是 managed
+AppSecrets CAS writer；exact replacement candidate 仍由受管
+caller/test 注入，尚没有生产 OpenSSH hostfile parser/issuer 将其交给 provider。
+`ssh_native_client` 因 native-facing provider 缺失仍返回 `ENOTSUP`，真实 OpenSSH
+event loop、partial I/O/EOF、KEX/auth/PTY/forward/service/UI、设备和完整客户端 AC
+继续开放，task 仍为 `in_progress`。
+
+## 2026-10-15 — role/hop-bound HostEvidence/CAS contract（前一窄增量）
+
+本轮冻结并实现 native↔Java host evidence seam：`SshNativeCallbackAdapter` 通过同步
+callback 接收 native role token、hop、target metadata、classification、key type、SHA256
+fingerprint 与 32-byte base/replacement digest。KNOWN 只返回 bounded
+`CAS_NOT_REQUIRED`；NEW 必须由 `SshManagedProvider` 产出完整 role/hop/key-type-bound
+proposal，经 `SshHostKeyAuthority` 显式 approval，再由注入的 `TrustCasWriter` 返回
+精确 `COMMITTED` CAS 结果。返回给 native 的 wire 只有 bounded metadata、digest 和
+proposal binding；known_hosts body 不跨 JNI。C/JNI 对返回结果重新校验，失败、取消或
+期限竞争清零 result。
+
+新增/强化回归：
+
+- JVM 覆盖 KNOWN、NEW approved、无 provider、无 approval、wrong hop、base digest
+  mismatch、classification/key-type substitution、stale proposal 与 exact CAS failure；
+  `testReleaseUnitTest --rerun-tasks` 汇总 **166 tests / 0 failures / 0 errors / 0 skipped**。
+- native callback host 覆盖 bounded evidence/result、KNOWN/NEW CAS status、malformed
+  result、provider callback failure、thread/re-entry/cancel/deadline/cleanup；
+  `SSH_CALLBACK_HOST ... host_evidence ... value=4`，最终 `gate=pass value=15`。
+- 严格 `compileSshFiles`、三 ABI Release、`:app:lintRelease` 与 `:app:assembleRelease`
+  全部 `BUILD SUCCESSFUL`。APK SHA256：
+  `26747c49c3333eeff65544be9131668699281eaef7736166224b2856106bff06`；ZIP 中 SSH
+  生产条目仍为 `lib/*/libctos_ssh_files.so`，没有 `ssh_native_client`、launcher、
+  fixture OpenSSH object 或对应 probe 条目。
+
+本节只证明可注入 provider contract；其后的 managed provider 段落已另行证明具体
+AppSecrets known_hosts CAS writer，但不证明真实
+OpenSSH event-loop caller、partial I/O/EOF、KEX/auth/PTY/forward/service/UI、设备或外部
+SSH。缺 provider 的 `ssh_native_client.[ch]` 仍在独立 host gate=27 后稳定 `ENOTSUP`。
+
+## 2026-10-15 — production KEX caller provider-missing fail-closed boundary
+
+Pinned OpenSSH 10.6p1 source map confirms that the repository still lacks a
+compilable production known_hosts issuer/CAS native-facing contract. The new
+`ssh_native_client.[ch]` therefore only validates the live role, same PID/UID,
+CLOEXEC/NONBLOCK socket ownership, callback token/environment, future deadline
+and bounded step buffers. It returns stable `ENOTSUP` after admission, keeps
+`*client == NULL`, does not close the caller FD, and never calls OpenSSH/KEX,
+JNI or credential callbacks. It does not classify a fingerprint or create a
+trust proposal.
+
+The strict host gate passed:
+
+```text
+SSH_NATIVE_CLIENT phase=admission state=pass errno=0 value=27
+SSH_NATIVE_CLIENT phase=provider state=pass errno=0 value=1
+SSH_NATIVE_CLIENT phase=cleanup state=pass errno=0 value=1
+SSH_NATIVE_CLIENT phase=gate state=pass errno=0 value=27
+```
+
+`:app:testSshNativeClientHost` passed through the project hako wrapper. The
+boundary is intentionally excluded from `compileSshFiles`, so the normal APK
+has no new client/OpenSSH/KEX object. This is not a production caller or KEX
+pass: real socket partial I/O/EAGAIN/EOF, cancel/deadline, close retry,
+inbound NEWKEYS/session digest/JNI proof, device, vault, external SSH,
+userauth, PTY, forwarding, service and UI remain open until the provider/CAS
+contract is frozen.
+
+The combined hako gate
+`:app:testSshNativeClientHost :app:testSshCallbackAdapterHost
+:app:testReleaseUnitTest :app:lintRelease :app:assembleRelease` also completed
+`BUILD SUCCESSFUL`. The JVM baseline is 162 tests with zero failures/errors/
+skips; in this rerun the unit-test task was `UP-TO-DATE`. Strict
+`compileSshFiles`, lint and all three Release ABIs passed. The APK SHA256 is
+`28fc98aaf64d1e010cd63a2ba69086b891de6afc7851376ff65c663a8fc0a179`; ZIP
+inspection shows `lib/arm64-v8a/libctos_ssh_files.so` as the only SSH-related
+entry and no `ssh_native_client` or fixture OpenSSH object.
+
+随后用 `:app:testReleaseUnitTest --rerun-tasks` 强制重跑，JUnit XML 汇总仍为 **162
+tests, failures=0, errors=0, skipped=0**；因此上述 JVM 数量不是只由缓存任务状态推断。
+
+## 2026-10-14 — SSH 受管 provider typed handoff 质量门禁
+
+在用户确认的受管 `config/known_hosts` 文件视图、精确 trust proposal/CAS 和 typed
+private-key handoff 方向上，本轮把 provider 的最小 production-facing seam 接到
+同步 JNI callback：NEW host proposal 必须绑定准确 role/hop；typed password/private-key
+bytes 必须同时匹配 host proof 与 signed KEX/NEWKEYS proof，并由
+`SshCredentialBridge` 在最终 vault 使用前重复 role/host/operation/cancellation guard。
+缺 provider、unbound/wrong-hop proposal、wrong-kind request、null role 或过期/错误环境
+均 fail-closed。JNI 只把 Java byte[] 复制到 caller-owned buffer 并清零 Java array；native
+失败会清零输出，cleanup context 在 native slot 移除后才释放，避免重试 UAF。
+
+固定 hako 主线命令
+`:app:testSshCallbackAdapterHost :app:testReleaseUnitTest :app:lintRelease
+:app:assembleRelease` 成功。host 输出为：
+
+```text
+SSH_CALLBACK_HOST phase=thread_reentry state=pass errno=0 value=1
+SSH_CALLBACK_HOST phase=cancel_deadline_cleanup state=pass errno=0 value=5
+SSH_CALLBACK_HOST phase=credential_bytes state=pass errno=0 value=5
+SSH_CALLBACK_HOST phase=gate state=pass errno=0 value=11
+```
+
+JVM 结果为 **162 tests, failures=0, errors=0, skipped=0**；严格 Android
+`compileSshFiles`、lint 和三 ABI Release native build 通过。正常 APK SHA256 为
+`f32bbc83a401c9997a3b901eccc4e2e5966808093ee1a3c17851ad62056df9ea`，ZIP 只有
+`lib/arm64-v8a/libctos_ssh_files.so`，没有独立 fixture/probe/control/KEX/launcher
+library。该结果只证明 bounded provider handoff 和其 host/JVM/native seam；具体
+config/known_hosts file view、trust CAS 写回、真实 OpenSSH event-loop caller、userauth、
+PTY、forward、service、UI、设备和外部 SSH 仍未验证，task 保持 `in_progress`/
+`implementation_complete=false`。
+
+## 2026-10-14 — `.14` 访问本机临时 Docker SSH 测试 pair
+
+用户更正本轮目标为 `192.168.9.14:5555`，并授权在本机创建临时 Docker 服务、追加测试
+SSH key pair、让该板尝试访问及完成后清理。连接时确认目标为 AIO-3568J、Android 11、
+`arm64-v8a`；系统没有 `ssh` 命令，因此使用项目 G1 已固定的 Android arm64
+OpenSSH `10.6p1` 客户端（OpenSSL `3.5.9`，SHA256
+`5a3a15e6f4de095419aa369383a8e133861ca2bdff3c521cdb86fa896d81fa16`）。
+
+本机 `192.168.9.5:2222` 绑定一次性 `linuxserver/openssh-server:latest` 容器（本地
+image ID `d42d0d9d40e0`），仅创建 `ctos-test` 用户，关闭密码和 sudo；临时 Ed25519
+公钥 fingerprint 为 `SHA256:QzXjQEBk1g1dx7uotibsDAJqHM004Yp/dDdNefst9u0`。
+`.14` 使用临时 `known_hosts` 完成主机 key 匹配、KEX、公钥认证，并在容器内执行固定
+命令 `printf ctos-14-pair-ok`，输出一致且 SSH exit status 为 `0`。本机先用同一 pair
+回环登录也通过。
+
+测试后停止并移除容器，删除本机 `/tmp` key pair、`.14` 的
+`/data/local/tmp/ctos-ssh-test-*` 临时目录；未安装 APK、未修改正式 ctOS、未接触真实
+秘密库或外部 SSH 账号。该结果证明当前板到临时 SSH endpoint 的网络、OpenSSH KEX、
+host-key 文件和公钥认证链路可达，不证明 ctOS 生产 `libctos_ssh_files.so` 已调用
+真实 event loop、JNI provider、userauth/PTY/forward/service/UI 或完整客户端已完成。
+
+## 2026-10-14 — SSH 同进程同步 JNI callback adapter 质量门禁（provider seam 之前的 baseline）
+
+用户已确认同进程 native event loop，以及当前 native event-loop 线程上的同步、
+附着 JNI callback。新增 adapter 只作为正常 `libctos_ssh_files.so` 的生产契约接缝：
+native 要求 live role、当前 PID/UID/deadline、原始 `JNIEnv`/`JavaVM` 和绑定线程；
+Java 侧在 host proof → KEX proof 顺序上继续校验。跨线程/错误环境/重入/取消/期限
+到期/迟到回调和 native-first cleanup failure 均有 fail-closed 回归。由于生产
+provider 尚未确定，JNI 不传 unknown-host proposal，NEW host 返回
+`SSH_HOST_KEY_REVIEW`；KEX 前 credential 返回 `SSH_KEX_REQUIRED`，KEX 后返回
+`SSH_CREDENTIAL_PROVIDER`，不触碰 receiver、vault 或 UI。
+
+固定 hako 主线命令
+`:app:testSshCallbackAdapterHost :app:testReleaseUnitTest :app:lintRelease
+:app:assembleRelease` 成功。host 输出为：
+
+```text
+SSH_CALLBACK_HOST phase=thread_reentry state=pass errno=0 value=1
+SSH_CALLBACK_HOST phase=cancel_deadline_cleanup state=pass errno=0 value=5
+SSH_CALLBACK_HOST phase=gate state=pass errno=0 value=6
+```
+
+JVM 结果为 **160 tests, failures=0, errors=0, skipped=0**；lint 无新增错误，
+严格 Android JNI/native compile 通过。正常 APK SHA256 为
+`fa4a6356bf594cee5245cca24c3faf1af911605c157155488cb24086c34c067e`，SSH 相关 ZIP
+条目只有 `lib/arm64-v8a/libctos_ssh_files.so`，没有独立 KEX/control/policy/upstream/probe
+或 launcher fixture library。该结果不代表真实 OpenSSH event-loop caller、trust/
+file/private-key provider、userauth、PTY、forward、service、设备或外部 SSH 验收；
+ARM binary、设备、外部 SSH 和 vault 均未执行，task 保持 `in_progress`。
+
+## 2026-10-14 — SSH same-process KEX-only launcher fixture quality gate
+
+当前窄增量通过源码审阅及主线独立重跑的固定 hako host/fixture/normal checks。launcher admission 的实际路径重查 token、当前 PID/UID、program/hop、nonce/binding、受限 role 字段、canonical CSRB 长度与字节内容、deadline、duplicate/capacity 和 KEX callback/fingerprint；teardown 精确匹配 token+client，先 `ctos_ssh_role_bootstrap_close`，成功后才 `ctos_ssh_kex_unbind`，失败保留 native binding 供重试，并擦除局部副本/槽位。KEX fixture 覆盖 malformed/trailing/wrong wire、过期与 stale admission、duplicate、mismatch/duplicate close、host/signature/pre-NEWKEYS、generic/DH-GEX/rekey/two-hop。
+
+主线结果为 host `SSH_KEX handshake=27 cleanup=1 gate=27`、固定 runner 严格 `-Wall -Wextra -Werror` 编译、manifest 前后相同；最终 fixture run 为 `build/ssh-native-kex/run.CYUJUpCa`，artifact SHA256 为 `ad8c73c8acaaefed7b12f693ec6ea78759974a55384c8e500d74a98b5ef140a8`。普通 `:app:testReleaseUnitTest` 的 150 项测试与 `:app:lintRelease :app:assembleRelease` 均通过，APK SHA256 为 `538cae5a32499c9ff0aa4dcbca76a2e6637b6186c4177c1785dfdf86e2f843f9`，ZIP 只有生产 `libctos_ssh_files.so`。本 reviewer 另行通过变更后 launcher/test 的 NDK 严格 C 编译、runner `bash -n` 与 `git diff --check`。ARM binary 未执行；native close failure 的故障注入仅有源码可达路径审阅，未做运行时注入。
+
+该结果严格限于 fixture/host seam；未做设备、外部 SSH 账号/endpoint、vault mutation，也未接入生产 event loop、认证、PTY、forward、service 或 UI。task 保持 `in_progress`，`implementation_complete=false`。
+
+## 2026-10-13 SSH 生产角色、信任与凭据桥合同
+
+本轮完成 production-facing Java bridge contract：角色 registry 绑定 owned PID、connection、hop、nonce、public view 和 deadline；主机 key authority 对 known/new/changed/revoked/certificate/invalid fail-closed，并将未知 key review 精确绑定到角色、目标、指纹和 known-hosts digest；凭据桥要求与 host proof 匹配的 signed KEX+NEWKEYS proof，再按 password、key passphrase、keyboard-interactive、private key 类型调用公共秘密库。失败 release（包括缺少 KEX）会关闭一次性请求并撤销对应 operation。
+
+固定 hako 环境中 `:app:testReleaseUnitTest` **138项通过**，`lintRelease`/`assembleRelease` 成功；Flutter analyze 无问题、Flutter test **221项通过**。host C 文件视图 **426项/1634次擦除检查通过**，host control 的 transport/cleanup/gate 计数 **24/1/24** 全部通过。正常 APK SHA256 为 `3b82259dd15a0764f156473ff3500137b6e5c7f409ecb32296fd82e4be9ec7ed`，包内只保留生产 `libctos_ssh_files.so`，无测试 probe。
+
+这是 Java 合同和本地 native 辅助验证，不是完整生产客户端验收：真实 OpenSSH launcher/native callback、host-key provider 接入、用户认证、PTY、forward、service、UI、设备安装及外部 SSH 账号/端点仍未验证。任务继续 `in_progress`。
+
+## 2026-10-13 SSH bounded native role bootstrap seam
+
+在独立 opt-in KEX fixture 中加入 native role bootstrap：仅当前进程 PID/UID 可签发 CLIENT/JUMP 元数据，固定 hop/connection/nonce/binding/public-view/deadline，same-owner/same-hop、nonce、same-hop binding 重放拒绝，distinct hop 允许共享 connection，过期/关闭/view revoke 可回收。metadata wire 有 2KiB 上限且不携带 argv、shell、路径、FD 或秘密正文；KEX guard 通过 token 绑定角色后仍要求 host fingerprint、签名和 NEWKEYS 完整时序。
+
+Java decoder 要求显式 `NativeOwnership` 才能签发既有 Java role，并保留 native token/UID；无默认放行路径。`testSshRoleBootstrapHost` 实测 bootstrap/cleanup/gate **54/1/54 全部通过**，其中包含填满 8 个短期限槽位、未查询旧 token 即回收并复用的回归；严格 C 编译、KEX runner syntax/diff 与固定输入 native 构建通过（`run.WvNKWswX`，未运行 ARM binary）。容量回收修复后 143 JVM、lint、正常 Release 构建通过；最新正常 APK SHA256 为 `8ceacce92e8dc6432638ad493a3d1b1a77613edd600e5f064600efc7637bbd93`，ZIP 仍只包含生产 `libctos_ssh_files.so`。
+
+该段是 fixture/host seam；production JNI ownership/open/release contract 另有下一节。native launcher、真实 OpenSSH host callback、协议认证/PTY/转发/服务/UI、设备安装或外部 SSH 账号/端点验收仍未完成。任务保持 `in_progress`。
+
+## 2026-10-13 SSH production JNI role ownership/open seam
+
+正常 `compileSshFiles` 现在把 `ssh_role_bootstrap.c` 与 `ssh_role_jni.c` 编入生产 `libctos_ssh_files.so`。JNI `open` 由 native 自身取得当前 PID/UID，只接受有界 role metadata 并返回 canonical `CSRB` wire；JNI `owns` 重新检查 live token、当前 UID、快照 owner，并将传入 wire 与 native canonical re-encode 做字节级比较。新增 JNI `release` 只接受 issued token/绑定 UID，native registry 再按当前 PID/UID 查找 live token。Java `productionOwnership()` 与 `productionRelease()` 没有 permissive 默认，`open()` 仅是 typed metadata wrapper；没有指针、FD、argv、shell、路径、文件正文或秘密接口。
+
+post-fix 固定 hako 环境中 `:app:testReleaseUnitTest` **150项通过、0 failure/error/skip**，`lintRelease` 与 `assembleRelease` 成功；严格 Android native compile 通过，生成库 `readelf` 可见 `SshNativeRoleBootstrap` 的 `open/owns/release` JNI 导出。正常 APK SHA256 为 `538cae5a32499c9ff0aa4dcbca76a2e6637b6186c4177c1785dfdf86e2f843f9`，ZIP 仍只有一个 `lib/arm64-v8a/libctos_ssh_files.so`，没有独立 role/probe library。
+
+该增量证明 production JNI ownership/open/release seam，但尚未由生产事件循环调用；
+仍未实现 native launcher/OpenSSH host callback、协议认证/PTY/转发/服务/UI，未安装设备
+或接触外部 SSH 账号/端点。完整 event-loop lifecycle integration 仍开放。
+
+## 2026-10-13 SSH 真实KEX完成守卫
+
+当前开发板独立UID10191/test10192，真实签名/NEWKEYS与每跳完成绑定 **27用例/1项6.999秒通过**；三类主机key、六种KEX、双向rekey、signature篡改、缺/到期role、NEWKEYS前拒绝和两hop交错/独立撤销。fixture15秒构建/lint、v2验签、真实段/ELF/安装读回一致；两个fixture已卸载，自有UID为空，正式APK3bc762d9…保持。正常release/133 JVM/lint41秒通过，APK55aef7e4…仅本地，实际排除全部测试探针与assets。失败轮与限制见[阶段检查](../.trellis/tasks/10-08-ssh-terminal-client/check.md#真实kex完成守卫27例当前板通过)。
+
+这是实际上游KEX完成时序的证据，合成已知主机key由夹具签发；产品role issuer、未知host/证书/撤销核验、私钥/口令释放、用户认证/PTY/转发/服务/UI和联合恢复仍开放。
+
+## 2026-10-13 SSH 原生控制通道
+
+独立App UID10189在当前`.14` API30/4KiB/Permissive下 **24项transport用例、1项0.388秒通过**，包括实际SCM发送者、绑定/顺序/重放/截断拒绝、只读匿名FD收取和无泄漏回收。15秒构建/lint、v2签名、段核对/ELF与安装读回一致；两fixture已卸载、自有UID进程为空、正式APK3bc762d9…保持，见[完整证据](../.trellis/tasks/10-08-ssh-terminal-client/check.md#原生控制transport24例当前板通过)。
+
+这是控制transport，不证明host-key分类、真实KEX完成、私钥/凭据释放或生产角色。真实源码先做host-key callback后验签，认证授权须在真实KEX证明后；不能从UI确认或终端文本直接放行。生产认证桥、协议/PTY/转发/服务/UI与混合恢复仍开放。
+
+## 2026-10-13 SSH 通用文件解析与撤销
+
+真实readconf/glob通过通用闭包视图读取：**147用例/1项0.780秒通过**；同批JNI **16用例/0.239秒通过**，实际128文件与8MiB正文边界。补齐发布后取消绑定后 **17用例/0.314秒通过**、133 JVM及lint通过。三轮独立夹具均已卸载，自有UID为空，正式APK3bc762d9…保持；426本地native用例/1634擦除检查另为host证据。完整产物/source pins、失败与限制见[阶段检查](../.trellis/tasks/10-08-ssh-terminal-client/check.md#当前通用文件解析147例与发布后撤销17例通过)。
+
+公开文件借用不含私钥正文，类型/路径/闭包/预算独立检查，锁库/更换会话/取消精确撤销；FILE按上游真实POSIX形态读取且没有普通明文文件回退。控制transport正在接入，生产KEX/每跳授权、私钥/凭据释放、协议/PTY/转发/服务、UI与混合恢复仍未验收，不能据fixture或host结果启用生产validator。
+
+## 2026-10-13 SSH 受管跳板参数与公共文件桥接
+
+真实ssh.c跳板参数生成器新增逐项引用和字面百分号处理，实际percent_expand、8项自有系统shell builtin roundtrip及2项生成字段检查均完成。17秒构建/lint、v2验签与打包ELF/段核对通过，main55e39733…/test24851017…安装读回一致。当前板UID10181/test10182 **127例、1项0.796秒通过，无skip**；两fixture已卸载，自有UID进程为空，正式APK3bc762d9…保持。完整hash、固定源码及清理见[阶段检查](../.trellis/tasks/10-08-ssh-terminal-client/check.md#当前受管跳板参数127例通过公共文件视图桥接实施中)。
+
+公共库同步文件接口随后加入私钥描述、公开正文与精确请求/库/连接绑定，正文借用结束即清零，私钥正文不在公开视图中；125 JVM与lint实际通过。JNI文件视图/锁库撤销继续实施，完整角色、生产provider、每跳审批/认证、协议/PTY/转发和客户端仍开放；参数引用通过不赋予任意命令或端点权限。
+
+## 2026-10-13 SSH 原生配置政策与Include回归
+
+在已通过101例基础上加入真实read_config_file_depth/compat glob、锁页匿名配置FILE，以及嵌套/相对目录/通配首值、parse-only执行拦截、展开后路径/缺失/深度8和每目标政策。两个扩展失败轮均0.166秒，数字诊断指出实际解析已成功，但存在额外拒绝文件访问1次；显式OpenSSL初始化NO_LOAD_CONFIG后归零，未放宽接受条件或实际读取普通配置文件。
+
+修后18秒fixture构建/lint、实际v2验签通过，main0ead24fc…/test16751c66…安装读回一致。当前板UID10179/test10180 **117例、1项0.189秒通过，无skip**；fixture已卸载，自有进程为空、正式APK3bc762d9…保持。完整hash/失败诊断/边界及临时原始证据见 [check](../.trellis/tasks/10-08-ssh-terminal-client/check.md#原生配置政策与include回归117例通过)。生产file provider、受管shell参数、完整每跳审批/认证及协议仍开放。
+
+## 2026-10-13 SSH 原生配置政策增量实测
+
+冻结G1/G2之外新增真实上游三文件policy patch、缺provider早拒绝及独立测试APK。原parser保留none/no、inactive及首值语义，Match exec在展开前拒绝；有效指纹绕过/外部依赖和严格跳板语法按真实枚举处理。只证明缺provider时提前拒绝，不是人工信任审批或完整生产客户端。
+
+19秒/111 tasks/36 executed构建、lint0错误3既有警告、v2/单signer及三个非法开关拒绝通过；正常APK13秒构建/lint，ZIP排除全部研究输出，hashd43dff68…保持。当前`.14`独立UID10173/test10174、公开合成固定方法 **1项/0.154秒通过，无skip，101用例**。test/main安装hash实际匹配，两个fixture已卸载，自有UID进程为空，正式APK3bc762d9…前后相同。完整hash/失败构建修正/阶段记录见 [check](../.trellis/tasks/10-08-ssh-terminal-client/check.md#原生配置政策首批增量通过)。
+
+真实嵌套Include/受管路径、每跳绑定/审批、安全shell参数、信任CAS、认证/PTY/转发与公共库接入仍开放；本轮不接真实库，不把语法正例当已实现完整跳板。
+
+## 2026-10-13 SSH G2 实机回归通过与清理
+
+用户专项批准“允许，测试后清理”后，当前开发板`.14`独立UID合成G2测试第一轮1项/3.418秒失败：proxy继承缺清理回执，errno10可能是残留诊断，不能据此确认wait链根因。真实OpenSSH cleanup_exit使用 `_exit`跳过destructor；仅VFS客户端新增退出前自有对象清理hook，并明确区分launch/evidence错误，六组及清理断言保持。
+
+修后源码/严格编译/1240输入覆盖/17秒fixture构建、lint及v2验签通过。main `23d33cca…`、test `cf673b52…`实际安装读回一致，fresh UID10171/test10172；指定方法 **1项/4.496秒通过，无skip**，六组、真实parent2199/jump2200及代次73、cleanup/gate全部通过。runtime crypto_version810549392出现；不据此标全算法矩阵通过。
+
+两个fixture已精确卸载，自有UID进程表为空，正式APK SHA `3bc762d9…`前后相同。未操作真实库、外部SSH账号、Root、剪贴板或系统设置。完整hash与临时日志入口见 [task check](../.trellis/tasks/10-08-ssh-terminal-client/check.md#g2-第二轮当前设备回归通过与清理)。API30/4KiB/Permissive、固定16对象/16KiB可信合成及identification-only loopback是本轮证据边界；生产配置限制/主机信任、完整认证/PTY/转发及公共库接入继续实施。
+
+## 2026-10-13 SSH G0 本地实现与构建隔离
+
+TOTP 用户验收已提交 `566ca51`、归档 `f3762ba`、journal `74f8324`，当前复用原 SSH 客户端 task 为 in_progress。用户批准继续下一项，随后明确批准本轮 `.14` SSH G0安装/合成自动测试/卸载，并追加允许真实秘密库操作；凭据不记录。**G0已在当前板独立AppUID实际通过，完整OpenSSH与生产客户端仍未通过**；本轮仅合成数据，未操作真实库、SSH账号、锁屏输入、Root/剪贴板/系统设置或远程端点。
+
+实现包含 opt-in C PIE、fixture-only Gradle 输出目录与固定方法的 Java instrumentation。对 ASharedMemory / raw memfd syscall 分别检查，不把 mmap 或诊断完成等同可用；至少一个完整候选通过才允许 G0 通过。固定合成载荷不创建普通数据文件，不启动页面、访问真实库/账号/剪贴板、Root 或网络。独立源码审阅及最终产物 hash 维护在 [SSH 阶段检查](../.trellis/tasks/10-08-ssh-terminal-client/check.md)。
+
+本地实际执行：首轮14秒重建和 lint 0错误/3既有警告；API28/arm64/NDK27 严格编译，真实 AArch64 PIE `/system/bin/linker64` / `0x4000` PT_LOAD，动态依赖 libandroid/libdl/libc；两夹具 APK v2/单 signer 通过。随后又收紧失败路径诊断：未 reap 子进程不能输出 cleanup=pass；最终8秒重新构建/lint通过，最终ELF/v2验签、source SHA逐份匹配及唯一probe路径/arm64 ABI核对通过。最终两fixture hash为 `a14f1767…` / `0dafbda4…`，完整标识见task check。
+
+生成 probe 后正常 release **26秒重新构建通过**；正常 ZIP 无 SSH 探针，APK `d43dff680ab8d31492cfb70a64e9ab315b3a99c01ef1e25ae172bc0e3384f3cb`，未安装。`ctosSshMemoryProbe=false`、true但不启独立fixture两项配置都实际拒绝，分别命中精确 opt-in / requires fixture。正常安装仍为上一轮TOTP实测的 `3bc762d9…`，未据本轮构建宣称设备已更新。
+
+开发板实测：AIO-3568J Android11/API30/arm64、SELinux **Permissive**，正式UID10131/fresh fixture10167/test10168；两APK读回hash一致。仅执行固定方法+opt-in，**1项/1.693秒通过，无skip**。固定协议 page_size=4096、memlock_limit=67108864、eligible=1；ASharedMemory可map/mlock，但常规文件形态不适用（fstat shape errno95），raw memfd完整通过POSIX读写/取消与超时回收/受管exec白名单/失效拒绝/同步擦除/held-FD EOF及cleanup，最终gatepass、production_openssh=false。测试后自身UID进程表为空，两个精确fixture卸载Success/pm path为空，正式APK路径及SHA `3bc762d9…`前后相同。
+
+G1 官方源码 payload、版本/许可证及工具链实际核对，来源见 [依赖](dependencies.md#2026-10-13-ssh-android-g1-构建输入)。unmodified stock make先在Bionic sentinel/兼容空宏冲突失败，后续两fresh兼容版本分别暴露bzero函数式宏与fallback定义冲突、私有resolver state不可用；三个失败run完整保留。最终兼容patch保留实际bzero函数和byte-identical explicit_bzero，仅研究专用 `__BIONIC__ && CTOS_ANDROID_ABI_BASELINE_ONLY` 分支使用公开res_init/res_query，不fake私有state/cache/headerchecks；仍不能证明EDNS0/DO/AD可信或VerifyHostKeyDNS可靠，后续受约束native必须拒绝提前accept并保留人工指纹批准。
+
+最终 `stock-run.lOHF9Oai` 实际全量cross-build成功：OpenSSL3.5.9静态PIC库与私有install_dev，OpenSSH10.6p1 configure/WITH_OPENSSL1/WITH_ZLIB1、ssh/ssh-keygen及readelf均exit0。两个ELF实际AArch64/PIE、linker64、所有PT_LOAD0x4000，DT_NEEDED仅libz/libdl/libc、无hostglibc/动态libcrypto/TEXTREL；bzero/explicit_bzero/OPENSSL_cleanse/OpenSSL_version均有已定义符号。ssh **6,593,352B / `5a3a15e6…`**，ssh-keygen **6,172,496B / `591eb4a8…`**；完整hash和finalrunner/patch见 [阶段检查](../.trellis/tasks/10-08-ssh-terminal-client/check.md)。只计ABI兼容构建，不计unmodified stock、完整G1/运行算法/协议或生产trust通过；未执行、安装或打入正式APK。
+
+G2 上游文件六组/Include/ProxyJump/配置执行与信任边界、G3秘密库/每跳/协议/PTY/转发/服务及父完整AC仍开放；缺失生产SSH provider继续fail-closed。当前G0不能代替Enforcing、API28/29或真实16KiB设备；编译不能代替实际协议/crypto算法。失败路径时钟/中断仍是源码审阅，未做设备故障注入。
+
+本轮临时原始证据 `/tmp/ctos-ssh-g0-20261013/`，持久结论以本节和task check为准。
+
+## 2026-10-13 SSH G2 上游文件夹具本地准备完成
+
+真实10.6p1/OpenSSL3.5.9的独立driver/VFS client/closefrom observer已实现并完成本地构建与只读审阅。六组源码调用真实readconf/glob/authfile/hostfile及单跳ProxyJump，使用固定可信合成输入、匿名锁页和有界public proposal流；不是生产配置政策/信任provider或完整登录客户端。
+
+审查修复固定metadata缺失误通过、清理回执忽略bootstrap错误、teardown信号竞态/重复关闭FD、未确认group丢失primary及reap后PGID复用风险。独立CLI与Gradle均检查完整输入树；1240文件aggregate构建前后核对，实际Gradle输入与独立oracle比较零缺失，包含.gitignore。相关pin/源码SHA及失败run全部见 [阶段检查](../.trellis/tasks/10-08-ssh-terminal-client/check.md#g2-最终本地构建与可审阅产物)。
+
+最终fixture release/test/lint **17秒通过，111 tasks/27 executed，lint0错误/3既有警告**。两APK实际v2/1 signer、独立包名/SDK28/arm64通过；main **`aba810c1…`**、test **`cf673b52…`**。APK恰含三个G2程序及完整许可证/patch/输入manifest；strip后的.text/.rodata与最终build逐字节一致，真实APK ELF均PIE/linker64/LOAD0x4000、动态依赖仅libz/libdl/libc。G2输出已存在时正常release/lint13秒通过，ZIP不含研究程序/专用assets，正常控制APK仍`d43dff68…`，未安装。
+
+原始产物/日志在临时`/tmp/ctos-ssh-g2-20261013/`，最后fresh native run `build/ssh-native-g2/run.Z9J9BADS`。当前`.14`只读在线，两独立fixture尚无安装路径。**G2未安装或运行，六组设备结果保持未测**；新增自有127.0.0.1两个随机端口与真实上游shell→exec链的identification失败/取消测试，当前准备可审阅产物后确认相应设备范围。正式ctOS/真实库未改，无远程账号测试，生产配置执行/信任绕过与后续认证/PTY/转发/公共库关卡继续开放。
 
 ## 2026-10-13 Authenticator TOTP 开发板自动验收（进行中）
+
+2026-10-13 用户回复“效果不错；可以提交验收；然后继续做下一项”，接受当前TOTP交付并批准提交/归档，实际已提交566ca51/归档f3762ba。下方in_progress是验收前历史状态，执行日志、产物及未测边界继续按各自阶段解释；用户反馈不替代未执行的平台/账号/跨设备/混合测试，也不据归档标全部AC通过。
 
 用户随后明确要求“帮我安装、自动测试”，目标为 `192.168.9.14:5555`。本节是该授权后的设备证据；下方“本地实现与最终产物”保留此前阶段结果。**安装及本轮自动验收完成：7项非copy原生检查通过，用户专项批准后的原生复制1项/6.616秒通过，最终fresh真实Flutter UI非copy全流程1项/72.734秒通过。当前task仍为in_progress / human-required，硬件相机及其他未测产品AC保持开放；不是全部平台/账号验收完成。**
 
