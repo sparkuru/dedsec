@@ -119,7 +119,7 @@
 
 - 环境检查：`git status --short` → task metadata/journal follow-up 提交完成后应为空；G3.7 code/docs 已由 `8c0a615` 保存。
 - 状态检查：`git show --stat --oneline 8c0a615` → G3.7 checkpoint；内容包括 native view handle、production client ownership、real JNI registry、Android synthetic test 与入口文档。
-- 最小验证：`jq -e . .trellis/tasks/10-08-ssh-terminal-client/task.json` → JSON 有效；metadata 保持 `in_progress` 与 `implementation_complete=false`；full G3.6 gate 为 189/0/0/0。
+- 最小验证：`python3 -m json.tool .trellis/tasks/10-08-ssh-terminal-client/task.json` 与 JSONL parse → metadata 有效并保持 `in_progress`/`implementation_complete=false`；G3.7 normal gate 为 189/0/0/0，`.14` synthetic session/view 各 1 项 status=0。
 - 接管判据：G3.7 host/normal gate、JSON metadata 和 synthetic Android lifecycle 证据已读到；下一 agent 可从 `8c0a615` 继续协议/runtime coverage，不得把 lifecycle gate 当完整 SSH pass。
 - 接管后更新：完成 native handle、runtime 或改变授权/设备范围后，先更新本档案顶部摘要、关键事实、假设台账和下一步，再继续实现。
 
