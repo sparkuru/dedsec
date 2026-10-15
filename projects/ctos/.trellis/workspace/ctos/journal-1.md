@@ -742,3 +742,40 @@
 ### Next Steps
 
 - 按用户既定先TOTP后SSH顺序复用10-08-ssh-terminal-client，先Android native OpenSSH无明文磁盘文件访问探针；真实设备/账号按新任务当前授权执行。
+
+
+## Session 24: SSH managed provider and OpenSSH fixture checkpoint
+
+**Date**: 2026-10-15
+**Task**: SSH managed provider and OpenSSH fixture checkpoint
+**Branch**: `antitrust`
+
+### Summary
+
+提交 managed known_hosts CAS provider、native callback/candidate handoff、pinned OpenSSH hostfile/caller fixture、测试与设计证据；production caller 仍未接入，handoff 已写入 design/handoff-ssh-terminal-client.md。
+
+### Main Changes
+
+- 完成 managed known_hosts provider/CAS 与一次性 candidate handoff
+- 完成 pinned OpenSSH 10.6p1 hostfile/caller fixture 和 normal APK exclusion
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `6dc6b34` | (see git log) |
+| `19281bf` | (see git log) |
+
+### Testing
+
+- [OK] Gradle JVM 177、native callback 20、native boundary 27、strict compile/lint/Release assemble 通过
+- [OK] fixture runner gate=pass，runtime=not-run，normal_apk=not-wired
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 新 session 先读取 handoff，然后闭合 production OpenSSH source/object 和同进程 caller/event loop
+- 保持 ssh_native_client 在 production provider/caller 未闭合前 ENOTSUP；完成后再做 .14 合成 runtime 验证
