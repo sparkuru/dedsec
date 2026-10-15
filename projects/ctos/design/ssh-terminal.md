@@ -1,6 +1,30 @@
 # SSH 终端规划入口
 
-2026-10-15 当前最新窄增量（G3.6）：已在 production `ssh_native_client` C boundary 之上
+2026-10-15 当前最新窄增量（G3.7）：已在 production `ssh_native_client` C boundary 之上
+完成 native-owned session/view boundary。`ssh_view_handle.[ch]` 用正整数 opaque token
+登记一个 native-owned public view；`borrow` 固定 native lifetime，`destroy` 是可重入 revoke，
+已有 borrow 会延迟底层 view 的最终销毁。`ssh_native_client` 在 open admission 中从 borrow
+取得 live view，复制并解析 bounded host-key blob，校验 fingerprint 后由 native 持有
+`struct sshkey`，成功 open 后接管 view borrow；close 先 callback/KEX/OpenSSH/socket，
+再 release view borrow、释放 parsed key，destroy 只接受 closed tombstone。
+
+`ssh_session_jni.c` 现在是真实 JNI bridge：64-slot monotonic opaque session registry、
+owner pthread 检查、bounded array/string clone/wipe、八个 bounded step scalar 返回值和
+可重试 close/destroy；五个 `SshNativeSession$Native_*` symbols 均来自 production library。
+Java `SshPublicFileLease` 在显式 revoke 后保留失败 cleanup token 供重试。`SshNativeSession`
+平台测试只覆盖 synthetic socketpair 的 open → view revoke → close 生命周期；它证明的是
+native handle/borrow 边界，不是 userauth、完整 packet event loop、host proof、PTY、forward、
+service/UI 或外部 SSH。
+
+固定证据：normal gate 为 JUnit **189/0/0/0**、view/native/callback host gate 通过、
+`SSH_PRODUCTION_OPENSSH_BUILD gate=pass fixture=excluded`、
+`SSH_NATIVE_CLIENT_BUILD gate=pass runtime=not-run reason=qemu-aarch64-unavailable`，
+strict compile/lint/三 ABI Release/assemble 通过；APK `dd962567…`，archive=83，五个 JNI
+symbol 可见。`.14` API30 arm64 独立 fixture 的两个 1-item instrumentation 方法均 status 0，
+运行后两个 fixture 已卸载，正式 APK path/hash 保持；没有 qemu、真实 vault、凭据或外部 SSH。
+task 保持 `in_progress`/`implementation_complete=false`。
+
+2026-10-15 历史窄增量（G3.6）：已在 production `ssh_native_client` C boundary 之上
 加入 package-private `SshNativeSession`。owner event-loop thread 独占 `open/step/
 verifyHostKey/close/destroy`，`cancel` 可从其他线程请求；callback 的
 `NativeSessionClaim` 防止同一 binding 重复拥有 session。成功 close 的 Java 顺序是

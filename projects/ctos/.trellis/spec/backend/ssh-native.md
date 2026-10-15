@@ -7,12 +7,160 @@ caller boundary, using the approved parent PRD/design and existing
 AppSecrets/SshVaultAdapter contracts. The normal APK production archive is
 rebuilt from the pinned OpenSSH 10.6p1 source with `-fPIC`; old fixture objects
 and stock high-level callers are not valid inputs. The client is not yet a
-complete Android product: the Java session-owner seam exists, but its
-production JNI entrypoints are deliberately fail-closed until a native-owned
-handle/view-borrow protocol exists. Runtime/ARM execution, userauth, typed
-credentials, PTY, forwarding, service/UI, device and external SSH remain open
-gates. Missing semantic/trust/runtime providers must keep the product path
-fail-closed.
+complete Android product: G3.7 now has native-owned session/key/view handles
+and a real JNI bridge, with an authorized synthetic Android lifecycle gate.
+Runtime/ARM execution for the native host binary, full packet/protocol
+coverage, userauth, typed credentials, PTY, forwarding, service/UI, real vault
+and external SSH remain open gates. Missing semantic/trust/runtime providers
+must keep the product path fail-closed.
+
+## G3.7: native-owned session handle, view borrow, and JNI runtime seam
+
+### 1. Scope / Trigger
+
+- Trigger: replace the G3.6 fail-closed JNI placeholder only after native code
+  can own the parsed host key and the managed public view for the complete
+  native session lifetime.
+- Scope: `ssh_view_handle.[ch]`, production `ssh_native_client`,
+  `ssh_session_jni.c`, `SshPublicFileLease` revoke/retry behavior, host
+  handle tests, and the explicitly opted-in synthetic Android session test.
+- This section authorizes no real SSH account, credential, vault mutation,
+  external endpoint, or claim that the full OpenSSH protocol is complete.
+
+### 2. Signatures
+
+Java production binding:
+
+```java
+Native.open(long role, int ownerUid, long callback, long view, int socketFd,
+        long deadline, int stepBudget, byte[] hostKeyBlob,
+        byte[] expectedFingerprint, String knownHostsPath, String host,
+        String candidateId) -> long;
+Native.step(long handle, boolean cancelled) -> int[8];
+Native.verifyHostKey(long handle, byte[] hostKeyBlob) -> void;
+Native.close(long handle) -> void;
+Native.destroy(long handle) -> void;
+```
+
+Native view/session boundary:
+
+```c
+int ctos_ssh_view_handle_create(const unsigned char *, size_t,
+    ctos_ssh_view_token *);
+int ctos_ssh_view_handle_summary(ctos_ssh_view_token,
+    struct ctos_ssh_view_summary *);
+int ctos_ssh_view_handle_destroy(ctos_ssh_view_token);
+int ctos_ssh_view_handle_borrow(ctos_ssh_view_token,
+    struct ctos_ssh_view_borrow **);
+int ctos_ssh_view_borrow_live(const struct ctos_ssh_view_borrow *);
+int ctos_ssh_view_borrow_release(struct ctos_ssh_view_borrow *);
+
+int ctos_ssh_native_client_open(
+    const struct ctos_ssh_native_client_config *,
+    struct ctos_ssh_native_client **);
+int ctos_ssh_native_client_step(
+    struct ctos_ssh_native_client *,
+    struct ctos_ssh_native_client_step *);
+int ctos_ssh_native_client_verify_host_key(
+    struct ctos_ssh_native_client *, const void *, size_t);
+int ctos_ssh_native_client_close(struct ctos_ssh_native_client *);
+int ctos_ssh_native_client_destroy(struct ctos_ssh_native_client *);
+```
+
+The native config includes a caller-owned `ctos_ssh_view_borrow *`, bounded
+host-key blob/length, and a 32-byte expected fingerprint. A positive Java
+`long` is an opaque registry token, never an address or `struct sshkey *`.
+
+### 3. Contracts
+
+- `ctos_ssh_view_handle_create` transfers the validated wire into a native
+  registry. `borrow` increments the handle lifetime; `destroy` is idempotent
+  revoke, blocks new borrows, and defers final `ctos_ssh_view` destruction
+  until the last borrow releases. Stale tokens do not identify a new view.
+- Native open validates the live role, descriptor, view slices/root/reference,
+  deadline and bounded text before OpenSSH setup. It parses the supplied host
+  key into a native-owned `struct sshkey`, checks the exact SHA-256 fingerprint,
+  and owns the parsed key plus view borrow only after successful open. On
+  failure, the caller retains the original FD and borrow; JNI releases its
+  temporary borrow and copied inputs.
+- A successful session owns the attached `F_DUPFD_CLOEXEC` socket, original
+  caller FD, parsed host key, and managed-view borrow. Java arrays/strings are
+  copied into native bounded storage and wiped after the binding returns.
+- JNI session slots are monotonic opaque tokens with an owner `pthread_t`.
+  Every open/step/verify/close/destroy call checks the owner thread; Java
+  cancellation remains the only cross-thread request. The native bridge may
+  synchronously invoke the callback while the owner call is active; callback
+  code must not re-enter the session JNI registry.
+- Native close is event-loop ordered and retryable:
+  candidate rollback if needed → callback close → KEX unbind/OpenSSH free →
+  managed-view borrow release → parsed host-key free → original FD close.
+  Any failed stage remains retryable. Destroy accepts only a closed tombstone;
+  Java then completes claim/role/view bookkeeping according to its staged
+  owner contract.
+- `step` returns exactly eight bounded scalar values. This G3.7 gate covers
+  handle/lifetime plumbing and the synthetic open/revoke/close path; it does
+  not turn the current bounded socket turn into a complete protocol/auth gate.
+
+### 4. Validation / Error Matrix
+
+| Condition | Required result |
+| --- | --- |
+| Non-positive/stale/revoked view token | borrow fails; no client is opened |
+| Revoke with active borrow | new borrow fails; existing borrow may be released; final view destruction is deferred |
+| Invalid wire, view slices, role, deadline, descriptor, or bounded key input | `-1`; caller FD and caller borrow remain available; JNI throws `IOException` |
+| Malformed host-key blob | `-1`/`EINVAL`; parsed key is not retained |
+| Fingerprint mismatch | `-1`/`EACCES`; no OpenSSH attach and no FD consumption |
+| Successful native open | native owns parsed key, original/attached FD, callback lifetime and view borrow |
+| Wrong JNI owner thread or unknown session token | no C client call; `IOException` |
+| Callback, view-borrow, or original-FD close failure | return failure; retain retryable session state |
+| Destroy before native close | `-1`/`EBUSY`; slot and resources remain |
+| AArch64 cross-link without qemu/device protocol coverage | record `runtime=not-run`; never report full Android SSH pass |
+
+### 5. Good / Base / Bad
+
+- Good: native token is opaque; revoke prevents new borrow while an existing
+  session safely finishes; malformed/mismatched host keys fail before attach;
+  close can retry; Android synthetic test passes and removes its fixture.
+- Base: normal APK exposes five JNI symbols and production OpenSSH closure;
+  host tests pass; the authorized device test proves only open → revoke →
+  close on a socketpair, while qemu/native protocol runtime remains not-run.
+- Bad: cast a Java `long` to `ctos_ssh_view *`, keep a borrowed Java array as
+  the parsed key, release the view before native close, destroy an open slot,
+  or infer userauth/host-proof/EOF/PTY success from the lifecycle test.
+
+### 6. Tests Required
+
+- `testSshViewHandleHost`: create/summary, borrow, revoke, stale token,
+  deferred final destruction and replacement-token separation.
+- `testSshNativeClientHost`: valid host-key blob parsing/ownership,
+  fingerprint admission, managed-view borrow, close order and malformed/error
+  paths; strict native warnings remain enabled.
+- `SshNativeSessionPlatformTest#syntheticNativeSessionHandle`: exact opt-in
+  instrumentation method on the authorized `.14` fixture; use synthetic
+  socketpair and cleanup assertions only.
+- `SshFileViewPlatformTest#syntheticProtectedFileViews`: retain the existing
+  public-file view matrix and run it separately from the new session method.
+- Normal gate must retain JUnit `189/0/0/0`, callback host=20, production
+  archive=83, five JNI exports, fixture exclusion, all Release ABIs, lint and
+  APK scans. A future protocol gate must add partial I/O/EAGAIN/EOF/deadline,
+  host proof, auth and close-retry evidence before claiming full runtime.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```c
+struct ctos_ssh_view *view = (struct ctos_ssh_view *)(uintptr_t)view_token;
+client->server_host_public_key = (struct sshkey *)java_array;
+```
+
+#### Correct
+
+```text
+opaque Java token -> native registry -> borrow
+bounded Java blob -> sshkey_from_blob -> native-owned sshkey
+revoke -> block new borrows -> native close releases borrow -> destroy tombstone
+```
 
 ## G3.6: Java/JNI session-owner fail-closed seam
 

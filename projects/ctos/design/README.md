@@ -1,6 +1,24 @@
 # ctOS 信息入口
 
-2026-10-15 SSH当前最新窄增量（G3.6）：在 G3.5 production native C boundary 之上新增
+2026-10-15 SSH当前最新窄增量（G3.7）：native 已接管 session 的 opaque handle、解析后
+host key 和 public-view borrow；`ssh_session_jni.c` 已把五个 JNI entrypoint 接到真实
+`ssh_native_client`，并强制 owner-thread、bounded key/fingerprint copy、opaque session
+registry 与可重试 close/destroy。`ssh_view_handle` 的 revoke 会阻止新 borrow，已有 borrow
+在 native session 释放前保持有效，避免 Java token 被当作 C pointer。生产路径仍只证明
+open/revoke/close 的合成 JNI runtime，不代表完整 SSH 协议、认证或产品验收。
+
+当前固定证据：normal hako gate 的 view-handle/native-client/callback host gate 通过，
+JUnit **189/0/0/0**，production `SSH_PRODUCTION_OPENSSH_BUILD gate=pass fixture=excluded`，
+native host `gate=pass runtime=not-run reason=qemu-aarch64-unavailable`，strict
+`compileSshFiles`、三 ABI Release、lint、assemble 通过；APK SHA256 为
+`dd9625677e7f874f19ec85f4f0e3f10b31ab8acd4ab71565d145ece4403f582a`，archive=83，五个
+session JNI symbols 可见，APK 只包含生产 `lib/arm64-v8a/libctos_ssh_files.so`。独立
+`secretsFixture` 在 `192.168.9.14:5555` API30/arm64 上分别通过
+`SshNativeSessionPlatformTest#syntheticNativeSessionHandle` 与既有
+`SshFileViewPlatformTest#syntheticProtectedFileViews` 各 1 项；两个 fixture UID 和包均已
+卸载，正式包路径/hash 未变。task 仍 `in_progress`/`implementation_complete=false`。
+
+2026-10-15 SSH历史窄增量（G3.6）：在 G3.5 production native C boundary 之上新增
 Java `SshNativeSession` owner seam。打开、step、host-key verify、close/destroy 只能由
 callback event-loop owner thread 驱动，`cancel` 是唯一允许跨线程的操作；
 `SshNativeCallbackAdapter.NativeSessionClaim` 保证一个 callback binding 同时只有一个
@@ -123,7 +141,7 @@ NEWKEYS proof 及完整 SSH 仍开放，task 保持 `in_progress`/未完成。
 | [Portable 五项工具与 HFTP](portable-tools.md) | 模块边界、SDK v2、文件能力、认证加密与后台文件服务 |
 | [Portable 工作台与 SDK](portable-workbench.md) | 内置 Python、终端工具、运行包清单和脚本扩展契约 |
 | [App 统一秘密库与公共认证](app-authentication.md) | 先行底座：主口令、加密库/会话/设置/设备快捷/备份/隐私配套；2026-10-12 恢复推进，API30凭证快捷实测通过，保留 in_progress/其余待测关卡，TOTP 与 SSH 共同依赖 |
-| [SSH 终端规划](ssh-terminal.md) | APK 内客户端、OpenSSH config/一键连接和统一秘密库接入；in_progress，managed AppSecrets known_hosts CAS provider、production native C caller 与 Java owner seam 已接入，但 production JNI 当前 fail-closed，Android runtime/完整 SSH 仍开放 |
+| [SSH 终端规划](ssh-terminal.md) | APK 内客户端、OpenSSH config/一键连接和统一秘密库接入；in_progress，managed AppSecrets known_hosts CAS provider、production native C caller、native-owned session/view handle 与合成 JNI runtime gate 已接入，完整 SSH 仍开放 |
 | [SSH 终端接管档案](handoff-ssh-terminal-client.md) | 下一 session 的当前提交、证据、授权边界、阻塞与可执行接管步骤 |
 | [第三方 Authenticator](authenticator.md) | 离线 SHA1/6位/30秒 TOTP、工作台入口与公共秘密库；修复版已安装当前开发板，本轮非copy隔离自动验收完成，账号及未测平台关卡保留 |
 | [兼容性](compatibility.md) | 设备差异、已验证范围与未验证项 |

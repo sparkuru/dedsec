@@ -236,12 +236,15 @@ static int expected_fingerprint(const struct sshkey *key,
 struct fixture {
     struct ctos_ssh_native_client *client;
     struct ctos_ssh_view *view;
+    struct ctos_ssh_view_borrow *view_borrow;
     struct callback_fixture callback;
     struct sshkey *private_key;
     struct sshkey *public_key;
     ctos_ssh_role_token role;
     ctos_ssh_callback_token callback_token;
     unsigned char fingerprint[32];
+    unsigned char *public_blob;
+    size_t public_blob_length;
     uint64_t deadline;
     int pair[2];
 };
@@ -258,6 +261,10 @@ static void setup_fixture(struct fixture *fixture) {
     CHECK(sshkey_from_private(fixture->private_key, &fixture->public_key) == 0);
     CHECK(expected_fingerprint(fixture->public_key, fixture->fingerprint) == 0);
     fixture->view = load_view(fixture->deadline);
+    CHECK(sshkey_to_blob(fixture->public_key, &fixture->public_blob,
+        &fixture->public_blob_length) == 0);
+    CHECK(ctos_ssh_view_borrow_owned_view(fixture->view,
+        &fixture->view_borrow) == 0);
     request = role_request(fixture->deadline);
     CHECK(ctos_ssh_role_bootstrap_open(&request, &fixture->role) == 0);
     fixture->callback_token = open_callback(&fixture->callback, fixture->role,
@@ -274,9 +281,10 @@ static void setup_fixture(struct fixture *fixture) {
         .callback_environment = fixture->callback.environment,
         .deadline = fixture->deadline,
         .step_budget = 3,
-        .server_host_public_key = fixture->public_key,
+        .server_host_public_key_blob = fixture->public_blob,
+        .server_host_public_key_length = fixture->public_blob_length,
         .expected_host_fingerprint = fixture->fingerprint,
-        .managed_view = fixture->view,
+        .managed_view_borrow = fixture->view_borrow,
         .known_hosts_path = "ssh/known_hosts",
         .host = "example.invalid",
         .candidate_id = "native-candidate"
@@ -287,6 +295,7 @@ static void setup_fixture(struct fixture *fixture) {
 static void cleanup_fixture(struct fixture *fixture,
     unsigned int expected_release_calls) {
     CHECK(ctos_ssh_native_client_close(fixture->client) == 0);
+    fixture->view_borrow = NULL;
     CHECK(fixture->callback.release_calls == expected_release_calls);
     CHECK(fixture->callback.release_saw_fd_open == 1);
     errno = 0;
@@ -302,14 +311,19 @@ static void cleanup_fixture(struct fixture *fixture,
     destroy_view(fixture->view);
     sshkey_free(fixture->public_key);
     sshkey_free(fixture->private_key);
+    if (fixture->public_blob != NULL) {
+        volatile unsigned char *bytes = fixture->public_blob;
+        for (size_t index = 0; index < fixture->public_blob_length; index++) bytes[index] = 0;
+        free(fixture->public_blob);
+    }
 }
 
 static void test_admission_and_descriptor(void) {
     struct ctos_ssh_role_request request;
-    struct ctos_ssh_view malformed = {.valid = 1};
     struct ctos_ssh_native_client_config config = {0};
     struct ctos_ssh_native_client *client = (struct ctos_ssh_native_client *)1;
     unsigned char fingerprint[32] = {1};
+    static const unsigned char key_blob[] = {1, 2, 3};
     uint64_t expiry = deadline_after(5000);
     ctos_ssh_role_token role = 0;
     int pair[2] = {-1, -1};
@@ -325,14 +339,16 @@ static void test_admission_and_descriptor(void) {
     config = (struct ctos_ssh_native_client_config){
         .role = role, .socket_fd = pair[0], .owner_uid = getuid(),
         .owns_socket = 1, .callback = 1, .callback_environment = &config,
-        .deadline = expiry, .step_budget = 64, .server_host_public_key =
-            (const struct sshkey *)1, .expected_host_fingerprint = fingerprint,
-        .managed_view = &malformed, .known_hosts_path = "ssh/known_hosts",
+        .deadline = expiry, .step_budget = 64,
+        .server_host_public_key_blob = key_blob,
+        .server_host_public_key_length = sizeof(key_blob),
+        .expected_host_fingerprint = fingerprint,
+        .managed_view_borrow = NULL, .known_hosts_path = "ssh/known_hosts",
         .host = "example.invalid", .candidate_id = "native-candidate"
     };
     errno = 0;
     CHECK(ctos_ssh_native_client_open(&config, &client) != 0
-        && errno == EACCES && client == NULL);
+        && errno == EINVAL && client == NULL);
     CHECK(fcntl(pair[0], F_GETFD) >= 0);
 
     flags = fcntl(pair[0], F_GETFL);
@@ -373,8 +389,11 @@ static void test_malformed_view_slice(void) {
     CHECK(sshkey_generate(KEY_ED25519, 0, &fixture.private_key) == 0);
     CHECK(sshkey_from_private(fixture.private_key, &fixture.public_key) == 0);
     CHECK(expected_fingerprint(fixture.public_key, fixture.fingerprint) == 0);
+    CHECK(sshkey_to_blob(fixture.public_key, &fixture.public_blob,
+        &fixture.public_blob_length) == 0);
     view = load_view(fixture.deadline);
     fixture.view = view;
+    CHECK(ctos_ssh_view_borrow_owned_view(view, &fixture.view_borrow) == 0);
     CHECK(ctos_ssh_role_bootstrap_open(&(struct ctos_ssh_role_request)
         { .program = CTOS_SSH_ROLE_CLIENT, .owner_pid = getpid(),
           .owner_uid = getuid(), .hop = 0, .port = 22,
@@ -396,8 +415,10 @@ static void test_malformed_view_slice(void) {
         .owns_socket = 1, .callback = fixture.callback_token,
         .callback_environment = fixture.callback.environment,
         .deadline = fixture.deadline, .step_budget = 64,
-        .server_host_public_key = fixture.public_key,
-        .expected_host_fingerprint = fixture.fingerprint, .managed_view = view,
+        .server_host_public_key_blob = fixture.public_blob,
+        .server_host_public_key_length = fixture.public_blob_length,
+        .expected_host_fingerprint = fixture.fingerprint,
+        .managed_view_borrow = fixture.view_borrow,
         .known_hosts_path = "ssh/known_hosts", .host = "example.invalid",
         .candidate_id = "native-candidate"
     };
@@ -412,9 +433,15 @@ static void test_malformed_view_slice(void) {
     CHECK(fixture.callback.release_saw_fd_open == 1);
     CHECK(close(pair[0]) == 0 && close(pair[1]) == 0);
     CHECK(ctos_ssh_role_bootstrap_close(fixture.role) == 0);
+    CHECK(ctos_ssh_view_borrow_release(fixture.view_borrow) == 0);
     destroy_view(view);
     sshkey_free(fixture.public_key);
     sshkey_free(fixture.private_key);
+    if (fixture.public_blob != NULL) {
+        volatile unsigned char *bytes = fixture.public_blob;
+        for (size_t index = 0; index < fixture.public_blob_length; index++) bytes[index] = 0;
+        free(fixture.public_blob);
+    }
 }
 
 static void test_step_and_close(void) {

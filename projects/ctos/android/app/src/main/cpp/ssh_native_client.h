@@ -6,12 +6,13 @@
 #include <sys/types.h>
 
 #include "ssh_callback_adapter.h"
-#include "ssh_file_view.h"
+#include "ssh_view_handle.h"
 #include "ssh_role_bootstrap.h"
 
 /* The normal APK caller owns one same-process OpenSSH event-loop object. */
 #define CTOS_SSH_NATIVE_CLIENT_MAX_STEP_BYTES (64U * 1024U)
 #define CTOS_SSH_NATIVE_CLIENT_FINGERPRINT_BYTES 32U
+#define CTOS_SSH_NATIVE_CLIENT_MAX_HOST_KEY_BLOB_BYTES (1024U * 1024U)
 
 struct ctos_ssh_native_client;
 struct sshkey;
@@ -30,10 +31,13 @@ struct ctos_ssh_native_client_config {
     void *callback_environment;
     uint64_t deadline;
     size_t step_budget;
-    /* Borrowed managed-provider inputs. They must remain live until close. */
-    const struct sshkey *server_host_public_key;
+    /* The blob is parsed and owned by the native client before OpenSSH is
+     * attached. The caller may wipe it as soon as open returns. */
+    const unsigned char *server_host_public_key_blob;
+    size_t server_host_public_key_length;
     const unsigned char *expected_host_fingerprint;
-    const struct ctos_ssh_view *managed_view;
+    /* Caller-owned on open failure; native client-owned after success. */
+    struct ctos_ssh_view_borrow *managed_view_borrow;
     const char *known_hosts_path;
     const char *host;
     const char *candidate_id;
@@ -58,9 +62,9 @@ struct ctos_ssh_native_client_step {
     int packet_type;
 };
 
-/* A successful open owns the original descriptor and its attached duplicate.
- * On failure, the original descriptor and pre-opened callback remain
- * caller-owned. */
+/* A successful open owns the original descriptor, its attached duplicate,
+ * parsed host key and managed-view borrow. On failure, the original
+ * descriptor, pre-opened callback and view borrow remain caller-owned. */
 int ctos_ssh_native_client_open(
     const struct ctos_ssh_native_client_config *,
     struct ctos_ssh_native_client **);
@@ -72,7 +76,7 @@ int ctos_ssh_native_client_step(
 
 /* Verifies the exact managed host-key path and synchronously invokes evidence. */
 int ctos_ssh_native_client_verify_host_key(
-    struct ctos_ssh_native_client *, const void *opaque_host_key);
+    struct ctos_ssh_native_client *, const void *, size_t);
 
 int ctos_ssh_native_client_complete(
     const struct ctos_ssh_native_client *);

@@ -1,5 +1,26 @@
 # SSH 接入实施计划
 
+## 2026-10-15 当前窄增量：native-owned session handle 与 Android JNI gate（G3.7）
+
+- [x] 新增 `ssh_view_handle.[ch]`：正整数 opaque token、native-owned validated view、
+  borrow/revoke/deferred destroy、stale-token 幂等回归。
+- [x] 扩展 `ssh_native_client`：bounded host-key blob 解析和 fingerprint admission，
+  native-owned parsed `sshkey`、managed-view borrow、OpenSSH/FD close order 与 destroy
+  tombstone；失败保留 caller FD/borrow，临时输入清零。
+- [x] 替换 `ssh_session_jni.c` fail-closed placeholder：64-slot owner-thread session
+  registry、五个真实 JNI symbols、bounded key/string copy/wipe、八 scalar step result、
+  close/destroy retry。
+- [x] 更新 `SshPublicFileLease` revoke/retry 与 production `SshNativeSession` 文档；新增
+  `testSshViewHandleHost` 和 `SshNativeSessionPlatformTest` 精确 synthetic probe。
+- [x] host/normal gate：view handle pass、native `gate=pass runtime=not-run`、production
+  fixture excluded、callback=20、JUnit **189/0/0/0**、strict compile/lint/三 ABI
+  Release/assemble pass、archive=83、APK `dd962567…`。
+- [x] `.14` API30/arm64 独立 fixture：session handle 和 public-file view matrix 各 1 项
+  instrumentation status=0；fixture 已精确卸载、正式包未改。
+- [ ] 后续补 packet protocol/partial I/O/EAGAIN/EOF/deadline、host proof、userauth/typed
+  credential、PTY/forward/service/UI 和更广泛 ARM runtime；当前 G3.7 不勾选父任务完整
+  `implementation_complete`。
+
 ## 2026-10-15 当前窄增量：Java/JNI session-owner fail-closed seam（G3.6）
 
 - [x] 新增 `SshNativeSession` owner-thread state machine：只有创建 callback 的线程可

@@ -1,5 +1,42 @@
 # SSH 客户端阶段检查
 
+## 2026-10-15 native-owned session handle 与 Android JNI synthetic gate（G3.7）
+
+质量复核确认 G3.6 的 fail-closed JNI placeholder 已被安全的 native ownership seam 替换，
+且没有把 Java token 当作 C pointer。`ssh_view_handle.[ch]` host test 覆盖 create/summary、
+borrow、revoke、existing-borrow release、stale token 和新 token 分离；`ssh_native_client`
+在 open 前完成 role/view/socket/deadline admission，解析 bounded public-key blob 并核对
+fingerprint，成功后拥有 parsed key 和 view borrow。close 顺序为 callback → KEX/OpenSSH →
+view borrow → parsed key → caller FD，失败仍可重试；destroy 只接受 closed tombstone。
+
+`ssh_session_jni.c` 质量点：64-slot monotonic opaque session registry、owner pthread 检查、
+bounded Java array/string clone/wipe、八项 step scalar、五个真实 JNI exports；
+`SshPublicFileLease` revoke 在 cleanup 失败时保留 token，方便再次关闭。
+
+固定 host/normal gate 结果：
+
+- `SSH_VIEW_HANDLE_HOST gate=pass borrow=pass revoke=pass stale=pass`。
+- `SSH_PRODUCTION_OPENSSH_BUILD gate=pass fixture=excluded`；
+  `SSH_NATIVE_CLIENT_BUILD gate=pass runtime=not-run reason=qemu-aarch64-unavailable`；
+  callback host=20。
+- JUnit **189/0/0/0**；strict `compileSshFiles`、三 ABI Release、lint、assemble 成功；
+  production archive=83；APK SHA256 为
+  `dd9625677e7f874f19ec85f4f0e3f10b31ab8acd4ab71565d145ece4403f582a`；ZIP 只有生产
+  `lib/arm64-v8a/libctos_ssh_files.so`，forbidden stock caller=0。
+
+独立 fixture 以 `-PctosSecretsUiFixture=true` 构建并只在授权 `.14` 执行两个精确方法：
+
+```text
+SshNativeSessionPlatformTest#syntheticNativeSessionHandle -> OK (1 test), status=0
+SshFileViewPlatformTest#syntheticProtectedFileViews -> OK (1 test), status=0
+```
+
+设备为 Android 11/API30/arm64-v8a；fixture app/test UID=10193/10194，测试后两包均卸载，
+无 fixture package/process 残留。正式 `im.majo.ctos` path 保持，安装后读回 hash 为
+`3bc762d9e6463ab9612393b9382923f4a29f613ceec3dbe4d9159aae0078f252`。本检查不覆盖 qemu
+native runtime、packet partial I/O/EAGAIN/EOF/deadline、host proof、userauth、PTY、forward、
+service/UI、真实 vault 或外部 SSH；task 仍 `in_progress`/`implementation_complete=false`。
+
 ## 2026-10-15 Java/JNI session-owner fail-closed seam（G3.6）
 
 本轮复核了 Java/C/JNI 的 ownership 边界，并修正 session owner 必须持有

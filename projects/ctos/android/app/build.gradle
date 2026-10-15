@@ -175,6 +175,7 @@ def sshProductionSources = files(
     'src/main/cpp/ssh_role_bootstrap.c', 'src/main/cpp/ssh_role_bootstrap.h',
     'src/main/cpp/ssh_callback_adapter.c', 'src/main/cpp/ssh_callback_adapter.h',
     'src/main/cpp/ssh_hostfile_issuer.c', 'src/main/cpp/ssh_hostfile_issuer.h',
+    'src/main/cpp/ssh_view_handle.c', 'src/main/cpp/ssh_view_handle.h',
     'src/main/cpp/ssh_kex_guard.c', 'src/main/cpp/ssh_kex_guard.h',
     'src/main/cpp/ssh_native_client.c', 'src/main/cpp/ssh_native_client.h')
 tasks.register('compileSshProductionObjects', Exec) {
@@ -204,6 +205,7 @@ tasks.register('compileSshProductionObjects', Exec) {
 def sshFilesOutput = layout.buildDirectory.file('generated/jniLibs/arm64-v8a/libctos_ssh_files.so')
 tasks.register('compileSshFiles', Exec) {
     inputs.files('src/main/cpp/ssh_file_view.c', 'src/main/cpp/ssh_file_view.h', 'src/main/cpp/ssh_file_jni.c',
+        'src/main/cpp/ssh_view_handle.c', 'src/main/cpp/ssh_view_handle.h',
         'src/main/cpp/ssh_file_io.c', 'src/main/cpp/ssh_file_io.h',
         'src/main/cpp/ssh_role_bootstrap.c', 'src/main/cpp/ssh_role_bootstrap.h',
         'src/main/cpp/ssh_role_jni.c',
@@ -229,7 +231,8 @@ tasks.register('compileSshFiles', Exec) {
             '-Isrc/main/cpp', "-I${productionInclude.absolutePath}",
             "-I${baselineSource.absolutePath}", "-I${baselineBuild.absolutePath}",
             "-I${baselineCompatInclude.absolutePath}", "-I${opensslInclude.absolutePath}",
-            'src/main/cpp/ssh_file_view.c', 'src/main/cpp/ssh_file_io.c', 'src/main/cpp/ssh_file_jni.c',
+            'src/main/cpp/ssh_file_view.c', 'src/main/cpp/ssh_view_handle.c',
+            'src/main/cpp/ssh_file_io.c', 'src/main/cpp/ssh_file_jni.c',
             'src/main/cpp/ssh_role_bootstrap.c', 'src/main/cpp/ssh_role_jni.c',
             'src/main/cpp/ssh_callback_adapter.c', 'src/main/cpp/ssh_callback_jni.c',
             'src/main/cpp/ssh_session_jni.c',
@@ -341,7 +344,8 @@ tasks.register('testSshNativeClientHost') {
                 '-Isrc/main/cpp', "-I${productionInclude.absolutePath}",
                 "-I${baselineSource.absolutePath}", "-I${baselineBuild.absolutePath}",
                 "-I${baselineCompatInclude.absolutePath}", "-I${opensslInclude.absolutePath}",
-                'src/main/cpp/ssh_file_view.c', 'src/main/cpp/ssh_role_bootstrap.c',
+                'src/main/cpp/ssh_file_view.c', 'src/main/cpp/ssh_view_handle.c',
+                'src/main/cpp/ssh_role_bootstrap.c',
                 'src/main/cpp/ssh_callback_adapter.c', 'src/main/cpp/ssh_hostfile_issuer.c',
                 'src/main/cpp/ssh_kex_guard.c', 'src/main/cpp/ssh_native_client.c',
                 'src/test/cpp/ssh_native_client_test.c',
@@ -351,6 +355,26 @@ tasks.register('testSshNativeClientHost') {
                 '-Wl,--end-group', '-lz', '-ldl', '-o', binary.absolutePath
         }
         println 'SSH_NATIVE_CLIENT_BUILD gate=pass runtime=not-run reason=qemu-aarch64-unavailable'
+    }
+}
+
+def sshViewHandleHostTest = layout.buildDirectory.file('verification/sshViewHandle/ctos_ssh_view_handle_test')
+tasks.register('testSshViewHandleHost') {
+    inputs.files('src/main/cpp/ssh_file_view.c', 'src/main/cpp/ssh_file_view.h',
+        'src/main/cpp/ssh_view_handle.c', 'src/main/cpp/ssh_view_handle.h',
+        'src/test/cpp/ssh_view_handle_test.c')
+    outputs.file(sshViewHandleHostTest)
+    outputs.upToDateWhen { false }
+    doLast {
+        File binary = sshViewHandleHostTest.get().asFile
+        binary.parentFile.mkdirs()
+        project.exec {
+            commandLine '/usr/bin/cc', '-std=c11', '-O2', '-Wall', '-Wextra', '-Werror',
+                '-pthread', '-Isrc/main/cpp', 'src/main/cpp/ssh_file_view.c',
+                'src/main/cpp/ssh_view_handle.c', 'src/test/cpp/ssh_view_handle_test.c',
+                '-o', binary.absolutePath
+        }
+        project.exec { commandLine binary.absolutePath }
     }
 }
 

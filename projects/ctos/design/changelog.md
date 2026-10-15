@@ -1,5 +1,23 @@
 # Changelog
 
+## 2026-10-15 — native-owned SSH session handle and Android JNI gate (G3.7)
+
+- 新增 `ssh_view_handle.[ch]`：Java 只持有正整数 opaque token；native registry 拥有
+  `ctos_ssh_view`，borrow/revoke 之间有延迟销毁和 stale-token 幂等处理，禁止把 token
+  解释成 C pointer。
+- `ssh_native_client` 现在在 native 侧解析并拥有 bounded host-key blob，按 fingerprint
+  校验后把 parsed `sshkey` 和 managed-view borrow 绑定到 session；close/destroy 保留
+  event-loop 顺序和失败重试边界。`ssh_session_jni.c` 接入 64-slot owner-thread session
+  registry、五个真实 JNI entrypoint、bounded step result 与输入清零。
+- 增加 host `SSH_VIEW_HANDLE_HOST` 回归和独立 Android synthetic JNI 方法。normal gate
+  为 JUnit **189/0/0/0**、production gate pass、native runtime not-run（容器无
+  `qemu-aarch64`）、strict compile/lint/三 ABI Release/assemble pass，APK
+  `dd962567…`；`.14` 上 session handle 与既有 view matrix 各 1 项通过，fixture 已卸载且
+  正式包未改。
+- 本轮仍不宣称完整 SSH：userauth/typed credential、真实 host proof、partial I/O/
+  EAGAIN/EOF/deadline、PTY/forward/service/UI、真实 vault 与外部 SSH 留待后续；task
+  保持 `in_progress`/`implementation_complete=false`。
+
 ## 2026-10-15 — Java session-owner seam and fail-closed JNI (G3.6)
 
 - 新增 `SshNativeSession` Java ownership seam：owner event-loop thread 独占

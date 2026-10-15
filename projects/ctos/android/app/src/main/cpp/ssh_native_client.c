@@ -36,9 +36,11 @@
 
 struct ctos_ssh_native_client {
     struct ssh *ssh;
+    struct sshkey *server_host_public_key;
     ctos_ssh_role_token role;
     ctos_ssh_callback_token callback;
     void *callback_environment;
+    struct ctos_ssh_view_borrow *managed_view_borrow;
     const struct ctos_ssh_view *managed_view;
     int socket_fd;
     int caller_socket_fd;
@@ -48,6 +50,7 @@ struct ctos_ssh_native_client {
     int candidate_handed_off;
     int kex_released;
     int callback_closed;
+    int view_released;
     unsigned int completion_calls;
     uint64_t deadline;
     unsigned char expected_host_fingerprint[CTOS_SSH_NATIVE_CLIENT_FINGERPRINT_BYTES];
@@ -195,27 +198,36 @@ static int view_slices_are_safe(const struct ctos_ssh_view *view) {
     return 0;
 }
 
+static int view_borrow_is_live(const struct ctos_ssh_view_borrow *borrow) {
+    if (borrow == NULL || ctos_ssh_view_borrow_live(borrow) != 0) {
+        errno = EACCES;
+        return -1;
+    }
+    return 0;
+}
+
 static int view_is_current(const struct ctos_ssh_native_client_config *config,
+    const struct ctos_ssh_view *view,
     const struct ctos_ssh_role_snapshot *snapshot, size_t path_length) {
     static const unsigned char root_path[] = "ssh/config";
     const struct ctos_ssh_file *root;
     const struct ctos_ssh_file *known_hosts;
     int references_known_hosts = 0;
 
-    if (config == NULL || snapshot == NULL || config->managed_view == NULL
-        || view_slices_are_safe(config->managed_view) != 0
-        || ctos_ssh_view_live(config->managed_view) != 0
-        || config->managed_view->deadline != snapshot->deadline
-        || same_slice_text(config->managed_view->connection,
+    if (config == NULL || view == NULL || snapshot == NULL
+        || view_slices_are_safe(view) != 0
+        || ctos_ssh_view_live(view) != 0
+        || view->deadline != snapshot->deadline
+        || same_slice_text(view->connection,
             snapshot->connection_id, CTOS_SSH_ROLE_CONNECTION_ID_BYTES) != 0
-        || same_slice_text(config->managed_view->root,
+        || same_slice_text(view->root,
             (const char *)root_path, sizeof(root_path) - 1U) != 0) {
         errno = EACCES;
         return -1;
     }
-    root = ctos_ssh_view_lookup(config->managed_view, root_path,
+    root = ctos_ssh_view_lookup(view, root_path,
         sizeof(root_path) - 1U, CTOS_SSH_CONFIG);
-    known_hosts = ctos_ssh_view_lookup(config->managed_view,
+    known_hosts = ctos_ssh_view_lookup(view,
         (const unsigned char *)config->known_hosts_path, path_length,
         CTOS_SSH_KNOWN_HOSTS);
     if (root == NULL || known_hosts == NULL
@@ -346,7 +358,8 @@ static int verify_host_key(struct sshkey *host_key, struct ssh *ssh) {
     memset(&result, 0, sizeof(result));
     client = ssh == NULL ? NULL : ssh_get_app_data(ssh);
     if (client == NULL || client->closed || client->failed || client->completed
-        || client->managed_view == NULL || host_key == NULL
+        || client->managed_view == NULL
+        || view_borrow_is_live(client->managed_view_borrow) != 0 || host_key == NULL
         || fingerprint_matches(client, host_key) != 0) {
         errno = EACCES;
         goto out;
@@ -468,6 +481,7 @@ int ctos_ssh_native_client_open(
     char *proposals[PROPOSAL_MAX] = {KEX_CLIENT};
     size_t path_length;
     size_t candidate_length;
+    const struct ctos_ssh_view *managed_view = NULL;
     int attached_socket = -1;
     int connection_attempted = 0;
     int attached = 0;
@@ -481,23 +495,31 @@ int ctos_ssh_native_client_open(
     memset(&snapshot, 0, sizeof(snapshot));
     if (config == NULL || config->role == 0 || config->socket_fd < 0
         || config->owns_socket != 1 || config->callback == 0
-        || config->callback_environment == NULL || config->server_host_public_key == NULL
+        || config->callback_environment == NULL
+        || config->server_host_public_key_blob == NULL
+        || config->server_host_public_key_length == 0
+        || config->server_host_public_key_length
+            > CTOS_SSH_NATIVE_CLIENT_MAX_HOST_KEY_BLOB_BYTES
         || config->expected_host_fingerprint == NULL
         || !nonzero32(config->expected_host_fingerprint)
-        || config->managed_view == NULL || config->known_hosts_path == NULL
+        || config->known_hosts_path == NULL
         || config->host == NULL || config->candidate_id == NULL
         || config->step_budget == 0
         || config->step_budget > CTOS_SSH_NATIVE_CLIENT_MAX_STEP_BYTES
         || validate_descriptor(config->socket_fd) != 0
         || role_is_current(config, &snapshot) != 0
-        || view_slices_are_safe(config->managed_view) != 0
+        || config->managed_view_borrow == NULL
+        || (managed_view = ctos_ssh_view_borrow_view(
+            config->managed_view_borrow)) == NULL
+        || view_borrow_is_live(config->managed_view_borrow) != 0
+        || view_slices_are_safe(managed_view) != 0
         || bounded_text(config->known_hosts_path, 512U, &path_length) != 0
         || bounded_text(config->candidate_id,
             CTOS_SSH_CALLBACK_CANDIDATE_ID_BYTES - 1U, &candidate_length) != 0
-        || ctos_ssh_view_lookup(config->managed_view,
+        || ctos_ssh_view_lookup(managed_view,
             (const unsigned char *)config->known_hosts_path, path_length,
             CTOS_SSH_KNOWN_HOSTS) == NULL
-        || view_is_current(config, &snapshot, path_length) != 0) {
+        || view_is_current(config, managed_view, &snapshot, path_length) != 0) {
         if (errno == 0) errno = EINVAL;
         wipe_bytes(&snapshot, sizeof(snapshot));
         return -1;
@@ -512,13 +534,23 @@ int ctos_ssh_native_client_open(
     client->role = config->role;
     client->callback = config->callback;
     client->callback_environment = config->callback_environment;
-    client->managed_view = config->managed_view;
+    client->managed_view_borrow = config->managed_view_borrow;
+    client->managed_view = managed_view;
     client->socket_fd = -1;
     client->caller_socket_fd = -1;
     client->deadline = config->deadline;
     client->step_budget = config->step_budget;
     memcpy(client->expected_host_fingerprint, config->expected_host_fingerprint,
         sizeof(client->expected_host_fingerprint));
+    if (sshkey_from_blob(config->server_host_public_key_blob,
+            config->server_host_public_key_length,
+            &client->server_host_public_key) != 0
+        || client->server_host_public_key == NULL) {
+        errno = EINVAL;
+        goto failed;
+    }
+    if (fingerprint_matches(client, client->server_host_public_key) != 0)
+        goto failed;
     if (copy_config_text(client->known_hosts_path,
             sizeof(client->known_hosts_path), config->known_hosts_path, 512U) != 0
         || copy_config_text(client->host, sizeof(client->host), config->host,
@@ -530,8 +562,7 @@ int ctos_ssh_native_client_open(
     memcpy(params.proposal, proposals, sizeof(proposals));
     if (ssh_init(&client->ssh, 0, &params) != 0 || client->ssh == NULL)
         goto failed;
-    if (ssh_add_hostkey(client->ssh,
-            (struct sshkey *)config->server_host_public_key) != 0
+    if (ssh_add_hostkey(client->ssh, client->server_host_public_key) != 0
         || ctos_ssh_kex_bind_role(client->ssh, client->role,
             client->expected_host_fingerprint) != 0) goto failed;
     if (ssh_set_verify_host_key_callback(client->ssh, verify_host_key) != 0)
@@ -566,6 +597,10 @@ failed:
         if (connection_attempted) attached_socket = -1;
         ssh_free(client->ssh);
         client->ssh = NULL;
+    }
+    if (client != NULL && client->server_host_public_key != NULL) {
+        sshkey_free(client->server_host_public_key);
+        client->server_host_public_key = NULL;
     }
     if (attached_socket >= 0) close(attached_socket);
     if (client != NULL) {
@@ -613,6 +648,10 @@ int ctos_ssh_native_client_step(
     }
     if (client->completed || client->failed) {
         errno = EALREADY;
+        goto out;
+    }
+    if (view_borrow_is_live(client->managed_view_borrow) != 0) {
+        result = terminal_error(client, EACCES);
         goto out;
     }
     if (cancelled) {
@@ -693,12 +732,21 @@ out:
 }
 
 int ctos_ssh_native_client_verify_host_key(
-    struct ctos_ssh_native_client *client, const void *opaque_host_key) {
-    if (client == NULL || opaque_host_key == NULL) {
+    struct ctos_ssh_native_client *client, const void *host_key_blob,
+    size_t host_key_blob_length) {
+    struct sshkey *host_key = NULL;
+    int result;
+
+    if (client == NULL || host_key_blob == NULL || host_key_blob_length == 0
+        || host_key_blob_length > CTOS_SSH_NATIVE_CLIENT_MAX_HOST_KEY_BLOB_BYTES
+        || sshkey_from_blob(host_key_blob, host_key_blob_length, &host_key) != 0
+        || host_key == NULL) {
         errno = EINVAL;
         return -1;
     }
-    return verify_host_key((struct sshkey *)opaque_host_key, client->ssh);
+    result = verify_host_key(host_key, client->ssh);
+    sshkey_free(host_key);
+    return result;
 }
 
 int ctos_ssh_native_client_complete(
@@ -732,6 +780,15 @@ int ctos_ssh_native_client_close(struct ctos_ssh_native_client *client) {
         client->kex_released = 1;
     }
     if (!client->kex_released) client->kex_released = 1;
+    if (!client->view_released && client->managed_view_borrow != NULL
+        && ctos_ssh_view_borrow_release(client->managed_view_borrow) != 0) return -1;
+    client->managed_view_borrow = NULL;
+    client->managed_view = NULL;
+    client->view_released = 1;
+    if (client->server_host_public_key != NULL) {
+        sshkey_free(client->server_host_public_key);
+        client->server_host_public_key = NULL;
+    }
     if (client->caller_socket_fd >= 0
         && close(client->caller_socket_fd) != 0) return -1;
     client->caller_socket_fd = -1;

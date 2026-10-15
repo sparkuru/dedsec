@@ -23,3 +23,9 @@
 {"file": ".trellis/tasks/10-08-ssh-terminal-client/research/android-hostfile-issuer-build.sh", "reason": "quality check：G3.4 KEX closure, separate PIE links, forbidden symbols and normal APK exclusion"}
 {"file": "android/app/src/main/cpp/ssh_pinned_client.c", "reason": "quality check：heap-bounded replacement scratch、owned socket flags、fmemopen close 与 candidate rollback"}
 {"file": ".trellis/tasks/10-08-ssh-terminal-client/research/android-hostfile-issuer-build.sh", "reason": "quality check：修正正式 compileSshFiles 闭包 exclusion 误报后，run.3PZSbIzM AArch64 fixture gate 通过"}
+{"file": "android/app/src/test/cpp/ssh_view_handle_test.c", "reason": "quality check：native view handle borrow/revoke/deferred-destroy/stale-token matrix"}
+{"file": "android/app/src/main/cpp/ssh_view_handle.c", "reason": "quality check：opaque registry lifetime, revoke and cleanup error boundary"}
+{"file": "android/app/src/main/cpp/ssh_native_client.c", "reason": "quality check：host-key parse/fingerprint ownership, view-borrow liveness, close order and retry"}
+{"file": "android/app/src/main/cpp/ssh_session_jni.c", "reason": "quality check：five real JNI exports, owner pthread slots, bounded input wipe and cleanup retry"}
+{"file": "android/app/src/androidTestSecretsFixture/java/im/majo/ctos/SshNativeSessionPlatformTest.java", "reason": "quality check：authorized synthetic socketpair Android open/revoke/close runtime and exact cleanup"}
+{"file": "design/verification.md", "reason": "G3.7 host/normal/device evidence with explicit qemu, protocol and authorization boundaries"}

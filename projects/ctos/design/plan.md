@@ -1,5 +1,13 @@
 # ctOS 产品与实施规划
 
+2026-10-15 SSH当前最新窄增量（G3.7）：native-owned session/key/view boundary 与真实
+JNI bridge 已实现。`ssh_view_handle` 以 opaque token 管理 native public view borrow/revoke，
+`ssh_native_client` 拥有 parsed host key、managed-view borrow 和 caller FD，
+`ssh_session_jni.c` 使用 owner-thread session registry；normal JUnit=189/0/0/0、host/
+normal gate 通过，`.14` synthetic open→revoke→close 与 public-file view matrix 各 1 项
+通过并清理。qemu native runtime、完整 protocol/host proof/auth/PTY/forward/service/UI、
+真实 vault 和外部 SSH 仍开放，task 保持 `in_progress`/`implementation_complete=false`。
+
 2026-10-15 SSH当前最新窄增量：在 managed known_hosts CAS provider 之上，已完成仍限于
 host/fixture 的 pinned OpenSSH caller seam。它使用真实 `ssh_api` 附着受管 socket FD，覆盖
 bounded partial I/O/EAGAIN、host issuer/evidence、NEW candidate rollback、KEX/NEWKEYS 到

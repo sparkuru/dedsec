@@ -1,5 +1,51 @@
 # Verification
 
+## 2026-10-15 — native-owned session handle and Android JNI runtime gate (G3.7)
+
+本轮把 G3.6 的 fail-closed JNI placeholder 替换为受管 native boundary。新增
+`ssh_view_handle.[ch]`：positive opaque token 只索引 native registry；`borrow` 是 native
+持有的生命周期凭证，`destroy` revoke 后禁止新 borrow，已有 borrow 在 release 前延迟
+底层 view 销毁。`ssh_native_client` 在成功 open 后持有 parsed host key、managed-view
+borrow 和 OpenSSH state；Java array/string 只经 bounded clone，native 端在完成后清零。
+JNI session registry 保存 owner pthread，`step` 只返回八个 bounded scalar，close/destroy
+失败保留可重试 slot。
+
+host/normal gate 命令（hako 固定容器）包含：
+
+```text
+./hako bash -lc 'cd android && ./gradlew :app:testSshViewHandleHost :app:testSshNativeClientHost :app:testSshCallbackAdapterHost :app:testReleaseUnitTest :app:compileSshFiles :app:lintRelease :app:assembleRelease --rerun-tasks --console=plain'
+```
+
+结果：`SSH_VIEW_HANDLE_HOST gate=pass borrow=pass revoke=pass stale=pass`；
+`SSH_PRODUCTION_OPENSSH_BUILD gate=pass fixture=excluded`；
+`SSH_NATIVE_CLIENT_BUILD gate=pass runtime=not-run reason=qemu-aarch64-unavailable`；
+callback host gate=20；JUnit **189/0/0/0**。strict `compileSshFiles`、arm64-v8a/
+armeabi-v7a/x86_64 Release、lint 和 assemble 均成功；production archive=83；APK SHA256
+`dd9625677e7f874f19ec85f4f0e3f10b31ab8acd4ab71565d145ece4403f582a`。ZIP 只有生产
+`lib/arm64-v8a/libctos_ssh_files.so`；五个 JNI exports 为
+`open/step/verifyHostKey/close/destroy`，forbidden stock caller=0。
+
+独立 fixture 构建使用 `-PctosSecretsUiFixture=true`，main/test APK 的 assemble 与 lint
+成功。对当前授权 `192.168.9.14:5555`（Android 11/API30/arm64-v8a）只安装这两个独立
+包，精确执行：
+
+```text
+im.majo.ctos.SshNativeSessionPlatformTest#syntheticNativeSessionHandle
+im.majo.ctos.SshFileViewPlatformTest#syntheticProtectedFileViews
+```
+
+两项均 `OK (1 test)`、instrumentation status code=0；前者覆盖 synthetic socketpair 的
+production open、view active/revoke、native close 和 cleanup，后者复测现有 public-file
+view matrix。fixture app/test UID 为 10193/10194，测试后精确卸载；无 fixture package
+path、fixture/session process 残留，正式 `im.majo.ctos` APK path 为
+`/data/app/~~nGo0N0WrfrAequbiq8FZTw==/im.majo.ctos-K1Mv_CfV9-JIwLY7giviTQ==/base.apk`，
+安装后读回 hash 为 `3bc762d9e6463ab9612393b9382923f4a29f613ceec3dbe4d9159aae0078f252`。
+
+这不是完整 Android SSH pass：hako 没有 `qemu-aarch64`，没有真实 vault/credential/外部
+SSH；当前设备方法只证明 open/revoke/close 和 view matrix，不证明 userauth、host proof、
+partial I/O/EAGAIN/EOF/deadline、PTY/forward/service/UI。task 仍为
+`in_progress`/`implementation_complete=false`。
+
 ## 2026-10-15 — Java session-owner seam with fail-closed production JNI (G3.6)
 
 本轮新增 `SshNativeSession`、`SshNativeSessionTest`、`ssh_session_jni.c`，并把 JNI

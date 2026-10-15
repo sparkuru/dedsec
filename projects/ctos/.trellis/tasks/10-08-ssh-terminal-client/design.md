@@ -1,5 +1,30 @@
 # SSH 客户端与公共认证集成设计
 
+## G3.7 native-owned session/key/view boundary（2026-10-15，合成 runtime 已验收）
+
+G3.7 在同进程 production C boundary 上完成 native ownership 的最小闭环。Java
+`SshPublicFileLease` 仍只暴露正整数 opaque token；`ssh_view_handle.[ch]` 把 validated
+wire 放进 native registry，borrow 计数保护 view，revoke 阻止新 borrow，最后一个 borrow
+release 后才允许底层 view 销毁。stale token 不会指向新 view。
+
+`ssh_native_client_open` 在 attach OpenSSH 前校验 live role、socket、deadline、view root/
+known_hosts 引用和 bounded text；从 bounded SSH public-key blob 解析 `struct sshkey`，
+校验 32-byte SHA-256 fingerprint 后由 session 持有 parsed key、managed-view borrow、
+OpenSSH state、原 caller FD 与 `F_DUPFD_CLOEXEC` attached FD。失败保留 caller FD/borrow，
+成功后 ownership 转移。close 顺序固定为 candidate rollback → callback close → KEX/OpenSSH
+free → view-borrow release → parsed key free → original FD close；失败阶段保持可重试，
+destroy 只接受 closed tombstone。
+
+`ssh_session_jni.c` 使用 64-slot monotonic session registry 保存 owner `pthread_t`，所有
+JNI open/step/verify/close/destroy 都做 owner 检查；key/fingerprint/blob 只 bounded clone
+并清零，`step` 只返回八个 bounded scalar。Java 层仍负责 callback claim、role/view staged
+cleanup；显式 view revoke 与 native close 之间由 native borrow 提供生命周期保护。
+
+本增量只打开 synthetic JNI lifecycle：host `SSH_VIEW_HANDLE_HOST`、native client host、
+normal APK gate 和 `.14` 上 socketpair 的 open → view revoke → close 均通过。它不证明
+完整 packet event loop、host proof、userauth/typed credential、PTY/forward/service/UI，
+也不改变真实 vault 或外部 SSH 授权边界。
+
 ## G3.6 Java/JNI session-owner fail-closed seam（2026-10-15，runtime 未验收）
 
 `SshNativeSession` 是同进程 production boundary 上的 Java owner 对象。它记录创建
@@ -16,7 +41,7 @@ KEX、socket）→ `nativeClientClosed(claim)` bookkeeping → `releaseRoleAfter
 → `view.close` → `nativeBinding.destroy`。每个已完成阶段用独立布尔状态记录，失败时
 保留未完成阶段供 owner thread 重试。
 
-`ssh_session_jni.c` 先只实现稳定的 fail-closed entrypoint：`Native.open/step/
+历史实现中的 `ssh_session_jni.c` 先只实现稳定的 fail-closed entrypoint：`Native.open/step/
 verifyHostKey/close/destroy` 均抛 `IOException`。原因是现有 C API 参数中有借用的
 `struct sshkey *` 与 `ctos_ssh_view *`，Java token 不能直接解释为这些指针；必须先设计
 native-owned session handle、key ownership、view snapshot/borrow/revoke 和 close/destroy

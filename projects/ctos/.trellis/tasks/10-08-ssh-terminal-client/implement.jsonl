@@ -25,3 +25,11 @@
 {"file": ".trellis/tasks/10-08-ssh-terminal-client/research/android-hostfile-issuer-build.sh", "reason": "G3.4 runner adds pinned KEX guard closure, separate caller PIE link and runtime/not-wired evidence"}
 {"file": "android/app/src/main/cpp/ssh_pinned_client.c", "reason": "G3.4 cleanup hardening：replacement scratch heap allocation、CLOEXEC/NONBLOCK/SOCK_STREAM admission、candidate rollback across protocol/stream errors"}
 {"file": ".trellis/tasks/10-08-ssh-terminal-client/research/android-hostfile-issuer-build.sh", "reason": "修正 normal APK exclusion 误报，只检查 compileSshFiles 正式输入闭包；保留 opt-in KEX fixture 分支"}
+{"file": "android/app/src/main/cpp/ssh_view_handle.h", "reason": "G3.7 opaque native view token, borrow/revoke and deferred destruction contract"}
+{"file": "android/app/src/main/cpp/ssh_view_handle.c", "reason": "G3.7 native view registry ownership, borrow lifetime and stale-token behavior"}
+{"file": "android/app/src/test/cpp/ssh_view_handle_test.c", "reason": "G3.7 host create/summary/borrow/revoke/stale regression"}
+{"file": "android/app/src/main/cpp/ssh_native_client.c", "reason": "G3.7 parsed host-key ownership, fingerprint admission and managed-view borrow transfer"}
+{"file": "android/app/src/main/cpp/ssh_native_client.h", "reason": "G3.7 native config and opaque managed-view borrow API"}
+{"file": "android/app/src/main/cpp/ssh_session_jni.c", "reason": "G3.7 real JNI session registry, owner-thread enforcement, bounded clone/wipe and retryable close"}
+{"file": "android/app/src/androidTestSecretsFixture/java/im/majo/ctos/SshNativeSessionPlatformTest.java", "reason": "Authorized synthetic Android ARM lifecycle probe: production open, view revoke, native close and cleanup"}
+{"file": "android/app/src/main/java/im/majo/ctos/SshPublicFileLease.java", "reason": "Preserve opaque view token after failed revoke cleanup so close can retry"}

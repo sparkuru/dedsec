@@ -11,11 +11,10 @@ import java.io.IOException;
  * consumes the bridge-owned socket according to the native contract.  A
  * failed open consumes neither the socket, callback, nor public-view lease.</p>
  *
- * <p>The production JNI binding is currently fail-closed.  The C client still
- * accepts opaque {@code struct sshkey} and borrowed {@code ctos_ssh_view}
- * pointers, so exposing those values without a native handle/borrow protocol
- * would create a use-after-free boundary.  The injected binding below is the
- * executable Java ownership contract for this increment.</p>
+ * <p>The production JNI binding accepts only bounded key bytes and opaque
+ * native tokens.  The native side owns the parsed host key and keeps a
+ * revocable public-view borrow until native close; the injected binding below
+ * remains the executable Java ownership contract for host JVM tests.</p>
  */
 final class SshNativeSession implements AutoCloseable {
     static final int MAX_STEP_BUDGET = 64 * 1024;

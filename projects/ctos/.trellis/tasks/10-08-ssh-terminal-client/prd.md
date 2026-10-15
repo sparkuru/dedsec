@@ -1,6 +1,24 @@
 # OpenSSH 终端与统一秘密库接入
 
-2026-10-15 G3.6 已增加 Java/JNI session-owner seam，但不宣称 Android runtime 已通过。
+## 2026-10-15 G3.7 当前增量
+
+G3.7 已把 native-owned session/key/view boundary 接入生产 library：Java 侧只传 opaque
+role/callback/view/session token，native 侧持有 parsed host key、managed-view borrow、
+OpenSSH state 和 caller socket。`ssh_view_handle.[ch]` 的 revoke 阻止新 borrow，已有 borrow
+在 native close 后 release；`ssh_session_jni.c` 的五个 entrypoint 已真实调用 C API，并执行
+owner-thread、bounded clone/wipe、64-slot registry 和 close/destroy retry。
+
+当前增量的可验收范围是 native handle 生命周期，不是父任务完整 AC：host view-handle
+回归、normal production link 和独立 `.14` synthetic socketpair 的
+`SshNativeSessionPlatformTest#syntheticNativeSessionHandle` 已通过；既有 public-file
+view matrix 也单独通过。normal JUnit 为 189/0/0/0，production gate pass，native host
+runtime 因 hako 无 qemu 为 not-run，task 仍 `in_progress`/`implementation_complete=false`。
+userauth/typed credential、真实 host proof、packet partial I/O/EAGAIN/EOF/deadline、PTY/
+forward/service/UI、真实 vault 和外部 SSH 不在本增量的完成判据内。
+
+以下 G3.6 段落保留为历史 Java owner/fail-closed 约束；它不再描述当前 JNI 实现。
+
+2026-10-15 历史 G3.6 已增加 Java/JNI session-owner seam，但不宣称 Android runtime 已通过。
 `SshNativeSession` 让 owner event-loop thread 独占 `open/step/verifyHostKey/close/destroy`，
 只允许 `cancel` 跨线程；`NativeSessionClaim` 保证一个 callback binding 只能同时拥有
 一个 session。failed open 必须清掉 opening claim 且不消费 caller FD、callback 或 view；

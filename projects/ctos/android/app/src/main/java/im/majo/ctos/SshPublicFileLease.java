@@ -140,16 +140,29 @@ final class SshPublicFileLease implements AutoCloseable, VaultSession.Revocation
 
     /** No AppSecrets/session calls: also safe under the session's lock. */
     @Override public synchronized void revoke() {
-        if (!active) return;
-        active = false;
-        try { cleanupFailed = !Native.destroy(token); }
-        catch (LinkageError failure) { cleanupFailed = true; }
-        finally { token = 0; }
+        if (active) active = false;
+        destroyNative();
     }
 
     @Override public void close() throws VaultException {
         revoke();
         synchronized (this) { if (cleanupFailed) throw unavailable(); }
+    }
+
+    /** Revoke may only acknowledge a deferred native borrow release. Keep the
+     * token when cleanup is unconfirmed so the owner can retry it. */
+    private synchronized void destroyNative() {
+        if (token <= 0) return;
+        try {
+            if (Native.destroy(token)) {
+                token = 0;
+                cleanupFailed = false;
+            } else {
+                cleanupFailed = true;
+            }
+        } catch (LinkageError failure) {
+            cleanupFailed = true;
+        }
     }
 
     private static VaultException unavailable() {
