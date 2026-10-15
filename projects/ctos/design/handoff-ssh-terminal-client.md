@@ -2,12 +2,12 @@
 
 - 目标与完成判据：在 ctOS 同一个 APK 内完成受管 OpenSSH SSH 客户端；production caller、事件循环、主机信任/凭据、认证、PTY、转发、服务/UI 与 Android 运行时联合验收均通过，且所有未测边界有明确证据。
 - 范围与权限：只在 `projects/ctos` 内工作。允许 `.14`（`192.168.9.14:5555`）上的合成/隔离 SSH 测试和已授权的真实秘密库操作；不使用真实外部 SSH 账号，不把账号、密码、token、私钥写入代码、任务或日志；不 push。
-- 当前状态：基线 checkpoint 为 `6dc6b34`；本轮 G3.5 代码、测试、runner、spec/design 变更已完成并待 checkpoint 提交。task `10-08-ssh-terminal-client` 仍为 `in_progress`，`implementation_complete=false`；normal APK 已包含 production native OpenSSH closure 和 C caller，但没有 Java/JNI session orchestration。
+- 当前状态：本轮 G3.5 checkpoint 已提交为 `df73a64`（父提交 `6dc6b34`）。task `10-08-ssh-terminal-client` 仍为 `in_progress`，`implementation_complete=false`；normal APK 已包含 production native OpenSSH closure 和 C caller，但没有 Java/JNI session orchestration。
 - 已完成：managed `known_hosts` AppSecrets/CAS provider、一次性 native→managed candidate handoff、同步 JNI callback/role bridge、hostfile issuer、production PIC OpenSSH source/object closure、`ssh_native_client` C boundary、pinned caller fixture、host/Gradle/Release/normal-APK exclusion 质量门。
 - 未完成：Android runtime/JNI/Java 会话编排；userauth/typed credential、PTY、forward、foreground service、UI；设备/ARM runtime 和外部 SSH 验收。
-- 下一步：先提交并复核 G3.5 checkpoint，然后在当前 production C boundary 之上接入受审计的 Java/JNI event-loop owner；完成后才安排 `.14` 合成 runtime 验证。
+- 下一步：在已提交的 production C boundary 之上接入受审计的 Java/JNI event-loop owner；完成后才安排 `.14` 合成 runtime 验证。
 - 阻塞与停止条件：不得把 AArch64 cross-link、fixture `ssh_api` 内存流、host/fixture runner 或历史 Docker smoke 当作 Android runtime/production SSH pass。没有 runtime 生命周期、清理、授权范围或外部账号证据时停止，不接真实外部 SSH 账号。
-- 工作状态：workspace `/home/wkyuu/cargo/repo/06-dedsec/projects/ctos`；branch `antitrust`；基线提交 `6dc6b34`；本轮变更尚未提交。
+- 工作状态：workspace `/home/wkyuu/cargo/repo/06-dedsec/projects/ctos`；branch `antitrust`；最近实质代码 checkpoint `df73a64`，handoff metadata follow-up 已提交；工作树应保持 clean。
 - 环境：Android module 在 `android/`；hako/Docker 调用可能需要提升权限；容器内没有 `qemu-aarch64`，因此 AArch64 fixture 只能 link，不能在本机 runtime 执行。
 - 最近更新：2026-10-15
 - 最后验证：固定 runner `build/ssh-native-g3/run.aqN1F2bD/` 返回 `SSH_HOSTFILE_CALLER_BUILD gate=pass runtime=not-run normal_apk=fixture-caller-not-wired`；production native `gate=pass runtime=not-run`；Gradle host gates、177 JVM、strict compile/lint/Release assemble 通过；APK SHA256 `805fc28679aa56be85fa3be75a1608701273908a02f7fb04dddb717c4e1b601e`。
@@ -16,7 +16,7 @@
 
 | 项 | 值 / 描述 | 状态 | 证据来源 |
 | --- | --- | --- | --- |
-| 当前 work commit | `6dc6b34`（本轮 checkpoint 待提交） | 确认 | `git show --stat 6dc6b34` |
+| 当前 work commit | `df73a64`（G3.5 checkpoint） | 确认 | `git show --stat df73a64` |
 | managed provider | `SshManagedKnownHostsProvider` + `AppSecrets` guarded CAS | 确认 | `android/app/src/main/java/im/majo/ctos/SshManagedKnownHostsProvider.java`; `design/verification.md` |
 | candidate handoff | exact role/hop/target/connection/host/port/key/digest/body，一次性、清零 | 确认 | `SshKnownHostsCandidateHandoff.java`; `ssh_callback_adapter.[ch]`; `design/ssh-terminal.md` |
 | hostfile issuer | pinned upstream parser + project-owned stream writer，production source and fixture evidence | 确认 | `ssh_hostfile_issuer.[ch]`; production/G3 runners |
@@ -66,9 +66,8 @@
 
 ## 下一步行动
 
-- **提交 G3.5 checkpoint** — 状态：当前轮次
-  - 前置条件：固定 runner、native host、G3 exclusion、full Gradle gate 和文档检查均为 pass。
-  - 完成判据：只提交本轮 intended code/test/runner/spec/design/task 变更，不 push；task 仍保持 `in_progress`。
+- **提交 G3.5 checkpoint** — 状态：已完成
+  - 结果：`df73a64` 已提交本轮 intended code/test/runner/spec/design/task 变更；未 push，task 仍保持 `in_progress`。
 - **实现 Java/JNI production session owner** — 状态：待开始
   - 前置条件：复用现有 role/view/callback contracts，不新增明文文件、CLI、fork/exec 或外部账号。
   - 完成判据：同一 event-loop 线程同步调用 native open/step/verify/close，证明 callback/FD/managed-view 生命周期和取消/期限。
@@ -80,8 +79,8 @@
 
 ## 接管验证
 
-- 环境检查：`git status --short` → 先确认 dirty path 都属于本轮 G3.5 intended 变更。
-- 状态检查：`git show --stat --oneline 6dc6b34` → 基线 checkpoint；本轮新 checkpoint 需在提交后更新本档案。
+- 环境检查：`git status --short` → 应为空；本轮 G3.5 intended 变更已提交。
+- 状态检查：`git show --stat --oneline df73a64` → 当前 checkpoint；基线父提交为 `6dc6b34`。
 - 最小验证：`jq -e . .trellis/tasks/10-08-ssh-terminal-client/task.json` → JSON 有效；metadata 应保持 `in_progress` 与 `implementation_complete=false`。
 - 接管判据：当前 branch、task 状态、dirty path 和本档案一致，才可开始 Java/JNI runtime integration。
 - 接管后更新：完成 runtime 或改变授权/设备范围后，先更新本档案顶部摘要、关键事实、假设台账和下一步，再继续实现。
@@ -94,4 +93,4 @@
 - `.trellis/tasks/10-08-ssh-terminal-client/research/android-production-openssh-build.sh`（时间=2026-10-15）→ 支撑 pinned PIC source/object closure、83-member archive 与 symbol gate。
 - `.trellis/tasks/10-08-ssh-terminal-client/research/android-hostfile-issuer-build.sh`（时间=2026-10-15）→ 支撑 pinned manifest/patch/object/link/exclusion runner。
 - `.trellis/tasks/10-08-ssh-terminal-client/task.json`（时间=2026-10-15）→ 支撑授权范围、当前 implementation phase 和 run ID。
-- `git show --stat 6dc6b34`（cwd=ctOS，时间=2026-10-15）→ 支撑本轮提交内容。
+- `git show --stat df73a64`（cwd=ctOS，时间=2026-10-15）→ 支撑本轮 production code checkpoint 内容。
