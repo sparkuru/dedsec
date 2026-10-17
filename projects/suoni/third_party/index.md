@@ -1,0 +1,12 @@
+# Retained Third-Party Material
+
+This inventory supplements existing notices; it does not assign a license to Suoni or resolve all redistribution obligations. No project root license has been selected.
+
+| Component | Version/source | Retained paths | License/notice evidence and status |
+| --- | --- | --- | --- |
+| Trellis | 0.6.17; installed `@mindfoldhq/trellis` distribution, package repository https://github.com/mindfold-ai/trellis | `.trellis/workflow.md`, scripts, agents, configuration/metadata, generated spec templates, managed AGENTS block; local platform helpers remain untracked | Package declares AGPL-3.0-only. Exact installed `LICENSE` retained as [TRELLIS-0.6.17-LICENSE](TRELLIS-0.6.17-LICENSE). Representative workflow and task-store files match installed templates by SHA-256; keep inline notices. |
+| UI/UX Pro Max CLI and bundled generated assets | `uipro-cli` 2.2.3, downloaded from npm during authorized Codex initialization | `.codex/skills/ui-ux-pro-max/` (ignored local integration) | Package declares MIT but npm contents did not include an exact LICENSE/NOTICE file. `license-notice-needed`: obtain version-matched upstream text before copying/distributing the integration or generated source/data. No raw design output is retained as shared project material. |
+| Sony Sound Connect | User-supplied `sound_connect_v13.3.0.apk`; version is the supplied filename, not independently inspected package metadata | `archive/analyse/sound_connect_v13.3.0.apk` (ignored APK input) | Proprietary research input; source/redistribution rights not established. Do not bundle, copy app assets or add it as a build dependency. |
+| Supplied analysis and SonyMdrTile prototype | User-supplied archive; no independent license or revision metadata found | `archive/analyse/sony_mdr.py`, protocol document, `archive/SonyMdrTile/` | Provenance/license unresolved for redistribution; references may inform original implementation but are not automatically licensed for code copying. `SonyMdrTile-debug.apk` is ignored; no binary copied or removed. |
+
+For any new copied source/template/asset/font, establish exact version and retained paths, preserve its exact LICENSE/NOTICE/COPYRIGHT and inline notices, and extend this inventory. Package dependencies normally retain their packaged notices; do not vendor every transitive dependency merely for bootstrap. An unknown notice remains `license-notice-needed`, never a fabricated generic license or an implied project license.

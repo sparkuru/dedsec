@@ -1,0 +1,32 @@
+# Local assistant integrations
+.agents/
+.codex/
+.claude/
+.opencode/
+.aws/
+
+# Local configuration and development state
+.env
+.env.*
+!.env.example
+!.env.*.example
+.devhome/
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+
+# Android build/cache output and machine configuration
+.gradle/
+.kotlin/
+**/build/
+local.properties
+*.apk
+*.aab
+*.jks
+*.keystore
+
+# Generated test artifacts
+playwright-report/
+test-results/
