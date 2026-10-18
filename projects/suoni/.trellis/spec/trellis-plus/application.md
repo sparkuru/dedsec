@@ -6,7 +6,7 @@ Approved direction: an independently developed Sony device controller APK, using
 
 Reference sources are `archive/analyse/docs/sony-mdr-protocol.md`, `archive/analyse/sony_mdr.py`, and `archive/SonyMdrTile/`. They are retained reference implementations, not the new application's build roots. Do not edit or move them during initialization. The original Sound Connect APK is research input and must not become an app resource or build dependency.
 
-Proposed boundary for the first implementation: Kotlin owns on-phone Bluetooth and native UI; Flask provides a development/laboratory API or simulator. Whether Flask is required at runtime, hosts Bluetooth itself on Linux, or supports another use case needs a user decision. Do not require a remote server for basic headphone control based only on the chosen language stack. Jetpack Compose is a candidate for the new UI, not an established project dependency.
+Confirmed runtime boundary (2026-10-17 user approval, recorded in `.trellis/mainline.md`): Kotlin owns on-phone Bluetooth, protocol sessions, device state and native UI. Basic control must work independently and offline with Flask stopped, the Sony App closed and no Sony account. Flask is limited to development/laboratory simulation, protocol fixtures/replay and regression validation; it is outside the APK runtime control path. Linux Bluetooth hosting or remote-control deployment requires a separate scope decision. Verify this boundary on the selected real phone/headphone combination; simulated transport alone cannot close offline hardware acceptance. Jetpack Compose remains a candidate for the UI, not an established project dependency.
 
 ## Protocol Contracts to Carry Forward
 
