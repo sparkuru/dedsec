@@ -15,7 +15,7 @@
   "branch": null,
   "base_branch": "antitrust",
   "worktree_path": null,
-  "commit": "8c0a615",
+  "commit": "251b0f35641457ae91a8fdbac663eb1859f832e0",
   "latest_increment": "2026-10-19 Android/JNI密码与未加密/加密私钥认证连续阶段已实现并独立实测；CSASv2精确key/passphrase一次能力、RSA SHA2/publicmatch/localverify、全线程重入guard、真实loan期限兼容、最后store read后finalguard和own-NEW-CAS epoch/loan continuation均完成。fresh JVM244/0/0/0、final ARM1244010checks/exit0、normal94tasks65s/lint/Release/v2/archive83/12JNI/forbidden0；设备四精确方法各OK1，26.954/27.418/23.781/23.906秒，两包进程清理且正式APK3bc762d9不变。普通APK89eb6425未安装，无真实vault/账号。",
   "pr_url": null,
   "subtasks": [],
@@ -113,8 +113,8 @@
     ".trellis/spec/backend/app-secrets.md",
     ".trellis/tasks/10-08-ssh-terminal-client/research/auth-integration-final-20261019.md"
   ],
-  "notes": "2026-10-19 Android/JNI密码与未加密/加密私钥认证连续阶段已实现并独立实测；CSASv2精确key/passphrase一次能力、RSA SHA2/publicmatch/localverify、全线程重入guard、真实loan期限兼容、最后store read后finalguard和own-NEW-CAS epoch/loan continuation均完成。fresh JVM244/0/0/0、final ARM1244010checks/exit0、normal94tasks65s/lint/Release/v2/archive83/12JNI/forbidden0；设备四精确方法各OK1，26.954/27.418/23.781/23.906秒，两包进程清理且正式APK3bc762d9不变。普通APK89eb6425未安装，无真实vault/账号。 加密PKCS8/KBI/MFA/rekey压缩兼容、channel/PTY/forward/service/UI及完整产品AC仍开放；父task in_progress/implementation_complete=false，未提交归档。",
-  "current_increment": "本轮Android/JNI与私钥认证连续阶段已完成（包括有界加密私钥与真实NEW/CAS）；下一阶段为父任务的channels/PTY和后续客户端集成。",
+  "notes": "2026-10-19 Android/JNI密码与未加密/加密私钥认证连续阶段已实现并独立实测；CSASv2精确key/passphrase一次能力、RSA SHA2/publicmatch/localverify、全线程重入guard、真实loan期限兼容、最后store read后finalguard和own-NEW-CAS epoch/loan continuation均完成。fresh JVM244/0/0/0、final ARM1244010checks/exit0、normal94tasks65s/lint/Release/v2/archive83/12JNI/forbidden0；设备四精确方法各OK1，26.954/27.418/23.781/23.906秒，两包进程清理且正式APK3bc762d9不变。普通APK89eb6425未安装，无真实vault/账号。 加密PKCS8/KBI/MFA/rekey压缩兼容、channel/PTY/forward/service/UI及完整产品AC仍开放；父task in_progress/implementation_complete=false；认证阶段已提交251b0f3，不归档。用户确认下一增量session channel/PTY；详见现有handoff当前行动。",
+  "current_increment": "认证阶段已提交251b0f3；用户确认下一增量为session channel/PTY与终端输入输出、resize、退出清理闭环，尚未实施。先trellis-continue恢复原任务，再研究冻结合同、本地实现与合成验证；不归档父任务。",
   "local_docker_ssh_smoke": {
     "date": "2026-10-14",
     "state": "device_to_ephemeral_docker_ssh_public_key_login_pass_cleaned",

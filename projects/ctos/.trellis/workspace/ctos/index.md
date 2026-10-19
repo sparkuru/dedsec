@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 26
-- **Last Active**: 2026-10-15
+- **Total Sessions**: 47
+- **Last Active**: 2026-10-19
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~838 | Active |
+| `journal-1.md` | ~1667 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,10 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 47 | 2026-10-19 | Commit SSH authentication checkpoint and prepare channel/PTY continuation | `251b0f3` | `antitrust` |
+| 46 | 2026-10-19 | Android/JNI password, encrypted private keys and real NEW/CAS authentication; synthetic board gates pass | `251b0f3` | `antitrust` |
+| 45 | 2026-10-19 | Explicit native password USERAUTH;67 encrypted scenarios and ARM gates pass | `251b0f3` | `antitrust` |
+| 44 | 2026-10-19 | Receipt-bound selected credential handoff; local JVM/ARM gates pass | `251b0f3` | `antitrust` |
 | 26 | 2026-10-15 | SSH native-owned session handle and Android JNI synthetic gate | `8c0a615` | `antitrust` |
 | 25 | 2026-10-15 | SSH Java owner seam and fail-closed JNI checkpoint | `297c328`, `aa9d69f` | `antitrust` |
 | 24 | 2026-10-15 | SSH managed provider and OpenSSH fixture checkpoint | `6dc6b34`, `19281bf` | `antitrust` |

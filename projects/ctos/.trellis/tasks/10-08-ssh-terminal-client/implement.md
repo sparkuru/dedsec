@@ -33,7 +33,7 @@ archive83/12JNI/forbidden0通过。开发板密码/未加密私钥/加密私钥/
 - [x] actual ARM QEMU、fresh JVM、strict/lint/Release/12JNI/archive/fixture排除及四Android精确方法。
 - [x] 安装的独立两包/进程清理，正式APK读回未变；design/spec/task/context/journal同步。
 
-本连续阶段已完成，父task保持in_progress，未commit/archive/dist/正式安装。后续转入
+本连续阶段已完成，实现已提交 `251b0f3`；父task保持in_progress，未archive/dist/正式安装。后续转入
 channels/PTY及产品集成；不重新等待用户为已经授权的本地工作逐项回复继续。
 
 ## 2026-10-19 连续阶段：Android/JNI 与私钥认证

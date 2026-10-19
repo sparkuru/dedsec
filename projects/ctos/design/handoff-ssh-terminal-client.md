@@ -9,7 +9,7 @@
 - 未完成：session channel / PTY / shell、现有终端界面接入、forward/service，以及 KBI/MFA、加密 PKCS8 和兼容性矩阵。
 - 下一步：用 `$trellis-continue` 恢复 `.trellis/tasks/10-08-ssh-terminal-client`，研究并冻结认证成功后的 channel/PTY 合同，再实现本地合成闭环。
 - 阻塞与停止条件：暂无本地阻塞；设备不可用不阻塞本地工作。遇到真实凭据需求、未授权设备操作或需改变认证安全合同，先明确范围；不能把 PARTIAL/CHANGE_REQUIRED 当成功。
-- 工作状态：workspace `/home/wkyuu/cargo/repo/06-dedsec/projects/ctos`；branch `antitrust`；认证阶段提交及交接提交见 `git log -2 --oneline`，不归档父任务、不 push。
+- 工作状态（确认）：workspace `/home/wkyuu/cargo/repo/06-dedsec/projects/ctos`；branch `antitrust`；认证实现提交 `251b0f3`，随后的交接/日志提交见 `git log -2 --oneline`。父任务不归档、不 push。
 - 环境（确认）：zsh、项目 `./hako` Docker 构建入口；临时证据 `/tmp/ctos-ssh-android-auth-20261019.yqKxcIaN`，临时工件缺失时按验证文档重建。
 - 最近更新：2026-10-19。
 - 最后验证（确认）：2026-10-19 提交前重新执行 `sha256sum -c` 的 source-final21项、runtime-final9项均通过；本次未重跑构建或设备测试。
