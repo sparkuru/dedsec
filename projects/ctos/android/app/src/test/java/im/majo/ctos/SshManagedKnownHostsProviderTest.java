@@ -41,15 +41,17 @@ public final class SshManagedKnownHostsProviderTest {
     private AppSecrets vault;
     private SshRoleRegistry registry;
     private SshRoleContext role;
+    private PublicView rootView;
 
     private static final class TestClock implements VaultSession.Clock, SshRoleContext.Clock {
         long value = 1_000;
         @Override public long now() { return value; }
     }
 
-    private static final class PublicView implements SshRoleContext.PublicView {
+    private static final class PublicView implements SshRoleContext.PublicView, VaultSession.Revocation {
         boolean active = true;
         @Override public boolean active() { return active; }
+        @Override public void revoke() { active = false; }
     }
 
     private static final class MemoryStore implements AppSecrets.Store {
@@ -57,6 +59,7 @@ public final class SshManagedKnownHostsProviderTest {
         byte[] quick;
         boolean fail;
         boolean uncertain;
+        Runnable afterCommit;
 
         @Override public byte[] read() { return bytes == null ? null : bytes.clone(); }
         @Override public byte[] quickMaterial() { return quick == null ? null : quick.clone(); }
@@ -67,6 +70,7 @@ public final class SshManagedKnownHostsProviderTest {
             guard.beforeCommit();
             bytes = next.clone();
             quick = material == null ? null : material.clone();
+            if (afterCommit != null) afterCommit.run();
             if (uncertain) throw new VaultException("VAULT_COMMIT_UNCERTAIN",
                     "Fixture commit completed but its receipt is uncertain");
         }
@@ -93,7 +97,8 @@ public final class SshManagedKnownHostsProviderTest {
         vault.session.foreground(true);
         vault.unlock(PASSWORD, () -> { });
         registry = new SshRoleRegistry(clock);
-        role = issueRole(0, CONNECTION, 8_001, 11);
+        rootView = new PublicView();
+        role = issueRole(0, CONNECTION, 8_001, 11, rootView);
     }
 
     @After public void tearDown() {
@@ -546,6 +551,56 @@ public final class SshManagedKnownHostsProviderTest {
         return new Prepared(reviewerApproval, trustApproval, hostApproval);
     }
 
+    @Test public void exactOwnCasKeepsLoanButAdvancesEpochAndOldCancellationStillRevokes() throws Exception {
+        long epoch = vault.session.epoch();
+        VaultOperation fileRequest = vault.beginSshFiles(ROOT, CONNECTION);
+        fileRequest.attachRevocation(rootView);
+        vault.session.attachRevocation(epoch, rootView);
+        try (Prepared prepared = prepared(true, true, true)) {
+            prepared.review();
+            assertEquals(SshTrustProposal.CasStatus.COMMITTED, prepared.commit().status);
+            assertEquals(epoch + 1, vault.session.epoch());
+            assertTrue(rootView.active());
+            role.requireActive(clock);
+            rejects("VAULT_OPERATION", () -> vault.sshFiles(fileRequest, ROOT, CONNECTION, files -> fail("old operation")));
+            vault.cancelOperation(fileRequest);
+            assertFalse(rootView.active());
+        }
+    }
+
+    @Test public void unboundTrustMutationStillRevokesAttachedLoan() throws Exception {
+        vault.session.attachRevocation(vault.session.epoch(), rootView);
+        try (Prepared prepared = prepared(true, true, true)) {
+            SshTrustProposal proposal = prepared.review();
+            VaultOperation request = vault.beginTrustUpdate(proposal);
+            vault.updateTrust(request, proposal, () -> { });
+            assertFalse(rootView.active());
+        }
+    }
+
+    @Test public void wrongAttachedLoanCannotBePreservedOrWritten() throws Exception {
+        PublicView other = new PublicView();
+        vault.session.attachRevocation(vault.session.epoch(), other);
+        byte[] before = store.bytes.clone();
+        try (Prepared prepared = prepared(true, true, true)) {
+            prepared.review();
+            rejects("VAULT_CHANGED", prepared::commit);
+            assertArrayEquals(before, store.bytes);
+            assertTrue(rootView.active()); assertTrue(other.active());
+        } finally { vault.lock(); VaultCodec.wipe(before); }
+    }
+
+    @Test public void lockAfterDurableOwnCasNeverRestoresLoanKeyOrHostReceipt() throws Exception {
+        vault.session.attachRevocation(vault.session.epoch(), rootView);
+        try (Prepared prepared = prepared(true, true, true)) {
+            prepared.review();
+            store.afterCommit = vault::lock;
+            rejects("SSH_FILE_VIEW", prepared::commit);
+            assertFalse(rootView.active());
+            assertFalse(vault.session.unlocked());
+        }
+    }
+
     private NativeHandoffPrepared nativeHandoffPrepared() throws Exception {
         return new NativeHandoffPrepared();
     }
@@ -580,9 +635,14 @@ public final class SshManagedKnownHostsProviderTest {
 
     private SshRoleContext issueRole(int hop, String connectionId, int ownerPid, int seed)
             throws VaultException {
+        return issueRole(hop, connectionId, ownerPid, seed, new PublicView());
+    }
+
+    private SshRoleContext issueRole(int hop, String connectionId, int ownerPid, int seed, PublicView view)
+            throws VaultException {
         return registry.issue(new SshRoleContext.Bootstrap(SshRoleContext.Program.CLIENT, ownerPid, hop,
                 connectionId, TARGET, HOST, 22, "view-" + hop, bytes(32, seed), bytes(32, seed + 1),
-                clock.value + 30_000), new PublicView());
+                clock.value + 30_000), view);
     }
 
     private byte[] readKnownHosts() throws Exception {

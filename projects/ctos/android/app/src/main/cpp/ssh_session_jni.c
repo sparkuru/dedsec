@@ -181,9 +181,12 @@ JNIEXPORT jlong JNICALL Java_im_majo_ctos_SshNativeSession_00024Native_open(
     JNIEnv *env, jclass type, jlong role, jint owner_uid, jlong callback,
     jlong view, jint socket_fd, jlong deadline, jint step_budget,
     jbyteArray host_key_blob, jbyteArray expected_fingerprint,
-    jstring known_hosts_path, jstring host, jstring candidate_id) {
+    jstring known_hosts_path, jstring host, jstring candidate_id,
+    jbyteArray selection_wire) {
     unsigned char *key_blob = NULL;
     size_t key_blob_length = 0;
+    unsigned char *selection = NULL;
+    size_t selection_length = 0;
     unsigned char fingerprint[CTOS_SSH_NATIVE_CLIENT_FINGERPRINT_BYTES] = {0};
     char known_hosts[513] = {0};
     char host_name[CTOS_SSH_ROLE_HOST_BYTES + 1U] = {0};
@@ -204,6 +207,9 @@ JNIEXPORT jlong JNICALL Java_im_majo_ctos_SshNativeSession_00024Native_open(
         || copy_string(env, known_hosts_path, known_hosts, sizeof(known_hosts)) != 0
         || copy_string(env, host, host_name, sizeof(host_name)) != 0
         || copy_string(env, candidate_id, candidate, sizeof(candidate)) != 0
+        || (selection_wire != NULL && copy_array(env, selection_wire,
+            CTOS_SSH_NATIVE_CLIENT_MAX_SELECTION_WIRE_BYTES,
+            &selection, &selection_length) != 0)
         || reserve_session(&token) != 0
         || ctos_ssh_view_handle_borrow((ctos_ssh_view_token)view, &borrow) != 0)
         goto failed;
@@ -222,7 +228,9 @@ JNIEXPORT jlong JNICALL Java_im_majo_ctos_SshNativeSession_00024Native_open(
         .managed_view_borrow = borrow,
         .known_hosts_path = known_hosts,
         .host = host_name,
-        .candidate_id = candidate
+        .candidate_id = candidate,
+        .authentication_selection_wire = selection,
+        .authentication_selection_wire_length = selection_length
     };
     if (ctos_ssh_native_client_open(&config, &client) != 0) goto failed;
     borrow = NULL; /* ownership transferred to the native session */
@@ -245,6 +253,8 @@ failed:
         wipe_bytes(key_blob, key_blob_length);
         free(key_blob);
     }
+    wipe_bytes(selection, selection_length);
+    free(selection);
     wipe_bytes(fingerprint, sizeof(fingerprint));
     wipe_bytes(known_hosts, sizeof(known_hosts));
     wipe_bytes(host_name, sizeof(host_name));
@@ -254,6 +264,26 @@ failed:
         return 0;
     }
     return (jlong)token;
+}
+
+JNIEXPORT jbyteArray JNICALL Java_im_majo_ctos_SshNativeSession_00024Native_authenticationSelectionReceipt(
+    JNIEnv *env, jclass type, jlong handle) {
+    struct session_slot *slot;
+    unsigned char receipt[32] = {0};
+    jbyteArray result = NULL;
+
+    (void)type;
+    slot = lock_session(env, handle);
+    if (slot == NULL) return NULL;
+    if (ctos_ssh_native_client_authentication_selection_receipt(slot->client, receipt) != 0) {
+        fail(env);
+    } else {
+        result = (*env)->NewByteArray(env, 32);
+        if (result != NULL) (*env)->SetByteArrayRegion(env, result, 0, 32, (jbyte *)receipt);
+    }
+    wipe_bytes(receipt, sizeof(receipt));
+    pthread_mutex_unlock(&sessions_lock);
+    return result;
 }
 
 JNIEXPORT jintArray JNICALL Java_im_majo_ctos_SshNativeSession_00024Native_step(
@@ -305,6 +335,111 @@ JNIEXPORT void JNICALL Java_im_majo_ctos_SshNativeSession_00024Native_verifyHost
 done:
     wipe_bytes(blob, length);
     free(blob);
+}
+
+JNIEXPORT void JNICALL Java_im_majo_ctos_SshNativeSession_00024Native_beginUserauthService(
+    JNIEnv *env, jclass type, jlong handle) {
+    struct session_slot *slot;
+    int result;
+
+    (void)type;
+    slot = lock_session(env, handle);
+    if (slot == NULL) return;
+    result = ctos_ssh_native_client_begin_userauth_service(slot->client);
+    pthread_mutex_unlock(&sessions_lock);
+    if (result != 0) fail(env);
+}
+
+JNIEXPORT jboolean JNICALL Java_im_majo_ctos_SshNativeSession_00024Native_userauthServiceReady(
+    JNIEnv *env, jclass type, jlong handle) {
+    struct session_slot *slot;
+    int ready;
+
+    (void)type;
+    slot = lock_session(env, handle);
+    if (slot == NULL) return JNI_FALSE;
+    ready = ctos_ssh_native_client_userauth_service_ready(slot->client);
+    pthread_mutex_unlock(&sessions_lock);
+    if (ready != 0 && ready != 1) {
+        fail(env);
+        return JNI_FALSE;
+    }
+    return ready == 1 ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT void JNICALL Java_im_majo_ctos_SshNativeSession_00024Native_beginPasswordAuth(
+    JNIEnv *env, jclass type, jlong handle) {
+    struct session_slot *slot;
+    int result;
+
+    (void)type;
+    slot = lock_session(env, handle);
+    if (slot == NULL) return;
+    result = ctos_ssh_native_client_begin_password_auth(slot->client);
+    pthread_mutex_unlock(&sessions_lock);
+    if (result != 0) fail(env);
+}
+
+JNIEXPORT jint JNICALL Java_im_majo_ctos_SshNativeSession_00024Native_passwordAuthResult(
+    JNIEnv *env, jclass type, jlong handle) {
+    struct session_slot *slot;
+    enum ctos_ssh_native_client_password_auth_result outcome = CTOS_SSH_PASSWORD_AUTH_NOT_STARTED;
+    jint result = -1;
+
+    (void)type;
+    slot = lock_session(env, handle);
+    if (slot == NULL) return -1;
+    if (ctos_ssh_native_client_password_auth_result(slot->client, &outcome) == 0) {
+        switch (outcome) {
+            case CTOS_SSH_PASSWORD_AUTH_NOT_STARTED: result = 0; break;
+            case CTOS_SSH_PASSWORD_AUTH_PENDING: result = 1; break;
+            case CTOS_SSH_PASSWORD_AUTH_SUCCESS: result = 2; break;
+            case CTOS_SSH_PASSWORD_AUTH_REJECTED: result = 3; break;
+            case CTOS_SSH_PASSWORD_AUTH_PARTIAL: result = 4; break;
+            case CTOS_SSH_PASSWORD_AUTH_CHANGE_REQUIRED: result = 5; break;
+            default: break;
+        }
+    }
+    pthread_mutex_unlock(&sessions_lock);
+    if (result < 0) fail(env);
+    return result;
+}
+
+JNIEXPORT void JNICALL Java_im_majo_ctos_SshNativeSession_00024Native_beginPrivateKeyAuth(
+    JNIEnv *env, jclass type, jlong handle) {
+    struct session_slot *slot;
+    int result;
+
+    (void)type;
+    slot = lock_session(env, handle);
+    if (slot == NULL) return;
+    result = ctos_ssh_native_client_begin_private_key_auth(slot->client);
+    pthread_mutex_unlock(&sessions_lock);
+    if (result != 0) fail(env);
+}
+
+JNIEXPORT jint JNICALL Java_im_majo_ctos_SshNativeSession_00024Native_privateKeyAuthResult(
+    JNIEnv *env, jclass type, jlong handle) {
+    struct session_slot *slot;
+    enum ctos_ssh_native_client_private_key_auth_result outcome = CTOS_SSH_PRIVATE_KEY_AUTH_NOT_STARTED;
+    jint result = -1;
+
+    (void)type;
+    slot = lock_session(env, handle);
+    if (slot == NULL) return -1;
+    if (ctos_ssh_native_client_private_key_auth_result(slot->client, &outcome) == 0) {
+        switch (outcome) {
+            case CTOS_SSH_PRIVATE_KEY_AUTH_NOT_STARTED: result = 0; break;
+            case CTOS_SSH_PRIVATE_KEY_AUTH_PENDING: result = 1; break;
+            case CTOS_SSH_PRIVATE_KEY_AUTH_SUCCESS: result = 2; break;
+            case CTOS_SSH_PRIVATE_KEY_AUTH_REJECTED: result = 3; break;
+            case CTOS_SSH_PRIVATE_KEY_AUTH_PARTIAL: result = 4; break;
+            default: break;
+        }
+    }
+    pthread_mutex_unlock(&sessions_lock);
+    if (result < 0) fail(env);
+    return result;
 }
 
 JNIEXPORT void JNICALL Java_im_majo_ctos_SshNativeSession_00024Native_close(

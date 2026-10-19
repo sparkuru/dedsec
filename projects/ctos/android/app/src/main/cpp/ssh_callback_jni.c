@@ -20,6 +20,7 @@ struct jni_callback_target {
     jmethodID kex_complete;
     jmethodID credential;
     jmethodID credential_bytes;
+    jmethodID credential_bytes_selected;
 };
 
 static void wipe_bytes(unsigned char *bytes, size_t length) {
@@ -461,11 +462,13 @@ static int jni_credential(void *context, void *environment, int kind) {
     return result;
 }
 
-static int jni_credential_bytes(void *context, void *environment, int kind,
+static int jni_credential_bytes_common(void *context, void *environment, int kind,
+    const unsigned char selection_receipt[32], uint64_t cycle,
+    const unsigned char session_digest[32], int selected,
     unsigned char *output, size_t capacity, size_t *length) {
     struct jni_callback_target *target = context;
     JNIEnv *env = environment;
-    jbyteArray returned = NULL;
+    jbyteArray returned = NULL, receipt = NULL, digest = NULL;
     jsize returned_length = 0;
     int result = EIO;
     if (length != NULL) *length = 0;
@@ -476,10 +479,25 @@ static int jni_credential_bytes(void *context, void *environment, int kind,
     if (length == NULL || output == NULL || capacity == 0) return EINVAL;
     if (capacity > CTOS_SSH_CALLBACK_MAX_CREDENTIAL_BYTES) return EOVERFLOW;
     if (attached(target, environment) != 0) return EPERM;
-    if (target->credential_bytes == NULL) return ENOSYS;
-
-    returned = (jbyteArray)(*env)->CallObjectMethod(env, target->object,
-        target->credential_bytes, (jint)kind);
+    if (selected) {
+        if (target->credential_bytes_selected == NULL) return ENOSYS;
+        if (selection_receipt == NULL || session_digest == NULL || cycle == 0
+            || cycle > INT64_MAX) return EINVAL;
+        receipt = (*env)->NewByteArray(env, 32);
+        if (receipt == NULL || (*env)->ExceptionCheck(env)) goto done;
+        digest = (*env)->NewByteArray(env, 32);
+        if (digest == NULL || (*env)->ExceptionCheck(env)) goto done;
+        (*env)->SetByteArrayRegion(env, receipt, 0, 32, (const jbyte *)selection_receipt);
+        if ((*env)->ExceptionCheck(env)) goto done;
+        (*env)->SetByteArrayRegion(env, digest, 0, 32, (const jbyte *)session_digest);
+        if ((*env)->ExceptionCheck(env)) goto done;
+        returned = (jbyteArray)(*env)->CallObjectMethod(env, target->object,
+            target->credential_bytes_selected, (jint)kind, receipt, (jlong)cycle, digest);
+    } else {
+        if (target->credential_bytes == NULL) return ENOSYS;
+        returned = (jbyteArray)(*env)->CallObjectMethod(env, target->object,
+            target->credential_bytes, (jint)kind);
+    }
     if ((*env)->ExceptionCheck(env)) {
         (*env)->ExceptionClear(env);
         result = EFAULT;
@@ -514,6 +532,15 @@ static int jni_credential_bytes(void *context, void *environment, int kind,
     *length = (size_t)returned_length;
     result = 0;
 done:
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); result = EFAULT; }
+    if (receipt != NULL && zero_java_array(env, receipt, 32) != 0) {
+        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+        result = EFAULT;
+    }
+    if (digest != NULL && zero_java_array(env, digest, 32) != 0) {
+        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+        result = EFAULT;
+    }
     /* Zero the managed array before releasing the local reference, including
      * the too-large and provider-failure paths.  No payload is logged. */
     if (returned != NULL && returned_length >= 0
@@ -526,7 +553,23 @@ done:
         if (length != NULL) *length = 0;
     }
     if (returned != NULL) (*env)->DeleteLocalRef(env, returned);
+    if (receipt != NULL) (*env)->DeleteLocalRef(env, receipt);
+    if (digest != NULL) (*env)->DeleteLocalRef(env, digest);
     return result;
+}
+
+static int jni_credential_bytes(void *context, void *environment, int kind,
+    unsigned char *output, size_t capacity, size_t *length) {
+    return jni_credential_bytes_common(context, environment, kind, NULL, 0, NULL, 0,
+        output, capacity, length);
+}
+
+static int jni_credential_bytes_selected(void *context, void *environment, int kind,
+    const unsigned char selection_receipt[32], uint64_t cycle,
+    const unsigned char session_digest[32], unsigned char *output,
+    size_t capacity, size_t *length) {
+    return jni_credential_bytes_common(context, environment, kind, selection_receipt,
+        cycle, session_digest, 1, output, capacity, length);
 }
 
 static int jni_release(void *context, void *environment) {
@@ -593,6 +636,12 @@ JNIEXPORT jlong JNICALL Java_im_majo_ctos_SshNativeCallbackAdapter_00024Native_o
         (*env)->ExceptionClear(env);
         context->credential_bytes = NULL;
     }
+    context->credential_bytes_selected = (*env)->GetMethodID(env, callback_class,
+        "onNativeSelectedCredentialBytes", "(I[BJ[B)[B");
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        context->credential_bytes_selected = NULL;
+    }
     target.context = context;
     target.validate_environment = attached;
     target.host_key = jni_host_key;
@@ -604,6 +653,7 @@ JNIEXPORT jlong JNICALL Java_im_majo_ctos_SshNativeCallbackAdapter_00024Native_o
     target.release = jni_release;
     target.destroy = jni_destroy;
     target.credential_bytes = jni_credential_bytes;
+    target.credential_bytes_selected = jni_credential_bytes_selected;
     if (ctos_ssh_callback_open(&target, (ctos_ssh_role_token)role, owner_uid,
             (uint64_t)deadline, env, &callback) != 0 || callback == 0) goto failed;
     if (callback_class != NULL) (*env)->DeleteLocalRef(env, callback_class);

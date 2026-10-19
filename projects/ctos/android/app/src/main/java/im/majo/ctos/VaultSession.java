@@ -83,6 +83,21 @@ final class VaultSession {
         revocation = owned;
     }
 
+    synchronized Revocation attachedRevocation(long expected) throws VaultException {
+        assertEpoch(expected);
+        if (key == null || !foreground) throw new VaultException("VAULT_LOCKED", "Unlock the vault first");
+        return revocation;
+    }
+
+    /** Only the exact bound trust writer may retain its already attached loan. */
+    synchronized boolean advanceTrustEpoch(long expected, Revocation owned) {
+        check();
+        if (epoch != expected || key == null || !foreground || owned == null
+                || revocation != owned || !owned.active()) return false;
+        epoch++;
+        return true;
+    }
+
     private void check() {
         if (key != null && backgroundAt >= 0
                 && clock.now() - backgroundAt >= timeoutSeconds * 1000L) lock();

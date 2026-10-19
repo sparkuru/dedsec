@@ -1,5 +1,377 @@
 # SSH 客户端与公共认证集成设计
 
+## 2026-10-19 本连续阶段已完成：Android/JNI + 私钥认证
+
+已完成密码与未加密/有界加密私钥的生产Java/JNI编排及独立Android实测，不再把两项列为
+尚未实施。CSASv2/CSKBv1精确口令能力、RSA SHA2协商、expected-public/local verify、
+全线程重入、真实view/role期限和自身NEW/CAS生命周期修复均有真实合成正反回归。
+
+最终fresh JVM244/0/0/0、ARM1244010checks/exit0、normal94tasks65s/lint/Release/v2、
+archive83/12JNI/forbidden0通过。开发板密码/未加密私钥/加密私钥/真实NEW各精确方法OK1，
+26.954/27.418/23.781/23.906秒；两包进程清理，正式APK3bc762d9未变，未用真实vault/账号。
+普通APK89eb6425未安装；完整证据/格式限制见design/verification.md#20261019-android-auth。
+加密PKCS8、KBI/MFA、rekey/压缩、channels/PTY/forward/service/UI和父任务AC继续开放。
+
+安全合同先冻结为七段spec，再由main实现密码之后的private-key、atomic key/passphrase与
+own-CAS continuation；早期Java/JNI/fixture实现代理结果已复核，main独占所有构建与设备。
+不能把key identity替代remote target，不允许第二次回调kind2；KDF先有界；仅own exact
+CAS可保留原loan并推进epoch，manual lock/原file cancellation仍撤销，无状态复活。
+
+## 2026-10-19 连续阶段初始方案（已完成，实际结果见顶部）
+
+当前先接四个password service/auth JNI方法，Java显式phase保留KEX complete语义；static
+ThreadLocal覆盖全部session native entry，防止同/异session重入全局锁。独立fixture peer
+动态依赖生产libctos_ssh_files，不复制archive，真实MemoryStore AppSecrets/lease/role/
+callback/session走KNOWN四结果/取消。完整七段合同见ssh-native.md顶部。
+
+随后private-key使用ownedCSAS expectedpublic与rawsession签名；必须parse/equal_public且
+本地expectedpublic验签后才排队，以防Ed25519序列化private字段与public字段不一致。
+RSA SHA2协商、encryptedkey/passphrase独立能力合同另冻结；不传NULL算法落到SHA1。
+本地实现和检查连续执行，设备exact包就绪后按当前授权；不使用真实账号。
+
+## 2026-10-19 当前切片：C-only password USERAUTH（已实现，本地合成验证通过）
+
+显式begin_password_auth从ownedCSAS用户名/固定PASSWORD选择构造唯一USERAUTH_REQUEST，
+复用selectedhandoff的一次尝试、currentcycle/rawsessiondigest/READY与private scratch检查。
+密码1..8192bytes、拒任何NUL，put_string不截断，64padding；send后或构包失败立即擦除
+plaintext（失败仅sshpkt_start(SSH2_MSG_IGNORE)重置、不send），所有scratch wipe/free。
+
+独立authphase，REQUEST_PENDING全部排空后才AWAIT_REPLY；step复用boundedtransport并在
+I/O前/最终结果前查当前proof。只保留SUCCESS/REJECTED/PARTIAL/CHANGE_REQUIRED枚举，
+无自动retry/nextmethod；banner有界丢弃，无UI/promptauthority。新constresult accessor无
+I/O/provider/clientmutation且错误时清out。完整七段签名/矩阵/兼容合同见ssh-native.md顶部。
+
+实际验证：67新增连接场景；finalfocused7tasks13s、callback35/strictnative；normal94tasks
+19s（23exec71uptodate）、lint/Release/v2通过，JVM221/0/0/0为保留报告而非新跑。
+最终QEMU785537checks/exit0，正式checker无productionfinding；main补强pending-BANNER
+positive且实际运行通过。APK983f2032未安装。ENOMEM/hash/proof漂移、构包失败reset、
+padding/upstreamwipe和精确postparsecancel未动态注入；无Java/JNI认证执行或完整transport
+兼容声明，详见design/verification.md最新节。
+
+仅Cclient.h/.c与nativeclienttest.c由实现代理写；main独占所有构建/QEMU与文档，checker
+只读正式复核后协调必要修正。无JNI/Java变化、无上游patch/archive成员或真实凭据操作。
+
+## 2026-10-19 当前切片：receipt-bound selected credential handoff（已实现，本地合成验证通过）
+
+把CSAS身份回执接入一次selectedtypedbytehandoff，不发USERAUTH/不解析keys。Cclient
+唯一新入口从ownedCSAS派生kind/receipt，要求READY、unique/currentKEXcycle和当前raw
+session_id SHA256等于成功上报的digest。保存completiondigest，provider前后都核对。
+使用privateboundedsecretscratch，postcheck通过才copycaller，所有失败wipe/length0。
+preflightEPERM/premature不consume，scratchalloc可重试；调用selectedcallback前consume，
+之后任何失败terminal且不自动重试，success也不代表authenticated。
+
+Ccallbacktarget/API追加selected(kind,receipt32,cycle,digest32)，缺失ENOSYS且不回退旧
+kind-only。JNI唯一Java方法onNativeSelectedCredentialBytes(I[BJ[B)[B；Java验证frozenCSAS
+digest、currenthost/KEXobject/cycle/digest、ownednativeclaim，复用callbackpipeline。
+nativeclaim首次issued后sticky拒绝旧objectselectedoverload；所有selected路径shared
+one-shot，legacyunselected兼容。新增provider/bridge finalEffectGuard在AppSecretsreceiver
+前检查currentadapterinvocation/proofs/cancel/clock，返回前再查；不在guard重入vault。
+
+实际验证：final focused66/0/0/0（57tasks33s）、normal94tasks66s（29exec65uptodate）、
+fresh full JVM221/0/0/0、callback35、最终QEMU323726checks/exit0、lint/Release/v2通过。
+正式复核已修JNI异常检查顺序、finish取消/重入、Error逃逸后invocation清理，无遗留finding。
+Error原样传播，receiver借用数组擦除与owner cleanup实测；adapter内部result wipe源码复核。
+APK `f329056e…` 未安装。新JNI未Android执行；nativecycle/rawsession漂移及ENOMEM/hash故障
+未动态注入，不能外推为完整认证通过。完整hash/命令见design/verification.md最新节。
+
+完整7段错误/ownership/test合同见ssh-native.md最新节。main负责spec/docs/task及所有
+build/QEMU，C和Java实现代理按冻结接口各自所有权并行，之后统一check。无设备/账号/
+真实库操作，不提供JavaSessionsecretgetter，sessionJNIexports仍6；实际auth继续开放。
+
+## 2026-10-19 CSAS v1 native selection metadata（已实现，本地合成验证通过）
+
+沿用managed immutable selection，以CSASv1 canonicalbigendian record穿过现有sessionopen
+到JNI/nativeclient。字段为magic/version/flags、native role token/hop/roleNonce/
+connectionBinding、kind和五个length-prefixed username/entry/path/keyIdentity/publicblob；
+max1MiB+2048，SHA256exactwire作metadatareceipt，不是认证授权。完整字段/错误合同见
+ssh-native.md新7段CSASsection。privateblob解析、credentialcallback和USERAUTH均不加入。
+
+Java从callback当前frozenplan生成wire，不接caller独立plan；NativeBinding新增nullable
+wiredefaultoverload，legacy null委托旧open，非null默认拒绝，Production单一Native.open
+追加array参数。native在任何ownershiptransfer前校验strictUTF8/shape/bounds和exactrole
+binding并copy/hash；成功后ownedwire随close清零释放，failedopen/closeretry合同保留。
+
+新增只读receiptaccessor（Java/NativeBinding/JNI/C）；nativeowner/liveview/role/deadline
+检查但不要求KEX，所以preKEX和completedlive均可读；Java显式核对expected32byte digest。
+不在nativeopen成功后做额外可失败的自动核对，避免把已消费socket说成open失败未消费。
+本轮只本地JVM/ARMsynthetic、strictbuild和Releasepackaging；无设备或真实凭据操作。
+
+实际结果：focused53/0/0/0、56tasks28s；正式复核修正directadaptercancelguard及encoder
+scratchfinally两个问题，无remainingfinding。normal94tasks64s（29exec65uptodate），fresh
+JVM208/0/0/0、lint/Release/v2、archive83/sixJNI/forbidden0通过；最终QEMU253,155checks/
+exit0。新JNI只编译/链接未设备执行；完整hash/覆盖限制见design/verification.md最新节。
+
+## 2026-10-18 managed authentication selection（已实现，JVM 合成验证通过）
+
+承接 service-ready，只实现认证前 managed metadata/provider 合同，不发送 USERAUTH_REQUEST。
+新增 immutable SshAuthenticationSelection：精确 live role object、显式 strictUTF8 username
+（1–255bytes/noISOcontrol/不trimnormalize）、PASSWORD exactentry，或 PRIVATE_KEY
+managedpath/keyIdentity/defensive-copied expected publicblob。身份匹配不能仅依赖不含nonce的
+role.binding()；本轮 managed receipt 使用同一 selection object，不冻结 native serialization。
+
+adapter.selectAuthentication 在 owner线程、任何callback或sessionclaim之前one-shot冻结；
+sessionopen失败不能重新选择。selected byte overload必须携带相同selection，旧kind-only
+callback在selectedadapter拒绝；未selected路径保留legacy合同。selectedprovider直接通过
+bridge.openSelection按固定字段开request，不调用可重新选择的CredentialRequestSource。
+Request保留selection，在final AppSecrets effectguard重复精确identity/kind/entry/path/keyid
+及既有role/host/KEX/operation检查，保留boundedcopy/wipe/one-shotclose。
+
+私钥expectedpublicblob仅声明预期公钥，真实parse/equal_public留nativeauth阶段；本轮不
+支持selected KEY_PASSPHRASE/KBI。已发现manifest passphrase key:identity与现有operation
+target绑定不同，未来须独立设计，不修改AppSecrets/VaultOperation来绕过。完整7段合同见
+.trellis/spec/backend/ssh-native.md 的 Managed authentication selection 节。
+
+实施边界：Java selection/bridge/provider/adapter及JVMtests；main独占hako/Gradle等执行，
+代理不做设备或真实凭据操作。先focused JVM/lint，再适当normal/Release包装验证；C/JNI
+wire、服务阶段接入、真实认证和产品AC继续开放。
+
+实际结果：实现/正式复核无remainingfinding，新增12tests；focused46/0/0/0和lint通过，
+normal91tasks/57s（26executed65uptodate），fresh全量JVM201/0/0/0、Release/v2/包装通过。
+本轮C/JNI源码不变，无设备动作；完整产物hash和覆盖限制见design/verification.md最新节。
+
+## 2026-10-18 post-KEX ssh-userauth service 协商切片（C 实现与 ARM 合成验证通过）
+
+沿用既有本地实施授权和 `next-userauth-20261017.md` 研究，仅扩展 production C API：
+`ctos_ssh_native_client_begin_userauth_service(client)` 显式从 KEX-only 停止点进入服务
+协商；`ctos_ssh_native_client_userauth_service_ready(client)` 只报告该服务 milestone，
+不代表已认证。既有 `complete()` 继续表示初始 KEX milestone；未显式 begin 的 Java/JNI
+caller 仍在 KEX 后收到 EALREADY，JNI API/wire 不变。
+
+begin 只在原 callback owner/environment、live role/view/deadline、一次成功 KEX callback
+和同一非零 KEX guard cycle 下排队一个固定 `SERVICE_REQUEST("ssh-userauth")`。新增
+无 secret/provider 副作用的 `ctos_ssh_callback_check_live(callback, environment)`，复用
+现有 begin/finish validation，检查 owner/environment/role/cancel/reentry/deadline；不调用
+host/KEX/credential target。在 service begin 与每个 service step 前校验，不能拿 credential
+callback 当存活探针。错误线程/environment 为 EPERM 且不破坏原 owner 状态；有效 owner
+上的失效/取消/超时 terminalize 并保留 close retry。
+
+状态显式区分 KEX-only、request pending、await accept、service ready。仍使用 OpenSSH
+sshpkt/ssh_api 编解码和有界 socket read/write；request 必须排空后才能接受回复，success
+后停止，后续 step/begin 为 EALREADY。进入 service phase 时禁用 KEX 20–49 dispatch，
+让重入 KEX/NEWKEYS 在 caller 处 EPROTO 拒绝，不能在 ssh_packet_next 内悄然 rekey 并
+把旧 proof 当新授权。EXT_INFO 继续由固定 upstream handler 处理。
+
+兼容性：SERVICE_ACCEPT 无 payload 或一个零长度 string 保留 stock empty-reply 容忍；
+若携带非空 service string，必须逐字节等于 ssh-userauth 且无 trailing bytes。该非空值
+匹配比 stock 仅打印任意字符串严格，明确用于本请求绑定；不改服务名或扩大兼容承诺。
+truncated/oversized/wrong/trailing payload、早到 SERVICE_ACCEPT、USERAUTH_* 或 rekey
+均 EPROTO terminal；ready 后新到重复回复不再解析，后续 step EALREADY，不二次授予状态。
+
+错误：NULL=EINVAL、closed=ENOENT、failed/duplicate=EALREADY、pre-KEX=EACCES（无排队、
+不损坏正在进行的 KEX）；view revoke=EACCES、deadline=ETIMEDOUT、callback/role cancel
+保持对应 precise errno；current cycle mismatch=EACCES。close/destroy/FD/view/candidate
+ownership 沿用原合同。全过程不发送 USERAUTH_REQUEST、不请求 typed credential、不
+加入 username/secret 字段，也不链接 stock ssh_userauth2。
+
+验证：保留原 KEX-only 回归；在同一真实 OpenSSH synthetic peer 上完成 KNOWN 与 NEW/CAS
+KEX 后解析实际加密 SERVICE_REQUEST，再分片送 SERVICE_ACCEPT（exact/empty），检查
+request exactly once、零 credential calls、bounds/accounting 与 ready 后 EALREADY。
+负例覆盖错误/截断/trailing/早到/未请求 accept、USERAUTH_SUCCESS、rekey、cancel/deadline/
+stale role/view、owner mismatch 和 retryable close。strict build、actual ARM QEMU 与 normal
+gate 分开记录；本轮不操作设备/真实库/账号，不宣称 Android service/userauth 验收。
+
+实现/正式复核已完成；最终真实 ARM QEMU 为 246,808 checks / exit0，callback host 为
+24 组，normal94 tasks全部重跑、JVM189/lint/Release/v2通过。current-cycle mismatch 分支仅源码复核，未为动态注入暴露内部
+mutable ssh 指针。最终 normal gate 和产物信息以 design/verification.md 本日 service 节为准。
+
+## 2026-10-18 JNI 合成 transport 实测补证
+
+设备恢复解锁后，用当前四处 production 修复重建独立 fixture，原精确方法在
+AIO-3568J/API30/arm64 上 **OK (1 test)，0.202s**。预算 3 的分片 identification /
+初始 KEXINIT 输出、matching KNOWN/revoke 和独立 EOF/public terminal/close 合同均
+真实通过 Java→JNI→native 执行；两包清理、正式 APK 不变。本轮没有新增 API 或设计
+变更；该证据关闭此前锁定下的 JNI 窄关卡，不扩大为完整 Android KEX/userauth。
+
+## 宿主 QEMU runtime 补证（2026-10-17，native 合成验证通过）
+
+hako 无 QEMU 不代表宿主无 QEMU。使用宿主现有 `qemu-aarch64`、既有 Android API28
+arm64 PIE 测试与从当前 API30 板只读取得的公开 Bionic runtime，在 `/tmp` 中运行
+本地 socketpair synthetic regression。公开库不入仓库，不安装或更改设备；无真实凭据。
+沙箱拒绝必要的 socket type 查询时，通过工具的权限审核运行同一限定测试，不改测试或
+production admission 来适应沙箱。记录 toolchain/binary/runtime hash、timeout、退出码和
+实际断言结果；测试失败须定位并复核后修复，不再把 cross-link 成功当 runtime pass。
+
+Android JNI 分片 fixture 的设备锁定关卡保持开放；QEMU 只补 native ARM 执行证据。
+
+实际 ARM 执行进一步暴露 pinned `ssh_api.c::_ssh_read_banner` 的分片状态问题：未收到
+完整行时 input 未消费，但传入的 version buffer 已包含部分 `SSH-`，上层把非空版本当
+完整 identification，过早进入二进制 packet parser。采用最小 upstream source patch：
+incomplete 分支 reset version buffer 再返回，保留原 input/版本/长度/前导行校验；固定
+patch hash，仅对临时构建源应用并替换 PIC `ssh_api.o`，不修改 G1 原始基线或删减回归。
+production builder 的 source/object manifest 和 Gradle inputs 一并记录该补丁。
+
+独立复核确认 completion 还必须等待本端待发 OpenSSH output 清空：不能在收到 peer
+NEWKEYS 的当步先置 completed、再只写出一个 step budget 后永久 `EALREADY`。增加快
+server / 小 client budget 的 KNOWN 与 NEW/CAS 回归，先重现，再把唯一 KEX-complete
+callback 移至本端 output 已消费完毕之后。既有慢分片、exactly-once、terminal step
+和可重试 close 契约保留；这不是 userauth-ready 或远端认证成功。
+
+上游 `ssh_init` 已按 server 模式自动加入 `ext-info-s`；本轮新增的是 output drain
+和实际 EXT_INFO 收到的断言，而不是新增该协商能力。修复前已实际重现 completion
+过早。普通快分片不保证产生该排队情形，因此回归须检查
+完成时 `partial_write=false` / `write_would_block=false` 和 peer 实际接收到 EXT_INFO。
+另外 failed open 若已绑定 KEX guard、随后 `F_DUPFD_CLOEXEC` 因 `EMFILE` 失败，必须先
+解绑再释放 ssh；用仅降低并恢复当前进程 soft `RLIMIT_NOFILE` 的合成回归验证原
+role/callback/view/socket 可重试成功，hard limit 不变，不建立生产 fault-injection 入口。
+soft limit 为 1 且 fd0 已占用，保证 `F_DUPFD_CLOEXEC(...,0)` 参数有效而返回 `EMFILE`；
+不能设为 0 后误把 minfd 越界的 `EINVAL` 当作 FD 耗尽。
+
+最终 actual ARM QEMU 为 65,838 checks / exit0；normal gate 为 94 tasks 成功，JUnit
+189/0/0/0 为 UP-TO-DATE 保留报告。APK `f3327427…` 未安装；Android JNI 验证仍待解锁。
+
+## Android JNI 分片 transport 与 EOF 验证设计（2026-10-17，本地通过，待实测）
+
+复用现有精确 opt-in `syntheticNativeSessionHandle`、独立 fixture UID、受管内存 view
+和 production session。测试以非阻塞 socketpair、小 step budget 和有界循环送入
+server identification 分片，逐步核对输入输出计数并从 peer 读回 client banner / KEX
+输出。另以 peer 半关闭触发 transport EOF，并验证 Java terminal 状态与 owner close。
+原有 matching KNOWN host-proof 和 view revoke/close 合同保持覆盖。
+
+public `SshNativeSession.step` 将 JNI 的 generic IOException 归一为
+`VaultException("SSH_SESSION_STEP")`，且后续 step 在 Java 层保持该错误；因此设备测试
+不声称观察了 C errno，也不声称完整 KEX。只有实际 instrumentation、APK hash 与
+两包清理完成后，才把该增量标为 Android runtime 通过。
+
+实际本地 fixture build/lint/签名检查通过；设备 `RUNNING_LOCKED` 拒绝启动 fixture，
+用户选择保留本地结果，已完成两包及挂起进程清理。本轮 runtime 保持 not-run。
+
+## G3.8 Android ARM/JNI empty-peer EAGAIN boundary（2026-10-16，runtime 已实测）
+
+在 KNOWN host-proof fixture 之上，production `SshNativeSession.open` 成功后先对
+同一 synthetic nonblocking socketpair 调用一次 `session.step()`。空 peer 的
+`StepResult` 必须保持 `bytesRead == 0`、
+`inputAppended == 0`、`readWouldBlock == true`；不把
+`bytesWritten` 强行断言为 0，因为同一 bounded turn 允许 OpenSSH 排队/写出
+identification/banner。随后仍用同一 key 走 production `verifyHostKey`，再 revoke
+和 close。
+
+fixture 重建、lint 与 Java compile 通过；当前授权板
+`192.168.9.14:5555` 的精确 instrumentation 为 `OK (1 test)`、
+status 0、0.11s。新 fixture main/test SHA256 分别为
+`79776aad22be067e057fb2abd2a9af74bc365f890de44b1d3ba689c18d9560d3` 与
+`fc71429d9e06d33334cc51cbb9fa64a7b8f672f2bb8752922052aac5ec6dc71e`，测试后
+两个包和进程无残留。该项仍只证明 Android JNI 的 bounded EAGAIN + KNOWN host-proof，
+不证明 KEX、userauth 或完整 SSH runtime。
+
+## G3.8 Android ARM/JNI KNOWN host-proof boundary（2026-10-16，runtime 已实测）
+
+把 synthetic session fixture 的无效 `known_hosts` 占位改为由同一
+51-byte OpenSSH wire public-key blob 动态 Base64 生成的标准
+`127.0.0.1 ssh-ed25519 <blob>` 行，并在 production
+`SshNativeSession.open` 成功后、view revoke 前调用
+`verifyHostKey`。这让 Android ARM 真实执行 Java → JNI → native session registry →
+hostfile issuer → synchronous KNOWN callback；不通过 test-only callback，也不启动网络、
+KEX、userauth、真实 vault 或凭据。
+
+本轮 fixture main/test APK 构建与 lint 通过。当前授权板
+`192.168.9.14:5555`（AIO-3568J、Android 11/API 30、arm64-v8a）运行
+`SshNativeSessionPlatformTest#syntheticNativeSessionHandle` 为
+`OK (1 test)`、status code 0、0.089s。测试后仅卸载本轮两个 fixture 包，
+`pm path` 与 `pidof` 均无残留。
+
+这只证明 matching KNOWN host-proof 的 Android JNI/runtime 边界；host-only
+synthetic KEX、ARM KEX/packet runtime、userauth/typed credential、PTY/forward/
+service/UI、真实 managed CAS/vault 与外部 SSH 仍开放。task 继续
+`in_progress`/`implementation_complete=false`。
+
+## G3.8 NEW/CAS full-KEX host-proof boundary（2026-10-16，host-only）
+
+把先前 direct `NEW` verifier/CAS regression 接到真实 synthetic packet loop。空 managed
+`ssh/known_hosts` 由 production native client 与同进程非阻塞 OpenSSH server 共同驱动到
+`kex->done`；真实 host-key callback 必须按 candidate → `NEW` evidence (`CAS_COMMITTED`) →
+KEX-complete 顺序各调用一次。
+
+测试同时绑定 candidate/evidence 的 role/hop/port、candidate ID/classification/key/fingerprint、
+replacement body、base/replacement digest，以及 cycle=1 和 peer session ID SHA-256。client
+bounded step、server 2-byte 分片/EAGAIN/短写、completion 后 `EALREADY` 和双方清理均须通过。
+这是 host/AArch64 strict cross-link 证据，qemu 不可用时保持 `runtime=not-run`，不等同 ARM
+runtime、Android JNI packet runtime、真实 managed CAS 或完整 SSH 验收。
+
+focused 与 normal full gate 通过，APK SHA256 为
+`7ccac2fb8f705edd761d34574b9cead4b9e2296864dfe5568d2e9b1105fd849f`，task 仍
+`in_progress`/`implementation_complete=false`。
+
+## G3.8 synthetic KEX completion and host-proof boundary（2026-10-16，host-only）
+
+在既有 production `KNOWN` host-evidence 与 `NEW` candidate/CAS precommit 之上，新增一个
+合成 client/server OpenSSH socketpair。server 以非阻塞、2-byte 分片泵送真实 packet loop，
+production client 由 `ctos_ssh_native_client_step` 驱动到 `kex->done`；测试同时观察 server
+读 EAGAIN、短写和 client bounded partial I/O。
+
+该边界要求 matching managed key 的 host evidence 恰好调用一次，并在唯一的 KEX-complete
+callback 之前；callback 必须收到 `cycle == 1`、非零 session digest，且 digest 与 peer
+`session_id` 的 SHA-256 完全一致。client completion 后再次 production `step` 必须返回
+`EALREADY`。这仍是 strict AArch64 cross-link/host fixture 证据，不是 ARM runtime、Android
+JNI packet runtime 或完整 SSH 验收；无 qemu 时明确记录 `runtime=not-run`。
+
+focused 与 normal full gate 均通过，最新 APK SHA256 为
+`7195a67fad84185714d00cbb2bbc899fbdf788b61f722282fae8b99ae8ba5f69`，task 继续
+`in_progress`/`implementation_complete=false`。
+
+## G3.8 bounded native step/error and host-evidence classification semantics（2026-10-15，host-only）
+
+G3.7 的 native-owned session 已经拥有 managed-view borrow，但 `step` 原先把 borrow 的
+所有失败都改写成 `EACCES`，因此会隐藏 view deadline 的 `ETIMEDOUT`。本窄增量保留
+`view_borrow_live` 的精确 errno，再进入统一 terminal error：到期为 `ETIMEDOUT`，revoke/
+invalid 为 `EACCES` 或底层错误，后续 step 统一拒绝为 `EALREADY`。
+
+只新增/修正 production C boundary 与 host-only synthetic socketpair regression：空
+nonblocking peer 必须报告 `read_would_block` 且无读入/append 进度；半关闭 peer 必须报告
+`EPIPE`；短 BOOTTIME deadline 必须报告 `ETIMEDOUT`。该切片不引入网络、凭据、vault mutation、
+设备安装或外部 SSH，也不把 AArch64 cross-link 当作 ARM runtime。
+
+同一 host-only regression 还把 synthetic server identification banner 按 `step_budget=3`
+分片送入 peer。banner 完整后，production `ssh_packet_next` 生成客户端 identification 与
+KEX 输出；测试确认每步 read/write 都受预算限制、`bytes_written` 与
+`output_consumed` 一致、`partial_write` 表示仍有 OpenSSH 输出排队，并从 peer 读回实际
+客户端 banner 与后续 KEX 字节。这仍只是 strict AArch64 cross-link 编码的回归，未执行 ARM
+binary 或完整 KEX/host proof。另以独立测试分支验证 managed-view expiry 的 `ETIMEDOUT`、
+invalid view 的 `EACCES` 传播和 client deadline terminal 分支。
+
+同一 fixture 现把生成的 public key 写入受管 `ssh/known_hosts` 内存对象，并调用 production
+`ctos_ssh_native_client_verify_host_key`。callback fixture 回填完整 `KNOWN` evidence result
+（role/hop/port、连接/目标/host、key type/fingerprint、base/replacement digest、approved、
+`CAS_NOT_REQUIRED`），精确 key 成功且只触发一次 host evidence；另一个生成的 public key
+在 pinned fingerprint guard 处返回 `EACCES`，host evidence 调用数不增加。该项仍只有
+strict AArch64 cross-link 编译证据，未把 host binary 或完整 Android host proof 运行当作通过。
+
+随后增加 `CHANGED` classification 回归：fixture 保持 offered key 的 pinned fingerprint 有效，
+但把另一把生成 key 写入 managed `ssh/known_hosts`。测试直接调用 issuer 并断言
+`CTOS_SSH_CALLBACK_HOST_CHANGED`、key/fingerprint/base/replacement digest metadata 和无
+candidate handoff，再调用 production verifier，确认返回 `EACCES` 且 host evidence 次数仍为零；
+因此该项不是仅以 generic `EACCES` 推断 classification。
+
+本轮再增加 `REVOKED` classification 回归：fixture 用同一把 offered/pinned key 构造
+`@revoked` managed `ssh/known_hosts` entry。测试直接调用 issuer 并断言
+`CTOS_SSH_CALLBACK_HOST_REVOKED`、key/fingerprint/base/replacement digest metadata 和无
+candidate handoff，再调用 production verifier，确认在 host evidence 之前返回 `EACCES` 且
+evidence 次数仍为零。该测试同样把明确的 host-file classification 与 generic rejection 分开。
+
+本轮继续覆盖两个 fail-closed host-policy 分支。第一个用生成并签名的有效 OpenSSH host
+certificate，直接 issuer 断言 `CTOS_SSH_CALLBACK_HOST_CERTIFICATE`、bounded
+key/fingerprint/digest metadata 与无 candidate handoff，再断言 production verifier 在 host
+evidence 前返回 `EACCES`。第二个不假造上游 `HostStatus`：issuer 在
+`load_hostkeys_file()` 前用 pinned `hostkeys_foreach_file(..., HKF_WANT_PARSE_KEY, ...)`
+预检同一 managed 内存 body；测试用截断行加合法 key，遇到 `HKF_STATUS_INVALID` 时直接
+断言项目自有 `CTOS_SSH_CALLBACK_HOST_INVALID`、相等 digest/no handoff 和 production
+`EACCES`/zero evidence。合法但无匹配的 body 仍走上游 `NEW`，因此 `INVALID` 只代表明确的
+解析失败。
+
+## G3.8 bounded native NEW candidate/CAS precommit boundary（2026-10-15，host-only）
+
+合法但无匹配的 managed `ssh/known_hosts` body 必须进入 production `NEW` 路径：issuer
+先生成唯一 bounded replacement body，再同步 handoff exact candidate metadata/body；只有
+candidate callback 成功后，native verifier 才请求 host evidence。`NEW` 的 evidence result
+必须是 approved 且 `CAS_COMMITTED`，并逐字段绑定 role/hop/port、connection/target/host、
+key/fingerprint 与 base/replacement digest。
+
+本窄切片增加两个 production-caller synthetic cases。成功 case 使用空 managed body，逐字节
+比较 replacement、candidate ID/classification/key/fingerprint 和两个 digest，并记录
+candidate-before-evidence 顺序。失败 case 让 evidence 返回 `EACCES`，断言 candidate 只 abort
+一次、没有重复 callback，native client terminalize 后 `step` 返回 `EALREADY`，且 close 的
+release 失败仍可重试。该行为只使用内存 view 与 socketpair，不引入 vault mutation、设备、
+真实 endpoint 或凭据；AArch64 runtime 仍因无 qemu 保持 `not-run`。
+
 ## G3.7 native-owned session/key/view boundary（2026-10-15，合成 runtime 已验收）
 
 G3.7 在同进程 production C boundary 上完成 native ownership 的最小闭环。Java

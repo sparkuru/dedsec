@@ -1,0 +1,15 @@
+--- a/ssh_api.c
++++ b/ssh_api.c
+@@ -351,8 +351,11 @@
+ 		sshbuf_reset(banner);
+ 		expect_nl = 0;
+ 		for (;;) {
+-			if (j >= sshbuf_len(input))
++			if (j >= sshbuf_len(input)) {
++				/* Partial input is retained for the next API turn. */
++				sshbuf_reset(banner);
+ 				return 0; /* insufficient data in input buf */
++			}
+ 			c = s[j++];
+ 			if (c == '\r') {
+ 				expect_nl = 1;

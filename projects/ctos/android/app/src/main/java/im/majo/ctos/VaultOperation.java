@@ -7,7 +7,7 @@ import java.util.UUID;
 final class VaultOperation {
     enum Consumer { TOTP, SSH }
     enum Purpose { TOTP_CODE, TOTP_LIST, TOTP_RENAME, TOTP_SAVE, TOTP_DELETE, SSH_CREDENTIAL, SSH_FILES, SSH_PRIVATE_KEY,
-        SSH_SAVE, SSH_DELETE, SSH_TRUST_UPDATE, SSH_BUNDLE_WRITE }
+        SSH_SAVE, SSH_DELETE, SSH_TRUST_UPDATE, SSH_BUNDLE_WRITE, SSH_PRIVATE_KEY_BUNDLE }
     final String requestId = UUID.randomUUID().toString();
     final Consumer consumer;
     final Purpose purpose;
@@ -26,6 +26,7 @@ final class VaultOperation {
     private int roleHop = -1;
     private String roleFingerprint;
     private boolean trustBound;
+    private SshRoleContext trustRole;
     private String trustSnapshotRequestId;
     private UUID trustVaultId;
     private long trustGeneration;
@@ -118,6 +119,7 @@ final class VaultOperation {
             }
         } finally { VaultCodec.wipe(currentBinding); }
         trustBound = true;
+        trustRole = role;
         trustSnapshotRequestId = snapshot.requestId;
         trustVaultId = snapshot.vaultId;
         trustGeneration = snapshot.generation;
@@ -188,6 +190,11 @@ final class VaultOperation {
             VaultCodec.wipe(currentBase);
             VaultCodec.wipe(currentReplacement);
         }
+    }
+
+    synchronized SshRoleContext boundTrustRole() {
+        return consumer == Consumer.SSH && purpose == Purpose.SSH_TRUST_UPDATE && trustBound
+                && !cancelled ? trustRole : null;
     }
 
     void cancel() {

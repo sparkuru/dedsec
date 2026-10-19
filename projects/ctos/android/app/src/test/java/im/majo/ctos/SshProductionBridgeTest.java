@@ -36,7 +36,13 @@ public final class SshProductionBridgeTest {
 
     private static final class TestClock implements VaultSession.Clock, SshRoleContext.Clock {
         long value = 1_000;
-        @Override public long now() { return value; }
+        int reads;
+        Runnable onRead;
+        @Override public long now() {
+            reads++;
+            if (onRead != null) onRead.run();
+            return value;
+        }
     }
 
     private static final class PublicView implements SshRoleContext.PublicView {
@@ -65,7 +71,15 @@ public final class SshProductionBridgeTest {
 
     private static final class MemoryStore implements AppSecrets.Store {
         byte[] bytes;
-        @Override public byte[] read() { return bytes == null ? null : bytes.clone(); }
+        Runnable beforeRead;
+        @Override public byte[] read() {
+            if (beforeRead != null) {
+                Runnable action = beforeRead;
+                beforeRead = null;
+                action.run();
+            }
+            return bytes == null ? null : bytes.clone();
+        }
         @Override public byte[] quickMaterial() { return new byte[0]; }
         @Override public void commit(byte[] envelope, byte[] quick, AppSecrets.EffectGuard guard)
                 throws IOException, VaultException {
@@ -301,6 +315,9 @@ public final class SshProductionBridgeTest {
             byte[] privateKey = adapter.onNativeCredentialBytes(SshNativeCallbackAdapter.CREDENTIAL_PRIVATE_KEY);
             assertArrayEquals(bytes("private key fixture"), privateKey);
             VaultCodec.wipe(privateKey);
+            password = adapter.onNativeCredentialBytes(SshNativeCallbackAdapter.CREDENTIAL_PASSWORD);
+            assertArrayEquals(bytes("fixture password"), password);
+            VaultCodec.wipe(password);
         } finally {
             adapter.close();
             callbackRegistry.close();
@@ -615,6 +632,542 @@ public final class SshProductionBridgeTest {
         }
     }
 
+    private final class SelectedSetup implements AutoCloseable {
+        final SshRoleRegistry callbackRegistry = new SshRoleRegistry(clock);
+        final PublicView view = new PublicView();
+        final SshNativeRoleBootstrap.Issued issued;
+        final SshNativeCallbackAdapter adapter;
+        final SshAuthenticationSelection selection;
+        final CallbackNative nativeBinding = new CallbackNative();
+        SshNativeCallbackAdapter.NativeSessionClaim claim;
+        boolean owned;
+        int sourceCalls;
+
+        SelectedSetup(boolean key) throws Exception {
+            SshHostKeyAuthority authority = new SshHostKeyAuthority(review -> { });
+            SshManagedProvider provider = new SshManagedProvider(
+                    new SshCredentialBridge(vault, authority, clock), clock,
+                    evidence -> new SshTrustProposal(evidence.role, "known_hosts", "ssh-trust",
+                            evidence.role.targetIdentity, evidence.role.connectionId, evidence.role.host,
+                            evidence.role.port, evidence.keyType, evidence.fingerprint, evidence.baseDigest(),
+                            bytes("example.invalid ssh-ed25519 AAAA\n")),
+                    (evidence, proposal) -> SshTrustProposal.CasResult.committed(evidence, proposal),
+                    (bridge, selectedRole, proof, kind) -> {
+                        sourceCalls++;
+                        return kind == SshCredentialBridge.Kind.PRIVATE_KEY
+                                ? bridge.openPrivateKey(selectedRole, proof, "keys/key", "test-key-identity")
+                                : bridge.openCredential(selectedRole, proof, "password", kind);
+                    });
+            issued = SshNativeRoleBootstrap.issue(
+                    callbackRecord(2, "selected-connection", 31_002, clock.value + 30_000),
+                    callbackRegistry, view, clock, ignored -> true);
+            adapter = SshNativeCallbackAdapter.bind(issued, callbackRegistry, authority, clock,
+                    nativeBinding, new CallbackRelease(), provider);
+            selection = key ? SshAuthenticationSelection.privateKey(issued.role, " 显式User ",
+                    "keys/other", "other-key-identity", bytes("expected public declaration"), clock)
+                    : SshAuthenticationSelection.password(issued.role, " 显式User ", "password-other", clock);
+        }
+
+        void prove(boolean unknown) throws Exception {
+            assertTrue(adapter.onNativeHostKey(unknown ? SshNativeCallbackAdapter.HOST_NEW
+                    : SshNativeCallbackAdapter.HOST_KNOWN, "ssh-ed25519", FINGERPRINT,
+                    digest("known-hosts-before"), digest("example.invalid ssh-ed25519 AAAA\n")));
+            assertTrue(adapter.onNativeKexComplete(1, bytes(32, 7)));
+        }
+
+        void claim(boolean success) throws Exception {
+            claim = adapter.beginNativeSessionOpen();
+            adapter.finishNativeSessionOpen(claim, success);
+            owned = success;
+        }
+
+        byte[] receipt() throws Exception {
+            byte[] wire = selection.encode(issued.token, clock);
+            try { return VaultCodec.digest(wire); }
+            finally { VaultCodec.wipe(wire); }
+        }
+
+        @Override public void close() throws Exception {
+            try {
+                if (owned) {
+                    adapter.nativeClientClosed(claim);
+                    owned = false;
+                }
+                adapter.close();
+            }
+            finally { callbackRegistry.close(); }
+        }
+    }
+
+    @Test public void nativeSelectedCredentialsMatchExactReceiptForBothKindsAndHostPolicies()
+            throws Exception {
+        for (boolean key : new boolean[] { false, true }) {
+            for (boolean unknown : new boolean[] { false, true }) {
+                try (SelectedSetup setup = new SelectedSetup(key)) {
+                    setup.adapter.selectAuthentication(setup.selection);
+                    byte[] receipt = setup.receipt();
+                    byte[] digest = bytes(32, 7);
+                    setup.claim(true);
+                    setup.prove(unknown);
+                    byte[] result = setup.adapter.onNativeSelectedCredentialBytes(key ? 4 : 1,
+                            receipt, 1, digest);
+                    assertArrayEquals(bytes(key ? "other private fixture" : "other password fixture"), result);
+                    assertArrayEquals(setup.receipt(), receipt);
+                    assertArrayEquals(bytes(32, 7), digest);
+                    VaultCodec.wipe(result);
+                    assertEquals(0, setup.sourceCalls);
+                    assertEquals(null, setup.adapter.onNativeSelectedCredentialBytes(key ? 4 : 1,
+                            receipt, 1, digest));
+                    assertEquals("SSH_AUTH_SELECTION", setup.adapter.lastFailureCode());
+                }
+            }
+        }
+    }
+
+    @Test public void nativeSelectedCredentialRejectsMetadataAndOwnershipWithoutLegacyFallback()
+            throws Exception {
+        for (int mode = 0; mode < 16; mode++) {
+            try (SelectedSetup setup = new SelectedSetup(false)) {
+                if (mode != 3) setup.adapter.selectAuthentication(setup.selection);
+                byte[] receipt = setup.receipt();
+                byte[] digest = bytes(32, 7);
+                long cycle = 1;
+                int kind = 1;
+                if (mode == 1) setup.claim(false);
+                else if (mode == 2) setup.claim = setup.adapter.beginNativeSessionOpen();
+                else if (mode != 0) setup.claim(true);
+                if (mode == 5) assertTrue(setup.adapter.onNativeHostKey(SshNativeCallbackAdapter.HOST_KNOWN,
+                        "ssh-ed25519", FINGERPRINT, digest("before"), digest("after")));
+                else if (mode != 4) setup.prove(false);
+                if (mode == 6) receipt[0] ^= 1;
+                if (mode == 7) digest[0] ^= 1;
+                if (mode == 8) cycle = 2;
+                if (mode == 9) kind = 4;
+                if (mode == 10) kind = 2;
+                if (mode == 11) receipt = null;
+                if (mode == 12) digest = new byte[33];
+                if (mode == 13) cycle = 0;
+                if (mode == 14) receipt = new byte[31];
+                if (mode == 15) digest = new byte[32];
+                assertEquals(null, setup.adapter.onNativeSelectedCredentialBytes(kind, receipt, cycle, digest));
+                if (mode == 2) setup.adapter.finishNativeSessionOpen(setup.claim, false);
+                assertEquals(mode == 4 || mode == 5 || mode == 7 || mode == 8 || mode == 15
+                        ? "SSH_KEX_REQUIRED" : "SSH_AUTH_SELECTION", setup.adapter.lastFailureCode());
+                assertEquals(0, setup.sourceCalls);
+            }
+        }
+    }
+
+    @Test public void selectedNativeClaimPermanentlyDisablesManagedObjectDowngrade() throws Exception {
+        for (boolean success : new boolean[] { false, true }) {
+            try (SelectedSetup setup = new SelectedSetup(false)) {
+                setup.adapter.selectAuthentication(setup.selection);
+                setup.claim(success);
+                setup.prove(false);
+                assertEquals(null, setup.adapter.onNativeCredentialBytes(1, setup.selection));
+                assertEquals("SSH_AUTH_SELECTION", setup.adapter.lastFailureCode());
+                assertEquals(0, setup.sourceCalls);
+            }
+        }
+    }
+
+    @Test public void selectedManagedCredentialsAreAlsoOneShotAndProviderFailureCannotRetry()
+            throws Exception {
+        for (boolean failProvider : new boolean[] { false, true }) {
+            try (SelectedSetup setup = new SelectedSetup(false)) {
+                setup.adapter.selectAuthentication(setup.selection);
+                setup.prove(false);
+                if (failProvider) vault.session.lock();
+                byte[] result = setup.adapter.onNativeCredentialBytes(1, setup.selection);
+                if (failProvider) assertEquals(null, result);
+                else assertArrayEquals(bytes("other password fixture"), result);
+                VaultCodec.wipe(result);
+                assertEquals(null, setup.adapter.onNativeCredentialBytes(1, setup.selection));
+                assertEquals(0, setup.sourceCalls);
+            }
+        }
+    }
+
+    @Test public void nativeSelectedCallbackCopiesMetadataBeforeProviderEntry() throws Exception {
+        try (SelectedSetup setup = new SelectedSetup(false)) {
+            setup.adapter.selectAuthentication(setup.selection);
+            byte[] receipt = setup.receipt();
+            byte[] digest = bytes(32, 7);
+            setup.claim(true);
+            setup.prove(false);
+            store.beforeRead = () -> { Arrays.fill(receipt, (byte)0); Arrays.fill(digest, (byte)0); };
+            byte[] result = setup.adapter.onNativeSelectedCredentialBytes(1, receipt, 1, digest);
+            assertArrayEquals(bytes("other password fixture"), result);
+            VaultCodec.wipe(result);
+            assertArrayEquals(new byte[32], receipt);
+            assertArrayEquals(new byte[32], digest);
+        }
+    }
+
+    @Test public void nativeSelectedWrongThreadDoesNotConsumeOwnersAttempt() throws Exception {
+        try (SelectedSetup setup = new SelectedSetup(false)) {
+            setup.adapter.selectAuthentication(setup.selection);
+            byte[] receipt = setup.receipt();
+            setup.claim(true);
+            setup.prove(false);
+            Thread thread = new Thread(() -> assertEquals(null,
+                    setup.adapter.onNativeSelectedCredentialBytes(1, receipt, 1, bytes(32, 7))));
+            thread.start();
+            thread.join();
+            assertEquals("SSH_CALLBACK_THREAD", setup.adapter.lastFailureCode());
+            byte[] result = setup.adapter.onNativeSelectedCredentialBytes(1, receipt, 1, bytes(32, 7));
+            assertArrayEquals(bytes("other password fixture"), result);
+            VaultCodec.wipe(result);
+        }
+    }
+
+    @Test public void nativeSelectedProofAndViewChangesFailWithoutSecretReturn() throws Exception {
+        for (int mode = 0; mode < 3; mode++) {
+            try (SelectedSetup setup = new SelectedSetup(false)) {
+                setup.adapter.selectAuthentication(setup.selection);
+                byte[] receipt = setup.receipt();
+                setup.claim(true);
+                setup.prove(false);
+                if (mode == 0) assertTrue(setup.adapter.onNativeKexComplete(2, bytes(32, 8)));
+                else if (mode == 1) store.beforeRead = () -> setup.view.active = false;
+                else store.beforeRead = () -> assertFalse(setup.adapter.onNativeHostKey(
+                        SshNativeCallbackAdapter.HOST_KNOWN, "ssh-ed25519", FINGERPRINT,
+                        digest("before"), digest("after")));
+                assertEquals(null, setup.adapter.onNativeSelectedCredentialBytes(1, receipt, 1, bytes(32, 7)));
+                assertEquals(mode == 0 ? "SSH_KEX_REQUIRED" : mode == 1 ? "SSH_FILE_VIEW"
+                        : "SSH_CALLBACK_REENTRANT", setup.adapter.lastFailureCode());
+                assertEquals(0, setup.sourceCalls);
+            }
+        }
+    }
+
+    @Test public void selectedEffectGuardRunsAgainInsideAppSecretsBeforeReceiverAndClosesRequest()
+            throws Exception {
+        SshCredentialBridge bridge = new SshCredentialBridge(vault, new SshHostKeyAuthority(), clock);
+        SshAuthenticationSelection selection = SshAuthenticationSelection.password(role, "user", "password", clock);
+        SshCredentialBridge.Request request = bridge.openSelection(role, knownProof, selection);
+        int[] calls = new int[1];
+        try {
+            bridge.release(request, kex, selection, () -> {
+                if (++calls[0] == 2) request.close();
+                request.requireOpen();
+            }, ignored -> fail("cancelled final effect must not invoke receiver"));
+            fail("final guard must run inside AppSecrets");
+        } catch (VaultException failure) { assertEquals("VAULT_CANCELLED", failure.code); }
+        assertEquals(2, calls[0]);
+        try { request.requireOpen(); fail("request remains closed"); }
+        catch (VaultException failure) { assertEquals("VAULT_CANCELLED", failure.code); }
+    }
+
+    @Test public void nativeSelectedCancellationAtEveryClockBoundaryDiscardsBytes() throws Exception {
+        int boundaryCount;
+        try (SelectedSetup setup = new SelectedSetup(false)) {
+            setup.adapter.selectAuthentication(setup.selection);
+            byte[] receipt = setup.receipt();
+            setup.claim(true);
+            setup.prove(false);
+            int start = clock.reads;
+            byte[] result = setup.adapter.onNativeSelectedCredentialBytes(1, receipt, 1, bytes(32, 7));
+            boundaryCount = clock.reads - start;
+            assertArrayEquals(bytes("other password fixture"), result);
+            VaultCodec.wipe(result);
+        }
+        assertTrue(boundaryCount > 2);
+        for (int boundary = 1; boundary <= boundaryCount; boundary++) {
+            try (SelectedSetup setup = new SelectedSetup(false)) {
+                setup.adapter.selectAuthentication(setup.selection);
+                byte[] receipt = setup.receipt();
+                setup.claim(true);
+                setup.prove(false);
+                int target = clock.reads + boundary;
+                clock.onRead = () -> {
+                    if (clock.reads != target) return;
+                    clock.onRead = null;
+                    try { setup.adapter.cancel(); }
+                    catch (VaultException failure) { throw new AssertionError(failure); }
+                };
+                assertEquals("cancel boundary " + boundary, null,
+                        setup.adapter.onNativeSelectedCredentialBytes(1, receipt, 1, bytes(32, 7)));
+                assertEquals("SSH_CALLBACK_CANCELLED", setup.adapter.lastFailureCode());
+                assertEquals(null, setup.adapter.onNativeSelectedCredentialBytes(1, receipt, 1, bytes(32, 7)));
+            } finally { clock.onRead = null; }
+        }
+    }
+
+    @Test public void selectedFinishRetainsReentryGuardThroughFinalRoleClockChecks() throws Exception {
+        int boundaryCount;
+        try (SelectedSetup setup = new SelectedSetup(false)) {
+            setup.adapter.selectAuthentication(setup.selection);
+            byte[] receipt = setup.receipt();
+            setup.claim(true);
+            setup.prove(false);
+            int start = clock.reads;
+            byte[] result = setup.adapter.onNativeSelectedCredentialBytes(1, receipt, 1, bytes(32, 7));
+            boundaryCount = clock.reads - start;
+            assertArrayEquals(bytes("other password fixture"), result);
+            VaultCodec.wipe(result);
+        }
+        for (int boundary = boundaryCount - 1; boundary <= boundaryCount; boundary++) {
+            try (SelectedSetup setup = new SelectedSetup(false)) {
+                setup.adapter.selectAuthentication(setup.selection);
+                byte[] receipt = setup.receipt();
+                setup.claim(true);
+                setup.prove(false);
+                int target = clock.reads + boundary;
+                clock.onRead = () -> {
+                    if (clock.reads != target) return;
+                    clock.onRead = null;
+                    assertFalse(setup.adapter.onNativeKexComplete(2, bytes(32, 8)));
+                };
+                assertEquals(null, setup.adapter.onNativeSelectedCredentialBytes(1, receipt, 1, bytes(32, 7)));
+                assertEquals("SSH_CALLBACK_REENTRANT", setup.adapter.lastFailureCode());
+                assertEquals(null, setup.adapter.hostProof());
+                assertEquals(null, setup.adapter.kexProof());
+            } finally { clock.onRead = null; }
+        }
+    }
+
+    @Test public void selectedEscapingErrorsPreserveErrorAndReleaseInvocationForOwnerCleanup()
+            throws Exception {
+        int boundaryCount;
+        try (SelectedSetup setup = new SelectedSetup(false)) {
+            setup.adapter.selectAuthentication(setup.selection);
+            byte[] receipt = setup.receipt();
+            setup.claim(true);
+            setup.prove(false);
+            int start = clock.reads;
+            byte[] result = setup.adapter.onNativeSelectedCredentialBytes(1, receipt, 1, bytes(32, 7));
+            boundaryCount = clock.reads - start;
+            assertArrayEquals(bytes("other password fixture"), result);
+            VaultCodec.wipe(result);
+        }
+        // Skip begin's two role-clock reads: no invocation exists until begin returns.
+        // This includes guard checks and both final finish-clock reads after secret copy.
+        for (int boundary = 3; boundary <= boundaryCount; boundary++) {
+            try (SelectedSetup setup = new SelectedSetup(false)) {
+                setup.adapter.selectAuthentication(setup.selection);
+                byte[] receipt = setup.receipt();
+                setup.claim(true);
+                setup.prove(false);
+                AssertionError fault = new AssertionError("synthetic selected callback failure");
+                int target = clock.reads + boundary;
+                clock.onRead = () -> {
+                    if (clock.reads != target) return;
+                    clock.onRead = null;
+                    throw fault;
+                };
+                try {
+                    setup.adapter.onNativeSelectedCredentialBytes(1, receipt, 1, bytes(32, 7));
+                    fail("Error must propagate without returning a secret");
+                } catch (AssertionError caught) { assertTrue(caught == fault); }
+                assertEquals("SSH_CALLBACK_JAVA_EXCEPTION", setup.adapter.lastFailureCode());
+                assertEquals(null, setup.adapter.hostProof());
+                assertEquals(null, setup.adapter.kexProof());
+                setup.close();
+                assertEquals(0, setup.callbackRegistry.size());
+            } finally { clock.onRead = null; }
+        }
+    }
+
+    @Test public void selectedBridgeReceiverErrorWipesBorrowedSecretAndClosesRequest() throws Exception {
+        SshCredentialBridge bridge = new SshCredentialBridge(vault, new SshHostKeyAuthority(), clock);
+        SshAuthenticationSelection selection = SshAuthenticationSelection.password(role, "user", "password", clock);
+        SshCredentialBridge.Request request = bridge.openSelection(role, knownProof, selection);
+        byte[][] retained = new byte[1][];
+        AssertionError fault = new AssertionError("synthetic receiver failure");
+        try {
+            bridge.release(request, kex, selection, null, secret -> {
+                retained[0] = secret;
+                throw fault;
+            });
+            fail("receiver Error must propagate");
+        } catch (AssertionError caught) { assertTrue(caught == fault); }
+        assertNotNull(retained[0]);
+        assertArrayEquals(new byte[bytes("fixture password").length], retained[0]);
+        try { request.requireOpen(); fail("request must close even after Error"); }
+        catch (VaultException failure) { assertEquals("VAULT_CANCELLED", failure.code); }
+    }
+
+    @Test public void selectionSetupIsOneShotOwnerOnlyAndClaimFailureDoesNotReopenIt() throws Exception {
+        try (SelectedSetup setup = new SelectedSetup(false)) {
+            java.util.concurrent.atomic.AtomicReference<String> error = new java.util.concurrent.atomic.AtomicReference<>();
+            Thread wrongOwner = new Thread(() -> {
+                try { setup.adapter.selectAuthentication(setup.selection); }
+                catch (VaultException failure) { error.set(failure.code); }
+            });
+            wrongOwner.start();
+            wrongOwner.join();
+            assertEquals("SSH_CALLBACK_THREAD", error.get());
+            setup.adapter.selectAuthentication(setup.selection);
+            try { setup.adapter.selectAuthentication(setup.selection); fail("one-shot"); }
+            catch (VaultException failure) { assertEquals("SSH_AUTH_SELECTION", failure.code); }
+            setup.prove(false);
+            byte[] bytes = setup.adapter.onNativeCredentialBytes(
+                    SshNativeCallbackAdapter.CREDENTIAL_PASSWORD, setup.selection);
+            assertArrayEquals(bytes("other password fixture"), bytes);
+            VaultCodec.wipe(bytes);
+        }
+        try (SelectedSetup setup = new SelectedSetup(false)) {
+            SshNativeCallbackAdapter.NativeSessionClaim claim = setup.adapter.beginNativeSessionOpen();
+            setup.adapter.finishNativeSessionOpen(claim, false);
+            try { setup.adapter.selectAuthentication(setup.selection); fail("failed claim stays locked"); }
+            catch (VaultException failure) { assertEquals("SSH_AUTH_SELECTION", failure.code); }
+        }
+        try (SelectedSetup setup = new SelectedSetup(false)) {
+            setup.prove(false);
+            try { setup.adapter.selectAuthentication(setup.selection); fail("late selection"); }
+            catch (VaultException failure) { assertEquals("SSH_AUTH_SELECTION", failure.code); }
+        }
+        try (SelectedSetup setup = new SelectedSetup(false)) {
+            SshRoleContext other = SshRoleContext.issue(new SshRoleContext.Bootstrap(
+                    setup.issued.role.program, setup.issued.role.ownerPid, setup.issued.role.hop,
+                    setup.issued.role.connectionId, setup.issued.role.targetIdentity, setup.issued.role.host,
+                    setup.issued.role.port, setup.issued.role.publicViewId, bytes(32, 71), bytes(32, 72),
+                    setup.issued.role.deadline), setup.view, clock);
+            assertEquals(setup.issued.role.binding(), other.binding());
+            try {
+                setup.adapter.selectAuthentication(SshAuthenticationSelection.password(other,
+                        " 显式User ", "password-other", clock));
+                fail("same digest different exact role");
+            } catch (VaultException failure) { assertEquals("SSH_AUTH_SELECTION", failure.code); }
+            setup.adapter.selectAuthentication(setup.selection);
+        }
+    }
+
+    @Test public void selectedCallbacksReleaseOnlyFixedSameKindResourceAfterKnownAndNewProofs()
+            throws Exception {
+        for (boolean key : new boolean[] { false, true }) {
+            for (boolean unknown : new boolean[] { false, true }) {
+                try (SelectedSetup setup = new SelectedSetup(key)) {
+                    setup.adapter.selectAuthentication(setup.selection);
+                    setup.prove(unknown);
+                    byte[] result = setup.adapter.onNativeCredentialBytes(key
+                            ? SshNativeCallbackAdapter.CREDENTIAL_PRIVATE_KEY
+                            : SshNativeCallbackAdapter.CREDENTIAL_PASSWORD, setup.selection);
+                    assertArrayEquals(bytes(key ? "other private fixture" : "other password fixture"), result);
+                    VaultCodec.wipe(result);
+                    assertEquals(0, setup.sourceCalls);
+                }
+            }
+        }
+    }
+
+    @Test public void selectedCallbacksRejectMissingForeignAndUnsupportedReceiptsWithoutLegacySource()
+            throws Exception {
+        for (int mode = 0; mode < 7; mode++) {
+            try (SelectedSetup setup = new SelectedSetup(false)) {
+                setup.adapter.selectAuthentication(setup.selection);
+                setup.prove(false);
+                SshAuthenticationSelection receipt = setup.selection;
+                int kind = SshNativeCallbackAdapter.CREDENTIAL_PASSWORD;
+                if (mode == 1) receipt = null;
+                if (mode == 2) receipt = SshAuthenticationSelection.password(setup.issued.role,
+                        setup.selection.username, setup.selection.entryId, clock);
+                if (mode == 3) kind = SshNativeCallbackAdapter.CREDENTIAL_PRIVATE_KEY;
+                if (mode == 4) kind = SshNativeCallbackAdapter.CREDENTIAL_KEY_PASSPHRASE;
+                if (mode == 5) kind = SshNativeCallbackAdapter.CREDENTIAL_KEYBOARD_INTERACTIVE;
+                if (mode == 6) kind = 999;
+                byte[] result = mode == 0 ? setup.adapter.onNativeCredentialBytes(kind)
+                        : setup.adapter.onNativeCredentialBytes(kind, receipt);
+                assertTrue(result == null);
+                assertEquals("SSH_AUTH_SELECTION", setup.adapter.lastFailureCode());
+                assertEquals(0, setup.sourceCalls);
+            }
+        }
+    }
+
+    @Test public void selectedCallbackStillRequiresHostAndKexAndLiveRole() throws Exception {
+        for (int stage = 0; stage < 5; stage++) {
+            try (SelectedSetup setup = new SelectedSetup(false)) {
+                setup.adapter.selectAuthentication(setup.selection);
+                if (stage == 1) assertTrue(setup.adapter.onNativeHostKey(SshNativeCallbackAdapter.HOST_KNOWN,
+                        "ssh-ed25519", FINGERPRINT, digest("before"), digest("after")));
+                if (stage >= 2) setup.prove(false);
+                if (stage == 2) clock.value = setup.issued.role.deadline;
+                if (stage == 3) setup.view.active = false;
+                if (stage == 4) setup.adapter.cancel();
+                assertTrue(setup.adapter.onNativeCredentialBytes(
+                        SshNativeCallbackAdapter.CREDENTIAL_PASSWORD, setup.selection) == null);
+                assertEquals(stage < 2 ? "SSH_KEX_REQUIRED" : stage == 2 ? "SSH_ROLE_EXPIRED"
+                        : stage == 3 ? "SSH_FILE_VIEW" : "SSH_CALLBACK_CANCELLED",
+                        setup.adapter.lastFailureCode());
+                assertEquals(0, setup.sourceCalls);
+            }
+            clock.value = 1_000;
+        }
+    }
+
+    @Test public void selectedRequestCannotBypassReceiptAndAlwaysClosesAndWipes() throws Exception {
+        SshCredentialBridge bridge = new SshCredentialBridge(vault, new SshHostKeyAuthority(), clock);
+        SshAuthenticationSelection selected = SshAuthenticationSelection.password(role, "user", "password", clock);
+        for (int mode = 0; mode < 3; mode++) {
+            SshCredentialBridge.Request request = bridge.openSelection(role, knownProof, selected);
+            try {
+                if (mode == 0) bridge.release(request, kex, ignored -> fail("legacy release bypass"));
+                else if (mode == 1) bridge.release(request, kex,
+                        SshAuthenticationSelection.password(role, "user", "password", clock),
+                        ignored -> fail("foreign receipt"));
+                else {
+                    byte[][] retained = new byte[1][];
+                    bridge.release(request, kex, selected, secret -> retained[0] = secret);
+                    assertArrayEquals(new byte[bytes("fixture password").length], retained[0]);
+                    try { request.requireOpen(); fail("successful selected request must close"); }
+                    catch (VaultException failure) { assertEquals("VAULT_CANCELLED", failure.code); }
+                    continue;
+                }
+                fail("receipt must match exactly");
+            } catch (VaultException failure) { assertEquals("SSH_AUTH_SELECTION", failure.code); }
+            try { request.requireOpen(); fail("request must close"); }
+            catch (VaultException failure) { assertEquals("VAULT_CANCELLED", failure.code); }
+        }
+        SshCredentialBridge.Request cancelled = bridge.openSelection(role, knownProof, selected);
+        cancelled.close();
+        try { bridge.release(cancelled, kex, selected, ignored -> fail("cancelled request")); fail("cancelled"); }
+        catch (VaultException failure) { assertEquals("VAULT_CANCELLED", failure.code); }
+    }
+
+    @Test public void selectedResourcesStillRequireVaultTypeIdentityAndEpoch() throws Exception {
+        SshCredentialBridge bridge = new SshCredentialBridge(vault, new SshHostKeyAuthority(), clock);
+        for (SshAuthenticationSelection invalid : new SshAuthenticationSelection[] {
+                SshAuthenticationSelection.password(role, "user", "passphrase", clock),
+                SshAuthenticationSelection.privateKey(role, "user", "keys/key", "other-key-identity",
+                        bytes("declared public"), clock),
+                SshAuthenticationSelection.privateKey(role, "user", "config", "fixture config",
+                        bytes("declared public"), clock) }) {
+            try { bridge.openSelection(role, knownProof, invalid); fail("wrong resource type or identity"); }
+            catch (VaultException failure) { assertEquals("VAULT_OPERATION", failure.code); }
+        }
+        SshAuthenticationSelection selected = SshAuthenticationSelection.password(role, "user", "password", clock);
+        SshCredentialBridge.Request request = bridge.openSelection(role, knownProof, selected);
+        vault.session.lock();
+        try {
+            bridge.release(request, kex, selected, ignored -> fail("revoked vault epoch"));
+            fail("vault lock must invalidate selected request");
+        } catch (VaultException failure) { assertTrue(failure.code.startsWith("VAULT_")); }
+        try { request.requireOpen(); fail("revoked request closes"); }
+        catch (VaultException failure) { assertEquals("VAULT_CANCELLED", failure.code); }
+    }
+
+    @Test public void selectedFinalEffectGuardRepeatsRoleLivenessAfterInitialGuard() throws Exception {
+        int[] calls = new int[1];
+        boolean[] armed = new boolean[1];
+        SshRoleContext.Clock effectClock = () -> {
+            if (armed[0] && ++calls[0] == 5) clock.value = role.deadline;
+            return clock.value;
+        };
+        SshCredentialBridge bridge = new SshCredentialBridge(vault, new SshHostKeyAuthority(), effectClock);
+        SshAuthenticationSelection selected = SshAuthenticationSelection.password(role, "user", "password", clock);
+        SshCredentialBridge.Request request = bridge.openSelection(role, knownProof, selected);
+        armed[0] = true;
+        try {
+            bridge.release(request, kex, selected, ignored -> fail("role expired inside final guard"));
+            fail("final guard must repeat liveness");
+        } catch (VaultException failure) { assertEquals("SSH_ROLE_EXPIRED", failure.code); }
+        assertEquals(6, calls[0]);
+        try { request.requireOpen(); fail("failed final guard must close"); }
+        catch (VaultException failure) { assertEquals("VAULT_CANCELLED", failure.code); }
+    }
+
     private static final class HostResultWire {
         final long role;
         final int hop;
@@ -701,6 +1254,85 @@ public final class SshProductionBridgeTest {
                 FINGERPRINT, base, replacement);
     }
 
+    @Test public void selectedEncryptedKeyUsesOneExactResourceBundleAndWipesBorrowedBytes() throws Exception {
+        SshCredentialBridge bridge = new SshCredentialBridge(vault, new SshHostKeyAuthority(), clock);
+        SshAuthenticationSelection selection = SshAuthenticationSelection.privateKey(role, "user", "keys/key",
+                "test-key-identity", bytes("expected public"), "passphrase", clock);
+        SshCredentialBridge.Request request = bridge.openSelection(role, knownProof, selection);
+        assertEquals(VaultOperation.Purpose.SSH_PRIVATE_KEY_BUNDLE, request.operation.purpose);
+        assertEquals(TARGET, request.operation.target);
+        assertEquals("connection-0", request.operation.connectionId);
+        assertEquals("keys/key\0test-key-identity\0passphrase", request.operation.resource);
+        byte[][] borrowed = {null};
+        bridge.release(request, kex, selection, value -> {
+            borrowed[0] = value;
+            java.nio.ByteBuffer wire = java.nio.ByteBuffer.wrap(value);
+            assertEquals(0x43534b42, wire.getInt()); assertEquals(1, wire.getInt());
+            byte[] key = new byte[wire.getInt()]; wire.get(key);
+            byte[] passphrase = new byte[wire.getInt()]; wire.get(passphrase);
+            try {
+                assertArrayEquals(bytes("private key fixture"), key);
+                assertArrayEquals(bytes("fixture passphrase"), passphrase);
+                assertEquals(0, wire.remaining());
+            } finally { VaultCodec.wipe(key); VaultCodec.wipe(passphrase); }
+        });
+        assertNotNull(borrowed[0]); assertArrayEquals(new byte[borrowed[0].length], borrowed[0]);
+        try { bridge.release(request, kex, selection, value -> fail("no second receiver")); fail("one-shot request"); }
+        catch (VaultException expected) { assertEquals("VAULT_CANCELLED", expected.code); }
+    }
+
+    @Test public void encryptedBundleRejectsWrongEntryKeyPurposeRemoteAndConnection() throws Exception {
+        for (String entry : new String[]{"password", "missing"}) {
+            try { vault.beginSshPrivateKeyBundle("keys/key", "test-key-identity", entry, TARGET, "connection-0");
+                fail("wrong entry type or identity"); }
+            catch (VaultException expected) { assertEquals("VAULT_OPERATION", expected.code); }
+        }
+        try { vault.beginSshPrivateKeyBundle("keys/other", "other-key-identity", "passphrase", TARGET, "connection-0");
+            fail("passphrase cannot cross keys"); }
+        catch (VaultException expected) { assertEquals("VAULT_OPERATION", expected.code); }
+        for (int mode = 0; mode < 4; mode++) {
+            VaultOperation operation = mode == 0
+                    ? vault.beginSshPrivateKey("keys/key", "test-key-identity", TARGET, "connection-0")
+                    : vault.beginSshPrivateKeyBundle("keys/key", "test-key-identity", "passphrase", TARGET, "connection-0");
+            try {
+                vault.sshPrivateKeyBundle(operation, "keys/key", "test-key-identity",
+                        mode == 3 ? "password" : "passphrase", mode == 1 ? "key:test-key-identity" : TARGET,
+                        mode == 2 ? "other-connection" : "connection-0", () -> { }, value -> fail("no receiver"));
+                fail("resource and purpose must be exact");
+            } catch (VaultException expected) { assertEquals("VAULT_OPERATION", expected.code); }
+            finally { vault.cancelOperation(operation); }
+        }
+    }
+
+    private void cancelRoleAtFinalStoreRead(boolean key, boolean encrypted) throws Exception {
+        SshCredentialBridge bridge = new SshCredentialBridge(vault, new SshHostKeyAuthority(), clock);
+        SshAuthenticationSelection selection = key
+                ? SshAuthenticationSelection.privateKey(role, "user", "keys/key", "test-key-identity",
+                        bytes("expected public"), encrypted ? "passphrase" : "", clock)
+                : SshAuthenticationSelection.password(role, "user", "password", clock);
+        SshCredentialBridge.Request request = bridge.openSelection(role, knownProof, selection);
+        int[] guards = {0};
+        try {
+            bridge.release(request, kex, selection, () -> {
+                if (++guards[0] == 2) store.beforeRead = role::close;
+            }, value -> fail("a final store read revoked this role before receiver"));
+            fail("final store read must revoke release");
+        } catch (VaultException expected) { assertEquals("SSH_ROLE_EXPIRED", expected.code); }
+        assertEquals(2, guards[0]);
+    }
+
+    @Test public void passwordFinalStoreReadRechecksRoleBeforeReceiver() throws Exception {
+        cancelRoleAtFinalStoreRead(false, false);
+    }
+
+    @Test public void privateKeyFinalStoreReadRechecksRoleBeforeReceiver() throws Exception {
+        cancelRoleAtFinalStoreRead(true, false);
+    }
+
+    @Test public void encryptedBundleFinalStoreReadRechecksRoleBeforeReceiver() throws Exception {
+        cancelRoleAtFinalStoreRead(true, true);
+    }
+
     private static VaultManifest fixtureManifest() throws VaultException {
         VaultManifest.Entry password = new VaultManifest.Entry(VaultManifest.EntryType.SSH_PASSWORD,
                 "password", TARGET, "fixture password", "", 0, 0, bytes("fixture password"));
@@ -714,7 +1346,12 @@ public final class SshProductionBridgeTest {
                 "ssh-private", "keys/key", "test-key-identity", bytes("private key fixture"), List.of());
         VaultManifest.FileObject knownHosts = new VaultManifest.FileObject(VaultManifest.FileType.KNOWN_HOSTS,
                 "ssh-trust", "known_hosts", "fixture trust", bytes("example.invalid ssh-ed25519 AAAA\n"), List.of());
-        return new VaultManifest(Arrays.asList(password, passphrase), Arrays.asList(config, key, knownHosts));
+        VaultManifest.Entry otherPassword = new VaultManifest.Entry(VaultManifest.EntryType.SSH_PASSWORD,
+                "password-other", TARGET, "other password", "", 0, 0, bytes("other password fixture"));
+        VaultManifest.FileObject otherKey = new VaultManifest.FileObject(VaultManifest.FileType.PRIVATE_KEY,
+                "ssh-other-private", "keys/other", "other-key-identity", bytes("other private fixture"), List.of());
+        return new VaultManifest(Arrays.asList(password, passphrase, otherPassword),
+                Arrays.asList(config, key, knownHosts, otherKey));
     }
 
     private static byte[] bytes(String value) { return value.getBytes(StandardCharsets.UTF_8); }

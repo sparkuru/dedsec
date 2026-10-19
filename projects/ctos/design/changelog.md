@@ -1,5 +1,269 @@
 # Changelog
 
+## 2026-10-19 Android/JNI 与私钥认证：已实现并完成独立实测
+
+Java/JNI 已接入密码与私钥认证，支持 Ed25519、ECDSA p256/p384/p521、RSA SHA-2；
+未加密私钥和有界加密 OpenSSH/传统 RSA、EC PEM 走同一证明绑定的一次授权。新增 CSASv2
+把精确私钥和口令条目绑定到实际远端；修复真实文件视图与角色期限兼容、首次 NEW 主机
+写回撤销自身视图，以及最后一次库读取后的凭据交付检查。
+
+最终 fresh JVM244/0/0/0、ARM QEMU1,244,010 checks、normal94任务/lint/Release/v2通过；
+开发板四个精确方法各 OK(1 test)，覆盖密码、未加密/加密私钥及真实 NEW/CAS。测试包/进程
+已清理，正式应用 hash 未变，未使用真实库或账号。普通 APK89eb6425… 未安装；加密PKCS8、
+KBI/MFA、channel/PTY/forward/service/UI 和完整客户端 AC 继续开放。
+[完整证据、格式与限制](verification.md#20261019-android-auth)。
+
+## 2026-10-19 — Explicit native password USERAUTH
+
+- Added C-only begin/result APIs using the owned CSAS username and existing selected
+  attempt. Passwords are bounded to8192 with explicit NUL rejection, padding64 and
+  short wiped plaintext lifetime; no none probe or automatic retry.
+- Bounded encrypted steps distinguish SUCCESS/REJECTED/PARTIAL/CHANGE_REQUIRED,
+  require request drain/current proof, and discard bounded remote text.
+- Added67 real encrypted scenarios, including a discriminating pending-banner
+  positive; formal review has no findings. Final ARM785537, normal94tasks19s,
+  lint/Release/v2/archive83/sixJNI pass. JVM221 is an up-to-date retained report.
+- APK `983f2032…` not installed/published; Java/JNI auth, private-key auth and full
+  transport/product acceptance remain open. [Evidence](verification.md#2026-10-19--explicit-native-password-userauth-protocol).
+
+## 2026-10-19 — Receipt-bound selected credential handoff
+
+- Added a one-shot native selected byte request after current KEX/service-ready,
+  with owned CSAS identity, private scratch and post-provider proof checks.
+- Java verifies the native receipt/cycle/digest and owned claim, prevents selected
+  downgrade, and repeats current-state guards at the AppSecrets receiver boundary.
+- Fixed JNI pending-exception order and callback finish cancellation/reentry/Error
+  cleanup. Thirteen new JVM methods; final focused66/fullfresh221, callback35,
+  final ARM323726 checks, lint/Release/v2 and formal review pass; APK `f329056e…`.
+- No USERAUTH, key parsing, device/real account access or APK installation.
+  Modified selected JNI has no Android runtime evidence; [details](verification.md#2026-10-19--receipt-bound-selected-credential-handoff).
+
+## 2026-10-19 — CSAS native metadata and explicit receipt
+
+- Frozen managed selection now crosses session JNI as canonical bounded CSASv1.
+  Native validates role bindings/UTF-8/shapes before ownership transfer and owns
+  copied wire plus SHA-256; explicit live-owner receipt read also allows completed KEX.
+- Legacy null metadata remains compatible. Selected old bindings fail closed;
+  scratch is wiped, failed admission preserves resources, and close remains retryable.
+- Fixed new getter direct-adapter-cancel validation and encoder scratch finally scope.
+  Focused53/fullfresh208 JVM, final ARM253155 checks, lint/Release/v2 pass; archive83,
+  six session JNI exports, forbidden0. APK `bda806ca…` not installed/published.
+- No credential callback, USERAUTH or private-key match added. Modified JNI not
+  device-executed; [evidence and coverage limits](verification.md#2026-10-19--csas-native-selection-metadata-and-receipt).
+
+## 2026-10-18 — Managed immutable authentication selection
+
+- Added explicit strict UTF-8 username and exact per-role password-entry or
+  private-key path/identity/expected-public selection. Adapter freezes it before
+  callbacks/session claims and requires the same selection receipt for typed bytes.
+- Selected provider bypasses legacy request source; bridge repeats selection and
+  existing proof/operation guards at final release, with bounded copy/wipe/close.
+  Selected legacy kind-only, passphrase and KBI requests fail closed.
+- Twelve new tests; focused46 and fresh full JVM201/0/0/0, lint/Release/v2 and formal
+  review pass. Normal91 tasks/57s; archive83/fiveJNI/forbidden0. APK `e6c4d58b…`
+  was not installed/published. No C/JNI/wire/actual auth or private/public key-match
+  claim; [evidence and coverage limits](verification.md#2026-10-18--managed-immutable-ssh-authentication-selection).
+
+## 2026-10-18 — Explicit native userauth service negotiation
+
+- Production C adds opt-in post-KEX service begin/ready and no-secret callback
+  liveness validation. Existing KEX-only/JNI callers retain their stop point.
+- Request output must drain before accept; exact/legacy-empty accepts are bounded,
+  malformed/out-of-phase packets and service-phase rekey fail closed. Live owner,
+  role/view/deadline and the successful current KEX cycle are checked before I/O.
+- Final ARM QEMU encrypted KNOWN/NEW-CAS synthetic suite: **246,808 checks / exit0**;
+  callback24, independent review, normal94 tasks all rerun, fresh JVM189/0/0/0,
+  strict native, Release/lint/v2 and archive83/fiveJNI/forbidden0 pass.
+- APK `8cd6da66…` was built but not installed/published. No username, credentials,
+  USERAUTH_REQUEST, authenticated state or Java/JNI service API added; direct cycle
+  mismatch injection is a documented coverage limit. [Evidence](verification.md#2026-10-18--native-post-kex-userauth-service-negotiation).
+
+## 2026-10-18 — Android JNI transport / EOF verified after board recovery
+
+- Rebuilt independent fixture APKs from the current production fixes; build/lint and
+  matching v2 signatures pass (112 tasks). No source changes.
+- Exact synthetic JNI method passed on AIO-3568J API30/arm64: **1 test, 0.202s**, including
+  fragmented banner / initial KEXINIT readback, KNOWN proof and independent EOF cleanup.
+- Both fixture packages/processes were cleaned; formal APK hash stayed unchanged.
+  Full Android KEX, userauth and product acceptance remain open.
+
+## 2026-10-17 — Actual ARM QEMU runtime and production KEX fixes
+
+- Fixed deterministic role admission errors, atomic partial identification parsing,
+  completion only after local NEWKEYS/EXT_INFO output drains, and failed-open KEX unbind.
+- Added current-errno/FD-retention, both-side bytewise identification, 2/64-byte peer
+  completion/EXT_INFO, and real FD-exhaustion identical-resource retry regressions.
+- Final actual QEMU/Bionic ARM suite passed 65,838 checks / exit0; normal gate passed
+  94 tasks. JVM reports remain 189/0/0/0, reused UP-TO-DATE. APK `f3327427…` verifies v2,
+  archive remains 83 members and only production SSH library is packaged.
+- No device install this continuation. Android JNI is still blocked by user storage
+  lock; rebuild fixture APKs from these fixes before retrying after unlock.
+
+## 2026-10-17 — JNI fragmented transport / EOF fixture, local verification
+
+- Added two synthetic production sessions to the existing exact opt-in fixture:
+  bounded fragmented identification / initial KEXINIT readback and EOF terminal cleanup.
+- Review fixed Android's unavailable `EWOULDBLOCK` constant and nested failure cleanup.
+  Fixture Java compile, assemble, lint and matching v2 signatures pass (112 tasks).
+- Device runtime remains not-run: the board is `RUNNING_LOCKED` and rejected process
+  startup. The user chose to retain local results; owned packages/process were cleaned,
+  and the formal APK hash stayed unchanged. Full SSH remains in progress.
+
+## 2026-10-16 — Android ARM/JNI empty-peer EAGAIN boundary (G3.8 follow-up)
+
+- The production session fixture now calls `SshNativeSession.step()` once after
+  native ownership transfer and before KNOWN verification. An empty peer must report zero
+  bytes read, zero input appended and `readWouldBlock=true__.
+- The test intentionally leaves `bytesWritten` unconstrained because the same bounded
+  turn may emit the client identification/banner. KNOWN verification, revoke and close remain
+  covered by the same production path.
+- On AIO-3568J Android 11/API 30/arm64 the exact instrumentation passed `OK (1 test)`,
+  status 0, 0.11s. Fixture main/test hashes are
+  `79776aad22be067e057fb2abd2a9af74bc365f890de44b1d3ba689c18d9560d3` and
+  `fc71429d9e06d33334cc51cbb9fa64a7b8f672f2bb8752922052aac5ec6dc71e`; packages and
+  processes were cleaned.
+
+## 2026-10-16 — Android ARM/JNI KNOWN host-proof boundary (G3.8 follow-up)
+
+- The isolated `secretsFixture` now formats the managed
+  `ssh/known_hosts` line from the same OpenSSH wire public-key blob used by the
+  production session, removing the invalid `AAAA` placeholder.
+- `SshNativeSessionPlatformTest#syntheticNativeSessionHandle` calls production
+  `verifyHostKey` before view revoke. On the authorized AIO-3568J Android 11/API 30
+  arm64 board it passed `OK (1 test)` / status 0 in 0.089s; both fixture packages and
+  processes were removed afterward.
+- Fixture main/test hashes are
+  `1e3a10c709fed7d514a90e247494c61345da6a0f71dd142c17157f34ea4e9de6` and
+  `2b9f80678220d89a7a67e23197bd5f85c1eee7543763bfb895da8d31a801f7e7`. This is
+  KNOWN host-proof JNI/ARM evidence only; KEX, userauth and full SSH runtime remain open.
+
+## 2026-10-16 — NEW/CAS full-KEX host-proof boundary (G3.8 follow-up)
+
+- The production native caller now drives an empty managed `ssh/known_hosts` through the real
+  synthetic OpenSSH client/server packet loop. The host-key callback performs one exact candidate
+  handoff, one approved `NEW` evidence result with `CAS_COMMITTED`, then one KEX-complete callback.
+- The regression binds candidate/evidence route fields, candidate ID/classification/key/fingerprint,
+  replacement body, base/replacement digests, cycle=1 and the callback session digest to the peer
+  session ID; it also asserts bounded I/O, EAGAIN/short write, completion and post-completion
+  `EALREADY`, with retry-safe cleanup.
+- Focused and normal full gates passed: 94 tasks, JUnit `189/0/0/0`, archive=83, three ABI
+  Release/lint/assemble pass, APK SHA256
+  `7ccac2fb8f705edd761d34574b9cead4b9e2296864dfe5568d2e9b1105fd849f`, and production-only SSH
+  native APK topology. ARM runtime remains `not-run` because qemu-aarch64 is unavailable; task
+  remains `in_progress`/`implementation_complete=false`.
+
+## 2026-10-16 — synthetic KEX completion and host-proof boundary (G3.8 follow-up)
+
+- `ssh_native_client_test.c` now drives the production native client and an in-process,
+  nonblocking OpenSSH server over a socketpair through the real `kex->done` boundary. The
+  server pump uses 2-byte fragments and asserts EAGAIN/short-write behavior while the client
+  remains bounded by its step budget.
+- The regression asserts one matching `KNOWN` host-evidence callback before one KEX-complete
+  callback, `cycle == 1`, a nonzero callback session digest matching the peer session ID's
+  SHA-256, client completion, and post-completion `EALREADY`. Strict OpenSSH allocator handling
+  now also isolates `realloc` macros.
+- Focused and normal full gates passed: 94 tasks, JUnit `189/0/0/0`, archive=83, three ABI
+  Release/lint/assemble pass, APK SHA256
+  `7195a67fad84185714d00cbb2bbc899fbdf788b61f722282fae8b99ae8ba5f69`, and APK SSH native
+  topology remains production-only. ARM runtime is `not-run` because qemu-aarch64 is unavailable;
+  no device, vault, credential, endpoint, or external SSH was used. Task remains
+  `in_progress`/`implementation_complete=false`.
+
+## 2026-10-15 — bounded native NEW candidate/CAS precommit boundary (G3.8 follow-up)
+
+- `ssh_native_client_test.c` now drives the production verifier with an empty managed
+  `ssh/known_hosts` body and asserts the exact generated replacement body, candidate ID,
+  `NEW` classification, key/fingerprint, base/replacement digest binding, candidate-before-
+  evidence ordering, and `CAS_COMMITTED` success.
+- A host-evidence rejection regression asserts one candidate abort, no duplicate callbacks,
+  terminal `step()`=`EALREADY`, and retryable native close. The production verifier now marks
+  every failed host-verification path terminal after rolling back any handed-off candidate.
+- Focused and normal full gates passed: native/production host gates pass with
+  `runtime=not-run` because qemu-aarch64 is unavailable; normal gate is 94 tasks, JUnit
+  `189/0/0/0`, archive=83, APK SHA256
+  `7f0bd0f14ec2a5ae9175ee340512acfdeaf0aa76f843834d1a3c87107c97993b`, five JNI exports,
+  and no forbidden stock caller. No device, vault, credential, endpoint, or external SSH was used.
+  Task remains `in_progress`/`implementation_complete=false`.
+
+## 2026-10-15 — bounded native CERTIFICATE/INVALID host-policy classification (G3.8 follow-up)
+
+- `ssh_native_client_test.c` now uses a generated, signed OpenSSH host certificate
+  to directly assert `CTOS_SSH_CALLBACK_HOST_CERTIFICATE`, bounded key/fingerprint
+  and equal base/replacement digests, no candidate handoff, and production
+  `EACCES` before host evidence.
+- The issuer preflights the same in-memory managed body with pinned
+  `hostkeys_foreach_file(..., HKF_WANT_PARSE_KEY, ...)`. A parser-invalid line
+  produces project-owned `CTOS_SSH_CALLBACK_HOST_INVALID`; it is not an invented
+  upstream `HostStatus`. The regression combines a truncated line with a valid
+  record, asserts metadata/no handoff, and verifies production `EACCES` with zero
+  host-evidence calls. A legal no-match body remains upstream `NEW`.
+- The focused native gate passed with production/native gate pass and
+  `runtime=not-run reason=qemu-aarch64-unavailable`; no device, vault, credential,
+  endpoint or external SSH was used. The task remains
+  `in_progress`/`implementation_complete=false`.
+
+## 2026-10-15 — bounded native REVOKED host-policy classification (G3.8 follow-up)
+
+- `ssh_native_client_test.c` now marks a matching synthetic managed
+  `ssh/known_hosts` entry with `@revoked`. The direct host-file issuer assertion returns
+  `CTOS_SSH_CALLBACK_HOST_REVOKED` with key/fingerprint and equal base/replacement digests,
+  without candidate handoff.
+- The production verifier rejects the same offered key with `EACCES` before host evidence;
+  evidence remains uncalled. The fixture uses only an in-memory managed body, so no real
+  endpoint, known_hosts path, vault, credential or external SSH was used. Focused and normal
+  gates passed: production/native host gates pass, JUnit `189/0/0/0`, archive=83, APK SHA256
+  `df4605a4f41158b600184cb9daac25a8dd61e15697e614d69c4243ff640d25f9`, five session JNI
+  exports and forbidden stock caller=0. Native runtime remains `not-run` because qemu-aarch64
+  is unavailable, and the task remains `in_progress`/`implementation_complete=false`.
+
+## 2026-10-15 — bounded native KNOWN host-evidence proof (G3.8 follow-up)
+
+- `ssh_native_client_test.c` now places the generated Ed25519 public key in a synthetic managed
+  `ssh/known_hosts` object and calls the production `ctos_ssh_native_client_verify_host_key` API.
+  The callback fixture returns a complete approved `KNOWN` result with
+  `CAS_NOT_REQUIRED`, matching role/identity, key/fingerprint and both digests; the exact key
+  succeeds with one host-evidence callback.
+- A second generated public key is rejected by the production pinned-fingerprint guard with
+  `EACCES`, and the host-evidence callback count does not increase. The focused strict AArch64
+  cross-link and subsequent normal full gate passed (`JUnit 189/0/0/0`, archive=83, APK SHA256
+  `872e8f438e83217c2a6f7ae44a8a3e7065f7eedbdefe4be64284e7103c81608d`); native runtime remains
+  `not-run` because qemu-aarch64 is unavailable. This is not ARM runtime, full host policy, or
+  complete SSH proof. Task remains
+  `in_progress`/`implementation_complete=false`.
+
+- The same native fixture now separates host-file policy from the pinned guard: it keeps the
+  offered key's fingerprint valid, places a different generated key in managed `known_hosts`,
+  directly observes issuer classification `CHANGED` and matching digest metadata, then confirms
+  production verification returns `EACCES` with zero host-evidence calls and no candidate handoff.
+  The subsequent normal full gate passed with JUnit 189/0/0/0, archive=83 and APK SHA256
+  `e83b155b017985f048188a4fe3e9e838933e9d3eafda590fc50f75985272746b`; native runtime remains
+  `not-run` because qemu-aarch64 is unavailable.
+
+## 2026-10-15 — bounded native SSH step packet/output accounting (G3.8 follow-up)
+
+- `ssh_native_client_test.c` 以 synthetic socketpair 分片发送服务端 identification banner，
+  让 production `ssh_api` 生成客户端 banner/KEX 输出；回归确认每步读写不超过
+  `step_budget=3`、`bytes_written == output_consumed`、`partial_write` 表示仍有输出排队，
+  并从 peer 读回实际 banner/KEX 字节；同时分开覆盖 managed-view expiry 与 client deadline
+  的 `ETIMEDOUT` 路径。
+- focused strict AArch64 cross-link 与 `git diff --check` 通过；native runtime 因无
+  `qemu-aarch64` 仍为 `not-run`，没有设备、真实 vault、凭据或外部 SSH 操作。完整
+  packet/KEX、host proof、认证和产品 runtime 仍开放，task 保持
+  `in_progress`/`implementation_complete=false`。
+
+## 2026-10-15 — bounded native SSH step error semantics (G3.8 follow-up)
+
+- 修正 `ssh_native_client_step` 在 managed view borrow 失效时无条件改写 errno 的问题：
+  过期 view 保留 `ETIMEDOUT`，revoke/invalid view 保留 `EACCES` 或底层精确错误，并将
+  client terminalize，后续 step 返回 `EALREADY`。
+- `ssh_native_client_test.c` 新增空 nonblocking peer 的 EAGAIN、半关闭 EOF=`EPIPE`/后续
+  `EALREADY`、短 BOOTTIME deadline=`ETIMEDOUT` 回归；仍只使用 synthetic socketpair，
+  不访问设备、凭据、真实 vault 或外部 SSH。
+- focused `testSshNativeClientHost` strict AArch64 cross-link 通过，runtime 仍因容器无
+  `qemu-aarch64` 为 `not-run`；随后 normal full gate 的 JUnit 为 189/0/0/0、archive=83，
+  APK SHA256 为 `b71b02201717e455c45202e7408c7d490092653f4a56a5bfb1494ac4d08365bf`，APK
+  仅含生产 SSH library。task 继续 `in_progress`/`implementation_complete=false`。
+
 ## 2026-10-15 — native-owned SSH session handle and Android JNI gate (G3.7)
 
 - 新增 `ssh_view_handle.[ch]`：Java 只持有正整数 opaque token；native registry 拥有

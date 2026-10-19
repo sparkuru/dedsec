@@ -46,6 +46,17 @@ if (sshControlProbeOption == 'true' && secretsFixtureOption != 'true') {
 if (sshControlProbeOption == 'true' && (sshMemoryProbeOption != null || sshUpstreamProbeOption != null || sshPolicyProbeOption != null)) {
     throw new GradleException('ctosSshControlProbe must be packaged independently of other SSH probes')
 }
+def sshAuthFixtureOption = providers.gradleProperty('ctosSshAuthFixture').orNull
+if (sshAuthFixtureOption != null && sshAuthFixtureOption != 'true') {
+    throw new GradleException('ctosSshAuthFixture accepts only true; omit it for normal builds')
+}
+if (sshAuthFixtureOption == 'true' && secretsFixtureOption != 'true') {
+    throw new GradleException('ctosSshAuthFixture requires ctosSecretsUiFixture=true')
+}
+if (sshAuthFixtureOption == 'true' && (sshMemoryProbeOption != null || sshUpstreamProbeOption != null
+        || sshPolicyProbeOption != null || sshControlProbeOption != null)) {
+    throw new GradleException('ctosSshAuthFixture must be packaged independently of other SSH probes')
+}
 if (sshUpstreamProbeOption == 'true') {
     if (sshUpstreamBaselineOption == null || !(sshUpstreamBaselineOption ==~ '/app/build/ssh-native-g1/stock-run\\.[A-Za-z0-9_-]+')) {
         throw new GradleException('ctosSshUpstreamBaseline must identify one fixed /app/build/ssh-native-g1/stock-run.<id> directory')
@@ -116,6 +127,12 @@ android {
             sourceSets.secretsFixture.jniLibs.srcDirs += [layout.buildDirectory.dir('generated/sshKexProbeJniLibs').get().asFile]
             sourceSets.secretsFixture.assets.srcDirs += [layout.buildDirectory.dir('generated/sshKexProbeAssets').get().asFile]
         }
+        if (sshAuthFixtureOption == 'true') {
+            sourceSets.secretsFixture.jniLibs.srcDirs += [layout.buildDirectory.dir('generated/sshAuthFixtureJniLibs').get().asFile]
+        } else {
+            sourceSets.secretsFixture.java.exclude('**/SshAuthFixturePeer.java')
+            sourceSets.androidTestSecretsFixture.java.exclude('**/SshPasswordAuthPlatformTest.java')
+        }
     }
 }
 chaquopy {
@@ -165,6 +182,8 @@ def sshProductionRunner = rootProject.file(
     '../.trellis/tasks/10-08-ssh-terminal-client/research/android-production-openssh-build.sh')
 def sshProductionAbiPatch = rootProject.file(
     '../.trellis/tasks/10-08-ssh-terminal-client/research/openssh-10.6p1-bionic-includes.patch')
+def sshProductionBannerPatch = rootProject.file(
+    '../.trellis/tasks/10-08-ssh-terminal-client/research/openssh-10.6p1-banner-atomic.patch')
 def sshProductionBaseline = rootProject.file(
     '../build/ssh-native-g1/stock-run.lOHF9Oai')
 def sshProductionBaselineFile = { String relative ->
@@ -179,7 +198,8 @@ def sshProductionSources = files(
     'src/main/cpp/ssh_kex_guard.c', 'src/main/cpp/ssh_kex_guard.h',
     'src/main/cpp/ssh_native_client.c', 'src/main/cpp/ssh_native_client.h')
 tasks.register('compileSshProductionObjects', Exec) {
-    inputs.files(sshProductionRunner, sshProductionAbiPatch, sshProductionSources,
+    inputs.files(sshProductionRunner, sshProductionAbiPatch, sshProductionBannerPatch,
+        sshProductionSources,
         sshProductionBaselineFile('inputs/openssh-10.6p1.tar.gz'),
         sshProductionBaselineFile('inputs/openssl-3.5.9.tar.gz'),
         sshProductionBaselineFile('inputs/openssh-10.6p1-bionic-includes.patch'),
@@ -246,6 +266,36 @@ tasks.register('compileSshFiles', Exec) {
     }
 }
 tasks.named('preBuild').configure { dependsOn 'compileSshFiles' }
+
+if (sshAuthFixtureOption == 'true') {
+    def sshAuthPeer = layout.buildDirectory.file('generated/sshAuthFixtureJniLibs/arm64-v8a/libctos_ssh_auth_peer.so')
+    tasks.register('compileSshAuthFixturePeer', Exec) {
+        inputs.files('src/androidTestSecretsFixture/cpp/ssh_auth_peer_jni.c', sshFilesOutput)
+        dependsOn 'compileSshFiles'
+        outputs.file(sshAuthPeer)
+        doFirst {
+            File productionInclude = new File(sshProductionArchive.get().asFile.parentFile, 'include')
+            sshAuthPeer.get().asFile.parentFile.mkdirs()
+            commandLine "${android.ndkDirectory}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android28-clang",
+                '-std=c11', '-DCTOS_ANDROID_ABI_BASELINE_ONLY=1', '-DHAVE_CONFIG_H',
+                '-shared', '-fPIC', '-O2', '-Wall', '-Wextra', '-Werror',
+                '-Wno-pointer-sign', '-Wno-unused-parameter', '-Wno-unused-result',
+                '-Wno-deprecated-declarations', '-Wno-misleading-indentation',
+                '-Wl,--no-undefined', '-Wl,-z,max-page-size=16384',
+                "-I${productionInclude.absolutePath}",
+                "-I${sshProductionBaselineFile('sources/openssh-10.6p1').absolutePath}",
+                "-I${sshProductionBaselineFile('openssh-build').absolutePath}",
+                "-I${sshProductionBaselineFile('openssh-build/openbsd-compat/include').absolutePath}",
+                "-I${sshProductionBaselineFile('openssl-prefix/include').absolutePath}",
+                'src/androidTestSecretsFixture/cpp/ssh_auth_peer_jni.c',
+                "-L${sshFilesOutput.get().asFile.parentFile.absolutePath}", '-lctos_ssh_files',
+                '-o', sshAuthPeer.get().asFile
+        }
+    }
+    tasks.matching { it.name == 'preSecretsFixtureReleaseBuild' || it.name == 'preSecretsFixtureDebugBuild' }.configureEach {
+        dependsOn 'compileSshAuthFixturePeer'
+    }
+}
 
 def pythonExecutable = layout.buildDirectory.file('generated/jniLibs/arm64-v8a/libctos_python_exec.so')
 tasks.register('compilePythonExecutable', Exec) {

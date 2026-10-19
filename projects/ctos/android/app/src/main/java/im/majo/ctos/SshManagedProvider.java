@@ -156,11 +156,35 @@ final class SshManagedProvider {
             throw new VaultException("SSH_CREDENTIAL_PROVIDER", "The managed SSH credential provider is unavailable");
         }
 
-        SshCredentialBridge.Request request = null;
+        return releaseBytes(credentialSource.open(credentialBridge, role, hostKey, kind), kex, kind, null, null);
+    }
+
+    byte[] credentialBytes(SshRoleContext role, SshHostKeyAuthority.Proof hostKey,
+            SshKexProof kex, SshCredentialBridge.Kind kind, SshAuthenticationSelection selection)
+            throws VaultException {
+        return credentialBytes(role, hostKey, kex, kind, selection, null);
+    }
+
+    byte[] credentialBytes(SshRoleContext role, SshHostKeyAuthority.Proof hostKey,
+            SshKexProof kex, SshCredentialBridge.Kind kind, SshAuthenticationSelection selection,
+            AppSecrets.EffectGuard effectGuard) throws VaultException {
+        if (selection == null) throw SshAuthenticationSelection.invalid();
+        selection.requireMatches(role, kind, clock);
+        if (hostKey == null || kex == null) {
+            throw new VaultException("SSH_KEX_REQUIRED", "Signed SSH key exchange proof is required");
+        }
+        hostKey.requireMatches(role);
+        kex.requireMatches(role, hostKey);
+        return releaseBytes(credentialBridge.openSelection(role, hostKey, selection), kex, kind,
+                selection, effectGuard);
+    }
+
+    private byte[] releaseBytes(SshCredentialBridge.Request request, SshKexProof kex,
+            SshCredentialBridge.Kind kind, SshAuthenticationSelection selection,
+            AppSecrets.EffectGuard effectGuard) throws VaultException {
         byte[] result = null;
         final byte[][] handoff = new byte[1][];
         try {
-            request = credentialSource.open(credentialBridge, role, hostKey, kind);
             if (request == null) {
                 throw new VaultException("SSH_CREDENTIAL_PROVIDER",
                         "The managed SSH credential request is unavailable");
@@ -169,7 +193,7 @@ final class SshManagedProvider {
                 throw new VaultException("SSH_CREDENTIAL_PROVIDER",
                         "The managed SSH credential kind does not match the native request");
             }
-            credentialBridge.release(request, kex, credential -> {
+            credentialBridge.release(request, kex, selection, effectGuard, credential -> {
                 if (credential == null || credential.length == 0
                         || credential.length > VaultManifest.MAX_FILE_BYTES) {
                     throw new VaultException("SSH_CREDENTIAL_PROVIDER",

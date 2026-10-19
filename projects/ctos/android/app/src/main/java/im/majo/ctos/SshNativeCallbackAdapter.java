@@ -4,6 +4,8 @@ import java.io.ByteArrayOutputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 
 /**
  * Synchronous callback boundary for a future same-process native SSH event
@@ -167,6 +169,10 @@ final class SshNativeCallbackAdapter implements AutoCloseable {
     private boolean nativeSessionOpening;
     private boolean nativeSessionOwned;
     private String failureCode;
+    private boolean authenticationSetupLocked;
+    private boolean selectedNativeClaimIssued;
+    private boolean selectedCredentialAttempted;
+    private SshAuthenticationSelection authenticationSelection;
     private SshHostKeyAuthority.Proof hostProof;
     private SshKexProof kexProof;
 
@@ -202,6 +208,15 @@ final class SshNativeCallbackAdapter implements AutoCloseable {
             SshRoleContext.Clock clock, SshManagedProvider managedProvider) throws VaultException {
         return bind(issued, registry, hostAuthority, clock,
                 new ProductionNativeBinding(), SshNativeRoleBootstrap.productionRelease(), managedProvider);
+    }
+
+    /** Production binding with the provider's exact one-shot candidate receiver. */
+    static SshNativeCallbackAdapter bind(SshNativeRoleBootstrap.Issued issued,
+            SshRoleRegistry registry, SshHostKeyAuthority hostAuthority,
+            SshRoleContext.Clock clock, SshManagedProvider managedProvider,
+            SshKnownHostsCandidateHandoff candidateHandoff) throws VaultException {
+        return bind(issued, registry, hostAuthority, clock, new ProductionNativeBinding(),
+                SshNativeRoleBootstrap.productionRelease(), managedProvider, candidateHandoff);
     }
 
     /** Host/JVM contract seam; it does not weaken the callback state machine. */
@@ -280,6 +295,7 @@ final class SshNativeCallbackAdapter implements AutoCloseable {
                 cancelled = true;
                 throw new Rejected(failureCode);
             }
+            authenticationSetupLocked = true;
             inCallback = true;
             return new Invocation(++invocationSerial);
         }
@@ -293,43 +309,67 @@ final class SshNativeCallbackAdapter implements AutoCloseable {
                 inCallback = false;
                 return false;
             }
-            inCallback = false;
-            if (failure != null) {
-                failureCode = failure;
-                cancelled = true;
-                hostProof = null;
-                kexProof = null;
-                return false;
-            }
-            if (cancelled || closing || closed) {
-                if (failureCode == null) failureCode = "SSH_CALLBACK_CANCELLED";
-                hostProof = null;
-                kexProof = null;
-                return false;
-            }
             try {
-                role.requireActive(clock);
-            } catch (VaultException expired) {
-                failureCode = expired.code;
-                cancelled = true;
-                hostProof = null;
-                kexProof = null;
-                return false;
-            } catch (RuntimeException | LinkageError exception) {
-                failureCode = "SSH_CALLBACK_JAVA_EXCEPTION";
-                cancelled = true;
-                hostProof = null;
-                kexProof = null;
-                return false;
+                if (failure != null) {
+                    failureCode = failure;
+                    cancelled = true;
+                    hostProof = null;
+                    kexProof = null;
+                    return false;
+                }
+                if (cancelled || closing || closed) {
+                    if (failureCode == null) failureCode = "SSH_CALLBACK_CANCELLED";
+                    hostProof = null;
+                    kexProof = null;
+                    return false;
+                }
+                try {
+                    role.requireActive(clock);
+                } catch (VaultException expired) {
+                    failureCode = expired.code;
+                    cancelled = true;
+                    hostProof = null;
+                    kexProof = null;
+                    return false;
+                } catch (RuntimeException | LinkageError exception) {
+                    failureCode = "SSH_CALLBACK_JAVA_EXCEPTION";
+                    cancelled = true;
+                    hostProof = null;
+                    kexProof = null;
+                    return false;
+                }
+                if (cancelled || closing || closed) {
+                    if (failureCode == null) failureCode = "SSH_CALLBACK_CANCELLED";
+                    hostProof = null;
+                    kexProof = null;
+                    return false;
+                }
+                if (value instanceof SshHostKeyAuthority.Proof) {
+                    hostProof = (SshHostKeyAuthority.Proof)value;
+                    kexProof = null;
+                } else if (value instanceof SshKexProof) {
+                    kexProof = (SshKexProof)value;
+                }
+                failureCode = null;
+                return true;
+            } catch (Error error) {
+                abortInvocation(invocation);
+                throw error;
+            } finally {
+                inCallback = false;
             }
-            if (value instanceof SshHostKeyAuthority.Proof) {
-                hostProof = (SshHostKeyAuthority.Proof)value;
-                kexProof = null;
-            } else if (value instanceof SshKexProof) {
-                kexProof = (SshKexProof)value;
-            }
-            failureCode = null;
-            return true;
+        }
+    }
+
+    /** An escaping Error must not strand callback ownership and block cleanup. */
+    private void abortInvocation(Invocation invocation) {
+        synchronized (stateLock) {
+            if (invocation == null || !inCallback || invocation.serial != invocationSerial) return;
+            if (!cancelled || failureCode == null) failureCode = "SSH_CALLBACK_JAVA_EXCEPTION";
+            cancelled = true;
+            hostProof = null;
+            kexProof = null;
+            inCallback = false;
         }
     }
 
@@ -552,17 +592,86 @@ final class SshNativeCallbackAdapter implements AutoCloseable {
         }
     }
 
+    /** Freezes metadata on the owner before any callback or native session claim. */
+    void selectAuthentication(SshAuthenticationSelection selection) throws VaultException {
+        synchronized (stateLock) {
+            if (Thread.currentThread() != eventLoopThread) {
+                throw new VaultException("SSH_CALLBACK_THREAD",
+                        "SSH authentication selection must run on the event-loop thread");
+            }
+            if (closed) throw new VaultException("SSH_CALLBACK_CLOSED", "The SSH callback binding is closed");
+            if (closing) throw new VaultException("SSH_CALLBACK_CLOSING", "The SSH callback binding is closing");
+            if (cancelled) throw new VaultException("SSH_CALLBACK_CANCELLED", "The SSH callback binding is cancelled");
+            if (selection == null || authenticationSelection != null || authenticationSetupLocked
+                    || inCallback || nativeSessionOpening || nativeSessionOwned || managedProvider == null) {
+                throw SshAuthenticationSelection.invalid();
+            }
+            selection.requireMatches(role, selection.kind, clock);
+            authenticationSelection = selection;
+        }
+    }
+
     /**
      * Synchronous bounded credential handoff for the native event-loop
      * callback.  JNI copies the returned array into its caller-owned buffer
      * and wipes the managed array before dropping its local reference.
      */
     byte[] onNativeCredentialBytes(int kind) {
+        return credentialBytes(kind, null, false, false, null, 0, null);
+    }
+
+    byte[] onNativeCredentialBytes(int kind, SshAuthenticationSelection selection) {
+        return credentialBytes(kind, selection, true, false, null, 0, null);
+    }
+
+    /** Only the native selected route carries the exact retained CSAS/KEX binding. */
+    byte[] onNativeSelectedCredentialBytes(int kind, byte[] receipt, long cycle, byte[] digest) {
+        return credentialBytes(kind, null, true, true, receipt, cycle, digest);
+    }
+
+    private byte[] credentialBytes(int kind, SshAuthenticationSelection selection, boolean selectedCall,
+            boolean nativeSelectedCall, byte[] receipt, long cycle, byte[] digest) {
         Invocation invocation = null;
         byte[] result = null;
+        byte[] receiptCopy = null;
+        byte[] digestCopy = null;
+        byte[] expectedDigest = null;
+        byte[] wire = null;
+        byte[] expectedReceipt = null;
+        boolean handedOff = false;
         try {
             invocation = begin();
+            SshAuthenticationSelection frozen;
+            synchronized (stateLock) {
+                frozen = authenticationSelection;
+                if (nativeSelectedCall ? !nativeSessionOwned || !selectedNativeClaimIssued
+                        : selectedCall && selectedNativeClaimIssued) {
+                    throw SshAuthenticationSelection.invalid();
+                }
+            }
+            if (selectedCall || frozen != null) {
+                if (!selectedCall || frozen == null || !nativeSelectedCall && selection != frozen
+                        || (kind != CREDENTIAL_PASSWORD && kind != CREDENTIAL_PRIVATE_KEY)) {
+                    throw SshAuthenticationSelection.invalid();
+                }
+            }
+            if (nativeSelectedCall) {
+                if (receipt == null || receipt.length != 32 || digest == null || digest.length != 32
+                        || cycle <= 0) throw SshAuthenticationSelection.invalid();
+                receiptCopy = receipt.clone();
+                digestCopy = digest.clone();
+                wire = frozen.encode(issued.token, clock);
+                try {
+                    expectedReceipt = MessageDigest.getInstance("SHA-256").digest(wire);
+                } catch (NoSuchAlgorithmException unavailable) {
+                    throw SshAuthenticationSelection.invalid();
+                }
+                if (!MessageDigest.isEqual(receiptCopy, expectedReceipt)) {
+                    throw SshAuthenticationSelection.invalid();
+                }
+            }
             SshCredentialBridge.Kind typedKind = credentialKind(kind);
+            if (frozen != null) frozen.requireMatches(role, typedKind, clock);
             SshHostKeyAuthority.Proof proof;
             SshKexProof signedKex;
             synchronized (stateLock) {
@@ -575,31 +684,80 @@ final class SshNativeCallbackAdapter implements AutoCloseable {
             }
             proof.requireMatches(role);
             signedKex.requireMatches(role, proof);
+            if (nativeSelectedCall) {
+                expectedDigest = signedKex.sessionIdDigest();
+                if (signedKex.cycle != cycle || !MessageDigest.isEqual(expectedDigest, digestCopy)) {
+                    throw new VaultException("SSH_KEX_REQUIRED", "The native KEX binding changed");
+                }
+            }
             if (managedProvider == null) {
                 throw new VaultException("SSH_CREDENTIAL_PROVIDER",
                         "The managed SSH credential provider is unavailable");
             }
-            result = managedProvider.credentialBytes(role, proof, signedKex, typedKind);
+            final Invocation capturedInvocation = invocation;
+            final AppSecrets.EffectGuard effectGuard = frozen == null ? null
+                    : () -> requireSelectedInvocation(capturedInvocation, frozen, proof, signedKex,
+                            nativeSelectedCall);
+            if (effectGuard != null) {
+                effectGuard.check();
+                synchronized (stateLock) {
+                    if (selectedCredentialAttempted) throw SshAuthenticationSelection.invalid();
+                    selectedCredentialAttempted = true;
+                }
+            }
+            result = frozen == null
+                    ? managedProvider.credentialBytes(role, proof, signedKex, typedKind)
+                    : managedProvider.credentialBytes(role, proof, signedKex, typedKind, frozen, effectGuard);
             if (result == null || result.length == 0 || result.length > MAX_CREDENTIAL_BYTES) {
                 throw new VaultException("SSH_CREDENTIAL_PROVIDER",
                         "The managed SSH credential is outside its bounded handoff");
             }
+            if (effectGuard != null) effectGuard.check();
             if (!finish(invocation, null, result)) {
-                VaultCodec.wipe(result);
                 return null;
             }
+            handedOff = true;
             return result;
         } catch (Rejected rejected) {
-            if (result != null) VaultCodec.wipe(result);
             return null;
         } catch (VaultException failure) {
-            if (result != null) VaultCodec.wipe(result);
             finish(invocation, failure.code, null);
             return null;
         } catch (RuntimeException | LinkageError failure) {
-            if (result != null) VaultCodec.wipe(result);
             finish(invocation, "SSH_CALLBACK_JAVA_EXCEPTION", null);
             return null;
+        } finally {
+            if (!handedOff) {
+                VaultCodec.wipe(result);
+                abortInvocation(invocation);
+            }
+            VaultCodec.wipe(receiptCopy);
+            VaultCodec.wipe(digestCopy);
+            VaultCodec.wipe(expectedDigest);
+            VaultCodec.wipe(expectedReceipt);
+            VaultCodec.wipe(wire);
+        }
+    }
+
+    private void requireSelectedInvocation(Invocation invocation, SshAuthenticationSelection selection,
+            SshHostKeyAuthority.Proof proof, SshKexProof signedKex, boolean nativeSelectedCall)
+            throws VaultException {
+        synchronized (stateLock) {
+            role.requireActive(clock);
+            selection.requireMatches(role, selection.kind, clock);
+            proof.requireMatches(role);
+            signedKex.requireMatches(role, proof);
+            if (Thread.currentThread() != eventLoopThread || !inCallback || invocation == null
+                    || invocation.serial != invocationSerial || authenticationSelection != selection
+                    || hostProof != proof || kexProof != signedKex
+                    || nativeSelectedCall && (!nativeSessionOwned || !selectedNativeClaimIssued
+                    || nativeCallback <= 0)
+                    || !nativeSelectedCall && selectedNativeClaimIssued) {
+                throw SshAuthenticationSelection.invalid();
+            }
+            if (cancelled || closing || closed) throw new VaultException(
+                    failureCode == null ? "SSH_CALLBACK_CANCELLED" : failureCode,
+                    "The SSH callback binding is no longer active");
         }
     }
 
@@ -638,6 +796,8 @@ final class SshNativeCallbackAdapter implements AutoCloseable {
                         "The SSH callback binding already has a native session");
             }
             role.requireActive(clock);
+            authenticationSetupLocked = true;
+            if (authenticationSelection != null) selectedNativeClaimIssued = true;
             nativeSessionOpening = true;
             return new NativeSessionClaim(this);
         }
@@ -767,6 +927,24 @@ final class SshNativeCallbackAdapter implements AutoCloseable {
         synchronized (stateLock) { return nativeCallback; }
     }
     long roleToken() { return issued.token; }
+
+    /** Only this adapter may export its frozen plan; session callers supply no wire. */
+    byte[] authenticationSelectionWire() throws VaultException {
+        synchronized (stateLock) {
+            if (Thread.currentThread() != eventLoopThread) throw new VaultException("SSH_CALLBACK_THREAD",
+                    "SSH selection export must run on the event-loop thread");
+            if (closed) throw new VaultException("SSH_CALLBACK_CLOSED", "The SSH callback binding is closed");
+            if (closing) throw new VaultException("SSH_CALLBACK_CLOSING", "The SSH callback binding is closing");
+            if (cancelled) throw new VaultException("SSH_CALLBACK_CANCELLED", "The SSH callback binding is cancelled");
+            if (inCallback || nativeSessionOpening || nativeSessionOwned) {
+                throw new VaultException("SSH_CALLBACK_SESSION", "The SSH callback binding is already in use");
+            }
+            role.requireActive(clock);
+            if (authenticationSelection == null) return null;
+            authenticationSelection.requireMatches(role, authenticationSelection.kind, clock);
+            return authenticationSelection.encode(issued.token, clock);
+        }
+    }
     int ownerUid() { return issued.ownerUid; }
     long deadline() { return role.deadline; }
     String host() { return role.host; }
@@ -778,6 +956,16 @@ final class SshNativeCallbackAdapter implements AutoCloseable {
         synchronized (stateLock) {
             if (closed) throw new VaultException("SSH_CALLBACK_CLOSED",
                     "The SSH callback binding is closed");
+            role.requireActive(clock);
+        }
+    }
+
+    /** Metadata reads additionally reject adapter cancellation without changing legacy step guards. */
+    void requireAuthenticationSelectionLive() throws VaultException {
+        synchronized (stateLock) {
+            if (closed) throw new VaultException("SSH_CALLBACK_CLOSED", "The SSH callback binding is closed");
+            if (closing) throw new VaultException("SSH_CALLBACK_CLOSING", "The SSH callback binding is closing");
+            if (cancelled) throw new VaultException("SSH_CALLBACK_CANCELLED", "The SSH callback binding is cancelled");
             role.requireActive(clock);
         }
     }

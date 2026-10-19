@@ -146,6 +146,19 @@ static int classify_status(HostStatus status) {
     }
 }
 
+struct hostfile_parse_state {
+    int invalid;
+};
+
+static int remember_invalid_hostfile_line(struct hostkey_foreach_line *line,
+    void *context) {
+    struct hostfile_parse_state *state = context;
+
+    if (line == NULL || state == NULL) return -1;
+    if (line->status == HKF_STATUS_INVALID) state->invalid = 1;
+    return 0;
+}
+
 static int digest_body(const unsigned char *body, size_t length,
     unsigned char digest[32]) {
     static const unsigned char empty_body = 0;
@@ -208,8 +221,10 @@ int ctos_ssh_hostfile_issue(const struct ctos_ssh_view *view,
     HostStatus status;
     int classification;
     int error = EINVAL;
+    int parse_result;
     size_t path_length;
     size_t host_length;
+    struct hostfile_parse_state parse_state = {0};
 
     if (issue == NULL) {
         errno = EINVAL;
@@ -225,7 +240,7 @@ int ctos_ssh_hostfile_issue(const struct ctos_ssh_view *view,
         || ctos_ssh_role_bootstrap_snapshot(role, &snapshot) != 0
         || snapshot.hop >= CTOS_SSH_ROLE_MAX || snapshot.port == 0
         || strcmp(snapshot.host, host) != 0
-        || view->deadline != snapshot.deadline
+        || view->deadline < snapshot.deadline
         || same_slice_text(view->connection, snapshot.connection_id) != 0
         || ctos_ssh_view_live(view) != 0
         || managed_known_hosts_root(view) != 0) {
@@ -262,6 +277,31 @@ int ctos_ssh_hostfile_issue(const struct ctos_ssh_view *view,
         input = fmemopen((void *)file->body.data, file->body.length, "r");
         if (input == NULL) {
             error = errno == 0 ? EIO : errno;
+            goto failed;
+        }
+        /* Keep the bound host in the parser even without HKF_WANT_MATCH: the
+         * preflight still visits every line, while upstream can reject a
+         * malformed hashed host token instead of silently treating it as a
+         * non-match and allowing NEW. */
+        parse_result = hostkeys_foreach_file(CTOS_SSH_HOSTFILE_SYNTHETIC_PATH,
+            input, remember_invalid_hostfile_line, &parse_state, host, NULL,
+            HKF_WANT_PARSE_KEY, 0);
+        if (parse_result != 0) {
+            error = EIO;
+            goto failed;
+        }
+        if (parse_state.invalid) {
+            issue->classification = CTOS_SSH_CALLBACK_HOST_INVALID;
+            memcpy(issue->replacement_digest, issue->base_digest,
+                sizeof(issue->replacement_digest));
+            fclose(input);
+            input = NULL;
+            free(fingerprint);
+            fingerprint = NULL;
+            return 0;
+        }
+        if (fseek(input, 0, SEEK_SET) != 0) {
+            error = EIO;
             goto failed;
         }
     }

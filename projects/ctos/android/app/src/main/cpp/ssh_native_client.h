@@ -13,6 +13,25 @@
 #define CTOS_SSH_NATIVE_CLIENT_MAX_STEP_BYTES (64U * 1024U)
 #define CTOS_SSH_NATIVE_CLIENT_FINGERPRINT_BYTES 32U
 #define CTOS_SSH_NATIVE_CLIENT_MAX_HOST_KEY_BLOB_BYTES (1024U * 1024U)
+#define CTOS_SSH_NATIVE_CLIENT_MAX_SELECTION_WIRE_BYTES (1024U * 1024U + 2048U)
+#define CTOS_SSH_NATIVE_CLIENT_MAX_PASSWORD_BYTES 8192U
+
+enum ctos_ssh_native_client_password_auth_result {
+    CTOS_SSH_PASSWORD_AUTH_NOT_STARTED = 0,
+    CTOS_SSH_PASSWORD_AUTH_PENDING = 1,
+    CTOS_SSH_PASSWORD_AUTH_SUCCESS = 2,
+    CTOS_SSH_PASSWORD_AUTH_REJECTED = 3,
+    CTOS_SSH_PASSWORD_AUTH_PARTIAL = 4,
+    CTOS_SSH_PASSWORD_AUTH_CHANGE_REQUIRED = 5
+};
+
+enum ctos_ssh_native_client_private_key_auth_result {
+    CTOS_SSH_PRIVATE_KEY_AUTH_NOT_STARTED = 0,
+    CTOS_SSH_PRIVATE_KEY_AUTH_PENDING = 1,
+    CTOS_SSH_PRIVATE_KEY_AUTH_SUCCESS = 2,
+    CTOS_SSH_PRIVATE_KEY_AUTH_REJECTED = 3,
+    CTOS_SSH_PRIVATE_KEY_AUTH_PARTIAL = 4
+};
 
 struct ctos_ssh_native_client;
 struct sshkey;
@@ -41,6 +60,9 @@ struct ctos_ssh_native_client_config {
     const char *known_hosts_path;
     const char *host;
     const char *candidate_id;
+    /* Optional CSAS v1 metadata, borrowed only for open; never credential bytes. */
+    const unsigned char *authentication_selection_wire;
+    size_t authentication_selection_wire_length;
 };
 
 struct ctos_ssh_native_client_step {
@@ -79,6 +101,38 @@ int ctos_ssh_native_client_verify_host_key(
     struct ctos_ssh_native_client *, const void *, size_t);
 
 int ctos_ssh_native_client_complete(
+    const struct ctos_ssh_native_client *);
+
+/* Live owner-only metadata fingerprint, permitted before/after KEX. No I/O or
+ * credential authority; every error clears a non-null 32-byte output. */
+int ctos_ssh_native_client_authentication_selection_receipt(
+    const struct ctos_ssh_native_client *, unsigned char receipt[32]);
+
+/* One selected typed handoff after service-ready/current proof. No USERAUTH is
+ * sent; output remains private until all post-provider checks pass. */
+int ctos_ssh_native_client_selected_credential_bytes(struct ctos_ssh_native_client *,
+    unsigned char *output, size_t capacity, size_t *length);
+
+/* One explicit password request using owned selection and the shared selected
+ * attempt. No retries or password-change continuation; all remote text is discarded. */
+int ctos_ssh_native_client_begin_password_auth(struct ctos_ssh_native_client *);
+/* Owner/live-proof-only read. Errors clear out and do not mutate the client. */
+int ctos_ssh_native_client_password_auth_result(
+    const struct ctos_ssh_native_client *,
+    enum ctos_ssh_native_client_password_auth_result *);
+
+/* One direct signed publickey request; expected identity comes only from owned
+ * CSAS and private material only from the selected one-shot credential callback. */
+int ctos_ssh_native_client_begin_private_key_auth(struct ctos_ssh_native_client *);
+int ctos_ssh_native_client_private_key_auth_result(
+    const struct ctos_ssh_native_client *,
+    enum ctos_ssh_native_client_private_key_auth_result *);
+
+/* Explicitly continue a proved initial KEX into fixed ssh-userauth service
+ * negotiation. No username or credential is sent; ready is not authentication.
+ * KEX-only callers keep their existing complete()/EALREADY stopping point. */
+int ctos_ssh_native_client_begin_userauth_service(struct ctos_ssh_native_client *);
+int ctos_ssh_native_client_userauth_service_ready(
     const struct ctos_ssh_native_client *);
 
 /*

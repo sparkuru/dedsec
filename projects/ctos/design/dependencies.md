@@ -1,6 +1,52 @@
 # Dependency provenance
 
+## 2026-10-19 Android/JNI authentication integration
+
+继续复用 pinned OpenSSH10.6p1/OpenSSL3.5.9、NDK27；没有新依赖、上游补丁或archive成员。
+生产archive83，session JNI扩为12。fixture peer仅在显式两个Gradle opt-in下动态链接生产
+libctos_ssh_files，不引入第二份OpenSSH/crypto；普通APK排除peer库和类。宿主QEMU/Bionic
+证据与Android API30实测分开，格式/KDF边界见[本轮验证](verification.md#20261019-android-auth)。
+
 仅在本项目记录依赖，不修改顶层 third_party。
+
+2026-10-19 C-only password USERAUTH 复用 pinned OpenSSH packet/string/padding、digest与
+现有selected callback，无新增依赖、上游补丁、archive成员或JNI入口。archive83/sixJNI
+保持；正常send的plaintext擦除与构包失败reset-only的边界见[验证](verification.md#2026-10-19--explicit-native-password-userauth-protocol)。
+
+2026-10-19 selected credential handoff 复用现有 callback/JNI、OpenSSH digest 和
+AppSecrets EffectGuard；无新增依赖、上游补丁或 archive 成员。session JNI 仍为6个，
+archive83；QEMU/Bionic 只作本地合成验证，[证据与限制](verification.md#2026-10-19--receipt-bound-selected-credential-handoff)。
+
+2026-10-19 CSASv1复用现有Java编码/SHA256、native OpenSSH digest与view-path校验，无
+新增依赖、上游patch或archive成员。只读receipt新增一个sessionJNIexport（共6）；
+production archive仍83，publicblob保持声明而非解析证明。见[验证](verification.md#2026-10-19--csas-native-selection-metadata-and-receipt)。
+
+2026-10-18 managed authentication selection 仅使用现有 Java UTF-8/ByteBuffer 和 vault
+合同，无新增依赖、native object/patch 或凭据持久格式。C/JNI源码未改；既有production
+builder每次强制重建归档，生成物hash变化与sourceidentity分列，见[验证](verification.md#2026-10-18--managed-immutable-ssh-authentication-selection)。
+
+2026-10-18 post-KEX service 切片沿用现有 pinned OpenSSH sshpkt/dispatch API 和 83-member
+production closure；未添加上游对象、源码补丁或生产依赖。QEMU/Bionic 继续仅作本地
+合成测试工具；新执行证据见[验证](verification.md#2026-10-18--native-post-kex-userauth-service-negotiation)。
+
+## 2026-10-17 production OpenSSH banner patch / local ARM runtime
+
+在既有固定 OpenSSH 10.6p1 基线上新增项目补丁
+[`openssh-10.6p1-banner-atomic.patch`](../.trellis/tasks/10-08-ssh-terminal-client/research/openssh-10.6p1-banner-atomic.patch)，
+SHA256 `ba61f35303233ebd2bf1c39d167774667766b3461721657f8af0483e51258a18`。
+它仅让 `_ssh_read_banner` 在输入不足完整行时清空未发布的 version buffer，保留 input
+供下次重试。生产 builder 校验固定 hash、在 scratch 中应用、编译 PIC `ssh_api.o` 替换
+原 archive 成员；G1 source/tree hash 和 83-member closure 不变。patched `ssh_api.c`
+SHA256 为 `ea50ae877474623fcd369fa85ac2c69b5ab1ba231bc25ec2117cefe81e83c4bf`。
+沿用已有完整上游许可证，不修改相邻目录或引入新生产依赖。
+
+宿主已有 `qemu-aarch64` 10.0.13（Debian 1:10.0.13+ds-0+deb13u1）仅用于本地验证，
+未加入 APK。临时 runtime 只读来自当前 `.14` API30 板的公开 linker64 与
+libc/libdl/libm/libz；文件及 hash 保留于 `/tmp` 证据目录，未入仓库或安装到全局路径。
+这是 QEMU/Bionic synthetic ARM 执行，与 Android JNI 实机验证分开记录，详见
+[验证](verification.md)。
+
+## 现有依赖
 
 | Dependency | Version / source | License / use |
 | --- | --- | --- |

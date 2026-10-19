@@ -2,17 +2,1395 @@
 
 ## Current scope
 
-`10-08-ssh-terminal-client` now owns a production source/object and native C
-caller boundary, using the approved parent PRD/design and existing
-AppSecrets/SshVaultAdapter contracts. The normal APK production archive is
-rebuilt from the pinned OpenSSH 10.6p1 source with `-fPIC`; old fixture objects
-and stock high-level callers are not valid inputs. The client is not yet a
-complete Android product: G3.7 now has native-owned session/key/view handles
-and a real JNI bridge, with an authorized synthetic Android lifecycle gate.
-Runtime/ARM execution for the native host binary, full packet/protocol
-coverage, userauth, typed credentials, PTY, forwarding, service/UI, real vault
-and external SSH remain open gates. Missing semantic/trust/runtime providers
-must keep the product path fail-closed.
+The production pinned OpenSSH10.6p1 PIC archive (83 members, stock high-level
+callers excluded) now drives native KEX, fixed userauth service, one password
+request or direct-signed private-key request through12 session JNI exports.
+Java owns explicit phases and a thread-wide reentry guard. CSASv1 unencrypted
+keys and CSASv2 exact key/passphrase bundles use the same selected one-attempt
+receipt and current role/view/KEX proof. No Java session secret getter exists.
+
+2026-10-19 actual API30/arm64 independent Android fixtures passed full KNOWN
+password and unencrypted/encrypted private-key chains, plus real NEW candidate,
+approval and in-memory AppSecrets CAS followed by authentication. The peer
+DT_NEEDED-links the same production shared library, verifies every request and
+signature, and uses generated synthetic identities only. Host QEMU/Bionic and
+JVM evidence are recorded separately in design/verification.md. Real accounts
+and the production vault were not used; fixture packages were uninstalled.
+
+This remains an incomplete product client: channels/PTY/forwarding, launcher/UI,
+KBI/MFA continuation, rekey/compression compatibility and real-account acceptance
+are open. Missing providers continue to fail closed. Encrypted PKCS8 is rejected;
+exact supported encryption/KDF limits follow below. Earlier dated/base contracts
+remain useful for compatibility, not as claims that newer APIs are absent.
+
+## Java/JNI password orchestration and isolated Android peer
+
+### 1. Scope / Trigger
+
+Connect the existing C service/password protocol to SshNativeSession, then validate
+real Java→JNI→native KEX/service/password→JNI credential callback→in-memory
+AppSecrets paths with an opt-in Android fixture. Continue into private-key work
+without requiring another user “continue”. Device operations wait for a concrete
+fixture and current AGENTS authorization; no real account is a development dependency.
+
+### 2. Signatures
+
+```java
+void beginUserauthService() throws VaultException;
+boolean userauthServiceReady() throws VaultException;
+void beginPasswordAuth() throws VaultException;
+PasswordAuthResult passwordAuthResult() throws VaultException;
+// explicit tags: NOT_STARTED0 PENDING1 SUCCESS2 REJECTED3 PARTIAL4 CHANGE_REQUIRED5
+```
+
+Append NativeBinding defaults throwing IOException for all four methods; production
+Native adds unique long-handle entries with void/boolean/void/int returns. No secret
+return API. Total session JNI exports becomes10. Keep step's existing eight-int wire
+and StepResult.complete as initial KEX, not authentication.
+
+Fixture-only helper SshAuthFixturePeer uses its own opaque owner-thread registry:
+open(borrowed raw AF_UNIX peer FD, response enum), hostKeyBlob(handle), step(handle),
+summary(handle), close(handle). Fixed peer username/password are fixture constants;
+no arbitrary credentials are accepted. Native duplicates the borrowed descriptor;
+Java retains its original descriptor on success and failure. Close wipes generated host
+private key. Its JNI library DT_NEEDED-links libctos_ssh_files.so, sharing the exact
+production OpenSSH implementation rather than statically copying another instance.
+No role/callback/client objects are reimplemented in the helper.
+
+### 3. Contracts
+
+- One static ThreadLocal native-entry guard covers ALL SshNativeSession operations
+  that can call a NativeBinding, including static open, legacy step/verify/receipt,
+  close/destroy and new methods. Claim after owner validation, before managed claim/
+  phase/liveness work; finally remove on every return/exception/Error. Reentry on
+  the same thread into the same OR another session is SSH_SESSION_REENTRANT, no
+  nested binding call or inner state mutation. This prevents deadlock on the global
+  JNI sessions_lock held across synchronous Java callbacks. If a provider explicitly
+  handles the refusal, the authorized outer operation may continue. cancel remains
+  cross-thread allowed and is not a guarded session JNI entry. Local observations
+  such as closed/cancellation state may remain readable.
+- Real AppSecrets file snapshots last120s while native roles are capped60s. Session
+  admission requires view.deadline >= role.deadline, while config.deadline equals
+  the role deadline exactly. This only permits a shorter role within its existing
+  view loan. Both view and role deadlines/revocation are still checked on every
+  protected effect; never extend a role or accept a view expiring before it.
+- Preserve complete()'s old KEX-only stop when no explicit service operation occurred.
+  Java tracks KEX_ONLY/SERVICE_PENDING/SERVICE_READY/PASSWORD_PENDING/FINISHED; KEX
+  complete is retained separately. Begin service requires completed KEX/KEX_ONLY;
+  begin password requires SERVICE_READY plus retained selection receipt. Wrong local
+  phase is nonterminal SSH_SESSION_PHASE, no binding/provider call. Missing selection
+  is nonterminal SSH_AUTH_SELECTION. C remains authority for exact PASSWORD kind,
+  current proof, READY and one-shot; native failures terminalize managed protocol.
+- New operations check owner/open/nonterminal, direct callback cancellation/closing,
+  view and role/clock before and after native calls, permitting completed KEX. Reuse
+  the selection read's complete-capable live guard, with SESSION_CANCELLED mapping.
+  Native IOException/LinkageError/RuntimeException maps SSH_SESSION_SERVICE or
+  SSH_SESSION_AUTH (query errors AUTH_RESULT); mark terminal, preserving cancellation/
+  expiry precedence. Escaping Error still propagates and always releases entry guard;
+  mutating protocol calls with uncertain native completion mark terminal before escape.
+- step is allowed after KEX only in SERVICE_PENDING/PASSWORD_PENDING. After successful
+  step in these explicit modes, query the corresponding native readiness/result
+  inside the same entry guard, validate it, and update Java phase; no extra queries
+  for legacy KEX-only steps. This prevents a hidden completed C phase from causing
+  accidental next-step EALREADY. SERVICE_READY/FINISHED step calls reject locally
+  with SSH_SESSION_PHASE and no binding call, while new auth or live result reads
+  remain permitted as appropriate. Existing verify's KEX-complete stop is preserved.
+- Service-ready false is allowed only while SERVICE_PENDING; true advances to READY
+  but does not authenticate. A regression to false after READY is a terminal service
+  result failure. passwordAuthResult before begin permits only NOT_STARTED in READY;
+  after begin permit PENDING or one final; after final require the same final value.
+  Unknown tags or result regression are terminal SSH_SESSION_AUTH_RESULT. Enums use
+  explicit tags, never ordinal-based native protocol assumptions. Final negative/
+  partial/change results do not imply generic transport failure or grant continuation.
+- JNI entries reuse lock_session owner/opaque token checks and existing fail helper.
+  No credentials/username/native pointers cross the new calls. C functions receive
+  only retained client; errors throw generic payload-free IOException, status must
+  not return successful-looking data while an exception is absent. No logging.
+- Fixture build requires -PctosSecretsUiFixture=true -PctosSshAuthFixture=true, rejects
+  false values or mixing other SSH probe options, and includes peer.so ONLY in that
+  flavor. Normal APK must exclude peer library/class/native exports. Compile peer
+  -Wall/-Wextra/-Werror, no-undefined, arm64/API28/16KiB alignment against generated
+  production include/header and shared library; no second archive/crypto linkage.
+  Helper is SshAuthFixturePeer in secretsFixture Java, library libctos_ssh_auth_peer.so;
+  summary is four ints: service count, password count, reply count, exact-fields flag.
+- Exact opt-in instrumentation selector plus allowSshAuthFixture=true is required.
+  Independent fixture UID/fresh-state guard, AF_UNIX socketpair only, no listener,
+  fixed synthetic password/username and generated ephemeral Ed25519 host key. Use
+  real AppSecrets MemoryStore/envelope/typed request, production public lease/role/
+  callback/session; no fake proof, KEX or credential provider success. Password bytes
+  reach only native peer validation; logs contain numeric outcomes/counts only.
+- Android KNOWN matrix covers four results, cancellation and no duplicate release.
+  NEW/CAS additionally follows the exact own-CAS continuation contract below and
+  uses the original attached public loan; fake CAS or detached views cannot
+  establish Android NEW acceptance.
+
+### 4. Validation & Error Matrix
+
+| Condition | Required result |
+| --- | --- |
+| Wrong owner/closed/cancel/expired/view revoked | existing precise lifecycle errors; no new provider grant |
+| Same-thread same/other-session reentry | SSH_SESSION_REENTRANT before inner state/binding; no deadlock |
+| Premature/duplicate/after-final transition | SSH_SESSION_PHASE, no binding/provider |
+| Password begin without retained selection | SSH_AUTH_SELECTION, no binding |
+| Native missing/default method or I/O/runtime failure | terminal SERVICE/AUTH/AUTH_RESULT, no downgrade |
+| Unknown/regressing status or service readiness | terminal typed-result failure, no success |
+| Valid service/password progress | preserve KEX complete, explicit phase progresses, exact typed result |
+| Fixture missing opt-in/normal flavor | test skipped or property rejected; no fixture native library packaged |
+| Real NEW/CAS revokes lease | fail closed; never replace with fake approval/liveness |
+
+### 5. Good / Base / Bad Cases
+
+Good: same production session reaches KEX, service and password result with a real
+selected callback into synthetic in-memory AppSecrets. Base: legacy unselected fake
+bindings still compile and retain KEX-only behavior. Bad: remove complete guards
+without explicit phases, or add only per-instance reentry guard around a global lock.
+
+### 6. Tests Required
+
+JVM: explicit phases/four outcomes/old stops/default fail-closed/owner/cancel/view/
+expiry/native failure/unknown and regressing status, no credentials returned; same
+and other-session nested calls across every entry, guard cleared after exception/
+Error, outer handled refusal, cancel allowed and close retry. Strict JNI link and
+10 exports; peer DT_NEEDED and absent normal APK fixture artifacts. Build independent
+fixture main/test, verify separate package/target/signer/opt-in and exact test selector;
+run on currently authorized board only after concrete artifact review. Record local
+build, host JVM/native and Android runtime independently.
+
+### 7. Wrong vs Correct
+
+Wrong: call the global-lock JNI while a callback is active, or link a second static
+OpenSSH into the peer and call that Android end-to-end proof. Correct: thread-wide
+entry guard with finally cleanup; fixture peer depends on the exact production
+shared library and only drives an isolated synthetic encrypted server.
+
+## Own approved NEW-host CAS preserves its exact bounded public loan
+
+### 1. Scope / Trigger
+
+Real NEW-host trust commit currently relocks the vault and revokes the very public
+loan that issued the authenticating role. Preserve only that exact attached loan
+for the same approved CAS; all generic mutations/unlock/lock behavior still revokes.
+
+### 2. Signatures
+
+VaultOperation stores the exact role pointer at successful bindTrust and exposes a
+package-private boundTrustRole() only for that purpose. VaultSession supplies
+attachedRevocation(expectedEpoch) and advanceTrustEpoch(expectedEpoch, exactOwned).
+Add a production callback bind overload with the owned known_hosts candidate handoff.
+No channel API, deadline change, generic preserve flag, new key or new native proof.
+
+### 3. Contracts
+
+AppSecrets.updateTrust alone may derive a continuation from an already bound exact
+trust operation and the currently attached revocation owned by that same role.
+It still replaces only the exact known_hosts object after CAS base/object/proposal
+checks; key/config/private-file/entry state remains unchanged. Final guard checks
+active role, exact attached loan and operation epoch in addition to existing exact
+snapshot/evidence/proposal checks. After durable commit, advance epoch only if key,
+foreground, expected epoch and identical active attached revocation still match.
+Keep the current vault key and original public-loan deadline, invalidate all old
+operations/previews, and never restore a locked/replaced/revoked loan. Failure after
+commit yields no COMMITTED host receipt and no authentication grant. Legacy unbound
+trust operations and every other mutation retain normal unlock/revoke behavior.
+Manual cancel of the old public-file request still revokes its attached loan even
+after its operation was removed from the active map. The preserved frozen view may
+contain the old trust body: only the accepted exact replacement proof authorizes
+this initial KEX; no rekey or new-session trust shortcut is granted.
+
+### 4. Validation & Error Matrix
+
+Exact approved own CAS → epoch advances and same loan stays active; wrong loan/role/
+epoch or lock/revoke/background race → fail closed, no resurrection/host receipt;
+generic mutation/re-unlock/manual lock/old-file cancellation → revoke as before;
+failed/uncertain store effect → no COMMITTED receipt or credential release.
+
+### 5. Good / Base / Bad Cases
+
+Good: approved NEW KEX continues with its exact original public loan and new vault
+epoch. Base: fake/unattached JVM views retain old behavior. Bad: preserve every
+lease on every write or keep an old epoch valid to avoid proper invalidation.
+
+### 6. Tests Required
+
+VaultSession exact identity/epoch/foreground/key/revocation/no-resurrection and
+normal subsequent revocation; real managed AppSecrets CAS attached-view success,
+late lock/revoke/uncertain effects and old operation cancellation. Isolated Android
+production NEW candidate→exact approval→real store CAS→KEX/service/auth, for password
+and encrypted private key, with metadata/callback/epoch and cleanup assertions.
+
+### 7. Wrong vs Correct
+
+Wrong: use fake CAS success or detached public view for Android NEW acceptance.
+Correct: preserve one exact bounded existing loan only across its own approved CAS,
+with fresh epoch and all original liveness checks.
+
+## Selected encrypted private-key capability
+
+### 1. Scope / Trigger
+
+Complete encrypted-key authentication without treating key identity as the remote
+target or granting a second kind-only credential callback. Only synthetic fixtures
+are used. Preserve all existing unencrypted CSASv1 behavior and one-attempt rules.
+
+### 2. Signatures
+
+Overload `SshAuthenticationSelection.privateKey(..., publicBlob, passphraseEntryId,
+clock)`. Nonempty identifier selects CSASv2 (version2/flags0), PRIVATE_KEY only;
+the existing five fields remain username/entryId/path/keyIdentity/publicBlob.
+v1 private entryId remains empty; v2 requires an exact nonempty identifier.
+
+Add AppSecrets purpose SSH_PRIVATE_KEY_BUNDLE, begin/use methods binding resource
+`path + NUL + keyIdentity + NUL + passphraseEntryId`, actual remote target and
+connection. One receiver gets CSKBv1: u32 magic0x43534b42, u32 version1,
+SSH-string privateFile, SSH-string passphrase. Total <=1MiB, private nonempty,
+passphrase1..8192 with no NUL. Existing selected PRIVATE_KEY opcode4/receipt and
+JNI method remain unchanged; no Java session secret API or second release.
+
+### 3. Contracts
+
+- Before request and at final effect, require exact PRIVATE_KEY file/path/identity
+  plus exact SSH_KEY_PASSPHRASE entry whose identity is `key:` + keyIdentity. Keep
+  operation target equal to role.targetIdentity. One operation owns both resources
+  in the same authenticated envelope snapshot, epoch and deadline; typed purpose
+  prevents generic key/credential or wrong entry crossover. No fallback or lookup
+  by prompt/error text. Request selection identity/entryId is rechecked by bridge.
+- Bundle is built in bounded owned memory and wiped after receiver or any throw.
+  Host/KEX/role/selected callback final guard runs immediately after protectedEffect
+  (which can read the store), immediately before receiver. Retain earlier checks.
+  Apply this final ordering to existing credential/private-key releases too.
+- Native v2 parses strict CSKB framing/count/size/end, copies passphrase into a
+  separately NUL-terminated bounded scratch, and wipes raw bundle and passphrase
+  immediately after in-memory parser returns. Parse/sign/match/verify/fresh proof,
+  output reset, one-shot and all cleanup contracts remain those of direct-signed auth.
+- Supported encrypted input: standard armored OpenSSH bcrypt/aes256-ctr with
+  one key, salt1..64bytes and rounds1..64, inspected before running its KDF;
+  legacy encrypted RSA/EC PEM with fixed PEM encryption header and AES-128-CBC or
+  AES-256-CBC. Reject encrypted PKCS8 and unsupported cipher/KDF/rounds ENOTSUP:
+  attacker-controlled PBKDF parameters must never block the owner event loop
+  without a bound. OpenSSH armor inspection accepts standard LF/CRLF and bounded
+  base64 only. No filesystem, agent, prompt or default passphrase selection.
+- Wrong selected passphrase is terminal EACCES, malformed bundle/file EINVAL,
+  unsupported bounded policy ENOTSUP; no retry/alternate key/passphrase grant.
+  Version1 encrypted input remains fail-closed ENOTSUP with no automatic upgrade.
+
+### 4. Validation & Error Matrix
+
+v2 PASSWORD or empty private entry → invalid selection before ownership transfer;
+wrong purpose/path/key/entry/remote/connection/snapshot → vault denial, no receiver;
+cancel/lock/expiry/view/KEX drift at final store read → no receiver or wire request;
+malformed CSKB/NUL/oversize → consumed terminal EINVAL; wrong passphrase → EACCES;
+unbounded KDF/unsupported encrypted format → consumed terminal ENOTSUP.
+
+### 5. Good / Base / Bad Cases
+
+Good: exact key+passphrase capability becomes one signed request after local verify.
+Base: v1 unencrypted request and every password path remain compatible. Bad: change
+the operation target to `key:identity`, release kind2 after kind4, or call bcrypt
+with an unchecked imported rounds value.
+
+### 6. Tests Required
+
+JVM canonical v2/immutable entry validation and real in-memory AppSecrets exact
+purpose/resource/entry-type/key-identity/remote/connection/one-shot/final-effect
+cancel/cleanup. Native actual encrypted key algorithm/format matrix, wrong passphrase,
+malformed bundle, unknown versions, NUL, oversized fields, KDF rounds65/unsupported
+cipher/PKCS8 fail-closed without signing, while v1 remains unchanged. Extend isolated
+Android generated encrypted identities and passphrase entry; actual peer verifies
+all five algorithm signatures and negatives before declaring encrypted Android pass.
+
+### 7. Wrong vs Correct
+
+Wrong: use the generic passphrase credential API with a key identity as target.
+Correct: atomic typed resource bundle bound to both exact key identity and real
+remote role/connection, sealed into CSASv2 and one selected receipt.
+
+## Java/JNI private-key orchestration
+
+### 1. Scope / Trigger
+
+Expose native direct-signed authentication through the same session owner and
+synthetic Android peer. Both v1 unencrypted keys and explicit v2 key/passphrase
+bundles use this API; own-CAS continuation follows its separate exact contract.
+
+### 2. Signatures
+
+`beginPrivateKeyAuth()` and `privateKeyAuthResult()` return no secret. Explicit
+PrivateKeyAuthResult tags are NOT_STARTED0/PENDING1/SUCCESS2/REJECTED3/PARTIAL4.
+Append two fail-closed NativeBinding defaults and unique long-handle JNI wrappers;
+total session JNI exports12. Keep password tags and eight-int step wire unchanged.
+
+### 3. Contracts
+
+Use the existing thread-wide guard and owner/live/selection checks. Append
+PRIVATE_KEY_PENDING; a successful begin marks the selected method. Final reads
+must use that same method, and password/private crossover refuses locally with
+SSH_SESSION_PHASE before native calls. READY permits NOT_STARTED only; pending
+permits PENDING or one final, final requires stable same result. step queries the
+pending method inside its entry guard. Unknown/regressing results terminalize with
+AUTH_RESULT; begin errors use AUTH and preserve cancellation/expiry/view precedence.
+Escaping Error releases the guard; uncertain mutating calls terminalize. Native
+remains authority for actual PRIVATE_KEY selection and cryptographic checks.
+
+### 4. Validation & Error Matrix
+
+Wrong phase/crossover → nonterminal PHASE; missing selection → AUTH_SELECTION;
+native begin failure → terminal AUTH; bad result → terminal AUTH_RESULT; owner,
+cancel, expiry and view failures retain existing precise codes. JNI accepts only
+opaque owner handle, maps exact0..4, and unlocks on every path.
+
+### 5. Good / Base / Bad Cases
+
+Good: current native key request reaches one stable typed result; base: all password
+and legacy KEX behavior retained. Bad: accept password CHANGE_REQUIRED as private-key
+success, or let final reads cross methods.
+
+### 6. Tests Required
+
+JVM final outcomes, step progression, crossover, unknown/regression, default failures,
+lifecycle/native error and same/other session reentry. Strict12-JNI build; ARM actual
+encrypted native peer verifies signatures. Extend isolated Android peer with generated
+ephemeral identity distinct from host, real synthetic AppSecrets private-file selection,
+exact peer signature verification, result and cleanup assertions before claiming Android.
+
+### 7. Wrong vs Correct
+
+Wrong: expose key bytes through Java session APIs or infer authentication from KEX.
+Correct: owner-only method API with explicit result and proof-bound native release.
+
+## Native direct-signed private-key USERAUTH
+
+### 1. Scope / Trigger
+
+Continue the Android/JNI stage with one direct-signed native publickey request from
+owned CSAS PRIVATE_KEY selection. CSASv1 parses unencrypted OpenSSH
+Ed25519, ECDSA p256/p384/p521 and RSA plus actually supported unencrypted PEM
+combinations. CSASv2 uses the separately bound key/passphrase capability above.
+Neither route grants KBI/MFA continuation or completes the remaining product AC.
+
+### 2. Signatures
+
+```c
+enum ctos_ssh_native_client_private_key_auth_result {
+    CTOS_SSH_PRIVATE_KEY_AUTH_NOT_STARTED = 0,
+    CTOS_SSH_PRIVATE_KEY_AUTH_PENDING = 1,
+    CTOS_SSH_PRIVATE_KEY_AUTH_SUCCESS = 2,
+    CTOS_SSH_PRIVATE_KEY_AUTH_REJECTED = 3,
+    CTOS_SSH_PRIVATE_KEY_AUTH_PARTIAL = 4
+};
+int ctos_ssh_native_client_begin_private_key_auth(struct ctos_ssh_native_client *);
+int ctos_ssh_native_client_private_key_auth_result(
+    const struct ctos_ssh_native_client *,
+    enum ctos_ssh_native_client_private_key_auth_result *);
+```
+
+Retain public-blob offset/length at the existing CSAS decode, just as username.
+No caller username/public/private key/algorithm/signature input. Preserve existing
+password C signatures and result tags. Share internal phase/response/proof machinery
+with a method tag instead of two divergent transport loops. Shared selected attempt
+permits only one method/key release per session.
+
+### 3. Contracts
+
+- Same owner/env/role/view/deadline/READY/unique current KEX cycle and fresh raw-session
+  SHA proof as password, before provider and after parse/sign/verify/before enqueue.
+  Const typed result checks current proof without I/O/provider/client mutation and
+  clears output on error. Wrong owner EPERM does not poison/consume; wrong selection
+  kind/premature is EACCES no provider; consumed or any active/final attempt EALREADY.
+- Before private release, parse the owned expected public blob using sshkey_from_blob
+  with exact end. Reject certificates/SK/external/DSA/unsupported plain types. RSA
+  minimum is pinned upstream1024 (SSH_RSA_MINIMUM_MODULUS_SIZE), not invented2048.
+  Canonical public wire must be <=64KiB; signed input is bounded by upstream
+  SSH_KEY_MAX_SIGN_DATA_SIZE. Reject invalid metadata/policy before consuming secrets;
+  pre-attempt ENOMEM may retry. No output/rekey is allowed before release/serialization.
+- Ed25519 algorithm is ssh-ed25519; ECDSA uses the exact supported curve algorithm.
+  RSA requires exact token intersection with server-sig-algs, prefers rsa-sha2-512
+  then rsa-sha2-256. Missing/empty/no-mutual/substring-only advertisement is ENOTSUP
+  before provider; never NULL/empty algorithm or SHA1 fallback. Other types never
+  invoke hardware/agent/PKCS11/SK providers. Reject SSH_OLD_SESSIONID compatibility;
+  no hostbound method or unsigned probe is implemented in direct mode.
+- Obtain <=1MiB PRIVATE_KEY bytes through the existing receipt-bound selected getter
+  once; no public-view private-content read. Parse in memory via
+  sshkey_parse_private_fileblob(...,NULL,...,NULL), without path/prompt. Empty/malformed
+  file errors map EINVAL, unsupported encrypted/passphrase-required errors ENOTSUP;
+  conservative undecodable PEM failure may be EINVAL. After consumption every error
+  is terminal, no retry/alternate key/passphrase request. Encrypted input must never
+  trigger interactive or unbounded default prompting. Wipe raw scratch immediately
+  after parsing; sshbuf_from's borrowed memory is not erased by sshbuf_free.
+- Parsed private key must be allowed plain software type with no EXT/SK/cert flags,
+  satisfy the same size policy and sshkey_equal_public against expected public.
+  Mismatch is terminal EACCES. Build signed data with string RAW initial session ID,
+  byte50, string exact owned username, ssh-connection, publickey, booleanTRUE,
+  string chosen algorithm and string canonical public blob. Never sign callback
+  digest/receipt, unframed legacy session ID or caller-built packet.
+- Sign once with explicit algorithm, check returned signature type, and locally
+  verify using the expected public key before queueing. This is mandatory even after
+  equal_public: Ed25519 serialized private/public fields may be internally inconsistent
+  without the upstream parser deriving public from seed. Signature/local verification
+  failure is EACCES (allocation ENOMEM), terminal and no auth packet. Signature blob
+  <=16KiB; exact signed input/packet bounds are checked, never silently truncated.
+- After fresh proof/no-rekey/empty-output checks, enqueue exactly one type50 packet
+  with the same request fields and complete OpenSSH signature blob as SSH string.
+  Private key/passphrase bytes are never on the wire. Wipe/free raw scratch, signature,
+  owned buffers and parsed expected/private keys on every exit, before begin returns.
+  Serialization errors map EIO; reset outgoing plaintext with start(IGNORE) without
+  sending cleanup header as password does. Document source-only upstream wipe claims.
+- Reuse request drain→AWAIT_REPLY and bounded BANNER/FAILURE/SUCCESS/DISCONNECT logic
+  and liveness checks. Direct-signed accepts SUCCESS/REJECTED/PARTIAL only; type60
+  PK_OK/INFO_REQUEST is unexpected EPROTO, never password CHANGE_REQUIRED or permission
+  to release another key. Old password behavior remains unchanged. Generic KEX
+  complete/service-ready remain milestones. All final results stop step and begin;
+  no next method/channel authorization, rekey or compression compatibility claim.
+
+### 4. Validation & Error Matrix
+
+| Condition | Required result |
+| --- | --- |
+| Null/closed/failed or consumed | EINVAL/ENOENT/EALREADY, no second secret |
+| Wrong owner/env, premature or wrong kind | EPERM nonpoisoning / EACCES no provider |
+| Invalid/unsupported expected key or RSA no exact SHA2 policy | EINVAL/ENOTSUP/EACCES before provider, no consumption |
+| Parse/encrypted/key mismatch/signature inconsistency after provider | precise local error, consumed/terminal, no request |
+| Valid signed request drains and exact final | SUCCESS/REJECTED/PARTIAL, no retry |
+| Type60/early/malformed/out-of-phase/rekey | EPROTO terminal, no success |
+| Cancel/expiry/view/role/current-proof changes | existing exact errors, terminal runtime; readonly status clears output |
+
+### 5. Good / Base / Bad Cases
+
+Good: independent peer reconstructs signed data using its raw session ID and verifies
+with the chosen immutable identity before SUCCESS. Base: unchanged password and
+standalone getter suites pass. Bad: public-field equality alone accepts a corrupted
+Ed25519 secret, or passing NULL algorithm silently selects RSA/SHA1.
+
+### 6. Tests Required
+
+Reuse actual encrypted KNOWN/NEW peer; generate identity independently from host key.
+Cover Ed25519, all ECDSA curves, RSA SHA512/SHA256 exact advertisements and supported
+OpenSSH/PEM format combinations. Peer verifies exact full request/signature and
+independently rejects altered username/sessionID/method/boolean/algorithm/key/signature
+and digest-as-session-ID. Local corrupted Ed25519 private-field case must fail before
+wire. Test invalid expected public/no secret, unsupported cert/SK/DSA/external, RSA
+size/no-advertisement/empty/misleading substring/no mutual, encrypted/malformed file,
+valid mismatched private key, one-shot crossover, owner/env recovery, provider/active
+liveness failures, response matrix/type60/earlyfinal, status no mutation and close
+retry. Keep matrices bounded/reuse generated algorithm fixtures where appropriate.
+Record ENOMEM/hash/sign/opaque drift/reset/upstream cleanup branches not injected.
+Strict link/QEMU, normal archive83/forbidden0,12 Java/JNI entries and independent
+Android peer verification are required and recorded as separate evidence.
+
+### 7. Wrong vs Correct
+
+Wrong: treat CSAS public blob as parsed private-key proof, sign a session digest,
+reuse a password-change handler for PK_OK, or add a second credential attempt.
+Correct: expected-public parse before release, private parse/equal_public, exact raw
+session signing plus local verify, shared attempt, method-specific terminal result.
+
+## Explicit C password USERAUTH protocol
+
+### 1. Scope / Trigger
+
+Extend the completed CSAS/current-KEX/service-ready selected handoff into one real
+password USERAUTH_REQUEST and bounded response handling. This slice is C-only;
+Java/JNI retain their current KEX-only session API. No private-key auth, password
+change, keyboard-interactive, MFA continuation, channel, device or real account use.
+Existing complete() stays the initial KEX milestone. Service-only and standalone
+selected-byte callers retain their stopping points unless they explicitly begin
+password auth.
+
+### 2. Signatures
+
+```c
+#define CTOS_SSH_NATIVE_CLIENT_MAX_PASSWORD_BYTES 8192U
+enum ctos_ssh_native_client_password_auth_result {
+    CTOS_SSH_PASSWORD_AUTH_NOT_STARTED = 0,
+    CTOS_SSH_PASSWORD_AUTH_PENDING = 1,
+    CTOS_SSH_PASSWORD_AUTH_SUCCESS = 2,
+    CTOS_SSH_PASSWORD_AUTH_REJECTED = 3,
+    CTOS_SSH_PASSWORD_AUTH_PARTIAL = 4,
+    CTOS_SSH_PASSWORD_AUTH_CHANGE_REQUIRED = 5
+};
+int ctos_ssh_native_client_begin_password_auth(struct ctos_ssh_native_client *);
+int ctos_ssh_native_client_password_auth_result(
+    const struct ctos_ssh_native_client *,
+    enum ctos_ssh_native_client_password_auth_result *);
+```
+
+Internal REQUEST_PENDING and AWAIT_REPLY both map to PENDING. No caller username,
+password, receipt or proof arguments. The validated CSAS decoder retains username
+length/offset into owned canonical wire; use that exact slice on the wire, without
+normalizing, parsing targetIdentity or duplicating the record parser.
+
+### 3. Contracts
+
+- Begin checks owner/environment before mutable failure transitions. Require live
+  role/view/deadline, PASSWORD selection, READY, unique accepted completion/current
+  guard cycle and fresh raw-session SHA matching the saved completion digest.
+  Premature/unselected/private-key calls return EACCES without provider/attempt
+  consumption. Duplicate auth or an already consumed standalone selected handoff
+  returns EALREADY. Wrong-owner/environment EPERM leaves the owner state intact.
+- Before secrets, require no queued output and no rekey in progress; an unexpected
+  invariant fails terminal EACCES. Use the existing selected-byte entrypoint for
+  exact receipt/current-proof gates and the same selected attempt. Allocate outer
+  bounded password scratch before that call (ENOMEM may retry if not consumed).
+  Never reopen the attempt after a callback/uncertain outcome.
+- Accept 1..8192 bytes, matching existing VaultManifest SSH secret bounds. Reject
+  ANY NUL, including trailing NUL, with terminal EINVAL after handoff; never silently
+  truncate. Other bytes are copied exactly via sshpkt_put_string, without a native
+  String/Unicode normalization contract. This deliberately narrows generic 1MiB
+  typed handoff to a bounded interoperable password packet.
+- Recheck current proof after the callback and immediately before construction.
+  Enqueue exactly type50 USERAUTH_REQUEST, string exact selected username, string
+  ssh-connection, string password, boolean0, string exact password; add64 padding
+  via sshpkt_add_padding then sshpkt_send. No none probe, retries or other methods.
+  Wipe/free outer password scratch on every path. Success send resets/wipes owned
+  outgoing plaintext in pinned packet/sshbuf. On partial construction/send failure,
+  call sshpkt_start(SSH2_MSG_IGNORE) ONLY to reset/wipe the outgoing plaintext,
+  never send the cleanup header and terminalize. Pinned packet serialization APIs
+  return SSH error codes rather than reliable errno; map those failures to EIO as
+  existing client packet calls do, without letting cleanup replace that error. No upstream
+  patch/member is required. Reject rekey before construction so password payload
+  cannot enter an unexamined rekey queue.
+- Explicit auth enables bounded step despite READY. Run full current-proof/liveness
+  checks before I/O and before accepting a final result. Preserve byte accounting,
+  budget, partial writes/EAGAIN, EOF/cancel/deadline and retryable close. Transition
+  REQUEST_PENDING→AWAIT_REPLY only after queued request output fully drains.
+  A final reply before that transition is terminal EPROTO, never authenticated.
+- While pending/awaiting, parse and discard at most16 USERAUTH_BANNER packets,
+  each text<=8192 and language<=128, exact two strings/end. No display/log or prompt
+  authority. Continue normal output drain after a banner. EXT_INFO retains existing
+  handling; rekey20..49 remains disabled and all unexpected packet types fail closed.
+  This retains the narrow transport contract: IGNORE/DEBUG/UNIMPLEMENTED are not
+  silently consumed by ssh_api and remain unsupported here, despite being legitimate
+  SSH transport messages. Do not claim full stock transport interoperability.
+- Only AWAIT_REPLY accepts final messages: SUCCESS52 has zero payload; FAILURE51
+  has methods string<=1024 and boolean byte, exact end. Accept an empty method list;
+  nonempty list is printable non-whitespace ASCII tokens separated by single commas, no empty
+  token. Nonzero boolean means PARTIAL, otherwise REJECTED. CHANGEREQ60 has prompt
+  <=8192 and language<=128, exact end, yielding CHANGE_REQUIRED. Discard all remote
+  strings, retain only enum. There is no follow-up provider or request for partial/
+  change outcomes. Malformed/trailing/oversized/out-of-phase replies are terminal
+  EPROTO. DISCONNECT1 parses reason u32, description<=8192 and language<=128 strings
+  plus exact end, discards text and terminalizes ECONNRESET; malformed disconnect
+  is EPROTO. EOF remains EPIPE. Never log remote strings or treat them as prompts.
+- Valid final results stop step with later EALREADY, including negative/partial/
+  change outcomes, but are not generic client-failed states. SUCCESS is published
+  only after fresh proof checks and drained request. Pinned packet reading may
+  enable delayed compression on SUCCESS before our parser checks it; malformed/
+  early success therefore MUST terminalize, never recover. The pinned receive path
+  already sets after_authentication and enables delayed compression; do not call
+  ssh_packet_set_authenticated as a substitute or duplicate. This is not a complete
+  compression/rekey/channel runtime claim. No manual stock auth context is added.
+- Result accessor starts *out=NOT_STARTED and returns0 or-1. Null arguments EINVAL,
+  closed ENOENT, failed EALREADY. Require live owner/env/role/view/deadline, PASSWORD
+  selection, READY and exact current completion cycle/session digest. It performs
+  no I/O/provider or client mutation; errors leave output NOT_STARTED. Permit a
+  standalone selected handoff to report NOT_STARTED, without implying authentication.
+  Successful close wipes new fields; callback release failure preserves retry state.
+
+### 4. Validation & Error Matrix
+
+| Condition | Required result |
+| --- | --- |
+| Begin null/closed/failed | EINVAL/ENOENT/EALREADY |
+| Begin wrong owner/env | EPERM, no consumption/client mutation |
+| Before READY, absent/wrong-kind selection | EACCES, no provider/attempt consumption |
+| Standalone handoff consumed or auth already started/final | EALREADY, no second provider/packet |
+| Pre-attempt scratch allocation failure | ENOMEM, retry allowed |
+| NUL/oversized/empty credential after provider | EINVAL or existing bounded overflow, consumed/terminal, no request |
+| Valid exact request, output partly written | PENDING, bounded progress, no final status |
+| Valid SUCCESS / FAILURE false / FAILURE true / CHANGEREQ | SUCCESS / REJECTED / PARTIAL / CHANGE_REQUIRED, then step EALREADY |
+| Early/malformed/trailing/unexpected reply or banner limit | EPROTO, terminal, no successful result |
+| Cancel/view/role/deadline/proof failure | precise existing error, terminal step/begin, retryable close |
+| Result accessor lifecycle/proof failure | precise error, NOT_STARTED output, no client mutation/provider |
+
+### 5. Good / Base / Bad Cases
+
+Good: real KNOWN/NEW encrypted peer receives exact selected Unicode username and
+one synthetic password, then exact SUCCESS yields SUCCESS only after drain.
+Base: old service-only/selected-byte/KEX callers remain unchanged.
+Bad: assume service-ready or partial success grants channel permission; truncate a
+password at NUL; retry another selected credential after rejection.
+
+### 6. Tests Required
+
+Use existing real synthetic OpenSSH socketpair fixture, both KNOWN and NEW/CAS,
+small budgets/fragmented packets. Decrypt and assert every request field, one callback,
+exact selected receipt/cycle/digest, password bytes/padding where observable, no old
+provider. Cover caps1/8192/8193 and NUL, non-ASCII username, pending/early final,
+valid four outcomes, malformed/trailing replies/methods/prompts/banners/limits,
+EXT_INFO/rekey/unexpected/EOF/cancel/view/role/deadline, post-provider rejection with
+no request, duplicate/standalone-consumed/unsupported kind and original caller stops.
+Accessor owner/env/liveness/no-provider/zero-on-error and close retry need assertions.
+Do not expose opaque ssh internals solely for fault injection; record source-only
+branches. Run strict native, actual ARM QEMU, existing callback/JVM/lint/Release,
+archive83/six-session-JNI/forbidden-stock-symbol/package checks. No Android runtime
+claim follows from separate C/JVM tests.
+
+Executed 2026-10-19: 67 new encrypted synthetic connection scenarios pass, including
+the pending-banner positive that must continue output drain. Final focused7 tasks /
+13s passes strict native/callback35; formal checker finds no defect and makes no
+edits. Normal94 tasks /19s (23 executed/71 up-to-date) passes strict C/JNI, lint,
+Release/v2, archive83/six session JNI/forbidden0. JVM221/0/0/0 is an UP-TO-DATE
+retained report, not a fresh run. Final actual QEMU/Bionic785537 checks /exit0.
+ENOMEM/hash/opaque proof faults, serialization-failure reset, padding/upstream wipe
+and exact post-parse cancellation are source-reviewed; missing-target behavior
+reuses the earlier selected-getter regression. See `design/verification.md` for
+paired executable/APK hashes and explicit transport/Android coverage limits.
+
+### 7. Wrong vs Correct
+
+Wrong: set completed=authenticated, release credentials again after auth failure, or
+call a blocking stock ssh_userauth2. Correct: explicit auth phase, exact owned
+selection with one attempt, bounded packet step, proof-bound typed result and wiped
+plaintext lifetime. Keep complete() as the KEX milestone and product AC open.
+
+## Receipt-bound selected credential handoff (no USERAUTH)
+
+### 1. Scope / Trigger
+
+Connect the retained CSAS selection to a bounded one-shot typed native→managed
+credential callback, after completed current KEX and explicit service-ready. No
+USERAUTH packet, private-key parsing/signing, JavaSession secret getter, device or
+real account access is added. Legacy unselected callbacks retain their contract.
+
+### 2. Signatures
+
+```c
+int ctos_ssh_callback_credential_bytes_selected(
+    ctos_ssh_callback_token, void *environment, int kind,
+    const unsigned char selection_receipt[32], uint64_t cycle,
+    const unsigned char session_digest[32],
+    unsigned char *output, size_t capacity, size_t *length);
+int ctos_ssh_native_client_selected_credential_bytes(
+    struct ctos_ssh_native_client *, unsigned char *output,
+    size_t capacity, size_t *length);
+```
+
+Append optional target.credential_bytes_selected with context/environment plus the
+same arguments. Never fall back to credential_bytes or boolean credential.
+
+```java
+byte[] onNativeSelectedCredentialBytes(int kind, byte[] receipt, long cycle, byte[] digest);
+provider.credentialBytes(role, host, kex, kind, selection, finalEffectGuard);
+bridge.release(request, kex, selection, finalEffectGuard, receiver);
+```
+
+JNI looks up the unique `(I[BJ[B)[B` method, copies both32-byte metadata inputs,
+and uses the existing bounded result copy/wipe discipline. Session JNI exports
+remain six; there is no new Java session API returning secrets.
+
+### 3. Contracts
+
+- Native client derives kind/receipt from owned CSAS; caller cannot supply another
+  kind or selection. Require live owner/environment/role/view/deadline, READY service,
+  exactly one successful completion callback, same nonzero guard cycle and exact
+  SHA256 of current raw session_id matching the digest successfully reported at KEX.
+  Store that successful completion digest; check cycle/digest before and after provider.
+- Invalid caller buffers are bounded-wiped and length reset. Wrong-owner/environment
+  preflight EPERM does not consume or poison owner state. Unselected/pre-READY is
+  EACCES without provider effects or attempt consumption. Failed/closed/repeated
+  attempts are EALREADY/ENOENT/EALREADY respectively.
+- Allocate bounded private scratch before consuming the attempt (ENOMEM may retry).
+  Mark one-shot immediately before invoking the selected callback. Every error after
+  that point consumes the attempt and terminalizes the client, with no automatic
+  retry. Revalidate service/liveness/current proof after the callback and only then
+  copy scratch to caller. Wipe/free scratch on all paths; output/length zero on error.
+  Success does not authenticate the client or resume packet processing.
+- C callback adapter reuses owner/environment/role/cancel/reentry/deadline begin/
+  finish checks and bounds. Only PASSWORD=1/PRIVATE_KEY=4, receipt32 and positive
+  cycle<=INT64_MAX with nonzero32 session digest are accepted. Absent new target is
+  ENOSYS, never legacy downgrade; output/length are wiped/reset on target error,
+  bad length, finish-time cancellation/expiry or validation error.
+- Java unique native method requires frozen selection, an owned native session,
+  exact SHA256 CSAS receipt, same kind and exact current host/KEX proof object plus
+  cycle/session digest. Copy bounded input metadata to private scratch and wipe it.
+  Native claim issuance sticky-disables the old object-selection byte overload,
+  including failed opens; unbound managed compatibility remains. All selected byte
+  paths share a one-shot attempt flag, consumed after validation and before provider.
+  Unselected legacy password/key callbacks remain repeatable as before.
+- Reuse the existing Java callback begin/finish and bounded result wiping. Selected
+  native provider receives a final EffectGuard that checks current invocation/owner,
+  selection/host/KEX identities and native bindings, cancel/closing/closed and clock.
+  Run it in the bridge's existing final guard immediately before AppSecrets receiver
+  use and repeat before callback finish. It must not re-enter vault/provider code.
+  Preserve existing request/operation/role/host/KEX checks, exact resource and cleanup.
+- JNI metadata arrays and secret result are wiped/deleted on success and failure;
+  pending Java exceptions fail closed without payload logging. Missing selected
+  method is unavailable, never a route to old callbacks. No secret cache is retained.
+  Check each NewByteArray/SetByteArrayRegion immediately before making another
+  JNI call that is invalid with an exception pending; clear before wipe/delete cleanup.
+- Keep inCallback set through finish-time role/clock checks, then recheck cancellation
+  and reentry before publishing success. Every exceptional byte-callback exit must
+  wipe an unhanded result and release invocation state so owner cleanup can complete.
+  Non-Linkage Error must still propagate; cleanup is not permission to swallow it.
+
+### 4. Validation & Error Matrix
+
+| Condition | Required result |
+| --- | --- |
+| Null/zero/over-limit buffer or invalid metadata/kind | EINVAL/EOVERFLOW, bounded wipe and length0 |
+| Client unselected or before service READY | EACCES, no attempt/provider effect |
+| Preflight wrong owner/environment | EPERM, no consumption/client mutation |
+| Missing selected target | ENOSYS, no legacy call; client attempt consumed/terminal |
+| Duplicate attempt | EALREADY; Java selected duplicate SSH_AUTH_SELECTION; no provider |
+| Receipt/proof/kind mismatch or old selected route after native claim | Java SSH_AUTH_SELECTION or SSH_KEX_REQUIRED, no receiver effect |
+| Cancel/view/expiry/current-proof change during handoff | precise failure, no returned bytes, client terminal, close retry retained |
+| Valid READY selected handoff | exactly one bounded selected secret, scratch wiped, no authentication packet |
+
+### 5. Good / Base / Bad Cases
+
+Good: encrypted KNOWN/NEW KEX plus service accept, exact CSAS and current proof
+release only selected synthetic bytes once. Base: unselected legacy managed tests
+retain password then key behavior. Bad: fallback from missing selected JNI method
+or trust the receipt without current KEX/service gates.
+
+### 6. Tests Required
+
+C callback host: selected arguments, unavailable target/no downgrade, buffer wiping,
+wrong env/thread, cancel/expiry/reentry and bad lengths. ARM client: both typed CSAS,
+real service-ready, premature/missing/duplicate denial, exactreceipt/cycle/digest,
+private scratch/post-provider cancel/view/deadline/proof rejection and close retry.
+Java: real synthetic AppSecrets selected native-route success, receipt/kind/cycle/
+digest/owned-session rejection, selected object-route downgrade and one-shot,
+final-guard cancellation/proof change before receiver, finish-time wipe, legacy tests.
+Run JVM, host callback, strict JNI/native, actual QEMU and normal Release/package
+gates. JNI execution on Android remains a separate not-run boundary.
+
+Executed 2026-10-19: final focused JVM66/0/0/0, callback35 (selected11), strict
+C/JNI and lint pass. Formal review fixed JNI immediate exception checks, finish
+clock cancellation/reentry and escaping-Error invocation cleanup. Normal94 tasks /
+66s freshly executes JVM221/0/0/0 (15 reports) and passes Release/v2, archive83,
+six session JNI exports and forbidden stock callers0. Final host QEMU/Bionic run
+passes323726 checks / exit0. Native cycle/raw-session drift and scratch ENOMEM/
+hash faults are not injected; JNI exception cleanup and internal adapter result
+wipe on Error are source-reviewed. Android selected JNI remains not-run. See
+`design/verification.md` for paired executable/APK hashes and evidence paths.
+
+### 7. Wrong vs Correct
+
+Wrong: put provider bytes in caller output before post-check, or check only the
+captured KEX object while adapter state can change. Correct: private scratch, exact
+current adapter guard at AppSecrets effect, post-provider native proof recheck and
+one selected attempt without downgrade.
+
+## Native authentication-selection metadata transport (CSAS v1 details)
+
+### 1. Scope / Trigger
+
+This original metadata increment extends immutable managed selection into bounded
+native session-owned metadata. It added no credential callback, private-key parser,
+USERAUTH packet or authentication state; selected handoff is specified separately
+above. The receipt is a SHA-256 fingerprint, never host/KEX/secret authority.
+
+### 2. Signatures / Wire
+
+Java callback exports the already frozen selection to session.open; no open caller
+may supply an independent plan. NativeBinding keeps its old open plus a default
+overload with nullable byte[] selectionWire: null delegates legacy open, non-null
+throws unless explicitly implemented. Production uses one Native.open declaration
+with the appended nullable array, avoiding overloaded JNI short names.
+
+```c
+/* New borrowed config fields; copied before open ownership transfer. */
+const unsigned char *authentication_selection_wire;
+size_t authentication_selection_wire_length;
+int ctos_ssh_native_client_authentication_selection_receipt(
+    const struct ctos_ssh_native_client *, unsigned char receipt[32]);
+```
+
+Java session/NativeBinding and JNI add `authenticationSelectionReceipt(handle)`;
+Java session method has no handle argument and checks the returned digest against
+its retained expected digest. It is an explicit read after successful open, never
+a fallible post-open step disguised as an ownership-preserving open failure.
+
+Canonical big-endian CSAS v1, with no padding/trailing bytes:
+
+| Field | Encoding |
+| --- | --- |
+| Magic/version/flags | u32 0x43534153, u16 1, u16 0 |
+| Exact role | u64 native role token (1..INT64_MAX), u32 hop, 32-byte roleNonce, 32-byte connectionBinding |
+| Kind | u32 stable tag PASSWORD=1 or PRIVATE_KEY=4 |
+| Five fields in order | each u32 byte length + bytes: username, entryId, path, keyIdentity, publicKeyBlob |
+
+Max wire is MAX_FILE_BYTES+2048 (1,050,624 bytes). Receipt is SHA256 of the exact
+complete canonical wire. No new production object/archive member is required.
+
+### 3. Contracts
+
+- Encoder runs on the adapter owner, after selectAuthentication and before the
+  issued native-session claim; freezes the same plan and uses exact issued role
+  metadata. Unselected returns null. Session clones/wipes transient wire/digest
+  copies on failed or successful open, preserving existing FD/view/callback rules.
+- Native checks length before reading, complete framing, magic/version/zero flags,
+  exact live role token/hop/nonce/binding, stable kind and typed field shape before
+  allocating/copying retained metadata and before socket ownership transfer.
+- Enforce managed text bounds and strict UTF-8 scalar decoding: no overlong,
+  surrogate, >U+10FFFF or ISO controls (U+0000–001F, U+007F–009F). Username1–255,
+  password entry identifier1–128, private path/keyIdentity1–512; reuse view-path
+  lexical validation after strict text validation. Password has empty path/key/blob;
+  private key has empty entry and nonempty public blob <=MAX_FILE_BYTES.
+- Retain copied canonical wire and receipt only after validation/hash success.
+  New selection-admission failures consume no caller FD/callback/view. Close failure keeps metadata
+  for retry; successful close wipes/frees it before tombstone destroy. Blob remains
+  an expected declaration, not parsed-key proof.
+- Native receipt read checks owner/environment via no-provider check_live, role,
+  view and deadline; permits both pre-KEX and completed live sessions. It performs
+  no I/O/provider call or client state mutation. Zero the full output on every error.
+- Java read enforces owner, selected/open/nonterminal/cancel/live state before and
+  after native return; allows complete KEX. Require exactly32 matching bytes; return
+  caller-owned copy and wipe transient result. Mismatch/native error terminalizes
+  Java session with SSH_SESSION_SELECTION; missing selection is nonterminal
+  SSH_AUTH_SELECTION. Wrong owner/closed/cancel/expiry retain existing errors.
+- The metadata API itself grants no credential access. The selected handoff above
+  compares the native receipt against frozen managed selection and current accepted
+  KEX/service state before synthetic secret release. Signing remains future work.
+
+### 4. Validation & Error Matrix
+
+| Native condition | Required result |
+| --- | --- |
+| null/zero wire | legacy unselected; non-null/zero or null/nonzero invalid |
+| malformed/truncated/trailing/oversized/version/shape/UTF8 input | EINVAL, no ownership transfer |
+| role token/hop/nonce/binding mismatch | EACCES, no ownership transfer |
+| allocation/hash failure | ENOMEM/EIO, cleanup without ownership transfer |
+| receipt NULL/client NULL, closed, failed, unselected | EINVAL, ENOENT, EALREADY, EACCES respectively; output zero when non-null |
+| receipt wrong owner/environment or canceled/expired/revoked | precise existing error; zero output, no client mutation |
+
+### 5. Good / Base / Bad Cases
+
+Good: selected Unicode username/password or key metadata survives Java→native copy,
+input mutation and KEX, with exact receipt. Base: null wire preserves legacy callers.
+Bad: receipt alone authorizes a credential, or post-open digest failure is reported
+as though native never consumed the socket.
+
+### 6. Tests Required
+
+JVM: exact framing/digest, selected open transport, non-null default-binding rejection,
+transient wiping, wrong/missing/length receipt, complete-KEX read, thread/cancel/
+expiry/close, legacy behavior. ARM synthetic C: both typed records, copy independence,
+framing/UTF8/control/shape/role rejection and same ownership retry, no provider calls,
+receipt errors/output-zero, post-KEX read and retryable cleanup. Run strict native,
+actual QEMU, full JVM/lint/Release and six-session-JNI-symbol/package checks. JNI
+runtime on Android is not established by these separate JVM/C tests.
+
+### 7. Wrong vs Correct
+
+Wrong: native retains a JNI array pointer or trusts a kind/username without role
+binding. Correct: validate/copy canonical bytes before transfer, retain one digest,
+and expose only a live owner-checked metadata receipt until real auth is implemented.
+For new Java metadata reads, a legacy role-only session helper is insufficient:
+check adapter cancellation/closing before and after the native call, including
+direct adapter.cancel(), and map cancellation before a generic receipt error.
+
+## Managed authentication selection (pre-wire contract, managed contract details)
+
+This managed contract was introduced before CSAS. Native metadata and the separately
+specified receipt-bound callback above now extend it; actual authentication remains
+open.
+
+### 1. Scope / Trigger
+
+Before native userauth is implemented, bind an explicit wire username and exact
+managed password entry or private-key selection to one live role. This slice is
+Java metadata/provider integration, without C/JNI transport, authentication packets,
+real accounts or credential access outside synthetic tests. The selected public
+key is an expected identity declaration, not proof of a parsed private-key match.
+
+### 2. Signatures
+
+```java
+SshAuthenticationSelection.password(role, username, entryId, clock)
+SshAuthenticationSelection.privateKey(role, username, path, keyIdentity, publicKeyBlob, clock)
+adapter.selectAuthentication(selection)
+adapter.onNativeCredentialBytes(kind, selection) // managed overload, no new JNI method
+bridge.openSelection(role, hostProof, selection)
+bridge.release(request, kexProof, selection, receiver)
+provider.credentialBytes(role, hostProof, kexProof, kind, selection)
+selection.usernameBytes() / selection.publicKeyBlob() // defensive copies
+```
+
+The package-private immutable selection stores the exact role object, explicit
+username, kind and fixed entry/path/key identity. Byte-array inputs/getters use
+defensive copies. Exact selection object identity is the managed receipt; this
+does not define a serialized native receipt or a persistent storage format.
+
+### 3. Contracts
+
+- Require the exact live role object, not just `role.binding()` (which omits its
+  nonces). Existing host/KEX/vault operation guards remain mandatory before open
+  and at the final AppSecrets receiver guard. Selection alone grants no authority.
+- Username is explicit strict UTF-8, 1–255 bytes, no NUL/ISO controls or unpaired
+  surrogate; do not parse targetIdentity, trim or normalize. Entry ID uses manifest
+  identifier syntax `[A-Za-z0-9_-]{1,128}`. Reuse `VaultManifest.path` for private
+  paths, plus strict UTF-8/control validation. Key identity is 1–512 UTF-8 bytes
+  without controls. Expected public blob is nonempty and at most MAX_FILE_BYTES.
+- Only PASSWORD and PRIVATE_KEY are selected methods. No passphrase field or
+  KEY_PASSPHRASE/KEYBOARD_INTERACTIVE selected release. Manifest key-passphrase
+  identities are `key:<identity>` while current vault role operations bind the
+  target; extending that capability is a separate future contract.
+- Select once on the owner thread before any callback begins or any native
+  session claim is issued. A failed session-open attempt does not reopen selection.
+  Do not replace a selection after opt-in. Setup validation failures release no
+  secret and do not mutate the existing selection.
+- A selected adapter requires the exact stored selection in its typed-byte
+  overload; the legacy kind-only path fails closed. Unselected adapters retain
+  their legacy contract. Both paths use the existing begin/finish cancellation,
+  reentry, thread and cleanup rules; do not add a parallel callback state machine.
+- Selected provider opens the exact request directly through bridge.openSelection,
+  never through legacy CredentialRequestSource. Request stores selection once;
+  validate its exact identity, kind/entry/path/key identity at the final guard.
+  Retain existing bounded secret copy, wiping and one-shot request close behavior.
+  The legacy release overload must reject a selected Request and still close it;
+  a legacy Request cannot be upgraded merely by passing a selection receipt.
+- Public-key blob remains only expected metadata. Native parsing/equal_public and
+  actual username wire use remain future work. Receipt-bound callbacks and service/
+  current-cycle enforcement belong to the separate handoff contract above.
+
+### 4. Validation & Error Matrix
+
+| Condition | Required result |
+| --- | --- |
+| Invalid/unsupported selection, different role/selection/kind, duplicate or late opt-in | SSH_AUTH_SELECTION, no credential release |
+| Wrong owner during selection setup | SSH_CALLBACK_THREAD, no selection mutation |
+| Closed/canceled/closing adapter | Existing lifecycle error, no selection/release |
+| Revoked view or expired role | Existing SSH_FILE_VIEW / SSH_ROLE_EXPIRED |
+| Missing/wrong host or KEX proof | Existing proof error before request open/release |
+| Selected adapter called by legacy kind-only JNI callback | Reject; no fallback to CredentialRequestSource |
+| Matching synthetic selection + live proofs | Exactly selected bounded bytes, final guarded release, request closed and transient copies wiped |
+
+### 5. Good / Base / Bad Cases
+
+Good: explicit Unicode username and exact password entry survive metadata copying;
+only that entry is released after matching proofs. Base: unselected legacy provider
+tests retain their contract. Bad: infer username from targetIdentity, accept a
+same-fields replacement receipt, or claim expected public bytes prove private-key identity.
+
+### 6. Tests Required
+
+Test UTF-8 byte boundaries/malformed surrogates/control rejection and no normalization;
+public byte defensive copying; password/private-key request selection; same-fields
+different role/receipt rejection; no legacy-source invocation in selected mode;
+one-shot/late/failed-session-open/thread restrictions; missing proofs, expiry,
+revocation, cancel/reentry and final-guard races with no receiver release; request
+close/copy wiping. Run JVM tests, lint and production Release/native packaging checks.
+Do not report a new Android/JNI/native auth runtime result from JVM tests.
+
+### 7. Wrong vs Correct
+
+Wrong: a native credential kind can choose a new entry each time, or a username is
+recovered from an opaque target string. Correct: an explicit immutable per-role
+selection is frozen before callbacks, selected release opens only its exact request,
+and future native auth must validate that same selection against actual wire/key use.
+
+## Post-KEX userauth service negotiation (C only)
+
+### 1. Scope / Trigger
+
+Explicitly extend a successfully completed initial KEX into fixed ssh-userauth
+service negotiation using the same native owner/socket. Java/JNI remains KEX-only;
+no username, credential, USERAUTH_REQUEST, channel or authenticated milestone.
+
+### 2. Signatures
+
+```c
+int ctos_ssh_native_client_begin_userauth_service(struct ctos_ssh_native_client *);
+int ctos_ssh_native_client_userauth_service_ready(const struct ctos_ssh_native_client *);
+int ctos_ssh_callback_check_live(ctos_ssh_callback_token, void *environment);
+```
+
+### 3. Contracts
+
+- `complete()` keeps the initial KEX milestone. Old callers stop with EALREADY.
+  Only explicit begin enables bounded step progress toward service-ready.
+- Validate live callback owner/environment, role/view/deadline and the exact
+  successful KEX callback/current guard cycle before queuing the one fixed request.
+  check_live reuses callback validation without invoking host/KEX/credential targets;
+  it is a liveness check, never provider availability or secret authority.
+- Distinguish KEX-only, request pending, await accept and ready; request output must
+  drain before accept. Use upstream sshpkt/ssh_api and retain step accounting.
+- Before parsing service traffic, disable KEX 20–49 dispatch so new KEX/NEWKEYS
+  cannot be silently processed with old authorization. Reject rekey in this phase.
+- Accept missing payload or an empty string for legacy empty-reply compatibility;
+  any nonempty service string must exactly match ssh-userauth, with no trailing
+  bytes. This string match is intentionally stricter than stock's arbitrary string.
+- Ready stops the C slice: later begin/step EALREADY; late duplicate replies are
+  not parsed and cannot grant a second milestone. EXT_INFO uses the upstream handler.
+- Keep close/destroy, original FD/view/callback and candidate ownership unchanged.
+
+### 4. Validation & Error Matrix
+
+| Condition | Required result |
+| --- | --- |
+| NULL / closed / failed-or-already-started | EINVAL / ENOENT / EALREADY |
+| begin before valid completed KEX | EACCES, no queued request, current KEX remains usable |
+| Wrong callback owner thread or environment | EPERM, no transport/state mutation |
+| Canceled/stale role or callback, expired deadline, revoked view | precise cancellation/expiry/view error, terminal; close retry remains possible |
+| Current KEX cycle differs from the one proved | EACCES, terminal, no request |
+| Accepted exact or legacy-empty SERVICE_ACCEPT after request drain | ready, no USERAUTH_REQUEST or credential callback |
+| Wrong/truncated/trailing service payload, early accept, USERAUTH packet or rekey | EPROTO, terminal; later step EALREADY |
+
+### 5. Good / Base / Bad Cases
+
+Good: peer decrypts one service request after real KNOWN or NEW/CAS KEX and the
+client reaches ready from fragmented encrypted accept. Base: no opt-in, old KEX-only
+behavior persists. Bad: callback kind/proof alone is treated as user authentication.
+
+### 6. Tests Required
+
+Keep old KEX-only tests. Test both host policies, exact/missing/empty accepted payloads,
+one request, no credential calls, malformed/out-of-phase/rekey packets, premature and
+duplicate begin, liveness/owner/expiry/revoke/cancel and retryable close. Verify actual
+ARM QEMU execution separately from cross-link and normal build/JVM/lint/package gates.
+No Android/JNI service runtime claim follows from the C emulator gate.
+Current-cycle mismatch is source-reviewed without a direct mutation test: keep
+the ssh/guard pointer opaque rather than exposing mutable production state just
+to reach that branch. Record this coverage limit with the runtime result.
+
+### 7. Wrong vs Correct
+
+Wrong: delete the completed guard, call credential to probe liveness, or silently
+allow KEX dispatch while reusing old proof. Correct: explicit bounded phase transition,
+no-secret check_live, exact current-cycle validation and fail-closed service-only parser.
+
+## ARM runtime: fragmented identification is atomic
+
+### 1. Scope / Trigger
+
+Production uses pinned OpenSSH 10.6p1 `ssh_api` on a nonblocking socket. A partial
+banner must not become a published KEX version or binary packet input. Apply the
+project's fixed-hash `openssh-10.6p1-banner-atomic.patch` only to a scratch source
+copy; the immutable G1 baseline remains unchanged.
+
+The separate native ARM regression may run on a host QEMU with a recorded Bionic
+runtime even when hako lacks QEMU. Keep emulator evidence separate from Android
+instrumentation, and record executable/runtime hashes and the actual exit status.
+
+### 2. Signatures
+
+`_ssh_read_banner(struct ssh *, struct sshbuf *)` and `ssh_packet_next` keep their
+pinned upstream signatures. `compileSshProductionObjects` takes the new patch as
+an explicit Gradle input; the production builder verifies its SHA256 before use.
+
+### 3. Contracts
+
+If input ends before the banner newline, reset the version buffer before the
+incomplete return and leave input unconsumed for the next turn. Preserve upstream
+version, length and pre-banner checks. Compile patched `ssh_api.c` to PIC and
+replace `ssh_api.o` in the existing 83-member archive; record patch/source/object
+hashes. Do not add a parallel banner parser or change the fixture to avoid splits.
+
+### 4. Validation & Error Matrix
+
+| Condition | Required result |
+| --- | --- |
+| Partial identification, including a trailing CR | zero published remote version, input retained, no early binary parsing |
+| Repeated call without more input | same incomplete state, no invented progress |
+| Final LF completes valid identification | exact remote version published; input consumed once; normal KEX may begin |
+| Patch hash drift or patch failure | production builder fails before archive/APK link |
+| Host sandbox denies `getsockopt(SO_TYPE)` | environment failure; no code/test weakening; use reviewed execution permission for the same local synthetic binary |
+
+### 5. Good / Base / Bad Cases
+
+Good: one-byte client and server identification fragments remain incomplete until
+LF, then the real fragmented KNOWN and NEW/CAS KEX regressions run. Base: strict
+cross-link only, runtime not-run. Bad: nonempty partial version is treated as a
+complete banner, or larger test fragments hide the defect.
+
+### 6. Tests Required
+
+Run direct client/server fragmentation assertions and the entire production
+native synthetic suite under the recorded ARM runtime, with an external timeout
+and core dumps disabled. Check admission, host evidence/CAS, KEX digest ordering,
+I/O, deadline, terminal state and retryable cleanup; retain the normal production
+build/symbol/archive and JVM/lint gates. Android JNI acceptance remains separate.
+
+### 7. Wrong vs Correct
+
+Wrong: return incomplete while `sshbuf_len(remote_version) != 0`. Correct: call
+`sshbuf_reset(banner)` before that return, retaining unconsumed input for retry.
+
+## G3.8 Android ARM/JNI KNOWN host-proof boundary
+
+### 1. Scope / Trigger
+
+- Trigger: the production Java/JNI session bridge now needs one real ARM
+  execution point for the already host-tested `KNOWN` verifier.
+- Scope: the opt-in
+  `SshNativeSessionPlatformTest#syntheticNativeSessionHandle` fixture only.
+  It opens the production native session over an owned local socketpair, calls
+  one bounded `step` against an empty peer, verifies one generated matching key, then
+  exercises the existing revoke and close cleanup. It does not complete KEX, userauth, a network endpoint,
+  a real vault, or credentials.
+
+The 2026-10-17 extension keeps this exact opt-in method and adds two independent
+production sessions: fragmented server identification / initial KEXINIT output,
+then peer half-close / terminal cleanup. Both use a 3-byte step budget and a
+nonblocking socketpair peer; networking and full KEX are outside this gate.
+
+### 2. Signatures
+
+- Fixture helper: `view(long deadline, byte[] hostKeyBlob)` creates the
+  managed `ssh/known_hosts` body from the same bounded SSH wire blob passed to
+  `SshNativeSession.open`.
+- Production call: `SshNativeSession.verifyHostKey(byte[] hostKeyBlob)`
+  invokes `Native.verifyHostKey` on the owner thread; the native bridge then
+  calls `ctos_ssh_native_client_verify_host_key`.
+- Production step: `SshNativeSession.step() -> StepResult` invokes
+  `Native.step` on the same owner thread and returns bounded scalar I/O flags.
+- Device command must target only the current authorized board and the exact
+  opt-in method:
+  `adb -s 192.168.9.14:5555 shell am instrument -w -r -e
+  class im.majo.ctos.SshNativeSessionPlatformTest#syntheticNativeSessionHandle
+  -e ctosSshNativeSessionPlatformProbe true
+  im.majo.ctos.secretsfixture.test/androidx.test.runner.AndroidJUnitRunner`.
+
+### 3. Contracts
+
+- The managed line is exactly
+  `127.0.0.1 ssh-ed25519 <Base64(no-wrap, hostKeyBlob)>\n`; the blob is
+  the OpenSSH wire-encoded public key, not a Java object or a fingerprint
+  string. The key remains alive until the view is created, verification
+  returns, and the final cleanup.
+- `verifyHostKey` must run before `view.revoke()`. A successful call is
+  evidence that the production Java → JNI → native host-file issuer → KNOWN
+  callback path accepted the matching key. Revoke, native close, callback
+  release, view release, and socket cleanup remain the existing owner order.
+- Before verification, an empty nonblocking peer must yield `bytesRead == 0`,
+  `inputAppended == 0` and `readWouldBlock == true`. The fixture deliberately
+  does not require `bytesWritten == 0`, because the same bounded turn may emit the
+  client identification/banner output.
+- The fixture is synthetic: socketpair only, no DNS/LAN/SSH server, account,
+  password, private key, or AppSecrets mutation.
+- The fragmented transport loop is bounded to 2000 turns. Each read/write is
+  at most the step budget; `inputAppended == bytesRead`, and accumulated
+  `bytesWritten` must equal the bytes actually read from the peer. Java exposes
+  no `outputConsumed` field, so do not invent that assertion. Parse the complete
+  bounded initial SSH packet, including padding and message type 20 (KEXINIT).
+- `Os.shutdown(peer, SHUT_WR)` triggers EOF in a separate session. JNI throws a
+  generic `IOException`, which public `SshNativeSession.step()` maps to
+  `VaultException` code `SSH_SESSION_STEP`; the next public step keeps that code.
+  This does not expose C `EPIPE` / `EALREADY` or an IOException cause to Java.
+  The view stays live until owner close; close releases it and is idempotent.
+
+### 4. Validation & Error Matrix
+
+| Condition | Required result |
+| --- | --- |
+| Exact wire blob is formatted into managed known_hosts | production `verifyHostKey` returns normally and the instrumentation test passes |
+| Empty peer is stepped once through production JNI | `bytesRead=0`, `inputAppended=0`, `readWouldBlock=true`; any bounded write remains implementation output |
+| Fragmented server identification with budget 3 | multiple read turns; bounded scalar accounting; actual peer output contains client identification plus complete initial KEXINIT |
+| Peer half-close then two public steps | both throw `SSH_SESSION_STEP`; view remains live until close, close releases view and native tombstone |
+| Old `AAAA`/malformed placeholder is retained | host-file issuer rejects the record; instrumentation fails rather than proving KNOWN |
+| Host key is wiped before view creation or verification | fixture must not claim a host-proof pass; build/runtime failure is visible |
+| Revoke follows successful verification | existing native borrow/revoke/close cleanup remains observable |
+| Device package/process cleanup after the test | both owned fixture packages are absent; no process remains |
+| ActivityManager rejects startup and user is `RUNNING_LOCKED` | runtime not-run, no assertion pass/fail; user manually unlocks before a newly authorized retry |
+
+### 5. Good / Base / Bad Cases
+
+- Good: a generated wire blob is Base64-encoded once into the managed line,
+  production `verifyHostKey` succeeds on ARM, and both fixture packages are
+  removed afterward.
+- Base: host/JNI compile, lint, and APK packaging pass without device runtime.
+- Bad: a host-only counter, test callback, fake `KNOWN` result, or a stale
+  historical device result is used instead of the production call.
+
+### 6. Tests Required
+
+- Compile the fixture test Java source and run fixture lint.
+- Run one production `step()` against the empty peer and assert only the stable
+  bounded read/append/EAGAIN fields.
+- Exercise fragmented identification / initial KEXINIT output with actual
+  nonblocking peer readback, then independently exercise EOF / terminal cleanup.
+- Install only the freshly built fixture main/test APKs on
+  `192.168.9.14:5555`, run the exact opt-in method, and assert
+  `OK (1 test)` / instrumentation status 0.
+- Uninstall both owned fixture packages and read back `pm path`/process
+  absence. Record the fixture APK hashes and board identity.
+- Bound the host wait for `am instrument -w` (for example, `timeout 90s adb ...`):
+  rejected process startup can otherwise leave the shell command waiting forever.
+  A successful APK install is not a runtime pass. For `RUNNING_LOCKED`, retain
+  local results and clean the owned packages / command process; never bypass the
+  gate by changing lockscreen settings or marking the fixture direct-boot aware.
+- Keep the host cross-link and normal APK evidence separate: this runtime
+  result proves JNI synthetic transport / KNOWN proof / EOF cleanup. The
+  2026-10-18 rebuilt fixture passed on API30 arm64; full Android KEX remains open.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+`"127.0.0.1 ssh-ed25519 AAAA\n"` plus a direct Java callback assertion.
+
+#### Correct
+
+`HOST + " ssh-ed25519 " + Base64.getEncoder().encodeToString(hostKeyBlob)
++ "\n"`, followed by `session.verifyHostKey(hostKeyBlob)` before revoke.
+
+For EOF, assert public `VaultException.code == "SSH_SESSION_STEP"` twice and
+successful close. Claiming Java directly observed `EPIPE` or `EALREADY` is wrong;
+those errno assertions belong to the native C regression.
+
+## G3.8: bounded step, terminal/error, and host-evidence classification semantics
+
+### 1. Scope / Trigger
+
+- Trigger: the native-owned session bridge exposes a real production `step`,
+  and its first host regression must distinguish an expired managed view from
+  a revoked/invalid view without hiding the original terminal error.
+- Scope: `ctos_ssh_native_client_step` and its synthetic host socketpair tests.
+  This is a narrow production error-propagation and regression slice; it does
+  not authorize a real endpoint, credentials, vault mutation, or full SSH
+  protocol claim.
+
+### 2. Contract
+
+- A live-borrow failure is terminal. Preserve its source errno: an expired
+  managed view/deadline remains `ETIMEDOUT`; revoke, invalidity, or an unknown
+  view remains `EACCES` (or the precise lower-level error). Later `step` calls
+  return `EALREADY` until the owner closes the client.
+- A nonblocking empty peer produces an ordinary successful step with
+  `read_would_block=1`, zero `bytes_read`, and zero `input_appended`. It must
+  not fabricate input progress or a terminal error.
+- A peer read of zero bytes is terminal `EPIPE` with zero read/input progress;
+  cancellation and expired client deadlines remain terminal errors. Cleanup
+  remains retryable and owns the peer close exactly once in the fixture.
+- Once `ssh_packet_next` completes a fragmented peer identification banner, the
+  same step may queue the native identification banner and KEX output. The
+  transport write is capped at `step_budget`; `bytes_written` must equal
+  `output_consumed`, and `partial_write=1` means OpenSSH output remains queued
+  after that bounded write. Peer output is observed only through the attached
+  synthetic socket, never through the rejected application byte-pipe fields.
+- `ctos_ssh_native_client_verify_host_key` must be covered against a synthetic
+  managed `ssh/known_hosts` object containing the exact generated public key.
+  The production host-file issuer must classify that key as `KNOWN`; the
+  synchronous host-evidence callback must return the complete role/identity,
+  key/fingerprint, digest, approved, and `CAS_NOT_REQUIRED` result; and the
+  production API must return success. A different public key blob must fail
+  with `EACCES` at the pinned-fingerprint guard without invoking host evidence
+  a second time.
+- A second host-policy case must keep the offered key's pinned fingerprint
+  valid while putting a different generated key for the same host in the
+  managed object. The issuer must be directly observed returning
+  `CTOS_SSH_CALLBACK_HOST_CHANGED`; production verification must then fail
+  closed with `EACCES` without invoking host evidence or handing off a
+  candidate. This direct issuer assertion prevents an unrelated early guard
+  from satisfying the classification regression.
+- A revoked host-policy case must prepend `@revoked` to the matching managed
+  key entry. The issuer must be directly observed returning
+  `CTOS_SSH_CALLBACK_HOST_REVOKED` with the offered key/fingerprint and equal
+  base/replacement digests, without candidate handoff; production verification
+  must fail closed with `EACCES` before host evidence is invoked.
+- A valid offered OpenSSH host certificate is a separate project policy result:
+  the issuer must directly return `CTOS_SSH_CALLBACK_HOST_CERTIFICATE` with
+  bounded key/fingerprint and equal base/replacement digests, without candidate
+  handoff; production verification must fail closed with `EACCES` before host
+  evidence. A certificate or CA marked `@revoked` remains `HOST_REVOKED` before
+  the generic certificate policy result.
+- `CTOS_SSH_CALLBACK_HOST_INVALID` is project-owned, not an invented upstream
+  `HostStatus` value. Before calling `load_hostkeys_file()`, the in-memory body
+  is scanned with pinned `hostkeys_foreach_file(..., HKF_WANT_PARSE_KEY, ...)`.
+  Any `HKF_STATUS_INVALID` line returns `HOST_INVALID` with the offered
+  key/fingerprint, equal base/replacement digests, no replacement body and no
+  candidate handoff. A syntactically valid body with no matching key remains
+  upstream `HOST_NEW`. Production verification rejects `HOST_INVALID` with
+  `EACCES` before host evidence.
+- A syntactically valid managed body with no matching key is a real `NEW` path,
+  not an early rejection. The issuer appends exactly one upstream-formatted
+  entry to the bounded replacement body, hands that body off once with the
+  exact candidate ID/key/fingerprint/base/replacement digests, and only then
+  may production verification ask for host evidence. A successful `NEW`
+  evidence result must be approved with `CAS_COMMITTED`; `CAS_NOT_REQUIRED` is
+  invalid for `NEW`.
+- If `NEW` host evidence or any later host-result binding check fails, the
+  native verifier aborts the handed-off candidate exactly once, terminalizes
+  the client, and preserves close retryability. A later `step` returns
+  `EALREADY`; it must not make transport progress or invoke a second candidate
+  or host-evidence callback. A successful verifier call keeps the candidate
+  committed for the subsequent protocol completion/close contract.
+- A synthetic OpenSSH client/server socketpair must drive the production client
+  through the real KEX completion boundary. The matching managed `KNOWN` key
+  produces exactly one host-evidence callback before exactly one KEX-complete
+  callback; the latter carries a nonzero cycle and nonzero SHA-256 session
+  digest matching the peer's session ID. Completion sets the client complete,
+  and a later production `step` returns `EALREADY`.
+- The same boundary must be exercised with an empty managed `known_hosts` body.
+  The real host-key callback must emit exactly one candidate, then exactly one
+  `NEW` evidence result with `CAS_COMMITTED`, before exactly one KEX-complete
+  callback. Candidate/evidence route fields, replacement body and both digests
+  remain bound to the same role/host/key; completion and post-completion
+  `EALREADY` semantics are unchanged.
+
+### 3. Validation / Error Matrix
+
+| Condition | Required result |
+| --- | --- |
+| Empty nonblocking peer | `0`; `read_would_block=1`; zero read/input progress |
+| Managed view expired before step | `-1`, `ETIMEDOUT`; client terminal; zero progress |
+| Managed view revoked/invalid before step | `-1`, `EACCES` or exact lower-level error; client terminal |
+| Peer EOF after successful open | `-1`, `EPIPE`; later step `-1`, `EALREADY` |
+| Fragmented peer banner reaches a complete identification | each step reads/appends at most `step_budget`; output write is at most `step_budget`; `bytes_written == output_consumed`; pending banner/KEX output sets `partial_write=1` |
+| Offered pinned key differs from managed known_hosts key | issuer classification is `CHANGED`; production verifier returns `EACCES`; no host-evidence callback or candidate handoff |
+| Matching managed key is marked `@revoked` | issuer classification is `REVOKED` with bounded key/fingerprint/digest metadata; production verifier returns `EACCES`; no host-evidence callback or candidate handoff |
+| Valid offered host certificate | issuer classification is `CERTIFICATE` with bounded metadata and no handoff; production verifier returns `EACCES`; no host-evidence callback |
+| Managed known_hosts body contains a parser-invalid line | project-owned issuer classification is `INVALID` with equal digests and no handoff; production verifier returns `EACCES`; no host-evidence callback |
+| Valid managed body has no offered-key match | issuer classification is `NEW`; one exact candidate handoff precedes one approved `NEW` evidence result with `CAS_COMMITTED`; replacement digest binds the exact body |
+| `NEW` evidence rejects or result binding mismatches | candidate abort exactly once; verifier fails closed and terminalizes client; later `step` returns `EALREADY`; close remains retryable |
+| Synthetic client/server KEX reaches `kex->done` | one `KNOWN` evidence callback precedes one KEX-complete callback; cycle and session digest are nonzero and digest-bound; client completes; later `step` returns `EALREADY` |
+| Synthetic client/server KEX with empty managed known_hosts | one candidate precedes one approved `NEW` evidence result with `CAS_COMMITTED`, which precedes one KEX-complete callback; exact body/digests and route fields bind; later `step` returns `EALREADY` |
+
+### 4. Tests Required
+
+- `testSshNativeClientHost` must compile the production caller with strict
+  C11/Werror flags and include empty-peer EAGAIN, half-close EOF, and bounded
+  BOOTTIME deadline cases using only the existing synthetic socketpair.
+- `test_step_fragmented_banner_output` must feed a synthetic server banner in
+  bounded fragments, observe the production client's local banner plus KEX
+  bytes on the peer, and assert bounded input/output accounting and
+  `partial_write`; this is a cross-link regression until an ARM runtime is
+  available.
+- `test_verify_known_host_key_proof` must format the generated key into the
+  synthetic managed object, assert one successful `KNOWN` evidence callback,
+  then submit a different generated public key and assert `EACCES` with no
+  additional callback. The callback result must be populated from the
+  evidence rather than accepted by a tautological counter assertion.
+- `test_verify_changed_host_key_classification` must use a different managed
+  key while retaining a valid offered-key fingerprint, directly assert the
+  issuer's `CHANGED` classification and bounded issue metadata, then assert
+  production `EACCES` with zero host-evidence calls.
+- `test_verify_revoked_host_key_classification` must mark the matching managed
+  entry `@revoked`, directly assert the issuer's `REVOKED` classification and
+  bounded issue metadata, then assert production `EACCES` before host evidence
+  with no candidate handoff.
+- `test_verify_certificate_host_key_classification` must use a generated,
+  signed host certificate, directly assert `CERTIFICATE` metadata/no handoff,
+  then assert production `EACCES` before host evidence.
+- `test_verify_invalid_hostfile_classification` must combine a truncated
+  managed record with a valid offered-key record, directly assert project-owned
+  `INVALID` metadata/no handoff, then assert production `EACCES` before host
+  evidence. The test must not claim that upstream `HostStatus` has an
+  `INVALID` member.
+- `test_verify_new_host_key_candidate` must use an empty managed body and assert
+  the exact replacement body, candidate ID/classification/key/fingerprint,
+  candidate-before-evidence ordering, base/replacement digest binding, and
+  `CAS_COMMITTED` before production verification succeeds.
+- `test_verify_new_host_key_candidate_rollback` must reject host evidence after
+  the candidate handoff, assert one abort and no duplicate callbacks, then
+  assert `step` is terminal (`EALREADY`) and native close can still retry.
+- `test_kex_completion_host_proof` must pump a synthetic nonblocking OpenSSH
+  server over the socketpair until both client completion and peer `kex->done`;
+  it must assert bounded partial I/O, exactly one `KNOWN` evidence callback,
+  evidence-before-KEX-complete ordering, `cycle == 1`, a nonzero callback digest
+  matching the peer session ID, and post-completion `EALREADY`.
+- `test_kex_completion_new_host_proof` must repeat that packet loop with an
+  empty managed body and assert candidate → `NEW` evidence (`CAS_COMMITTED`) →
+  KEX-complete exactly-once ordering, exact replacement/body/digest/route
+  binding, peer-bound session digest, bounded I/O/EAGAIN/short write and
+  post-completion `EALREADY`.
+- The host task is an AArch64 cross-link. Without qemu, report
+  `runtime=not-run`; compilation is not an ARM runtime result.
+- A future protocol gate still needs broader packet/KEX exchange and runtime
+  behavior, complete managed-CAS/provider runtime and ARM host-proof
+  runtime, KEX completion, auth, JNI/Java runtime and device evidence; these
+  host-only regressions are not that gate.
 
 ## G3.7: native-owned session handle, view borrow, and JNI runtime seam
 
@@ -87,7 +1465,7 @@ host-key blob/length, and a 32-byte expected fingerprint. A positive Java
   caller FD, parsed host key, and managed-view borrow. Java arrays/strings are
   copied into native bounded storage and wiped after the binding returns.
 - JNI session slots are monotonic opaque tokens with an owner `pthread_t`.
-  Every open/step/verify/close/destroy call checks the owner thread; Java
+  Every open/step/verify/receipt/close/destroy call checks the owner thread; Java
   cancellation remains the only cross-thread request. The native bridge may
   synchronously invoke the callback while the owner call is active; callback
   code must not re-enter the session JNI registry.
@@ -97,9 +1475,11 @@ host-key blob/length, and a 32-byte expected fingerprint. A positive Java
   Any failed stage remains retryable. Destroy accepts only a closed tombstone;
   Java then completes claim/role/view bookkeeping according to its staged
   owner contract.
-- `step` returns exactly eight bounded scalar values. This G3.7 gate covers
-  handle/lifetime plumbing and the synthetic open/revoke/close path; it does
-  not turn the current bounded socket turn into a complete protocol/auth gate.
+- `step` returns exactly eight bounded scalar values. Its live-borrow check
+  preserves `ETIMEDOUT` versus `EACCES` and terminalizes the client before the
+  transport turn. This G3.7/G3.8 gate covers handle/lifetime plumbing and
+  bounded terminal/error cases; it does not turn the socket turn into a
+  complete protocol/auth gate.
 
 ### 4. Validation / Error Matrix
 
@@ -121,9 +1501,9 @@ host-key blob/length, and a 32-byte expected fingerprint. A positive Java
 - Good: native token is opaque; revoke prevents new borrow while an existing
   session safely finishes; malformed/mismatched host keys fail before attach;
   close can retry; Android synthetic test passes and removes its fixture.
-- Base: normal APK exposes five JNI symbols and production OpenSSH closure;
-  host tests pass; the authorized device test proves only open → revoke →
-  close on a socketpair, while qemu/native protocol runtime remains not-run.
+- Base: the original G3.7 APK exposed five JNI symbols; CSAS now adds the sixth
+  receipt entry. The historical lifecycle-only device test proves only its
+  socketpair path; current independent ARM/JVM evidence is recorded above.
 - Bad: cast a Java `long` to `ctos_ssh_view *`, keep a borrowed Java array as
   the parsed key, release the view before native close, destroy an open slot,
   or infer userauth/host-proof/EOF/PTY success from the lifecycle test.
@@ -140,8 +1520,8 @@ host-key blob/length, and a 32-byte expected fingerprint. A positive Java
   socketpair and cleanup assertions only.
 - `SshFileViewPlatformTest#syntheticProtectedFileViews`: retain the existing
   public-file view matrix and run it separately from the new session method.
-- Normal gate must retain JUnit `189/0/0/0`, callback host=20, production
-  archive=83, five JNI exports, fixture exclusion, all Release ABIs, lint and
+- Normal gate must retain the full current JUnit/callback/native regression suite,
+  production archive=83, six session JNI exports, fixture exclusion, Release ABIs, lint and
   APK scans. A future protocol gate must add partial I/O/EAGAIN/EOF/deadline,
   host proof, auth and close-retry evidence before claiming full runtime.
 
@@ -192,6 +1572,7 @@ static SshNativeSession open(
 void cancel() throws VaultException; // the only cross-thread operation
 StepResult step() throws VaultException; // owner thread only
 void verifyHostKey(byte[] hostKeyBlob) throws VaultException; // owner thread only
+byte[] authenticationSelectionReceipt() throws VaultException; // selected/live owner; allows KEX complete
 void close() throws VaultException; // owner thread only, retryable
 ```
 
@@ -201,12 +1582,14 @@ JNI symbols in `ssh_session_jni.c`:
 Native.open(...) -> long
 Native.step(...) -> int[8]
 Native.verifyHostKey(...) -> void
+Native.authenticationSelectionReceipt(...) -> byte[32]
 Native.close(...) -> void
 Native.destroy(...) -> void
 ```
 
-The current implementation of all five JNI methods throws `IOException` and
-returns no native handle/result. `NativeSessionClaim` is the package-private
+The original G3.6 implementation made its five methods fail closed with
+`IOException`; that historical state is superseded by the native-owned bridge
+and CSAS contracts above. `NativeSessionClaim` is the package-private
 capability pairing one callback adapter with one opening/owned session.
 
 ### 3. Contracts
@@ -337,14 +1720,18 @@ must consume only its generated archive/include output.
 - All admission/setup checks run before OpenSSH attaches a descriptor. A
   successful open attaches a `F_DUPFD_CLOEXEC` duplicate and the native client
   owns both the duplicate and original descriptor. A failed open leaves the
-  original descriptor and pre-opened callback caller-owned.
+  original descriptor and pre-opened callback caller-owned. If KEX bind already
+  succeeded, failed-open must unbind before freeing ssh even when descriptor
+  duplication/attachment never completed; the same ownership tuple can retry.
 - One `step` performs a bounded nonblocking socket read, OpenSSH input/packet
   processing, and bounded output write/consume. Non-empty application input or
   output pipes are rejected; OpenSSH owns transport bytes.
 - Host verification consumes the managed public view through the pinned
   hostfile issuer, rechecks HostEvidence/CAS binding, and rolls back a handed
   off NEW candidate on later failure. KEX completion emits one session digest
-  callback only.
+  callback only, after `kex->done` and the local OpenSSH output queue is fully
+  consumed. Before that drain, later bounded steps must remain available;
+  only then may completion make subsequent steps return `EALREADY`.
 - `close` is event-loop-owner synchronous: candidate abort, callback release,
   KEX unbind/OpenSSH free, then original descriptor close. A release/close
   failure leaves a retryable non-tombstone. `destroy` accepts only a closed
@@ -359,11 +1746,14 @@ must consume only its generated archive/include output.
 | Condition | Required result |
 | --- | --- |
 | Null/malformed config, stale role/view, wrong owner/deadline, bad socket or missing trust input | `-1`; `*client == NULL`; original FD and callback remain caller-owned |
+| Role admission: unknown/expired role, UID/PID/host/deadline mismatch | deterministic `EACCES`, independent of incoming `errno`; original FD retained. Clock/registry operational failures keep their actual error |
 | Non-empty step input/output pipe | `-1`, `EINVAL`, zero progress |
 | Cancel, expired deadline, EOF, protocol/I/O failure | terminal error; no further progress; candidate rollback if needed |
 | Step after close | `-1`, `ENOENT` |
 | Step after terminal completion/failure | `-1`, `EALREADY` |
+| Peer NEWKEYS arrives while local output is pending | continue bounded output drain; do not publish completion or block the next step prematurely |
 | Callback release failure | `-1`; client remains retryable with OpenSSH and original FD still attached |
+| FD duplication fails after successful KEX bind | preserve `EMFILE`, NULL client and caller ownership; unbind before free; identical config may retry after resource recovery |
 | Original-FD close failure | `-1`; client remains retryable with the original FD handle retained for another close attempt |
 | Baseline hash/tree/patch drift, non-PIC or incomplete archive, stock caller symbol | production builder fails before APK link |
 | Missing qemu/Android runtime | report `runtime=not-run`; never count cross-link as runtime pass |
@@ -387,9 +1777,11 @@ must consume only its generated archive/include output.
 - Run callback host, JVM, strict `compileSshFiles`, all Release ABIs, lint,
   assemble, APK ZIP scan and `git diff --check`; assert 0 JVM failures/errors/
   skips and no fixture caller objects.
-- Before claiming runtime, add an authorized Android ARM execution test for
-  partial I/O/EAGAIN/EOF/cancel/deadline, host proof, KEX completion, close
-  retry and JNI/Java session ownership. Build success alone is insufficient.
+- The current host regression covers empty-peer EAGAIN, half-close EOF,
+  cancel, and managed-view deadline error propagation. Before claiming
+  runtime, add an authorized Android ARM execution test for partial packet/
+  write I/O, host proof, KEX completion, close retry and JNI/Java session
+  ownership. Build success alone is insufficient.
 
 ### 7. Wrong vs Correct
 
@@ -1451,6 +2843,12 @@ writer.
   `CERTIFICATE` (fail-closed), but `check_key_in_hostkeys()` must run first so
   a revoked certificate or revoked CA maps to `REVOKED` and cannot be hidden by
   the generic certificate denial.
+- Before `load_hostkeys_file()`, run pinned `hostkeys_foreach_file()` on the
+  same in-memory body with `HKF_WANT_PARSE_KEY` and record any
+  `HKF_STATUS_INVALID` line. This is the project-owned `INVALID` result; it is
+  not an upstream `HostStatus` member. Return bounded offered-key metadata and
+  equal digests with no replacement body or handoff. A valid body with no match
+  remains the upstream `NEW` result.
 - `NEW` appends one upstream-formatted entry to a copy of the exact public
   body, computes base/replacement SHA-256, and calls the existing one-shot
   candidate handoff. The handoff owns wiping after the synchronous call;
@@ -1466,7 +2864,7 @@ writer.
 | --- | --- |
 | View root is not `ssh/config`, wrong type, or does not refer to `ssh/known_hosts` | Reject `EACCES`; do not parse or hand off |
 | View/role deadline, connection, host or candidate identity mismatch | Reject; wipe issue/body |
-| Managed known_hosts body is malformed | Upstream parser yields no trusted match; classify `NEW` only when the normal upstream result is `HOST_NEW`, otherwise reject parse failures |
+| Managed known_hosts body contains a parser-invalid line | Return project-owned `INVALID` with offered-key metadata, equal digests and no handoff; production caller rejects before host evidence |
 | Certificate is not revoked | `CERTIFICATE`; fail closed by managed authority |
 | Certificate or its signing CA is revoked | `REVOKED`; never downgrade to `CERTIFICATE` |
 | Issuer attempts a pathname writer | Build/source check fails; no vault or host path is opened |
@@ -1490,7 +2888,9 @@ writer.
 
 - `ssh_hostfile_issuer_test.c`: valid root graph, KNOWN/NEW/CHANGED/REVOKED,
   certificate and revoked-CA classification, root/path rejection, exact body
-  digest, one-shot handoff wipe and callback-failure rollback.
+  digest, one-shot handoff wipe and callback-failure rollback. The production
+  native-client host test additionally covers signed CERTIFICATE and malformed
+  body INVALID classification/no-handoff with fail-closed EACCES.
 - `android-hostfile-issuer-build.sh`: `bash -n`, fixed archive/patch/tree and
   object hashes, patched source application, strict C11/Werror compilation,
   AArch64 PIE link, required symbol checks, pathname-writer exclusion and

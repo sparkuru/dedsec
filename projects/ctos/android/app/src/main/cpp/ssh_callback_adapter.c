@@ -629,6 +629,14 @@ int ctos_ssh_callback_close(ctos_ssh_callback_token callback, void *environment)
     return 0;
 }
 
+int ctos_ssh_callback_check_live(ctos_ssh_callback_token callback, void *environment) {
+    struct callback_slot *slot;
+    struct ctos_ssh_callback_target target;
+
+    if (begin_callback(callback, environment, &slot, &target) != 0) return -1;
+    return finish_callback(slot, 0);
+}
+
 int ctos_ssh_callback_host_key(ctos_ssh_callback_token callback, void *environment,
     int classification, const char *key_type, const char *fingerprint,
     const unsigned char base_digest[32], const unsigned char replacement_digest[32]) {
@@ -814,9 +822,10 @@ int ctos_ssh_callback_credential(ctos_ssh_callback_token callback, void *environ
     return finish_callback(slot, result);
 }
 
-int ctos_ssh_callback_credential_bytes(ctos_ssh_callback_token callback,
-    void *environment, int kind, unsigned char *output, size_t capacity,
-    size_t *length) {
+static int credential_bytes_common(ctos_ssh_callback_token callback,
+    void *environment, int kind, const unsigned char selection_receipt[32],
+    uint64_t cycle, const unsigned char session_digest[32], int selected,
+    unsigned char *output, size_t capacity, size_t *length) {
     struct callback_slot *slot;
     struct ctos_ssh_callback_target target;
     int result;
@@ -842,9 +851,21 @@ int ctos_ssh_callback_credential_bytes(ctos_ssh_callback_token callback,
         errno = EINVAL;
         return -1;
     }
+    if (selected && ((kind != CTOS_SSH_CALLBACK_CREDENTIAL_PASSWORD
+            && kind != CTOS_SSH_CALLBACK_CREDENTIAL_PRIVATE_KEY)
+        || selection_receipt == NULL || session_digest == NULL
+        || cycle == 0 || cycle > INT64_MAX || !nonzero32(session_digest))) {
+        errno = EINVAL;
+        return -1;
+    }
     if (begin_callback(callback, environment, &slot, &target) != 0) return -1;
 
-    if (target.credential_bytes == NULL) {
+    if (selected) {
+        result = target.credential_bytes_selected == NULL ? ENOSYS
+            : target.credential_bytes_selected(target.context, environment, kind,
+                selection_receipt, cycle, session_digest, output, capacity, length);
+        if (result == 0 && (*length == 0 || *length > capacity)) result = EINVAL;
+    } else if (target.credential_bytes == NULL) {
         result = ENOSYS;
     } else {
         result = target.credential_bytes(target.context, environment, kind,
@@ -864,4 +885,19 @@ int ctos_ssh_callback_credential_bytes(ctos_ssh_callback_token callback,
         return -1;
     }
     return 0;
+}
+
+int ctos_ssh_callback_credential_bytes(ctos_ssh_callback_token callback,
+    void *environment, int kind, unsigned char *output, size_t capacity,
+    size_t *length) {
+    return credential_bytes_common(callback, environment, kind, NULL, 0, NULL, 0,
+        output, capacity, length);
+}
+
+int ctos_ssh_callback_credential_bytes_selected(ctos_ssh_callback_token callback,
+    void *environment, int kind, const unsigned char selection_receipt[32],
+    uint64_t cycle, const unsigned char session_digest[32], unsigned char *output,
+    size_t capacity, size_t *length) {
+    return credential_bytes_common(callback, environment, kind, selection_receipt,
+        cycle, session_digest, 1, output, capacity, length);
 }

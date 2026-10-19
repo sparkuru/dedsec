@@ -1,17 +1,27 @@
 # App secrets host contract
 
+2026-10-19: exact role-bound NEW known_hosts CAS may advance epoch while retaining
+only its same already attached active public loan; lock, arbitrary mutation,
+re-unlock and original file-operation cancellation still revoke. No deadline or
+key is extended/restored. See the seven-part own-CAS contract in ssh-native.md.
+Selected encrypted private keys use one SSH_PRIVATE_KEY_BUNDLE operation binding
+path/key identity/passphrase entry/actual remote/connection and CSASv2 receipt;
+CSKBv1 total <=1MiB. Final host/KEX/role guards run after the last store read and
+immediately before any credential, key or bundle receiver. Generic passphrase
+target identity is never substituted for the actual remote target.
+
 The SSH public file loan now has a native-only SshPublicFileLease: no private
 body in its explicit bounded wire, opaque singleton native ownership, and
 revocation bound to both the exact VaultSession epoch and originating
 VaultOperation. Cancel after publication revokes that view; an old operation
 cannot attach a replacement view. Revocation callbacks must not re-enter
 AppSecrets or acquire session locks while holding lease/operation locks.
-The managed `KNOWN_HOSTS` provider/CAS writer is implemented, but it accepts
-only a caller-supplied exact replacement body. The native-facing hostfile
-issuer/candidate handoff, real OpenSSH transport/caller and restore validation
-remain absent; the bounded role/KEX/typed-byte handoff is specified separately
-and is not itself a production caller. See [SSH native contract](ssh-native.md)
-and dated design evidence.
+The managed KNOWN_HOSTS provider/CAS writer accepts the exact native hostfile
+candidate through the owned handoff. Production native KEX/service and password/
+private-key authentication now call these guarded providers. The isolated Android
+fixture uses actual AppSecrets encrypted MemoryStore, native loan, role and JNI;
+this is separate from production-vault, account, UI or full-client acceptance.
+See [SSH native contract](ssh-native.md) and dated design evidence.
 
 ## 1. Scope / Trigger
 

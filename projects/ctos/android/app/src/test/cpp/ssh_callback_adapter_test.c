@@ -29,8 +29,12 @@ struct fixture {
     unsigned int kex_calls;
     unsigned int credential_calls;
     unsigned int credential_bytes_calls;
+    unsigned int selected_calls;
+    int selected_action;
+    int omit_selected;
     unsigned int release_calls;
     int reenter;
+    int reenter_live;
     int reentry_rejected;
     int release_failure;
     int credential_bytes_failure;
@@ -57,6 +61,13 @@ static int host_key(void *context, void *environment, int classification,
     assert(strcmp(fingerprint, "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA") == 0);
     assert(base_digest != NULL && replacement_digest != NULL);
     fixture->host_calls++;
+    if (fixture->reenter_live) {
+        fixture->reenter_live = 0;
+        errno = 0;
+        assert(ctos_ssh_callback_check_live(fixture->callback, environment) != 0
+            && errno == EALREADY);
+        fixture->reentry_rejected = 1;
+    }
     if (fixture->host_delay_millis != 0) {
         struct timespec delay = {
             .tv_sec = (time_t)(fixture->host_delay_millis / 1000U),
@@ -194,6 +205,41 @@ static int credential_bytes(void *context, void *environment, int kind,
     return 0;
 }
 
+static int credential_bytes_selected(void *context, void *environment, int kind,
+    const unsigned char receipt[32], uint64_t cycle, const unsigned char digest[32],
+    unsigned char *output, size_t capacity, size_t *length) {
+    struct fixture *fixture = context;
+    const char *value = kind == CTOS_SSH_CALLBACK_CREDENTIAL_PASSWORD
+        ? "selected-password" : "selected-private";
+    assert(fixture != NULL && environment == fixture->environment);
+    assert(kind == CTOS_SSH_CALLBACK_CREDENTIAL_PASSWORD || kind == CTOS_SSH_CALLBACK_CREDENTIAL_PRIVATE_KEY);
+    assert(receipt != NULL && digest != NULL && cycle == 17U);
+    for (size_t index = 0; index < 32U; index++) assert(receipt[index] == 8U && digest[index] == 7U);
+    fixture->selected_calls++;
+    if (strlen(value) > capacity) return EOVERFLOW;
+    memcpy(output, value, strlen(value));
+    *length = strlen(value);
+    if (fixture->selected_action == 1) return EACCES;
+    if (fixture->selected_action == 2) *length = 0;
+    if (fixture->selected_action == 3) *length = capacity + 1U;
+    if (fixture->selected_action == 4) assert(ctos_ssh_callback_cancel(fixture->callback) == 0);
+    if (fixture->selected_action == 5) {
+        struct timespec delay = {.tv_sec = 0, .tv_nsec = 150000000L};
+        assert(nanosleep(&delay, NULL) == 0);
+    }
+    if (fixture->selected_action == 6) {
+        unsigned char nested[64];
+        size_t nested_length = 99;
+        errno = 0;
+        assert(ctos_ssh_callback_credential_bytes_selected(fixture->callback, environment,
+            kind, receipt, cycle, digest, nested, sizeof(nested), &nested_length) != 0
+            && errno == EALREADY && nested_length == 0);
+        for (size_t index = 0; index < sizeof(nested); index++) assert(nested[index] == 0);
+        fixture->reentry_rejected = 1;
+    }
+    return 0;
+}
+
 static int release(void *context, void *environment) {
     struct fixture *fixture = context;
     assert(fixture != NULL && environment == fixture->environment);
@@ -216,7 +262,8 @@ static struct ctos_ssh_callback_target target(struct fixture *fixture) {
         .kex_complete = kex_complete,
         .credential = credential,
         .release = release,
-        .credential_bytes = credential_bytes
+        .credential_bytes = credential_bytes,
+        .credential_bytes_selected = fixture->omit_selected ? NULL : credential_bytes_selected
     };
 }
 
@@ -302,6 +349,87 @@ static void *cross_thread_close(void *argument) {
         args->fixture->environment);
     args->error = errno;
     return NULL;
+}
+
+static void *cross_thread_live(void *argument) {
+    struct cross_thread_args *args = argument;
+
+    errno = 0;
+    args->result = ctos_ssh_callback_check_live(args->fixture->callback,
+        args->fixture->environment);
+    args->error = errno;
+    return NULL;
+}
+
+static void test_check_live(void) {
+    struct fixture fixture = {0};
+    uint64_t deadline = deadline_after(3000);
+    ctos_ssh_role_token role = role_open(deadline);
+    ctos_ssh_callback_token callback = binding(&fixture, role, deadline);
+    int wrong_environment;
+    pthread_t thread;
+    struct cross_thread_args args = {.fixture = &fixture};
+
+    errno = 0;
+    assert(ctos_ssh_callback_check_live(0, fixture.environment) != 0 && errno == ENOENT);
+    errno = 0;
+    assert(ctos_ssh_callback_check_live(callback, &wrong_environment) != 0
+        && errno == EPERM);
+    assert(pthread_create(&thread, NULL, cross_thread_live, &args) == 0);
+    assert(pthread_join(thread, NULL) == 0);
+    assert(args.result != 0 && args.error == EPERM);
+    assert(ctos_ssh_callback_check_live(callback, fixture.environment) == 0);
+    assert(ctos_ssh_callback_check_live(callback, fixture.environment) == 0);
+    assert(fixture.host_calls == 0 && fixture.host_evidence_calls == 0
+        && fixture.candidate_calls == 0 && fixture.candidate_abort_calls == 0
+        && fixture.kex_calls == 0 && fixture.credential_calls == 0
+        && fixture.credential_bytes_calls == 0 && fixture.release_calls == 0);
+    assert(ctos_ssh_callback_cancel(callback) == 0);
+    errno = 0;
+    assert(ctos_ssh_callback_check_live(callback, fixture.environment) != 0
+        && errno == ECANCELED);
+    assert(ctos_ssh_callback_close(callback, fixture.environment) == 0);
+    assert(ctos_ssh_role_bootstrap_close(role) == 0);
+
+    fixture = (struct fixture){0};
+    deadline = deadline_after(3000);
+    role = role_open(deadline);
+    callback = binding(&fixture, role, deadline);
+    assert(ctos_ssh_role_bootstrap_close(role) == 0);
+    errno = 0;
+    assert(ctos_ssh_callback_check_live(callback, fixture.environment) != 0
+        && errno == ECANCELED);
+    assert(ctos_ssh_callback_close(callback, fixture.environment) == 0);
+
+    fixture = (struct fixture){0};
+    deadline = deadline_after(100);
+    role = role_open(deadline);
+    callback = binding(&fixture, role, deadline);
+    struct timespec delay = {.tv_sec = 0, .tv_nsec = 150000000L};
+    assert(nanosleep(&delay, NULL) == 0);
+    errno = 0;
+    assert(ctos_ssh_callback_check_live(callback, fixture.environment) != 0
+        && errno == ETIMEDOUT);
+    assert(ctos_ssh_callback_close(callback, fixture.environment) == 0);
+    errno = 0;
+    assert(ctos_ssh_role_bootstrap_close(role) != 0 && errno == ENOENT);
+
+    fixture = (struct fixture){.reenter_live = 1};
+    deadline = deadline_after(3000);
+    role = role_open(deadline);
+    callback = binding(&fixture, role, deadline);
+    errno = 0;
+    assert(ctos_ssh_callback_host_key(callback, fixture.environment,
+        CTOS_SSH_CALLBACK_HOST_KNOWN, "ssh-ed25519",
+        "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        (const unsigned char[32]){1}, (const unsigned char[32]){1}) != 0
+        && errno == ECANCELED);
+    assert(fixture.reentry_rejected && fixture.host_calls == 1);
+    assert(fixture.kex_calls == 0 && fixture.credential_calls == 0
+        && fixture.credential_bytes_calls == 0);
+    assert(ctos_ssh_callback_close(callback, fixture.environment) == 0);
+    assert(ctos_ssh_role_bootstrap_close(role) == 0);
+    cases += 4;
 }
 
 static void *cancel_runner(void *argument) {
@@ -526,6 +654,113 @@ static void test_credential_bytes(void) {
     cases++;
 }
 
+struct selected_thread_args {
+    struct fixture *fixture;
+    unsigned char output[64];
+    size_t length;
+    int result;
+    int error;
+};
+
+static void *cross_thread_selected(void *argument) {
+    struct selected_thread_args *args = argument;
+    unsigned char receipt[32], digest[32];
+    memset(receipt, 8, sizeof(receipt));
+    memset(digest, 7, sizeof(digest));
+    memset(args->output, 0xa5, sizeof(args->output));
+    args->length = 99;
+    errno = 0;
+    args->result = ctos_ssh_callback_credential_bytes_selected(args->fixture->callback,
+        args->fixture->environment, CTOS_SSH_CALLBACK_CREDENTIAL_PASSWORD, receipt, 17U,
+        digest, args->output, sizeof(args->output), &args->length);
+    args->error = errno;
+    return NULL;
+}
+
+static void test_selected_credential_transport(void) {
+    struct fixture fixture = {0};
+    uint64_t deadline = deadline_after(3000U);
+    ctos_ssh_role_token role = role_open(deadline);
+    ctos_ssh_callback_token callback = binding(&fixture, role, deadline);
+    unsigned char output[64], receipt[32], digest[32], zero_digest[32] = {0};
+    size_t length;
+    int alien_environment;
+    pthread_t thread;
+    struct selected_thread_args args = {.fixture = &fixture};
+    memset(receipt, 8, sizeof(receipt));
+    memset(digest, 7, sizeof(digest));
+
+    for (unsigned int invalid = 0; invalid < 8U; invalid++) {
+        memset(output, 0xa5, sizeof(output));
+        length = 99;
+        errno = 0;
+        int kind = invalid == 0U ? CTOS_SSH_CALLBACK_CREDENTIAL_KEY_PASSPHRASE
+            : invalid == 1U ? CTOS_SSH_CALLBACK_CREDENTIAL_KEYBOARD_INTERACTIVE
+            : CTOS_SSH_CALLBACK_CREDENTIAL_PASSWORD;
+        assert(ctos_ssh_callback_credential_bytes_selected(callback, fixture.environment, kind,
+            invalid == 2U ? NULL : receipt, invalid == 3U ? 0 : invalid == 4U ? UINT64_MAX : 17U,
+            invalid == 5U ? NULL : invalid == 6U ? zero_digest : digest,
+            output, sizeof(output), invalid == 7U ? NULL : &length) != 0 && errno == EINVAL);
+        if (invalid != 7U) assert(length == 0);
+        for (size_t index = 0; index < sizeof(output); index++) assert(output[index] == 0);
+    }
+    static unsigned char oversized[CTOS_SSH_CALLBACK_MAX_CREDENTIAL_BYTES + 1U];
+    memset(oversized, 0xa5, sizeof(oversized));
+    length = 99;
+    errno = 0;
+    assert(ctos_ssh_callback_credential_bytes_selected(callback, fixture.environment,
+        CTOS_SSH_CALLBACK_CREDENTIAL_PASSWORD, receipt, 17U, digest, oversized,
+        sizeof(oversized), &length) != 0 && errno == EOVERFLOW && length == 0);
+    for (size_t index = 0; index < CTOS_SSH_CALLBACK_MAX_CREDENTIAL_BYTES; index++) assert(oversized[index] == 0);
+    assert(oversized[CTOS_SSH_CALLBACK_MAX_CREDENTIAL_BYTES] == 0xa5);
+    memset(output, 0xa5, sizeof(output));
+    length = 99;
+    errno = 0;
+    assert(ctos_ssh_callback_credential_bytes_selected(callback, &alien_environment,
+        CTOS_SSH_CALLBACK_CREDENTIAL_PASSWORD, receipt, 17U, digest,
+        output, sizeof(output), &length) != 0 && errno == EPERM && length == 0);
+    for (size_t index = 0; index < sizeof(output); index++) assert(output[index] == 0);
+    assert(pthread_create(&thread, NULL, cross_thread_selected, &args) == 0);
+    assert(pthread_join(thread, NULL) == 0);
+    assert(args.result != 0 && args.error == EPERM && args.length == 0);
+    for (size_t index = 0; index < sizeof(args.output); index++) assert(args.output[index] == 0);
+    assert(fixture.selected_calls == 0 && fixture.credential_calls == 0 && fixture.credential_bytes_calls == 0);
+    for (int kind = CTOS_SSH_CALLBACK_CREDENTIAL_PASSWORD; kind <= CTOS_SSH_CALLBACK_CREDENTIAL_PRIVATE_KEY; kind += 3) {
+        assert(ctos_ssh_callback_credential_bytes_selected(callback, fixture.environment, kind,
+            receipt, 17U, digest, output, sizeof(output), &length) == 0);
+        const char *expected = kind == CTOS_SSH_CALLBACK_CREDENTIAL_PASSWORD ? "selected-password" : "selected-private";
+        assert(length == strlen(expected) && memcmp(output, expected, length) == 0);
+    }
+    assert(fixture.selected_calls == 2 && fixture.credential_calls == 0 && fixture.credential_bytes_calls == 0);
+    assert(ctos_ssh_callback_close(callback, fixture.environment) == 0);
+    assert(ctos_ssh_role_bootstrap_close(role) == 0);
+
+    for (int mode = 0; mode < 8; mode++) {
+        fixture = (struct fixture){.selected_action = mode <= 6 ? mode : 0, .omit_selected = mode == 0};
+        deadline = deadline_after(mode == 5 ? 100U : 3000U);
+        role = role_open(deadline);
+        callback = binding(&fixture, role, deadline);
+        memset(output, 0xa5, sizeof(output));
+        length = 99;
+        errno = 0;
+        int expected = mode == 0 ? ENOSYS : mode == 1 ? EACCES
+            : mode == 2 || mode == 3 ? EINVAL : mode == 5 ? ETIMEDOUT
+            : mode == 7 ? EOVERFLOW : ECANCELED;
+        assert(ctos_ssh_callback_credential_bytes_selected(callback, fixture.environment,
+            CTOS_SSH_CALLBACK_CREDENTIAL_PASSWORD, receipt, 17U, digest,
+            output, mode == 7 ? 4U : sizeof(output), &length) != 0
+            && errno == expected && length == 0);
+        for (size_t index = 0; index < (mode == 7 ? 4U : sizeof(output)); index++) assert(output[index] == 0);
+        assert(fixture.selected_calls == (mode == 0 ? 0U : 1U));
+        assert(fixture.credential_calls == 0 && fixture.credential_bytes_calls == 0);
+        if (mode == 6) assert(fixture.reentry_rejected == 1);
+        assert(ctos_ssh_callback_close(callback, fixture.environment) == 0);
+        if (mode != 5) assert(ctos_ssh_role_bootstrap_close(role) == 0);
+        else { errno = 0; assert(ctos_ssh_role_bootstrap_close(role) != 0 && errno == ENOENT); }
+    }
+    cases += 11;
+}
+
 static void test_host_evidence_contract(void) {
     unsigned char digest[32];
     memset(digest, 5, sizeof(digest));
@@ -647,14 +882,18 @@ static void test_known_hosts_candidate_handoff(void) {
 }
 
 int main(void) {
+    test_check_live();
     test_thread_and_reentry();
     test_cancel_deadline_and_cleanup_failure();
     test_credential_bytes();
+    test_selected_credential_transport();
     test_host_evidence_contract();
     test_known_hosts_candidate_handoff();
+    printf("SSH_CALLBACK_HOST phase=check_live state=pass errno=0 value=4\n");
     printf("SSH_CALLBACK_HOST phase=thread_reentry state=pass errno=0 value=1\n");
     printf("SSH_CALLBACK_HOST phase=cancel_deadline_cleanup state=pass errno=0 value=5\n");
     printf("SSH_CALLBACK_HOST phase=credential_bytes state=pass errno=0 value=5\n");
+    printf("SSH_CALLBACK_HOST phase=selected_bytes state=pass errno=0 value=11\n");
     printf("SSH_CALLBACK_HOST phase=host_evidence state=pass errno=0 value=4\n");
     printf("SSH_CALLBACK_HOST phase=known_hosts_candidate state=pass errno=0 value=5\n");
     printf("SSH_CALLBACK_HOST phase=gate state=pass errno=0 value=%u\n", cases);

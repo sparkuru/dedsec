@@ -1,5 +1,986 @@
 # Verification
 
+<a id="20261019-android-auth"></a>
+## 2026-10-19 — Android/JNI authentication, encrypted private keys and real NEW CAS
+
+**Implemented and actually tested:** production Java/JNI KEX → userauth service →
+password or direct-signed private-key authentication. This replaces the earlier
+C-only/Android-auth-not-run status for this increment; older dated entries remain
+historical. The full SSH product task stays in progress (channels/PTY/forwarding,
+launcher/service/UI, KBI/MFA continuation and broader compatibility remain open).
+No production vault or real account was used, and the normal APK was not installed.
+
+Java exposes service begin/ready, password begin/result and private-key begin/result,
+with explicit stable result tags and12 session JNI exports. KEX complete retains its
+old meaning. A static ThreadLocal covers all session native entries, including open,
+legacy operations and close/destroy, so same-thread callbacks cannot deadlock the
+shared JNI registry through another session. Cancellation remains cross-thread.
+Wrong phase/crossover is local and nonterminal; native mutation failures terminalize
+and preserve cancel/expiry/view error precedence. Early Java/JNI source review used
+the checker; main implemented and reviewed the native crypto, capability and own-CAS
+changes, then ran the actual checks below.
+
+Native private-key authentication parses owned expected public metadata before any
+secret grant, then parses the exact selected private file in memory, matches public
+material, signs the framed raw initial session ID and exact request fields, checks
+signature type and locally verifies with expected public before queueing. The peer
+independently reconstructs and verifies the request. Shared selected one-attempt
+blocks retries, password/key crossover and legacy downgrade. RSA requires an exact
+advertised rsa-sha2-512/256 token, prefers512 and never falls back to SHA1. Native
+minimum1024 is inherited from pinned upstream (Android fixture RSA uses2048).
+
+Encrypted selections freeze the exact passphrase entry in CSASv2; no prompt selects
+an entry. One SSH_PRIVATE_KEY_BUNDLE capability binds path/key identity/entry plus
+actual remote target and connection, verifies SSH_KEY_PASSPHRASE identity `key:` +
+key identity in the same authenticated vault snapshot, and delivers one <=1MiB
+CSKBv1 bundle through existing selected opcode4. Passphrase1..8192/noNUL; raw bundle,
+parser wrapper, terminated passphrase, parsed private key, signature and owned buffers
+are wiped/freed on all paths. AppSecrets rechecks the final host/KEX/role guard after
+its last protected-effect store read, immediately before receiver; new regressions
+prove a role revoked during that read never reaches password/key/bundle receivers.
+
+Supported/tested native formats: unencrypted OpenSSH for all five algorithms,
+traditional unencrypted PEM for RSA/all ECDSA curves, unencrypted PKCS8 for all five;
+Ed25519 traditional PEM is explicitly unsupported by pinned upstream. Encrypted
+OpenSSH bcrypt/aes256-ctr is tested for all five, encrypted traditional AES-128-CBC
+PEM for RSA/all ECDSA curves. Policy also admits AES-256-CBC legacy PEM, but that
+cipher's positive runtime path was not separately generated/tested. OpenSSH bcrypt
+salt1..64/rounds1..64 is inspected before KDF; rounds65/zero and unsupported cipher
+are rejected without expensive decryption. Encrypted PKCS8 remains ENOTSUP because
+its imported KDF parameters are not bounded here. A fake RSA armor prefix before
+PKCS8, malformed versions/framing, trailing/NUL/oversized passphrases and wrong
+passphrase are rejected. No filesystem, agent, hardware key or interactive prompt.
+
+Real integration found two deadline equalities: AppSecrets view120s vs native role
+max60s made real loan admission/KEX impossible. Both client and hostfile issuer now
+require view.deadline >= role.deadline; config still equals the exact role deadline,
+and both are checked throughout. ARM tests reject an insufficient live view before
+ownership transfer, then complete KEX/auth with the shorter role and longer loan.
+
+Real NEW CAS formerly revoked its own loan via unlockIfEpoch. Only an already bound
+exact trust operation can retain its identical currently attached active public loan
+across its own approved known_hosts CAS. Vault epoch advances, old operations/previews
+are invalidated, key and original loan deadline are retained; generic writes, unlock,
+lock, expiry and cancellation still revoke. Late lock/revoke or wrong attached loan
+cannot restore state or return COMMITTED. Both JVM and actual Android verify these
+boundaries, including cancelling the original public-file request after CAS/auth.
+
+Actual checks, with logs/binaries under `/tmp/ctos-ssh-android-auth-20261019.yqKxcIaN`:
+
+| Check | Actual result |
+| --- | --- |
+| Initial Java/JNI focused JVM + lint |26/0/0/0;55 tasks29s |
+| Private-key Java focused + lint |28/0/0/0;55 tasks22s |
+| Encrypted/own-CAS focused JVM (fixture flavor) |70/0/0/0 in4 reports;117 tasks43s including fixture build/lint |
+| Final normal native/JVM/lint/Release |94 tasks1m5s,37 executed57 up-to-date; **fresh244/0/0/0**,15 reports |
+| Final host callback / archive / JNI |35 groups /83 members /12 session exports; forbidden high-level stock callers0 |
+| Final actual ARM QEMU/Bionic |**1,244,010 checks, exit0**; immutable `ctos_ssh_native_client_test.final` |
+| APK signatures | normal + exact fixture pair: v2, one signer; same fixture certificate |
+| Normal APK isolation | only SSH entry lib/arm64-v8a/libctos_ssh_files.so; peer class/library absent |
+| Fixture shared implementation | peer DT_NEEDED libctos_ssh_files.so, libc, libdl; no second crypto/archive instance |
+
+Final native binary SHA256 `8e65b06ba5b30f06d71a830dd73b8710ca14dee3500eee57e1137045fed84d53`. Final normal APK SHA256 `89eb642529d9e5a8977b52a5d5672b7883b0f8d4836a9e4b77cbd56e606bbabc`.
+`final-audit.json`, `source-final.sha256` (21 files), `runtime-final.sha256` (9 files),
+`final-normal-gate.log`, `final-apk-signatures.log` and `private-arm-final.log` retain
+exact checks and hashes. Intermediate loop counts vary; earlier snapshots are kept
+with their own logs and are not substituted for the final binary.
+
+Device authorization reused the user's explicit current-conversation **independent
+synthetic test and cleanup only** grant. Target explicitly `192.168.9.14:5555`,
+AIO-3568J/API30/arm64/RUNNING_UNLOCKED. Each exact opt-in method below ran separately
+with180s host timeout in independent im.majo.ctos.secretsfixture + .test packages:
+
+| SshPasswordAuthPlatformTest method | Scenarios / result |
+| --- | --- |
+| syntheticPasswordAuthenticationChain | four results, provider cancel, pending cancel, malformed success; OK(1 test),26.954s |
+| syntheticPrivateKeyAuthenticationChain | five algorithms success + rejected/partial; OK(1 test),27.418s |
+| syntheticEncryptedPrivateKeyAuthenticationChain | five encrypted algorithms success + wrong passphrase/no duplicate read; OK(1 test),23.781s |
+| syntheticNewHostAuthenticationChain | password + five encrypted algorithms; real native candidate/approval/CAS, epoch+1, original-loan cancellation; OK(1 test),23.906s |
+
+The first two methods used fixture main/test hashes
+`7cda81d68430c8ac0372c8ea8a8a5d66e7f5512846abbaa31d5d9e9ce244aa10` /
+`0a91b2be959dfaa004dbb9a199508281eb7741eacfcc6f6de3dbb00b8da28fa6`.
+The last two used
+`d45525e18b61c81f7e593cd4e0b19e19ecb31103102038ee47232dc56dfc80a5` /
+`30031d2438f8ed13e3af61cc7b7051c0c2ddb16457a8c688d1300167509786cf`.
+Peer is same-process AF_UNIX only, no listener; actual AppSecrets encrypted MemoryStore,
+native public loan, role, callback and session. Host and client identity keys are
+independently generated. Only fixed synthetic credentials enter the fixture.
+Final force-stop/uninstall removed both packages/processes. Production device APK
+before/after SHA256 remained
+`3bc762d9e6463ab9612393b9382923f4a29f613ceec3dbe4d9159aae0078f252`.
+
+Failed intermediate attempts were retained and cleaned: initial view/role deadline
+admission and second hostfile equality, unsupported SK lookup errno classification,
+synthetic encrypted-key identity containing spaces, and two new test expectations
+using a different existing lifecycle code. Production guards were retained/fixed;
+only incorrect test expectations were corrected. With fixture properties Gradle's
+testReleaseUnitTest alias targets testSecretsFixtureReleaseUnitTest: its fresh XML
+is in that flavor directory. The final normal gate ran the normal244 fresh suite,
+replacing the earlier normal-flavor failure report.
+
+Reproduction: normal command uses testSshViewHandleHost/testSshNativeClientHost/
+testSshCallbackAdapterHost/testReleaseUnitTest/compileSshFiles/lintRelease/assembleRelease
+with --offline --console=plain; fixture adds -PctosSecretsUiFixture=true and
+-PctosSshAuthFixture=true, assembleSecretsFixtureRelease,
+assembleSecretsFixtureReleaseAndroidTest and lintSecretsFixtureRelease. Device
+selector is each exact method above with -e allowSshAuthFixture true and matching
+-e class, AndroidJUnitRunner under the independent test package. QEMU uses the
+existing public API30 Bionic runtime `/tmp/ctos-ssh-arm-runtime-20261017.O81ADtu5`,
+LD_LIBRARY_PATH=/system/lib64,90s timeout and core dumps disabled.
+
+Limits: allocation/hash/sign/opaque proof-drift/packet-reset failures and allocator/
+upstream memory-wipe internals are source-reviewed rather than fault-injected.
+No Android16/Enforcing, real account/vault, encrypted PKCS8, external server matrix,
+full rekey/compression, KBI/MFA continuation, channel/PTY/forward or product UI claim.
+Normal APK is local only, no dist update/install/commit/archive.
+
+## 2026-10-19 — Explicit native password USERAUTH protocol
+
+Added an explicit C-only password authentication transition and a current-proof
+result accessor in ssh_native_client.h/.c. The decoder retains the username offset/
+length into owned CSAS wire. Begin requires PASSWORD selection, service READY,
+current accepted KEX cycle/raw-session SHA, live owner/environment/role/view/deadline,
+no pending output and no rekey. It uses the existing selected one-shot getter,
+then rechecks proof/output/rekey before encoding exactly one USERAUTH_REQUEST for
+ssh-connection/password/change=false. Passwords are 1..8192 bytes, matching existing
+vault bounds; all NUL positions reject without truncation or an authentication packet.
+Other bytes remain exact length-prefixed bytes. No none probe, alternate credential,
+automatic retry, password change or private-key authentication was added.
+
+Password scratch is wiped/freed on all paths. Pinned successful send resets/wipes
+the outgoing plaintext allocation; construction/send failure resets it using
+sshpkt_start(SSH2_MSG_IGNORE) without sending that cleanup header, then maps packet
+serialization errors to EIO. This reset does not wipe a separate rekey payload queue;
+pre-auth no-rekey checks prevent this supported path from entering it. No upstream
+patch, archive member, Java/JNI entrypoint or dependency was added.
+
+The bounded step resumes only after explicit begin, preserving old KEX-only,
+service-only and standalone selected-handoff stops. Request output must drain
+before final replies are accepted. SUCCESS, REJECTED, PARTIAL and CHANGE_REQUIRED
+are distinct terminal attempt results; only exact empty SUCCESS with fresh current
+proof produces SUCCESS. Banners, method lists, change prompts and disconnect text
+are bounded, parsed and discarded, with no display/log/provider authority. Valid
+banners during request drain continue output progress. Malformed/early replies,
+rekey and unexpected packets terminalize; close remains retryable. The const result
+reader clears output on error and performs no I/O/provider/client mutation.
+
+Formal review found no concrete production defect. Main requested one discriminating
+positive regression beyond the initial66 connections: an encrypted BANNER arriving
+while request output is pending must be accepted in a step that still writes/has
+partial output, before the server has received any complete password request. It
+then reaches SUCCESS with exactly one request and selected provider call. This
+makes both an incorrectly early phase gate and a banner early-return regression
+observable. Three-file source manifests and final diff checks pass; no edits were
+made by the checker.
+
+Focused command:
+
+```text
+./hako bash -lc 'cd android && ./gradlew :app:testSshNativeClientHost :app:testSshCallbackAdapterHost --offline --console=plain'
+```
+
+Initial result: **7 tasks / 14s**, 3 executed / 4 up-to-date, strict production/native
+cross-build and callback **35 groups** pass. Initial actual ARM execution passes
+**780,038 checks / exit0**, binary SHA256
+`8b854ee5d7f58dbec6a048bd59d450e63a54e82fa69766633e0383db4408f12d`.
+After adding the pending-banner positive, focused passes **7 tasks / 13s**, same
+execution counts and callback35. The augmented executable passes **785,653 checks /
+exit0**, SHA256 `1e1ffe396ee87b58f3ff08192e4ef1a31f9f1c69000f938b365c16ea5be0143e`.
+
+Actual execution uses the verified host QEMU10.0.13/API30 Bionic runtime, separate
+from hako's cross-link runtime=not-run message:
+
+```text
+ulimit -c 0
+timeout 60s qemu-aarch64 -L /tmp/ctos-ssh-arm-runtime-20261017.O81ADtu5 -E LD_LIBRARY_PATH=/system/lib64 /tmp/ctos-ssh-password-userauth-20261019.obv9zw5H/ctos_ssh_native_client_test.corrected
+```
+
+The final suite adds **67 real encrypted synthetic connection scenarios**, with
+KNOWN and NEW/CAS KEX/service setup. The peer decrypts and checks exact owned Unicode
+username, service/method/change flag, password bytes/end and request count. Tests
+cover four results, 1/8192/8193/empty passwords and first/interior/final NUL, mutated
+caller CSAS, shared one-shot/standalone-consumed paths, missing/wrong-kind selection,
+malformed/trailing/early finals, canonical method lists, remote text/banner caps,
+rekey/unexpected/disconnect/EOF, owner/environment recovery, zero-on-error const
+status with view recovery, provider-time and active-phase liveness failures, and
+retryable owner close. Legacy no-auth stops and callback counters remain intact.
+
+Normal command:
+
+```text
+./hako bash -lc 'cd android && ./gradlew :app:testSshViewHandleHost :app:testSshNativeClientHost :app:testSshCallbackAdapterHost :app:testReleaseUnitTest :app:compileSshFiles :app:lintRelease :app:assembleRelease --offline --console=plain'
+```
+
+Result: **94 tasks / 19s**, 23 executed / 71 up-to-date. View/native/callback35/
+production gates, strict C/JNI link, lint and Release pass. testReleaseUnitTest is
+**UP-TO-DATE**: its fifteen retained reports are **221/0/0/0**, not a new JVM run.
+There is no Java/JNI source change in this increment. The forced normal production
+rebuild changes artifact hashes, so the final executable was copied and actually
+rerun with the same QEMU command and `.final` filename: **785,537 checks / exit0**,
+SHA256 `db01d8f7aec9d7a8e9cf6f2e8477d8592f4a5041ad41e3d8025a1e4687d06829`. Loop-driven check counts vary; each hash
+is paired with its own run. Final executable plus five public runtime files pass
+runtime-final.sha256; public runtime hashes match the previously verified runtime.
+
+APK SHA256 `983f2032f89adc6a71f4968c77219e455b6a6a9f3c51b12d101e321f39ad09ad`; v2 signature verifies
+with one signer. Archive83, forbidden stock caller definitions0, six session JNI
+exports and only SSH APK entry lib/arm64-v8a/libctos_ssh_files.so. APK not installed,
+published or copied to dist. Evidence directory:
+`/tmp/ctos-ssh-password-userauth-20261019.obv9zw5H/`, containing first/corrected/final
+executables and QEMU logs, both focused logs, normal log, source-first/final.sha256,
+corrected.sha256, runtime-final.sha256, packaging.json and signature.log.
+
+Coverage limits: ENOMEM/hash faults, opaque current-cycle/session drift, packet
+serialization-failure reset, padding64 and upstream allocation wipe are source-
+reviewed rather than fault-injected/observed dynamically. Cancellation at the exact
+post-parse publication boundary is not injected; active-phase/provider cancellation
+and fresh final proof checks are covered separately. Missing selected target reuses
+the prior getter ENOSYS test. IGNORE/DEBUG/UNIMPLEMENTED remain unsupported transport
+messages and fail EPROTO; this is not full stock transport compatibility. Received
+SUCCESS activates upstream delayed compression before semantic parsing, so illegal
+success terminalizes; compression/channel interoperability is not established.
+
+No Android/JNI password-auth path, device, real vault/account or external sshd was
+used. Private-key parsing/match/signing, selected passphrase/KBI/MFA continuation,
+Java/JNI service/auth orchestration, Android full KEX/auth, channels/PTY/forwarding/
+service/UI and product AC remain open. Task stays in_progress /
+implementation_complete=false, with no commit/archive.
+
+## 2026-10-19 — Receipt-bound selected credential handoff
+
+The native client can now request one selected PASSWORD or PRIVATE_KEY byte handoff
+only after explicit service-ready and completed current KEX. It derives kind and
+CSAS receipt from its owned selection, retains the digest successfully reported at
+KEX completion, and checks live role/view/deadline, unique completion/current cycle
+and SHA-256 of the current raw session ID before and after the provider. The provider
+writes private bounded scratch; caller output is populated only after post-checks.
+Premature or wrong-owner probes do not consume the attempt; any failure after
+selected callback invocation consumes it and terminalizes the client. Missing new
+target never falls back to legacy callbacks.
+
+JNI calls the unique Java method `onNativeSelectedCredentialBytes(I[BJ[B)[B`.
+Java requires an owned native-session claim, exact frozen CSAS receipt and current
+host/KEX object, cycle and digest. It clones incoming metadata, shares one selected
+attempt flag across selected routes, and permanently rejects the old object route
+after the first native claim, including failed opens. Provider/bridge carry an
+EffectGuard to the final AppSecrets receiver boundary and repeat it before return.
+Unselected legacy password/key callbacks remain repeatable. No USERAUTH packet,
+key parsing/signing or Java session secret getter was added; session JNI exports
+remain six.
+
+Review findings fixed before the final gate:
+
+- Check each JNI metadata allocation/write immediately for a pending exception
+  before the next JNI operation, then clear exceptions before wipe/delete cleanup.
+- Keep `inCallback` set throughout finish-time clock checks and recheck cancel/
+  reentry before success. Clock-triggered cancellation and reentry regressions pass.
+- An escaping non-Linkage Error must wipe an unhanded result and abort the current
+  invocation, clearing proofs and allowing owner cleanup, while propagating the
+  same Error. New tests scan every post-begin clock boundary, including final finish
+  reads; a real synthetic AppSecrets receiver Error also wipes its borrowed array
+  and closes the request. Formal review has no remaining finding.
+
+Focused command (run before and after the Error cleanup fix):
+
+```text
+./hako bash -lc 'cd android && ./gradlew :app:testSshCallbackAdapterHost :app:testSshNativeClientHost :app:testReleaseUnitTest --tests im.majo.ctos.SshAuthenticationSelectionTest --tests im.majo.ctos.SshNativeSessionTest --tests im.majo.ctos.SshNativeCallbackAdapterTest --tests im.majo.ctos.SshProductionBridgeTest :app:lintRelease --offline --console=plain'
+```
+
+Both runs passed **57 tasks / 33s**, 19 executed / 38 up-to-date. First focused JVM
+was 64/0/0/0; after adding two Error regressions the final result is **66 tests /
+0 failures / 0 errors / 0 skipped** (selection6, adapter12, session17, bridge31).
+This increment adds thirteen JVM methods in total. Callback host passes **35 groups**,
+including eleven new selected groups; strict C/JNI compilation and lint pass.
+
+Actual ARM execution is separate from hako's cross-link `runtime=not-run` output:
+
+```text
+ulimit -c 0
+timeout 60s qemu-aarch64 -L /tmp/ctos-ssh-arm-runtime-20261017.O81ADtu5 -E LD_LIBRARY_PATH=/system/lib64 /tmp/ctos-ssh-selected-credential-20261019.tCsurTHc/ctos_ssh_native_client_test.first
+```
+
+First QEMU run passes **323,722 checks / exit0**, binary SHA256
+`8f258cbc4743baef5525026b7e78aa9bcbdccd1173f79d85fc080e64baf98671`.
+The real encrypted synthetic peer completes KNOWN or NEW/CAS KEX and service-ready
+before either typed handoff. Tests cover pre-KEX/pre-ready/unselected denial without
+consumption, owner/environment recovery, exact receipt/cycle/peer-session digest,
+private scratch isolation, one success/duplicate refusal, absent target/no downgrade,
+provider errors/bad lengths and cancellation/view/role/deadline changes before output
+copy. Failure wipes output, consumes the attempt and preserves close retry.
+
+Normal command:
+
+```text
+./hako bash -lc 'cd android && ./gradlew :app:testSshViewHandleHost :app:testSshNativeClientHost :app:testSshCallbackAdapterHost :app:testReleaseUnitTest :app:compileSshFiles :app:lintRelease :app:assembleRelease --offline --console=plain'
+```
+
+Result: **94 tasks / 1m6s**, 29 executed / 65 up-to-date. Unfiltered JVM freshly
+ran and passed **221 / 0 failures / 0 errors / 0 skipped**, fifteen reports.
+View/native/callback35/production, strict C/JNI, lint and Release pass. The forced
+production rebuild changes artifacts, so the final executable was copied and
+actually rerun with the same QEMU command and `.final` filename: **323,726 checks /
+exit0**, SHA256 `292d8c7e01cc2ac7bc125edcaece31e3a7226b00adfffb7e2a12c0fe2c50fd85`.
+Loop-driven check counts vary; each executable hash is paired with its own run.
+The final executable and five public API30 Bionic files pass runtime-final.sha256;
+public runtime hashes match the prior recorded runtime. Host QEMU remains 10.0.13.
+
+APK SHA256 `f329056e8ce108316dbd7d1674f4296b25ba286f0ce283030637cb33cba57a3f`;
+v2 signature verifies with one signer. Production archive has 83 members, forbidden
+stock caller definitions zero, six session JNI exports and only the SSH APK entry
+`lib/arm64-v8a/libctos_ssh_files.so`. APK was not installed, published or copied to dist.
+Evidence: `/tmp/ctos-ssh-selected-credential-20261019.tCsurTHc/` contains first/final
+executables and QEMU logs, both focused build logs/JVM JSONs, normal build log,
+packaging.json, signature.log and runtime-final.sha256.
+
+Coverage limits: native current-cycle/raw-session-ID drift is source-reviewed,
+not dynamically injected through an opaque client. Scratch ENOMEM/hash failures
+are not fault-injected. JNI exception/array cleanup and adapter-internal result wipe
+on Error are source-reviewed; borrowed receiver bytes and owner cleanup are tested.
+The modified selected JNI chain has not run on Android. Separate JVM and native ARM
+tests do not establish a full Java→JNI→native handoff on hardware. No device, real
+vault/account or external endpoint was used. USERAUTH, parsed private/public key
+matching, selected passphrase/KBI, Android full KEX/service/auth and product AC remain
+open. Task stays in_progress / implementation_complete=false; no commit/archive.
+
+## 2026-10-19 — CSAS native selection metadata and receipt
+
+Frozen managed selection now encodes CSAS v1 and crosses the single session JNI
+open declaration as an optional bounded byte array. C validates canonical framing,
+typed shape, strict UTF-8 including C1 controls and exact role token/hop/nonce/
+connection binding before copying/hash and socket transfer. Native owns the wire
+and its SHA-256 receipt; no credential callback, key parsing or authentication packet
+is added. Legacy null-selection bindings remain supported, while old fake bindings
+reject non-null metadata rather than dropping it.
+
+New explicit receipt reads allow pre-KEX and completed live sessions, enforcing owner,
+callback and own-role/view/deadline checks. Java compares its retained expected hash,
+returns a copy and wipes native scratch. It does not add a fallible receipt call
+after native open has already consumed the socket. New selection admission failures
+preserve caller ownership; the preexisting theoretical JNI publish-failure caveat
+was not redesigned. The receipt is metadata identity, not authentication authority.
+
+Early review found and fixed two issues before execution: the new Java read guard
+needed to reject direct adapter cancellation/closing independently of the legacy
+step helper, and encoder scratch allocations needed to be inside their finally
+scope. Direct adapter cancellation before/during receipt return now rejects with
+SSH_SESSION_CANCELLED and wipes any returned bytes. Legacy step semantics remain.
+
+Focused gate:
+
+```text
+./hako bash -lc 'cd android && ./gradlew :app:testSshNativeClientHost :app:testReleaseUnitTest --tests im.majo.ctos.SshAuthenticationSelectionTest --tests im.majo.ctos.SshNativeSessionTest --tests im.majo.ctos.SshNativeCallbackAdapterTest --tests im.majo.ctos.SshProductionBridgeTest :app:lintRelease --offline --console=plain'
+```
+
+Result: **56 tasks / 28s** (18 executed / 38 up-to-date), strict native/JNI compile,
+lint and **53 JVM tests / 0 failures / 0 errors / 0 skipped**. Classes: selection6,
+session17, callback11, bridge19; seven test methods added. Hako cross-link still
+reports runtime not-run; actual host ARM execution is separate:
+
+```text
+ulimit -c 0
+timeout 60s qemu-aarch64 -L /tmp/ctos-ssh-arm-runtime-20261017.O81ADtu5 -E LD_LIBRARY_PATH=/system/lib64 /tmp/ctos-ssh-native-selection-20261019.4F7DmbUU/ctos_ssh_native_client_test.first
+```
+
+First ARM run: **253,110 checks / exit0**, binary SHA256
+`3d8e505089a4a4d75444148366f2375ccb7c2b7e6d5a702642dea2250eb48161`.
+Both typed records, copy independence, every-byte short-record truncation, malformed
+framing/caps/overflow-style lengths, UTF-8/C1, mixed shapes/paths and each role-binding
+field are exercised. Admission failures and real EMFILE preserve the same resources
+for a valid retry. Read errors zero output without client mutation; environment
+EPERM/view recovery, cancel/stale/expiry, no I/O/provider effect, cleanup retry and
+selected KNOWN real KEX followed by receipt read execute in the suite. Existing
+NEW/CAS and service negotiation regressions remain present separately.
+
+New C getter wrong-thread behavior reuses the callback thread gate and source review;
+its environment EPERM is dynamically tested. Allocation/hash failure and an accepted
+1 MiB blob are not fault-injected; bounds and invalid/max-declared cases are covered.
+JVM goldens and C tests do not establish Android execution of the modified JNI
+signature/entrypoint. Formal review confirms both fixes and no remaining finding.
+
+Normal gate:
+
+```text
+./hako bash -lc 'cd android && ./gradlew :app:testSshViewHandleHost :app:testSshNativeClientHost :app:testSshCallbackAdapterHost :app:testReleaseUnitTest :app:compileSshFiles :app:lintRelease :app:assembleRelease --offline --console=plain'
+```
+
+Result: **94 tasks / 1m4s**, 29 executed / 65 up-to-date. View/native/callback24/
+production gates, strict native/JNI, Release and lint pass. Full unfiltered JVM
+tests freshly ran: **208 / 0 failures / 0 errors / 0 skipped**, 15 XML reports.
+The forced production rebuild changes artifact hashes, so the final native test
+was copied separately and actually rerun with the same QEMU command and `.final`
+filename: **253,155 checks / exit0**. Final binary SHA256
+`5c18eac4e893e5d346e0afafec8174c2f98ef517d47486a9117c8bb5a09c6821`.
+The final executable and five public API30 runtime files pass runtime-final.sha256;
+the emulator remains host QEMU10.0.13/Bionic. Loop-driven assertion counts vary
+between successful executions; hashes/logs remain paired with their own run.
+
+APK SHA256 `bda806ca9670f51cdae1160d4615ec59098788888d550268691cca99a2e41ccf`,
+v2 signature verifies with one signer. Archive83 / forbidden stock caller0 / six
+session JNI exports including authenticationSelectionReceipt / only SSH APK entry
+`lib/arm64-v8a/libctos_ssh_files.so`. APK not installed, published or copied to dist.
+Temporary evidence: `/tmp/ctos-ssh-native-selection-20261019.4F7DmbUU/`, containing
+first/final executables, runtime-final.sha256, qemu-first/final.log, focused/normal
+build logs, focused-jvm.json, packaging.json and signature.log.
+
+No device, real vault/account, credential callback, USERAUTH or key-match operation
+occurred. Design/spec/task/context/journal were synced. The overall task remains
+in_progress / implementation_complete=false, with no commit/archive.
+
+## 2026-10-18 — Managed immutable SSH authentication selection
+
+Added package-private `SshAuthenticationSelection` and connected it to the adapter,
+provider and credential bridge. Selection freezes an explicit strict UTF-8 username
+and one exact password entry or private-key path/identity/expected public blob for
+the exact role object. It is installed once before callbacks or a native-session
+claim; a failed session open cannot reopen setup. Selected callbacks require that
+same selection object, reject the old kind-only route, and open the fixed request
+without calling legacy CredentialRequestSource. The bridge repeats selection,
+role/host/KEX/operation checks at the final AppSecrets effect guard, retaining
+bounded copy/wipe and one-shot request cleanup.
+
+Focused execution:
+
+```text
+./hako bash -lc 'cd android && ./gradlew :app:testReleaseUnitTest --tests im.majo.ctos.SshAuthenticationSelectionTest --tests im.majo.ctos.SshProductionBridgeTest --tests im.majo.ctos.SshNativeCallbackAdapterTest --tests im.majo.ctos.SshNativeSessionTest :app:lintRelease --offline --console=plain'
+```
+
+Result: **55 tasks / 27s**, 17 executed / 38 up-to-date; javac and lint pass.
+Fresh focused JVM **46 tests / 0 failures / 0 errors / 0 skipped**: selection4,
+production bridge19, callback adapter11, native session12. Twelve tests were added.
+The matrix includes strict UTF-8 byte limits and surrogate/control rejection,
+Unicode preservation, defensive copies, same legacy role digest with different
+nonces, equal-fields/distinct selection rejection, one-shot/late/failed-claim
+setup, and real in-memory AppSecrets password/private-key releases for KNOWN and
+NEW/CAS paths. Two same-kind resources plus a deliberately different legacy source
+prove the fixed selected resource wins and legacy source calls remain zero.
+
+The final-guard expiry test advances time on the fifth clock call: the first guard
+has already passed, and the second AppSecrets guard observes expiry before receiver
+use. Missing this repeated guard would release bytes and fail the test. Legacy
+release cannot bypass a selected Request; foreign receipt, wrong type/key identity,
+vault epoch, revoked view, cancellation and missing proofs also reject with cleanup.
+
+Independent formal review found no concrete defects and made no edits. No reflection
+or mutable production test seam was introduced. Selected-specific mid-return cancel
+and reentry have no new dedicated test; they use the existing shared begin/finish/
+wipe pipeline and its retained tests. This coverage limit is not an additional
+selected-path runtime claim.
+
+Normal gate:
+
+```text
+./hako bash -lc 'cd android && ./gradlew :app:testReleaseUnitTest :app:compileSshFiles :app:lintRelease :app:assembleRelease --offline --console=plain'
+```
+
+Result: **91 tasks / 57s**, 26 executed / 65 up-to-date. Unfiltered JVM tests were
+freshly executed: **201 tests / 0 failures / 0 errors / 0 skipped**, 15 reports.
+Production pinned archive and strict native link, Release packaging and lint pass.
+APK SHA256 `e6c4d58b28537e5b14a351ea1a35b4d72d64781dd34c05e0dea4d452ef57470b`,
+v2 signature verifies, one signer. Archive83 / five session JNI exports /
+forbidden stock callers0 / only SSH entry `lib/arm64-v8a/libctos_ssh_files.so`.
+The APK was not installed, published or copied to dist.
+
+All 34 scoped C/JNI source/header hashes and the previous ARM test executable are
+unchanged. `compileSshProductionObjects` deliberately has `upToDateWhen { false }`,
+so archive/library artifact hashes do change on rebuild; an initial audit assertion
+that all generated artifacts stay identical was corrected to distinguish source
+identity from regenerated outputs. No code/test guard was weakened. New archive
+SHA256 `eadf9385f450498f6ad4d2105d6073976b70b974416f4068e462243c55072ab8`,
+generated library `dc3e4ecde325b7a1fd4b0b5c1730c18378b54fadb40183874ce1aa96087a1069`.
+This Java-only increment did not repeat QEMU; the prior actual ARM result remains
+dated to its previous executable and is not relabeled as a new runtime result.
+
+Evidence: `/tmp/ctos-ssh-auth-selection-20261018.y8DyzgNU/`, including focused and
+normal build logs, focused-jvm.json, native-before.json, packaging.json and
+signature.log. Design/spec/task/context and journal were synced; task remains
+in_progress / implementation_complete=false, with no commit/archive.
+
+This is a same-process managed contract, not a serialized native receipt. Expected
+public bytes are only an immutable declaration; native parse/equal_public and actual
+wire username/current-cycle/service-ready checks remain future work. Selected
+KEY_PASSPHRASE and KEYBOARD_INTERACTIVE are rejected; the manifest key-scoped
+passphrase versus role-target capability needs a separate contract. No C/JNI/wire,
+USERAUTH packet, device, real vault/account or authentication-success claim is part
+of this increment. Existing ARM service-negotiation evidence below remains separate.
+
+## 2026-10-18 — Native post-KEX userauth service negotiation
+
+The production C client now exposes explicit `begin_userauth_service` and
+`userauth_service_ready` milestones after initial KEX. Existing KEX-only/JNI
+callers retain their stop point. The new callback `check_live` reuses owner,
+environment, role, cancel, reentry and deadline validation without invoking
+host/KEX/credential provider targets. Begin and every active service step compare
+the successful completion cycle with the current guard proof. KEX dispatch 20–49
+is disabled during this slice; rekey cannot silently reuse the old proof.
+
+Focused build:
+
+```text
+./hako bash -lc 'cd android && ./gradlew :app:testSshCallbackAdapterHost :app:testSshNativeClientHost --offline --console=plain'
+```
+
+Result: 7 tasks / 14s (3 executed / 4 up-to-date), strict Android native cross-link
+pass; callback host gate **24 cases**, including 4 new check-live groups. Hako's
+native task still reports runtime not-run because QEMU is outside the container.
+The separately executed host ARM test is the actual protocol evidence:
+
+```text
+ulimit -c 0
+timeout 60s qemu-aarch64 -L /tmp/ctos-ssh-arm-runtime-20261017.O81ADtu5 -E LD_LIBRARY_PATH=/system/lib64 /tmp/ctos-ssh-userauth-service-20261018.uFA94Ngt/ctos_ssh_native_client_test.final
+```
+
+First run: **246,974 checks / exit0**. Executable SHA256
+`25a7010c06e2296b2adc9ff72f09cec54f433b3cff1d9d195ba8c74fdf93f96e`.
+The five public Bionic/linker files match the previously recorded runtime hashes;
+the new evidence directory contains an immutable executable copy and current
+`runtime.sha256`, `focused-build.log`, `qemu-first.log`.
+
+The real encrypted synthetic OpenSSH peer covers KNOWN and NEW/CAS KEX followed
+by exactly one decoded `SERVICE_REQUEST("ssh-userauth")`. Exact, payloadless and
+encoded-empty accepts reach ready with zero credential callback calls. Negative
+cases cover wrong/truncated/oversized/trailing service payloads, unsolicited
+accept before request drain, USERAUTH_SUCCESS, KEXINIT and KEX-method packets.
+The suite also exercises pre-KEX/duplicate begin, late duplicate unread after
+ready, environment EPERM recovery, cancel/stale role, invalid/expired view,
+deadline expiry, bounded accounting and retryable close. Callback host tests
+separately cover wrong-thread recovery and reentry without provider effects.
+
+Direct mutation of the guard cycle is not injected: the client/guard ssh pointer
+is opaque, and no mutable production test seam was added. The comparison is
+source-reviewed; this specific negative branch lacks a direct runtime test.
+Formal independent review found no concrete defects and made no source changes.
+
+Normal gate, with every task explicitly rerun:
+
+```text
+./hako bash -lc 'cd android && ./gradlew :app:testSshViewHandleHost :app:testSshNativeClientHost :app:testSshCallbackAdapterHost :app:testReleaseUnitTest :app:compileSshFiles :app:lintRelease :app:assembleRelease --offline --rerun-tasks --console=plain'
+```
+
+Result: **94 tasks, all executed / 1m24s**. View/callback/native/production gates,
+strict native compilation, three-ABI Release, lint and assemble pass. JVM tests
+were freshly run: **189 tests / 0 failures / 0 errors / 0 skipped**, 14 XML reports.
+The full rebuild produced a different ARM test hash, so the final executable was
+copied separately and actually rerun: **246,808 checks / exit0**, SHA256
+`3fcaee6aab8647adbdfd4af0cf4ce4f18ab6387d86b72ea7f687bc4b02079560`.
+Both runtime results are successful full-suite executions; assertion totals vary
+with the bounded synthetic packet-loop progress. The final copy and five runtime
+files pass `runtime-final.sha256`; final log is `qemu-final.log`.
+
+APK SHA256 `8cd6da66d836255341b81dd30577b84a85998727865a84f74154f28c8190f4a6`,
+v2 signature verifies, one signer. Archive remains 83 members, forbidden stock
+caller definitions 0, five unchanged session JNI exports, and the only SSH native
+APK entry is `lib/arm64-v8a/libctos_ssh_files.so`. Artifact audit is `packaging.json`,
+with `normal-build.log` and `signature.log` in the same temporary evidence directory.
+The APK was not installed, published or copied to dist.
+
+No device command, username, USERAUTH_REQUEST, real credential/vault/account,
+authenticated milestone or Java/JNI service API is part of this slice. Full
+Android service/auth and product acceptance remain open; task stays in_progress /
+implementation_complete=false. Design/spec/task context and journal were synced.
+
+## 2026-10-18 — Recovered board: Android JNI fragmented transport / EOF pass
+
+After the user reported recovery, explicit target checks confirmed `192.168.9.14:5555`,
+AIO-3568J / Android 11 API30 / arm64-v8a / `RUNNING_UNLOCKED`. Both independent fixture
+packages were absent. The prior synthetic-test/cleanup authorization was reused;
+the exact method's independent-UID/fresh-state guards, bounded socketpair-only behavior
+and cleanup were reviewed again without source changes or outstanding findings.
+
+Fresh fixture build from the current production fixes:
+
+```text
+./hako bash -lc 'cd android && ./gradlew -PctosSecretsUiFixture=true :app:assembleSecretsFixtureRelease :app:assembleSecretsFixtureReleaseAndroidTest :app:lintSecretsFixtureRelease --offline --console=plain'
+```
+
+Result: `BUILD SUCCESSFUL in 20s`, 112 tasks (29 executed / 83 up-to-date). Production
+archive rebuilt, fixture native/Java packaging and lint pass. Both APKs verify v2 with
+the same certificate; package and instrumentation target are the independent fixture.
+SHA256 main `eb2349b9da92d2ade7e55008db21a4ebf5a95de3c2344b6cd6708fed322c5bc2`;
+androidTest `d0634aa524053b14a94aefe9eec0ad12a3749a5140537fd7b9406c1c0503ee87`.
+
+Both packages installed successfully. Exact scoped execution:
+
+```text
+timeout 90s adb -s 192.168.9.14:5555 shell am instrument -w -r -e class 'im.majo.ctos.SshNativeSessionPlatformTest#syntheticNativeSessionHandle' -e ctosSshNativeSessionPlatformProbe true im.majo.ctos.secretsfixture.test/androidx.test.runner.AndroidJUnitRunner
+```
+
+Result: **OK (1 test), 0.202s**, method `INSTRUMENTATION_STATUS_CODE: 0`, overall
+`INSTRUMENTATION_CODE: -1` (normal successful runner result), host exit 0. The method's
+two independent production Java/JNI/native sessions actually exercised budget-3
+fragmented identification, complete initial KEXINIT output readback/accounting, KNOWN
+verification then revoke/close, plus peer EOF with two public `SSH_SESSION_STEP`
+errors, view release and idempotent close. All encoded assertions ran on this ARM board.
+
+Both fixture packages were uninstalled (`Success`); `pm path` and `pidof` for each were
+empty. Formal APK SHA256 before/after remained
+`3bc762d9e6463ab9612393b9382923f4a29f613ceec3dbe4d9159aae0078f252`. No production APK
+install, real vault/account access, network endpoint, Root or system-setting change.
+Logs: `/tmp/ctos-ssh-jni-recovered-20261018-build.log`, `-packaging.log`,
+`-instrumentation.log` (temporary evidence). `git diff --check` passes.
+
+This closes the previously locked-board **JNI fragmented transport/EOF** gate for the
+current fixture and API30/arm64 environment. It does not prove Android complete KEX,
+encrypted packet/userauth, real managed AppSecrets CAS/vault, PTY/forward/service/UI or
+external SSH. The separate prior native QEMU KEX proof remains separate. No source
+changed, so the normal production full gate/JVM/QEMU suite was not repeated this turn.
+Task remains `in_progress` / `implementation_complete=false`.
+
+## 2026-10-17 — Host QEMU ARM native runtime and production fixes
+
+The board still reports AIO-3568J / `RUNNING_LOCKED`; no fixture was reinstalled on
+this continuation. Host `/usr/bin/qemu-aarch64` is available (10.0.13, Debian
+1:10.0.13+ds-0+deb13u1), although hako still lacks QEMU. Read-only `adb -s
+192.168.9.14:5555 pull` copied only public linker64 and libc/libdl/libm/libz from the
+API30 board into `/tmp/ctos-ssh-arm-runtime-20261017.O81ADtu5/`. No user data, account,
+vault, Root, lockscreen setting or device application was changed.
+
+Actual execution exposed and fixed four production issues:
+
+1. Unknown role returned registry `ENOENT`, while semantic owner/host/deadline
+   rejection could retain incoming errno. Role-policy admission now deterministically
+   returns `EACCES`; clock/registry operational errors remain distinct, and failed
+   open retains caller resources. Regression covers clean and preexisting `EIO` errno.
+2. Pinned `_ssh_read_banner` published a partial remote version without consuming
+   input; the next turn parsed `SSH-` as packet length 1397966893. The fixed-hash
+   scratch-only banner patch resets the version on incomplete input. Direct client
+   and server tests cover one-byte fragments through CR, empty retry and final LF.
+3. KEX completion could be published with local NEWKEYS/EXT_INFO still queued, making
+   later steps return `EALREADY` before the output drained. The added no-pending-write
+   assertion failed before the fix. Completion/callback now waits for `kex->done` and
+   zero local output after bounded consumption. KNOWN and NEW/CAS paths exercise both
+   2-byte and 64-byte peers, exactly-once proof and actual peer EXT_INFO receipt.
+4. FD duplication failure after KEX bind could free ssh without unbinding the guard.
+   Failed-open now always unbinds existing ssh before free. A real `EMFILE` test lowers
+   only the current test process's soft `RLIMIT_NOFILE` to 1 with fd0 occupied, restores
+   it before assertions, and retries the same role/callback/view/socket successfully.
+   Soft limit 0 was corrected as a test setup error: minfd 0 then produces `EINVAL`.
+
+The banner patch SHA256 is
+`ba61f35303233ebd2bf1c39d167774667766b3461721657f8af0483e51258a18`; patched source is
+`ea50ae877474623fcd369fa85ac2c69b5ab1ba231bc25ec2117cefe81e83c4bf`. The builder verifies
+the patch, replaces only PIC `ssh_api.o` alongside existing project-patched members,
+records source/object evidence and leaves immutable G1 inputs unchanged. Gradle tracks
+the patch explicitly. Bash syntax, ShellCheck and `git diff --check` pass; no broad
+reformat was applied for preexisting shfmt style differences.
+
+Normal gate command:
+
+```text
+./hako bash -lc 'cd android && ./gradlew :app:testSshViewHandleHost :app:testSshNativeClientHost :app:testSshCallbackAdapterHost :app:testReleaseUnitTest :app:compileSshFiles :app:lintRelease :app:assembleRelease --offline --console=plain'
+```
+
+Result: `BUILD SUCCESSFUL in 21s`, 94 tasks (35 executed / 59 up-to-date), production /
+view / callback gates pass, strict native compilation, Release ABIs, lint and assemble
+pass. `testReleaseUnitTest` was **UP-TO-DATE**, retaining reports **189/0/0/0**; JVM tests
+were not freshly rerun. A subsequent final test-only cleanup was strict-rebuilt with
+`:app:testSshNativeClientHost`: 6 tasks / 12s success, with no later production change.
+
+The actual final ARM run, separately from hako's cross-link-only runtime marker:
+
+```sh
+ulimit -c 0
+timeout 60s qemu-aarch64 -L /tmp/ctos-ssh-arm-runtime-20261017.O81ADtu5 \
+  -E LD_LIBRARY_PATH=/system/lib64 \
+  build/app/verification/sshNativeClient/ctos_ssh_native_client_test
+```
+
+Result: exit **0**, `SSH_NATIVE_CLIENT checks=65838 admission=pass descriptor=pass
+view=pass close=pass open_failure_ownership=pass runtime=synthetic`. The host sandbox
+initially denied `getsockopt(SO_TYPE)` with `EPERM`; the same local socketpair test was
+run through approved tool execution permissions, without weakening code or assertions.
+Final executable SHA256:
+`5b030e73a72a67a08d381abd74c754703d46dd60036ebe1f05933110cde96fb8`.
+
+Normal APK SHA256 is `f3327427ce0af90ff7a8a5ea3b5cbba0ac7a7f1c396853c2fd247a45a2328dbd`;
+v2 verification passes. Archive remains 83 members, forbidden stock high-level caller
+definitions are zero, all five session JNI exports are visible, and APK SSH entries
+contain only production `lib/arm64-v8a/libctos_ssh_files.so`. APK was not installed or
+published to `dist/`.
+
+Temporary evidence directory above contains initial/fixed build and runtime logs,
+pre-fix packet/completion failures, final `build-verified.log`, `run-verified.log`,
+`full-gate.log`, packaging output and `runtime.sha256` (binary plus five runtime files).
+The initial generated QEMU core was removed; subsequent runs disabled core dumps.
+This proves synthetic native ARM execution under QEMU/Bionic, including real KEX and
+stubbed native host-evidence/CAS callbacks. It does **not** prove Android JNI runtime,
+real managed AppSecrets CAS/vault, userauth, PTY/forward/service/UI or external SSH.
+The task remains `in_progress` / `implementation_complete=false`; JNI fixture must
+be rebuilt for these production fixes and run after a manual board unlock.
+
+## 2026-10-17 — Android JNI fragmented transport / EOF fixture (local pass, device not-run)
+
+The exact `SshNativeSessionPlatformTest#syntheticNativeSessionHandle` now contains two
+independent synthetic production sessions. With step budget 3, the first feeds a
+fragmented server identification, checks all eight public step scalars, and requires
+actual peer readback to match accumulated `bytesWritten`, including a complete initial
+KEXINIT packet (type 20, bounded size/padding/alignment). It retains matching KNOWN
+verification, explicit view revoke and close. The second half-closes the peer, requires
+public `SSH_SESSION_STEP` twice, then checks view release and idempotent close. These
+are encoded assertions, not a new device runtime pass. Java exposes neither
+`outputConsumed` nor C errno; no Java `EPIPE` / `EALREADY` claim is made.
+
+Implement/check agents completed source review. The first compile failed because
+Android `OsConstants` does not expose `EWOULDBLOCK`; the check agent removed it, retaining
+`EAGAIN` / `EINTR`, and hardened nested failure cleanup. The final command was:
+
+```text
+./hako bash -lc 'cd android && ./gradlew -PctosSecretsUiFixture=true :app:assembleSecretsFixtureRelease :app:assembleSecretsFixtureReleaseAndroidTest :app:lintSecretsFixtureRelease --offline --console=plain'
+```
+
+Result: `BUILD SUCCESSFUL in 20s`, 112 tasks (26 executed / 86 up-to-date), including
+fixture Java compile and lint. Lint reports 0 errors and 3 existing warnings
+(`QueryPermissionsNeeded`, `AndroidGradlePluginVersion`, `DataExtractionRules`). Both APKs
+pass v2 verification with the same certificate; package names and instrumentation target
+are the independent fixture only. SHA256:
+
+- main: `78f71309dea6fc39804b9bc591c3db4a32dd291cdab5ddcd50fae02ff1e1bbf4`
+- androidTest: `d0634aa524053b14a94aefe9eec0ad12a3749a5140537fd7b9406c1c0503ee87`
+
+The user authorized this turn's independent synthetic install/test/cleanup on
+`192.168.9.14:5555`. Identity checks returned AIO-3568J / API30 / arm64-v8a; both
+fixture packages were initially absent and installed successfully. The exact command was:
+
+```text
+adb -s 192.168.9.14:5555 shell am instrument -w -r -e class 'im.majo.ctos.SshNativeSessionPlatformTest#syntheticNativeSessionHandle' -e ctosSshNativeSessionPlatformProbe true im.majo.ctos.secretsfixture.test/androidx.test.runner.AndroidJUnitRunner
+```
+
+No test started or produced an instrumentation result. ActivityManager logged
+`SecurityException: Package im.majo.ctos.secretsfixture is not encryption aware!`;
+`dumpsys user` confirmed `State: RUNNING_LOCKED`. This is a pre-test environment block,
+not a test pass or an assertion failure. The user chose “暂时无法解锁，保留本地结果”.
+The hanging shell instrumentation process was identified by its exact command line and
+terminated; both owned fixture packages were uninstalled (`Success`). Subsequent
+`pm path` / `pidof` checks for both packages were empty. The formal APK SHA256 before
+and after was unchanged:
+`3bc762d9e6463ab9612393b9382923f4a29f613ceec3dbe4d9159aae0078f252`.
+
+Temporary local evidence is under `/tmp/ctos-ssh-jni-transport-20261017-*`:
+initial/fixed build logs, packaging and test manifest dumps, empty instrumentation log,
+and filtered startup log. Normal production APK/full gate was not rerun for this
+fixture-only change. ARM fragmented transport/EOF runtime, full KEX, userauth, real
+CAS/vault, PTY/forward/service/UI and external SSH remain open. Resume the exact gate
+after the user manually unlocks the board and authorizes the current device run.
+
+## 2026-10-16 — Android ARM/JNI empty-peer EAGAIN boundary (G3.8 follow-up)
+
+After production `SshNativeSession.open` transfers the socket ownership, the isolated
+fixture calls `step()` once with an empty nonblocking peer. It asserts only the stable
+read boundary: `bytesRead=0`, `inputAppended=0`,
+`readWouldBlock=true`. It intentionally does not assert `bytesWritten=0`,
+then runs the existing production KNOWN `verifyHostKey` path and cleanup.
+
+The fixture main/test build and lint completed successfully (112 tasks). APK SHA256:
+main `79776aad22be067e057fb2abd2a9af74bc365f890de44b1d3ba689c18d9560d3`;
+androidTest `fc71429d9e06d33334cc51cbb9fa64a7b8f672f2bb8752922052aac5ec6dc71e`.
+On the explicitly identified `192.168.9.14:5555` board
+(AIO-3568J, Android 11/API30, arm64-v8a), the exact
+`SshNativeSessionPlatformTest#syntheticNativeSessionHandle` run returned
+`OK (1 test)`, 0.11s, instrumentation status 0. Both fixture packages were then
+uninstalled and `pm path`/`pidof` checks were empty.
+
+This proves only bounded Android JNI EAGAIN plus matching KNOWN host-proof. ARM packet/KEX,
+userauth, real CAS/vault, and full SSH runtime remain open; the host qemu runtime remains
+`not-run`.
+
+## 2026-10-16 — Android ARM/JNI KNOWN host-proof boundary (G3.8 follow-up)
+
+The isolated `secretsFixture` test now builds the managed
+`ssh/known_hosts` line from the exact 51-byte OpenSSH wire public-key blob used by the
+production session. After `SshNativeSession.open`, before view revoke, the test calls
+production `SshNativeSession.verifyHostKey`; no test-only callback or network is used.
+
+Local build and source checks:
+
+~~~text
+./hako bash -lc 'cd android && ./gradlew -PctosSecretsUiFixture=true :app:assembleSecretsFixtureRelease :app:assembleSecretsFixtureReleaseAndroidTest :app:lintSecretsFixtureRelease --offline --rerun-tasks --console=plain'
+~~~
+
+Result: BUILD SUCCESSFUL, 112 tasks. Fixture Java compile/type-check and fixture lint passed;
+the production OpenSSH build gate passed. Fixture main SHA256 is
+`1e3a10c709fed7d514a90e247494c61345da6a0f71dd142c17157f34ea4e9de6`; test APK SHA256 is
+`2b9f80678220d89a7a67e23197bd5f85c1eee7543763bfb895da8d31a801f7e7`.
+
+Target identity was read explicitly from `192.168.9.14:5555`: AIO-3568J,
+Android 11/API 30, `arm64-v8a`. The exact run was:
+
+~~~text
+adb -s 192.168.9.14:5555 shell am instrument -w -r -e class 'im.majo.ctos.SshNativeSessionPlatformTest#syntheticNativeSessionHandle' -e ctosSshNativeSessionPlatformProbe true im.majo.ctos.secretsfixture.test/androidx.test.runner.AndroidJUnitRunner
+~~~
+
+Result: `OK (1 test)`, 0.089s, instrumentation status code 0. The test proves the
+matching KNOWN host-proof path through Java → JNI → native hostfile issuer/callback, then keeps
+the existing synthetic revoke/close cleanup. Both owned fixture packages were uninstalled;
+subsequent `pm path` and `pidof` checks were empty.
+
+This does not prove ARM packet/KEX completion, userauth/typed credentials, real managed CAS/vault,
+PTY/forward/service/UI, or external SSH. The host native binary still reports
+`runtime=not-run` without qemu-aarch64, and the task remains
+`in_progress`/`implementation_complete=false`.
+
+## 2026-10-16 — NEW/CAS full-KEX host-proof boundary (G3.8 follow-up)
+
+The synthetic nonblocking OpenSSH server now drives an empty managed `ssh/known_hosts` through
+the production host-key callback during the real packet loop. The regression requires one exact
+candidate handoff, one `NEW` evidence callback with approved `CAS_COMMITTED`, and one KEX-complete
+callback in candidate → evidence → KEX order. Candidate/evidence route fields, exact replacement
+body, base/replacement digests, cycle=1 and the nonzero callback session digest bound to the peer
+session ID are checked. The client/server bounded I/O, EAGAIN/short write, completion and later
+`EALREADY`/cleanup contracts are also checked.
+
+Focused command:
+
+```text
+./hako bash -lc 'cd android && ./gradlew :app:testSshNativeClientHost --rerun-tasks --console=plain'
+```
+
+Result: `BUILD SUCCESSFUL`; production gate pass and
+`SSH_NATIVE_CLIENT_BUILD gate=pass runtime=not-run reason=qemu-aarch64-unavailable`.
+
+Normal full gate result: 94 tasks `BUILD SUCCESSFUL`; view/native/callback host gates pass, JUnit
+**189/0/0/0**, strict `compileSshFiles`, three ABI Release, lint and assemble pass, archive=83,
+APK SHA256 `7ccac2fb8f705edd761d34574b9cead4b9e2296864dfe5568d2e9b1105fd849f`, and the APK
+contains only production `lib/arm64-v8a/libctos_ssh_files.so` for SSH. `git diff --check` passes.
+No ARM runtime was run because qemu-aarch64 is unavailable; no device, vault, credential,
+endpoint or external SSH was used. Task remains `in_progress`/`implementation_complete=false`.
+
+## 2026-10-16 — synthetic KEX completion and host-proof boundary (G3.8 follow-up)
+
+The production native caller is now exercised with an in-process nonblocking OpenSSH server on a
+socketpair. The server pump transfers 2-byte fragments, records read EAGAIN and short writes, and
+the client-side step remains bounded by `step_budget`. The managed object contains the exact
+offered public key, so the real verifier produces one `KNOWN` host-evidence callback before one
+KEX-complete callback. The test requires `cycle == 1`, a nonzero callback session digest matching
+the peer `session_id` SHA-256, client completion, and a later `step()` of `EALREADY`.
+
+Focused verification:
+
+```text
+./hako bash -lc 'cd android && ./gradlew :app:testSshNativeClientHost --rerun-tasks --console=plain'
+```
+
+Result: `BUILD SUCCESSFUL`; `SSH_PRODUCTION_OPENSSH_BUILD gate=pass fixture=excluded` and
+`SSH_NATIVE_CLIENT_BUILD gate=pass runtime=not-run reason=qemu-aarch64-unavailable`.
+
+Normal full verification:
+
+```text
+./hako bash -lc 'cd android && ./gradlew :app:testSshViewHandleHost :app:testSshNativeClientHost :app:testSshCallbackAdapterHost :app:testReleaseUnitTest :app:compileSshFiles :app:lintRelease :app:assembleRelease --rerun-tasks --console=plain'
+```
+
+Result: 94 tasks `BUILD SUCCESSFUL`; view/native/callback host gates pass, JUnit **189/0/0/0**,
+strict `compileSshFiles`, three ABI Release, lint and assemble pass, production archive=83, APK
+SHA256 `7195a67fad84185714d00cbb2bbc899fbdf788b61f722282fae8b99ae8ba5f69`, and the APK contains
+only production `lib/arm64-v8a/libctos_ssh_files.so` for SSH. `git diff --check` passes. No ARM
+runtime was run because qemu-aarch64 is unavailable; no device, vault, credential, endpoint or
+external SSH was used. The task remains `in_progress`/`implementation_complete=false`.
+
+## 2026-10-15 — bounded native NEW candidate/CAS precommit boundary (G3.8 follow-up)
+
+The production verifier now has a synthetic no-match `NEW` regression rather than only
+direct issuer coverage. An empty managed `ssh/known_hosts` object causes one exact candidate
+handoff; the callback fixture captures and compares the generated replacement body byte for
+byte, candidate ID/classification/key/fingerprint, base digest and replacement digest. Host
+evidence is observed strictly after the candidate, returns approved `CAS_COMMITTED`, and the
+production verifier succeeds.
+
+The rejection companion makes host evidence return `EACCES` after the handoff. The verifier
+aborts that candidate once, marks the client terminal, leaves no duplicate callback path, and
+subsequent `step()` returns `EALREADY`; native close still follows its retryable release order.
+This fixes the prior behavior where candidate rollback did not terminalize the client.
+
+Focused verification:
+
+```text
+./hako bash -lc 'cd android && ./gradlew :app:testSshNativeClientHost --rerun-tasks --console=plain'
+```
+
+Result: `BUILD SUCCESSFUL`; `SSH_PRODUCTION_OPENSSH_BUILD gate=pass fixture=excluded` and
+`SSH_NATIVE_CLIENT_BUILD gate=pass runtime=not-run reason=qemu-aarch64-unavailable`.
+
+Normal full verification:
+
+```text
+./hako bash -lc 'cd android && ./gradlew :app:testSshViewHandleHost :app:testSshNativeClientHost :app:testSshCallbackAdapterHost :app:testReleaseUnitTest :app:compileSshFiles :app:lintRelease :app:assembleRelease --rerun-tasks --console=plain'
+```
+
+Result: 94 tasks `BUILD SUCCESSFUL`; view/native/callback host gates pass, JUnit **189/0/0**,
+strict `compileSshFiles`, three ABI Release, lint and assemble pass, production archive=83,
+APK SHA256 `7f0bd0f14ec2a5ae9175ee340512acfdeaf0aa76f843834d1a3c87107c97993b`, five session
+JNI exports visible, and no forbidden stock caller. `git diff --check` passes. No ARM runtime
+was run because qemu-aarch64 is unavailable; no device, vault, credential or external SSH was used.
+The task remains `in_progress`/`implementation_complete=false`.
+
+## 2026-10-15 — bounded native SSH step/error, host evidence and policy classifications (G3.8 follow-up)
+
+本轮修正 `ssh_native_client_step` 的错误传播：managed view borrow 到期时保留
+`ETIMEDOUT`，revoke/invalid view 保留 `EACCES` 或底层精确 errno，并在错误后将 client
+置为 terminal，后续 step 返回 `EALREADY`。新增 host-only synthetic socketpair 回归：
+空 nonblocking peer 返回成功且 `read_would_block=1`、读入/append 均为 0；peer 半关闭返回
+`EPIPE` 且后续 step 为 `EALREADY`；短 BOOTTIME deadline 返回 `ETIMEDOUT`，cleanup 仍可完成。
+同一回归还把 synthetic server banner 按 `step_budget=3` 分片送入，使 production
+`ssh_packet_next` 生成客户端 identification/KEX 输出；每步 read/write 均受预算限制，
+`bytes_written == output_consumed`，`partial_write` 被实际观察，并从 peer 读回客户端 banner
+与后续 KEX 字节。这是 host-only cross-link 回归，不是 ARM 行为执行。
+其中 managed-view expiry、invalid view 与 client deadline 使用独立 fixture 分支，避免用
+client deadline 分支冒充 view-borrow `ETIMEDOUT`/`EACCES` errno 保留证据。
+
+同一 production caller regression 还覆盖 bounded `KNOWN` host evidence：fixture 将生成的
+Ed25519 public key 通过上游 formatter 放入 synthetic managed `ssh/known_hosts` object，
+调用 `ctos_ssh_native_client_verify_host_key` 后由 callback fixture 回填完整、逐字段可匹配的
+`KNOWN` result（approved、`CAS_NOT_REQUIRED`、role/identity、key/fingerprint 和两组 digest），
+精确 key 成功且 host evidence 只调用一次；另一把生成的 public key 在 pinned fingerprint
+guard 处返回 `EACCES`，callback 次数不增加。这个 host-proof slice 仍是 strict AArch64
+cross-link 编译证据，不是 ARM runtime、全分类 host policy 或完整 SSH 验收。
+
+新增的 `CHANGED` 回归保持 offered key 的 pinned fingerprint 正确，但把另一把生成 key 写入
+managed `ssh/known_hosts`。测试先直接调用 issuer，确认返回
+`CTOS_SSH_CALLBACK_HOST_CHANGED`、key/fingerprint 与 base/replacement digest metadata 一致、
+没有 candidate handoff；随后 production verifier 对同一 offered key 返回 `EACCES`，host
+evidence 次数仍为零。它因此区分了 host-file classification rejection 与 pinned fingerprint
+guard，仍没有 ARM 行为运行证据。
+
+新增的 `REVOKED` 回归用 matching offered/pinned key 的 `@revoked` managed entry。测试先
+直接调用 issuer，确认返回 `CTOS_SSH_CALLBACK_HOST_REVOKED`、key/fingerprint 与
+base/replacement digest metadata 一致、没有 candidate handoff；随后 production verifier
+在 host evidence 之前返回 `EACCES`，host evidence 次数仍为零。它只使用 synthetic 内存
+known_hosts，不访问真实路径，也没有 ARM 行为运行证据。
+
+本轮继续补齐两个明确的 fail-closed policy 分支。`CERTIFICATE` 使用生成并签名的有效
+OpenSSH host certificate；issuer 直接返回 `CTOS_SSH_CALLBACK_HOST_CERTIFICATE`，检查
+bounded key/fingerprint 与相等的 base/replacement digest、无 candidate handoff，production
+verifier 随后在 host evidence 前返回 `EACCES`。`INVALID` 不伪造上游不存在的 `HostStatus`：
+issuer 在 `load_hostkeys_file()` 前用 pinned `hostkeys_foreach_file(...,
+HKF_WANT_PARSE_KEY, ...)` 预检同一内存 body，遇到 `HKF_STATUS_INVALID` 才返回项目自有
+`CTOS_SSH_CALLBACK_HOST_INVALID`；测试使用截断记录加合法记录，断言相同 metadata/no
+handoff，production verifier 返回 `EACCES` 且 evidence 为零。合法但无匹配的 body 仍保留
+上游 `NEW` 语义。
+
+focused 验证命令：
+
+```text
+./hako bash -lc 'cd android && ./gradlew :app:testSshNativeClientHost --rerun-tasks --console=plain'
+```
+
+结果：`BUILD SUCCESSFUL`；`SSH_PRODUCTION_OPENSSH_BUILD gate=pass fixture=excluded`，
+`SSH_NATIVE_CLIENT_BUILD gate=pass runtime=not-run reason=qemu-aarch64-unavailable`。
+这是严格 C11/Werror 的 AArch64 cross-link，host binary 未执行；所有新增回归案例均已编码，
+但没有 ARM 行为运行证据。
+
+随后重跑 normal full gate：
+
+```text
+./hako bash -lc 'cd android && ./gradlew :app:testSshViewHandleHost :app:testSshNativeClientHost :app:testSshCallbackAdapterHost :app:testReleaseUnitTest :app:compileSshFiles :app:lintRelease :app:assembleRelease --rerun-tasks --console=plain'
+```
+
+结果：view handle `gate=pass borrow=pass revoke=pass stale=pass`，production
+`gate=pass fixture=excluded`，callback host=20，JUnit **189/0/0/0**；strict
+`compileSshFiles`、arm64-v8a/armeabi-v7a/x86_64 Release、lint、assemble 均成功，production
+archive=83。新 APK SHA256 为
+`b471e55f9bdd54830f6613643deec22a9f4d493408ce24ebdae9a03e17e6a912`；APK 内 SSH 相关 native
+库只有生产 `lib/arm64-v8a/libctos_ssh_files.so`，五个 session JNI exports 可见，forbidden stock
+caller=0。没有设备、真实 vault、凭据或外部 SSH；task 继续
+`in_progress`/`implementation_complete=false`。
+
 ## 2026-10-15 — native-owned session handle and Android JNI runtime gate (G3.7)
 
 本轮把 G3.6 的 fail-closed JNI placeholder 替换为受管 native boundary。新增

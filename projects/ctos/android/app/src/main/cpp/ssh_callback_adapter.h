@@ -120,6 +120,11 @@ struct ctos_ssh_callback_target {
      * deliberately retained for callers that only need availability. */
     int (*credential_bytes)(void *context, void *environment, int kind,
         unsigned char *output, size_t capacity, size_t *length);
+    /* Optional receipt/proof-bound route. Absence never selects a legacy target. */
+    int (*credential_bytes_selected)(void *context, void *environment, int kind,
+        const unsigned char selection_receipt[32], uint64_t cycle,
+        const unsigned char session_digest[32], unsigned char *output,
+        size_t capacity, size_t *length);
 };
 
 /* Open binds the callback to the calling process, current event-loop thread,
@@ -133,6 +138,10 @@ int ctos_ssh_callback_open(const struct ctos_ssh_callback_target *target,
  * future callback; close still belongs to the bound event-loop thread. */
 int ctos_ssh_callback_cancel(ctos_ssh_callback_token callback);
 int ctos_ssh_callback_close(ctos_ssh_callback_token callback, void *environment);
+
+/* Checks owner/environment and live role/cancellation/deadline without calling
+ * a host, KEX or credential provider. This grants no secret authority. */
+int ctos_ssh_callback_check_live(ctos_ssh_callback_token callback, void *environment);
 
 /* These are the only native-to-Java callback entry points. Each call is
  * synchronous and must supply the currently attached JNIEnv/environment. */
@@ -170,5 +179,10 @@ int ctos_ssh_callback_credential(ctos_ssh_callback_token callback, void *environ
 int ctos_ssh_callback_credential_bytes(ctos_ssh_callback_token callback,
     void *environment, int kind, unsigned char *output, size_t capacity,
     size_t *length);
+
+int ctos_ssh_callback_credential_bytes_selected(ctos_ssh_callback_token callback,
+    void *environment, int kind, const unsigned char selection_receipt[32],
+    uint64_t cycle, const unsigned char session_digest[32],
+    unsigned char *output, size_t capacity, size_t *length);
 
 #endif

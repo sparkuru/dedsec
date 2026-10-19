@@ -117,6 +117,40 @@ public final class VaultSessionTest {
         catch (VaultException failure) { assertEquals("VAULT_CHANGED", failure.code); }
     }
 
+    @Test public void ownTrustCommitAdvancesEpochWithoutExtendingOrReplacingItsLoan() throws Exception {
+        VaultSession session = session();
+        Lease first = new Lease();
+        long epoch = session.epoch();
+        session.attachRevocation(epoch, first);
+        assertSame(first, session.attachedRevocation(epoch));
+        assertFalse(session.advanceTrustEpoch(epoch, new Lease()));
+        assertEquals(epoch, session.epoch());
+        assertTrue(session.advanceTrustEpoch(epoch, first));
+        assertEquals(epoch + 1, session.epoch());
+        assertSame(first, session.attachedRevocation(epoch + 1));
+        assertTrue(first.active); assertEquals(0, first.revoked);
+        assertFalse(session.advanceTrustEpoch(epoch, first));
+        session.lock();
+        assertFalse(first.active); assertEquals(1, first.revoked);
+        assertFalse(session.advanceTrustEpoch(epoch + 1, first));
+        assertFalse(session.unlocked());
+    }
+
+    @Test public void trustContinuationCannotResurrectRevokedReplacedOrBackgroundState() throws Exception {
+        for (int mode = 0; mode < 4; mode++) {
+            VaultSession session = session();
+            Lease first = new Lease(); long epoch = session.epoch();
+            session.attachRevocation(epoch, first);
+            if (mode == 0) first.revoke();
+            if (mode == 1) { first.revoke(); session.attachRevocation(epoch, new Lease()); }
+            if (mode == 2) session.foreground(false);
+            if (mode == 3) { session.lock(); session.unlock(new byte[32]); }
+            assertFalse(session.advanceTrustEpoch(epoch, first));
+            assertEquals(mode == 3 ? epoch + 2 : epoch, session.epoch());
+            session.lock();
+        }
+    }
+
     @Test public void activeLeaseCannotBeReplacedAndClosedLeaseCan() throws Exception {
         VaultSession session = session();
         Lease first = new Lease(); session.attachRevocation(session.epoch(), first);

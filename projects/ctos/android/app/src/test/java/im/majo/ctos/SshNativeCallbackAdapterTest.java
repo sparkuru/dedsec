@@ -97,6 +97,28 @@ public final class SshNativeCallbackAdapterTest {
         }
     }
 
+    @Test public void authenticationSelectionRequiresManagedProviderAndOwner() throws Exception {
+        Setup setup = new Setup(new SshHostKeyAuthority());
+        try {
+            SshAuthenticationSelection selection = SshAuthenticationSelection.password(setup.issued.role,
+                    "explicit-user", "password", setup.clock);
+            AtomicReference<String> code = new AtomicReference<>();
+            Thread thread = new Thread(() -> {
+                try { setup.adapter.selectAuthentication(selection); }
+                catch (VaultException failure) { code.set(failure.code); }
+            });
+            thread.start();
+            thread.join();
+            assertEquals("SSH_CALLBACK_THREAD", code.get());
+            try { setup.adapter.selectAuthentication(selection); fail("missing provider"); }
+            catch (VaultException failure) { assertEquals("SSH_AUTH_SELECTION", failure.code); }
+            // Failed setup does not poison the existing legacy host/KEX path.
+            assertTrue(setup.adapter.onNativeHostKey(SshNativeCallbackAdapter.HOST_KNOWN,
+                    "ssh-ed25519", FINGERPRINT, digest("known"), digest("replacement")));
+            assertTrue(setup.adapter.onNativeKexComplete(1, filled(32, 7)));
+        } finally { setup.close(); }
+    }
+
     @Test public void boundThreadCanContinueFromKnownHostProofToKexProof() throws Exception {
         Setup setup = new Setup(new SshHostKeyAuthority());
         try {
@@ -333,6 +355,24 @@ public final class SshNativeCallbackAdapterTest {
         } finally {
             setup.registry.close();
         }
+    }
+
+    @Test public void selectedCallbackWithoutSelectionFailsAndNativeCleanupCanRetry() throws Exception {
+        Setup setup = new Setup(new SshHostKeyAuthority());
+        try {
+            assertEquals(null, setup.adapter.onNativeSelectedCredentialBytes(1, filled(32, 3),
+                    1, filled(32, 7)));
+            assertEquals("SSH_AUTH_SELECTION", setup.adapter.lastFailureCode());
+            setup.nativeDouble.failClose = true;
+            try { setup.adapter.close(); fail("cleanup must remain retryable"); }
+            catch (VaultException failure) { assertEquals("SSH_CALLBACK_CLEANUP", failure.code); }
+            assertEquals(1, setup.registry.size());
+            setup.nativeDouble.failClose = false;
+            setup.adapter.close();
+            assertEquals(2, setup.nativeDouble.closeCalls);
+            assertEquals(1, setup.roleRelease.calls);
+            assertEquals(0, setup.registry.size());
+        } finally { setup.registry.close(); }
     }
 
     private static byte[] record(long token, int uid, int pid, int hop) throws IOException {

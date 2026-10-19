@@ -572,6 +572,17 @@ final class AppSecrets {
     synchronized void updateTrust(VaultOperation operation, SshTrustProposal proposal, EffectGuard guard) throws VaultException {
         verifyOperation(operation, VaultOperation.Consumer.SSH, VaultOperation.Purpose.SSH_TRUST_UPDATE,
                 proposal.binding, proposal.targetIdentity, proposal.connectionId);
+        SshRoleContext trustRole = operation.boundTrustRole();
+        VaultSession.Revocation attached = trustRole == null ? null : session.attachedRevocation(operation.epoch);
+        if (attached != null && (!(attached instanceof SshRoleContext.PublicView)
+                || !trustRole.ownsPublicView((SshRoleContext.PublicView) attached)))
+            throw new VaultException("VAULT_CHANGED", "The SSH public loan changed");
+        EffectGuard trustGuard = attached == null ? guard : boundGuard(guard, () -> {
+            trustRole.requireActive(clock::now);
+            if (session.attachedRevocation(operation.epoch) != attached || !attached.active()
+                    || !trustRole.ownsPublicView((SshRoleContext.PublicView) attached))
+                throw new VaultException("VAULT_CHANGED", "The SSH public loan changed");
+        });
         byte[] content = proposal.newContent();
         byte[] baseDigest = proposal.baseDigest();
         if (content.length > VaultManifest.MAX_FILE_BYTES) throw VaultException.invalid();
@@ -591,7 +602,7 @@ final class AppSecrets {
                 List<VaultManifest.FileObject> files = new ArrayList<>();
                 for (VaultManifest.FileObject file : verified.manifest.files) files.add(file.path.equals(proposal.path) ? replacement : file);
                 try (VaultManifest next = new VaultManifest(verified.manifest.entries, files)) {
-                    commitManifest(operation, verified, next, guard);
+                    commitManifest(operation, verified, next, trustGuard, attached);
                 }
             } finally { VaultCodec.wipe(replacement.content); }
         } finally { VaultCodec.wipe(content); }
@@ -626,6 +637,11 @@ final class AppSecrets {
 
     private void commitManifest(VaultOperation operation, Verified verified, VaultManifest next,
             EffectGuard guard) throws VaultException {
+        commitManifest(operation, verified, next, guard, null);
+    }
+
+    private void commitManifest(VaultOperation operation, Verified verified, VaultManifest next,
+            EffectGuard guard, VaultSession.Revocation trustContinuation) throws VaultException {
         validateBusiness(next);
         byte[] plain = next.encode();
         try {
@@ -642,7 +658,12 @@ final class AppSecrets {
             }));
             operations.clear();
             cancelPreview();
-            session.unlockIfEpoch(operation.epoch, verified.key);
+            if (trustContinuation == null) session.unlockIfEpoch(operation.epoch, verified.key);
+            else {
+                guard.check();
+                if (!session.advanceTrustEpoch(operation.epoch, trustContinuation))
+                    throw new VaultException("VAULT_CHANGED", "The SSH public loan changed");
+            }
         } finally { VaultCodec.wipe(plain); }
     }
 
@@ -704,7 +725,7 @@ final class AppSecrets {
             VaultManifest.Entry entry = findSshEntry(verified.manifest, entryId);
             if (!entry.identity.equals(target) || expectedType != null && entry.type != expectedType) throw denied();
             byte[] credential = entry.secret.clone();
-            try { hostKeyGuard.check(); protectedEffect(operation); receiver.receive(credential); }
+            try { hostKeyGuard.check(); protectedEffect(operation); hostKeyGuard.check(); receiver.receive(credential); }
             finally { VaultCodec.wipe(credential); }
         }
     }
@@ -786,8 +807,50 @@ final class AppSecrets {
             VaultManifest.FileObject file = findFile(verified.manifest, path);
             if (file.type != VaultManifest.FileType.PRIVATE_KEY || !file.identity.equals(keyIdentity)) throw denied();
             byte[] key = file.content.clone();
-            try { hostKeyGuard.check(); protectedEffect(operation); receiver.receive(key); }
+            try { hostKeyGuard.check(); protectedEffect(operation); hostKeyGuard.check(); receiver.receive(key); }
             finally { VaultCodec.wipe(key); }
+        }
+    }
+
+    synchronized VaultOperation beginSshPrivateKeyBundle(String path, String keyIdentity,
+            String passphraseEntryId, String target, String connectionId) throws VaultException {
+        if (target.isEmpty() || connectionId.isEmpty() || passphraseEntryId.isEmpty()) throw denied();
+        try (Verified verified = sessionManifest()) {
+            requirePrivateKeyBundle(verified.manifest, path, keyIdentity, passphraseEntryId);
+            return operation(VaultOperation.Consumer.SSH, VaultOperation.Purpose.SSH_PRIVATE_KEY_BUNDLE,
+                    path + "\0" + keyIdentity + "\0" + passphraseEntryId, target, connectionId, verified.envelope);
+        }
+    }
+
+    private static VaultManifest.FileObject requirePrivateKeyBundle(VaultManifest manifest,
+            String path, String keyIdentity, String passphraseEntryId) throws VaultException {
+        VaultManifest.FileObject file = findFile(manifest, path);
+        VaultManifest.Entry entry = findEntry(manifest, passphraseEntryId, VaultManifest.EntryType.SSH_KEY_PASSPHRASE);
+        if (file.type != VaultManifest.FileType.PRIVATE_KEY || !file.identity.equals(keyIdentity)
+                || !entry.identity.equals("key:" + keyIdentity)) throw denied();
+        return file;
+    }
+
+    synchronized void sshPrivateKeyBundle(VaultOperation operation, String path, String keyIdentity,
+            String passphraseEntryId, String target, String connectionId, EffectGuard hostKeyGuard,
+            SshVaultAdapter.CredentialReceiver receiver) throws VaultException {
+        verifyOperation(operation, VaultOperation.Consumer.SSH, VaultOperation.Purpose.SSH_PRIVATE_KEY_BUNDLE,
+                path + "\0" + keyIdentity + "\0" + passphraseEntryId, target, connectionId);
+        try (Verified verified = sessionManifest()) {
+            VaultManifest.FileObject file = requirePrivateKeyBundle(verified.manifest, path, keyIdentity, passphraseEntryId);
+            VaultManifest.Entry entry = findEntry(verified.manifest, passphraseEntryId, VaultManifest.EntryType.SSH_KEY_PASSPHRASE);
+            int length = 16 + file.content.length + entry.secret.length;
+            if (file.content.length == 0 || entry.secret.length == 0 || entry.secret.length > 8192
+                    || length > VaultManifest.MAX_FILE_BYTES) throw denied();
+            byte[] bundle = new byte[length];
+            try {
+                ByteBuffer.wrap(bundle).putInt(0x43534b42).putInt(1)
+                        .putInt(file.content.length).put(file.content).putInt(entry.secret.length).put(entry.secret);
+                hostKeyGuard.check();
+                protectedEffect(operation);
+                hostKeyGuard.check();
+                receiver.receive(bundle);
+            } finally { VaultCodec.wipe(bundle); }
         }
     }
 

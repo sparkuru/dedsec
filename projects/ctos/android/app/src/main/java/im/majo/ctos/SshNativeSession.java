@@ -1,6 +1,7 @@
 package im.majo.ctos;
 
 import java.io.IOException;
+import java.security.MessageDigest;
 
 /**
  * Same-process SSH session-owner seam.
@@ -21,6 +22,34 @@ final class SshNativeSession implements AutoCloseable {
     static final int HOST_FINGERPRINT_BYTES = 32;
     static final int MAX_HOST_KEY_BLOB_BYTES = 1024 * 1024;
     private static final String KNOWN_HOSTS_PATH = "ssh/known_hosts";
+    private static final ThreadLocal<Boolean> NATIVE_ENTRY = new ThreadLocal<>();
+
+    enum PasswordAuthResult {
+        NOT_STARTED(0), PENDING(1), SUCCESS(2), REJECTED(3), PARTIAL(4), CHANGE_REQUIRED(5);
+
+        final int tag;
+        PasswordAuthResult(int tag) { this.tag = tag; }
+
+        private static PasswordAuthResult fromNative(int tag) throws IOException {
+            for (PasswordAuthResult result : values()) if (result.tag == tag) return result;
+            throw new IOException("invalid SSH authentication result");
+        }
+    }
+
+    enum PrivateKeyAuthResult {
+        NOT_STARTED(0), PENDING(1), SUCCESS(2), REJECTED(3), PARTIAL(4);
+
+        final int tag;
+        PrivateKeyAuthResult(int tag) { this.tag = tag; }
+
+        private static PrivateKeyAuthResult fromNative(int tag) throws IOException {
+            for (PrivateKeyAuthResult result : values()) if (result.tag == tag) return result;
+            throw new IOException("invalid SSH authentication result");
+        }
+    }
+
+    private enum Phase { KEX_ONLY, SERVICE_PENDING, SERVICE_READY, PASSWORD_PENDING,
+        PRIVATE_KEY_PENDING, FINISHED }
 
     /** A public-only view token with deferred cleanup support. */
     interface ViewBinding {
@@ -35,6 +64,35 @@ final class SshNativeSession implements AutoCloseable {
                 long deadline, int stepBudget, byte[] hostKeyBlob,
                 byte[] expectedFingerprint, String knownHostsPath, String host,
                 String candidateId) throws IOException;
+        default long open(long role, int ownerUid, long callback, long view, int socketFd,
+                long deadline, int stepBudget, byte[] hostKeyBlob, byte[] expectedFingerprint,
+                String knownHostsPath, String host, String candidateId, byte[] selectionWire)
+                throws IOException {
+            if (selectionWire != null) throw new IOException("SSH selection transport is unavailable");
+            return open(role, ownerUid, callback, view, socketFd, deadline, stepBudget,
+                    hostKeyBlob, expectedFingerprint, knownHostsPath, host, candidateId);
+        }
+        default byte[] authenticationSelectionReceipt(long handle) throws IOException {
+            throw new IOException("SSH selection receipt is unavailable");
+        }
+        default void beginUserauthService(long handle) throws IOException {
+            throw new IOException("SSH userauth service is unavailable");
+        }
+        default boolean userauthServiceReady(long handle) throws IOException {
+            throw new IOException("SSH userauth service is unavailable");
+        }
+        default void beginPasswordAuth(long handle) throws IOException {
+            throw new IOException("SSH password authentication is unavailable");
+        }
+        default int passwordAuthResult(long handle) throws IOException {
+            throw new IOException("SSH password authentication is unavailable");
+        }
+        default void beginPrivateKeyAuth(long handle) throws IOException {
+            throw new IOException("SSH private-key authentication is unavailable");
+        }
+        default int privateKeyAuthResult(long handle) throws IOException {
+            throw new IOException("SSH private-key authentication is unavailable");
+        }
         StepResult step(long handle, boolean cancelled) throws IOException;
         void verifyHostKey(long handle, byte[] hostKeyBlob) throws IOException;
         void close(long handle) throws IOException;
@@ -97,8 +155,42 @@ final class SshNativeSession implements AutoCloseable {
         @Override public long open(long role, int ownerUid, long callback, long view, int socketFd,
                 long deadline, int stepBudget, byte[] hostKeyBlob, byte[] expectedFingerprint,
                 String knownHostsPath, String host, String candidateId) throws IOException {
+            return open(role, ownerUid, callback, view, socketFd, deadline, stepBudget,
+                    hostKeyBlob, expectedFingerprint, knownHostsPath, host, candidateId, null);
+        }
+
+        @Override public long open(long role, int ownerUid, long callback, long view, int socketFd,
+                long deadline, int stepBudget, byte[] hostKeyBlob, byte[] expectedFingerprint,
+                String knownHostsPath, String host, String candidateId, byte[] selectionWire)
+                throws IOException {
             return Native.open(role, ownerUid, callback, view, socketFd, deadline, stepBudget,
-                    hostKeyBlob, expectedFingerprint, knownHostsPath, host, candidateId);
+                    hostKeyBlob, expectedFingerprint, knownHostsPath, host, candidateId, selectionWire);
+        }
+
+        @Override public byte[] authenticationSelectionReceipt(long handle) throws IOException {
+            return Native.authenticationSelectionReceipt(handle);
+        }
+
+        @Override public void beginUserauthService(long handle) throws IOException {
+            Native.beginUserauthService(handle);
+        }
+
+        @Override public boolean userauthServiceReady(long handle) throws IOException {
+            return Native.userauthServiceReady(handle);
+        }
+
+        @Override public void beginPasswordAuth(long handle) throws IOException {
+            Native.beginPasswordAuth(handle);
+        }
+
+        @Override public int passwordAuthResult(long handle) throws IOException {
+            return Native.passwordAuthResult(handle);
+        }
+        @Override public void beginPrivateKeyAuth(long handle) throws IOException {
+            Native.beginPrivateKeyAuth(handle);
+        }
+        @Override public int privateKeyAuthResult(long handle) throws IOException {
+            return Native.privateKeyAuthResult(handle);
         }
 
         @Override public StepResult step(long handle, boolean cancelled) throws IOException {
@@ -133,7 +225,14 @@ final class SshNativeSession implements AutoCloseable {
         static native long open(long role, int ownerUid, long callback, long view, int socketFd,
                 long deadline, int stepBudget, byte[] hostKeyBlob,
                 byte[] expectedFingerprint, String knownHostsPath, String host,
-                String candidateId) throws IOException;
+                String candidateId, byte[] selectionWire) throws IOException;
+        static native byte[] authenticationSelectionReceipt(long handle) throws IOException;
+        static native void beginUserauthService(long handle) throws IOException;
+        static native boolean userauthServiceReady(long handle) throws IOException;
+        static native void beginPasswordAuth(long handle) throws IOException;
+        static native int passwordAuthResult(long handle) throws IOException;
+        static native void beginPrivateKeyAuth(long handle) throws IOException;
+        static native int privateKeyAuthResult(long handle) throws IOException;
         static native int[] step(long handle, boolean cancelled) throws IOException;
         static native void verifyHostKey(long handle, byte[] hostKeyBlob) throws IOException;
         static native void close(long handle) throws IOException;
@@ -148,19 +247,25 @@ final class SshNativeSession implements AutoCloseable {
     private final SshNativeCallbackAdapter.NativeSessionClaim callbackClaim;
     private final long nativeHandle;
     private final int stepBudget;
+    private final byte[] expectedSelectionReceipt;
     private boolean nativeClosed;
     private boolean callbackClosed;
     private boolean roleReleased;
     private boolean viewReleased;
     private boolean destroyed;
     private boolean complete;
+    private Phase phase = Phase.KEX_ONLY;
+    private PasswordAuthResult authenticationResult = PasswordAuthResult.NOT_STARTED;
+    private PrivateKeyAuthResult privateKeyResult = PrivateKeyAuthResult.NOT_STARTED;
+    private boolean privateKeyAuthentication;
     private volatile boolean cancellationRequested;
     private String terminalFailure;
 
     private SshNativeSession(SshNativeCallbackAdapter callback, ViewBinding view,
             NativeBinding nativeBinding,
             SshNativeCallbackAdapter.NativeSessionClaim callbackClaim, long nativeHandle,
-            int stepBudget) {
+            int stepBudget, byte[] expectedSelectionReceipt) {
+        this.expectedSelectionReceipt = expectedSelectionReceipt;
         this.callback = callback;
         this.view = view;
         this.nativeBinding = nativeBinding;
@@ -174,10 +279,13 @@ final class SshNativeSession implements AutoCloseable {
     static SshNativeSession open(SshNativeCallbackAdapter callback, SshPublicFileLease view,
             int socketFd, byte[] hostKeyBlob, byte[] expectedFingerprint,
             String candidateId, int stepBudget) throws VaultException {
-        if (callback == null || view == null || !callback.ownsPublicView(view)) throw invalid();
-        return open(callback, new ProductionViewBinding(view), socketFd, hostKeyBlob,
-                expectedFingerprint,
-                candidateId, stepBudget, new ProductionNativeBinding());
+        requireOpenOwner(callback);
+        enterNative();
+        try {
+            if (view == null || !callback.ownsPublicView(view)) throw invalid();
+            return openInternal(callback, new ProductionViewBinding(view), socketFd, hostKeyBlob,
+                    expectedFingerprint, candidateId, stepBudget, new ProductionNativeBinding());
+        } finally { NATIVE_ENTRY.remove(); }
     }
 
     /**
@@ -185,6 +293,17 @@ final class SshNativeSession implements AutoCloseable {
      * machine while keeping host JVM tests independent of Android/JNI.
      */
     static SshNativeSession open(SshNativeCallbackAdapter callback, ViewBinding view,
+            int socketFd, byte[] hostKeyBlob, byte[] expectedFingerprint,
+            String candidateId, int stepBudget, NativeBinding nativeBinding) throws VaultException {
+        requireOpenOwner(callback);
+        enterNative();
+        try {
+            return openInternal(callback, view, socketFd, hostKeyBlob, expectedFingerprint,
+                    candidateId, stepBudget, nativeBinding);
+        } finally { NATIVE_ENTRY.remove(); }
+    }
+
+    private static SshNativeSession openInternal(SshNativeCallbackAdapter callback, ViewBinding view,
             int socketFd, byte[] hostKeyBlob, byte[] expectedFingerprint,
             String candidateId, int stepBudget, NativeBinding nativeBinding) throws VaultException {
         if (callback == null || view == null || nativeBinding == null
@@ -196,41 +315,48 @@ final class SshNativeSession implements AutoCloseable {
             throw invalid();
         }
         callback.requireNativeSessionLive();
-        SshNativeCallbackAdapter.NativeSessionClaim callbackClaim =
-                callback.beginNativeSessionOpen();
-        final long viewToken;
-        long callbackToken = callback.nativeCallbackToken();
+        byte[] wire = null;
+        byte[] suppliedWire = null;
+        byte[] expectedReceipt = null;
+        byte[] key = null;
+        byte[] fingerprint = null;
+        SshNativeCallbackAdapter.NativeSessionClaim claim = null;
+        boolean opened = false;
         try {
-            viewToken = view.token();
-        } catch (VaultException failure) {
-            callback.finishNativeSessionOpen(callbackClaim, false);
-            throw failure;
-        }
-        if (viewToken <= 0 || callbackToken <= 0) {
-            callback.finishNativeSessionOpen(callbackClaim, false);
-            throw unavailable();
-        }
-        byte[] key = hostKeyBlob.clone();
-        byte[] fingerprint = expectedFingerprint.clone();
-        final long handle;
-        try {
-            handle = nativeBinding.open(callback.roleToken(), callback.ownerUid(), callbackToken,
-                    viewToken, socketFd, callback.deadline(), stepBudget, key, fingerprint,
-                    KNOWN_HOSTS_PATH, callback.host(), candidateId);
-        } catch (IOException | LinkageError | RuntimeException failure) {
-            callback.finishNativeSessionOpen(callbackClaim, false);
-            throw unavailable();
+            // All metadata work precedes the claim and native ownership transfer.
+            wire = callback.authenticationSelectionWire();
+            if (wire != null) {
+                if (wire.length == 0 || wire.length > SshAuthenticationSelection.MAX_WIRE_BYTES) {
+                    throw SshAuthenticationSelection.invalid();
+                }
+                suppliedWire = wire.clone();
+                expectedReceipt = VaultCodec.digest(wire);
+            }
+            key = hostKeyBlob.clone();
+            fingerprint = expectedFingerprint.clone();
+            claim = callback.beginNativeSessionOpen();
+            long viewToken = view.token();
+            long callbackToken = callback.nativeCallbackToken();
+            if (viewToken <= 0 || callbackToken <= 0) throw unavailable();
+            final long handle;
+            try {
+                handle = nativeBinding.open(callback.roleToken(), callback.ownerUid(), callbackToken,
+                        viewToken, socketFd, callback.deadline(), stepBudget, key, fingerprint,
+                        KNOWN_HOSTS_PATH, callback.host(), candidateId, suppliedWire);
+            } catch (IOException | LinkageError | RuntimeException failure) { throw unavailable(); }
+            if (handle <= 0) throw unavailable();
+            callback.finishNativeSessionOpen(claim, true);
+            opened = true;
+            return new SshNativeSession(callback, view, nativeBinding, claim, handle,
+                    stepBudget, expectedReceipt);
         } finally {
+            if (!opened && claim != null) callback.finishNativeSessionOpen(claim, false);
+            VaultCodec.wipe(wire);
+            VaultCodec.wipe(suppliedWire);
             VaultCodec.wipe(key);
             VaultCodec.wipe(fingerprint);
+            if (!opened) VaultCodec.wipe(expectedReceipt);
         }
-        if (handle <= 0) {
-            callback.finishNativeSessionOpen(callbackClaim, false);
-            throw unavailable();
-        }
-        callback.finishNativeSessionOpen(callbackClaim, true);
-        return new SshNativeSession(callback, view, nativeBinding, callbackClaim, handle,
-                stepBudget);
     }
 
     /** Request cancellation from any thread; all native I/O remains owner-thread only. */
@@ -244,10 +370,20 @@ final class SshNativeSession implements AutoCloseable {
 
     StepResult step() throws VaultException {
         requireOwnerThread();
+        enterNative();
+        try { return stepInternal(); }
+        finally { NATIVE_ENTRY.remove(); }
+    }
+
+    private StepResult stepInternal() throws VaultException {
         synchronized (stateLock) {
-            requireOpenLocked();
+            if (nativeClosed || destroyed) throw failure("SSH_SESSION_CLOSED");
             if (terminalFailure != null) throw failure(terminalFailure);
+            if (phase == Phase.SERVICE_READY || phase == Phase.FINISHED) throw phaseFailure();
+            if (complete && phase == Phase.KEX_ONLY) throw failure("SSH_SESSION_COMPLETE");
         }
+        boolean explicit = phase != Phase.KEX_ONLY;
+        if (explicit) requireProtocolLive();
         if (cancellationRequested) {
             terminalFailure = "SSH_SESSION_CANCELLED";
         } else {
@@ -266,20 +402,269 @@ final class SshNativeSession implements AutoCloseable {
             if (result == null) throw new IOException("missing SSH step result");
             if (!result.validFor(stepBudget)) throw new IOException("invalid SSH step result");
             if (result.complete) synchronized (stateLock) { complete = true; }
+            if (explicit) {
+                requireProtocolLive();
+                if (phase == Phase.SERVICE_PENDING) queryServiceReady();
+                else if (phase == Phase.PASSWORD_PENDING) queryPasswordResult();
+                else if (phase == Phase.PRIVATE_KEY_PENDING) queryPrivateKeyResult();
+            }
             return result;
         } catch (VaultException failure) {
             throw failure;
         } catch (IOException | LinkageError | RuntimeException failure) {
+            if (explicit) throw protocolNativeFailure("SSH_SESSION_STEP");
             synchronized (stateLock) {
                 terminalFailure = cancellationRequested
                         ? "SSH_SESSION_CANCELLED" : "SSH_SESSION_STEP";
             }
             throw failure(terminalFailure);
+        } catch (Error failure) {
+            if (explicit) terminalFailure = "SSH_SESSION_STEP";
+            throw failure;
         }
+    }
+
+    void beginUserauthService() throws VaultException {
+        requireOwnerThread();
+        enterNative();
+        try {
+            requireProtocolState();
+            if (!complete || phase != Phase.KEX_ONLY) throw phaseFailure();
+            requireProtocolLive();
+            try {
+                nativeBinding.beginUserauthService(nativeHandle);
+                requireProtocolLive();
+                phase = Phase.SERVICE_PENDING;
+            } catch (IOException | LinkageError | RuntimeException nativeFailure) {
+                throw protocolNativeFailure("SSH_SESSION_SERVICE");
+            } catch (Error nativeFailure) {
+                terminalFailure = "SSH_SESSION_SERVICE";
+                throw nativeFailure;
+            }
+        } finally { NATIVE_ENTRY.remove(); }
+    }
+
+    boolean userauthServiceReady() throws VaultException {
+        requireOwnerThread();
+        enterNative();
+        try {
+            requireProtocolState();
+            if (phase == Phase.KEX_ONLY) throw phaseFailure();
+            requireProtocolLive();
+            return queryServiceReady();
+        } finally { NATIVE_ENTRY.remove(); }
+    }
+
+    void beginPasswordAuth() throws VaultException {
+        requireOwnerThread();
+        enterNative();
+        try {
+            requireProtocolState();
+            if (phase != Phase.SERVICE_READY) throw phaseFailure();
+            if (expectedSelectionReceipt == null) throw SshAuthenticationSelection.invalid();
+            requireProtocolLive();
+            try {
+                nativeBinding.beginPasswordAuth(nativeHandle);
+                requireProtocolLive();
+                phase = Phase.PASSWORD_PENDING;
+                authenticationResult = PasswordAuthResult.PENDING;
+            } catch (IOException | LinkageError | RuntimeException nativeFailure) {
+                throw protocolNativeFailure("SSH_SESSION_AUTH");
+            } catch (Error nativeFailure) {
+                terminalFailure = "SSH_SESSION_AUTH";
+                throw nativeFailure;
+            }
+        } finally { NATIVE_ENTRY.remove(); }
+    }
+
+    PasswordAuthResult passwordAuthResult() throws VaultException {
+        requireOwnerThread();
+        enterNative();
+        try {
+            requireProtocolState();
+            if (privateKeyAuthentication) throw phaseFailure();
+            if (phase != Phase.SERVICE_READY && phase != Phase.PASSWORD_PENDING
+                    && phase != Phase.FINISHED) throw phaseFailure();
+            requireProtocolLive();
+            return queryPasswordResult();
+        } finally { NATIVE_ENTRY.remove(); }
+    }
+
+    /** These raw milestone queries share the caller's entry guard, including step(). */
+    private boolean queryServiceReady() throws VaultException {
+        try {
+            boolean ready = nativeBinding.userauthServiceReady(nativeHandle);
+            requireProtocolLive();
+            if (!ready && phase != Phase.SERVICE_PENDING) {
+                throw new IOException("SSH service readiness regressed");
+            }
+            if (ready && phase == Phase.SERVICE_PENDING) phase = Phase.SERVICE_READY;
+            return ready;
+        } catch (IOException | LinkageError | RuntimeException nativeFailure) {
+            throw protocolNativeFailure("SSH_SESSION_SERVICE");
+        }
+    }
+
+    private PasswordAuthResult queryPasswordResult() throws VaultException {
+        try {
+            PasswordAuthResult result = PasswordAuthResult.fromNative(
+                    nativeBinding.passwordAuthResult(nativeHandle));
+            requireProtocolLive();
+            if (phase == Phase.SERVICE_READY) {
+                if (result != PasswordAuthResult.NOT_STARTED) {
+                    throw new IOException("unexpected SSH authentication result");
+                }
+            } else if (phase == Phase.PASSWORD_PENDING) {
+                if (result == PasswordAuthResult.NOT_STARTED) {
+                    throw new IOException("SSH authentication result regressed");
+                }
+                authenticationResult = result;
+                if (result != PasswordAuthResult.PENDING) phase = Phase.FINISHED;
+            } else if (phase != Phase.FINISHED || result != authenticationResult) {
+                throw new IOException("SSH authentication result regressed");
+            }
+            return result;
+        } catch (IOException | LinkageError | RuntimeException nativeFailure) {
+            throw protocolNativeFailure("SSH_SESSION_AUTH_RESULT");
+        }
+    }
+
+    void beginPrivateKeyAuth() throws VaultException {
+        requireOwnerThread();
+        enterNative();
+        try {
+            requireProtocolState();
+            if (phase != Phase.SERVICE_READY) throw phaseFailure();
+            if (expectedSelectionReceipt == null) throw SshAuthenticationSelection.invalid();
+            requireProtocolLive();
+            try {
+                nativeBinding.beginPrivateKeyAuth(nativeHandle);
+                requireProtocolLive();
+                phase = Phase.PRIVATE_KEY_PENDING;
+                privateKeyAuthentication = true;
+                privateKeyResult = PrivateKeyAuthResult.PENDING;
+            } catch (IOException | LinkageError | RuntimeException nativeFailure) {
+                throw protocolNativeFailure("SSH_SESSION_AUTH");
+            } catch (Error nativeFailure) {
+                terminalFailure = "SSH_SESSION_AUTH";
+                throw nativeFailure;
+            }
+        } finally { NATIVE_ENTRY.remove(); }
+    }
+
+    PrivateKeyAuthResult privateKeyAuthResult() throws VaultException {
+        requireOwnerThread();
+        enterNative();
+        try {
+            requireProtocolState();
+            if (phase != Phase.SERVICE_READY && phase != Phase.PRIVATE_KEY_PENDING
+                    && phase != Phase.FINISHED) throw phaseFailure();
+            if (phase == Phase.FINISHED && !privateKeyAuthentication) throw phaseFailure();
+            requireProtocolLive();
+            return queryPrivateKeyResult();
+        } finally { NATIVE_ENTRY.remove(); }
+    }
+
+    private PrivateKeyAuthResult queryPrivateKeyResult() throws VaultException {
+        try {
+            PrivateKeyAuthResult result = PrivateKeyAuthResult.fromNative(
+                    nativeBinding.privateKeyAuthResult(nativeHandle));
+            requireProtocolLive();
+            if (phase == Phase.SERVICE_READY) {
+                if (result != PrivateKeyAuthResult.NOT_STARTED)
+                    throw new IOException("unexpected SSH authentication result");
+            } else if (phase == Phase.PRIVATE_KEY_PENDING) {
+                if (result == PrivateKeyAuthResult.NOT_STARTED)
+                    throw new IOException("SSH authentication result regressed");
+                privateKeyResult = result;
+                if (result != PrivateKeyAuthResult.PENDING) phase = Phase.FINISHED;
+            } else if (phase != Phase.FINISHED || result != privateKeyResult) {
+                throw new IOException("SSH authentication result regressed");
+            }
+            return result;
+        } catch (IOException | LinkageError | RuntimeException nativeFailure) {
+            throw protocolNativeFailure("SSH_SESSION_AUTH_RESULT");
+        }
+    }
+
+    private void requireProtocolState() throws VaultException {
+        synchronized (stateLock) {
+            if (nativeClosed || destroyed) throw failure("SSH_SESSION_CLOSED");
+            if (terminalFailure != null) throw failure(terminalFailure);
+        }
+    }
+
+    private void requireProtocolLive() throws VaultException {
+        try { requireSelectionReadLive(); }
+        catch (VaultException lifecycle) { throw selectionLifecycleFailure(lifecycle); }
+    }
+
+    private VaultException protocolNativeFailure(String code) throws VaultException {
+        // A callback may cancel, expire or revoke the view while native reports failure.
+        requireProtocolLive();
+        synchronized (stateLock) { terminalFailure = code; }
+        return failure(code);
+    }
+
+    private static VaultException phaseFailure() { return failure("SSH_SESSION_PHASE"); }
+
+    /** Read-only metadata fingerprint; neither KEX completion nor this receipt authorizes a secret. */
+    byte[] authenticationSelectionReceipt() throws VaultException {
+        requireOwnerThread();
+        enterNative();
+        try { return authenticationSelectionReceiptInternal(); }
+        finally { NATIVE_ENTRY.remove(); }
+    }
+
+    private byte[] authenticationSelectionReceiptInternal() throws VaultException {
+        try { requireSelectionReadLive(); }
+        catch (VaultException lifecycle) { throw selectionLifecycleFailure(lifecycle); }
+        if (expectedSelectionReceipt == null) throw SshAuthenticationSelection.invalid();
+        byte[] received = null;
+        try {
+            received = nativeBinding.authenticationSelectionReceipt(nativeHandle);
+            requireSelectionReadLive();
+            if (received == null || received.length != 32
+                    || !MessageDigest.isEqual(received, expectedSelectionReceipt)) {
+                throw new IOException("SSH selection receipt does not match");
+            }
+            return received.clone();
+        } catch (VaultException lifecycle) {
+            throw selectionLifecycleFailure(lifecycle);
+        } catch (IOException | LinkageError | RuntimeException nativeFailure) {
+            // Prefer a cancellation/expiry observed during the native call.
+            try { requireSelectionReadLive(); }
+            catch (VaultException lifecycle) { throw selectionLifecycleFailure(lifecycle); }
+            synchronized (stateLock) { terminalFailure = "SSH_SESSION_SELECTION"; }
+            throw failure("SSH_SESSION_SELECTION");
+        } finally { VaultCodec.wipe(received); }
+    }
+
+    private void requireSelectionReadLive() throws VaultException {
+        synchronized (stateLock) {
+            if (nativeClosed || destroyed) throw failure("SSH_SESSION_CLOSED");
+            if (terminalFailure != null) throw failure(terminalFailure);
+            if (cancellationRequested) throw failure("SSH_SESSION_CANCELLED");
+        }
+        callback.requireAuthenticationSelectionLive();
+        if (!view.active()) throw failure("SSH_FILE_VIEW");
+    }
+
+    private VaultException selectionLifecycleFailure(VaultException lifecycle) {
+        String code = cancellationRequested || "SSH_CALLBACK_CANCELLED".equals(lifecycle.code)
+                ? "SSH_SESSION_CANCELLED" : sessionFailureCode(lifecycle.code);
+        synchronized (stateLock) { terminalFailure = code; }
+        return code.equals(lifecycle.code) ? lifecycle : failure(code);
     }
 
     void verifyHostKey(byte[] hostKeyBlob) throws VaultException {
         requireOwnerThread();
+        enterNative();
+        try { verifyHostKeyInternal(hostKeyBlob); }
+        finally { NATIVE_ENTRY.remove(); }
+    }
+
+    private void verifyHostKeyInternal(byte[] hostKeyBlob) throws VaultException {
         if (!validHostKey(hostKeyBlob)) throw invalid();
         synchronized (stateLock) {
             requireOpenLocked();
@@ -314,6 +699,12 @@ final class SshNativeSession implements AutoCloseable {
      */
     @Override public void close() throws VaultException {
         requireOwnerThread();
+        enterNative();
+        try { closeInternal(); }
+        finally { NATIVE_ENTRY.remove(); }
+    }
+
+    private void closeInternal() throws VaultException {
         synchronized (stateLock) {
             if (destroyed) return;
         }
@@ -325,6 +716,7 @@ final class SshNativeSession implements AutoCloseable {
                         "The native SSH session close is unconfirmed");
             }
             synchronized (stateLock) { nativeClosed = true; }
+            VaultCodec.wipe(expectedSelectionReceipt);
         }
         if (!callbackClosed) {
             callback.nativeClientClosed(callbackClaim);
@@ -353,6 +745,18 @@ final class SshNativeSession implements AutoCloseable {
     private void requireOwnerThread() throws VaultException {
         if (Thread.currentThread() != ownerThread) throw new VaultException("SSH_SESSION_THREAD",
                 "SSH session I/O must run on its event-loop thread");
+    }
+
+    private static void requireOpenOwner(SshNativeCallbackAdapter callback) throws VaultException {
+        if (callback == null) throw invalid();
+        if (Thread.currentThread() != callback.eventLoopThread()) {
+            throw failure("SSH_SESSION_THREAD");
+        }
+    }
+
+    private static void enterNative() throws VaultException {
+        if (Boolean.TRUE.equals(NATIVE_ENTRY.get())) throw failure("SSH_SESSION_REENTRANT");
+        NATIVE_ENTRY.set(Boolean.TRUE);
     }
 
     private void requireOpenLocked() throws VaultException {
