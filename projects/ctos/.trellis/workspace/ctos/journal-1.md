@@ -1665,3 +1665,272 @@ implementation_complete=false。接续channels/PTY、forward、service/UI以及K
 SUCCESS-only session open/PTY/shell、window/背压、resize、EOF/exit/close与取消/期限合同，
 再实现native/Java/JNI合成闭环并接入现有终端界面。forward/service与KBI/MFA等后续推进；
 PARTIAL/CHANGE_REQUIRED不得放行，设备/真实账号操作不能沿用历史授权扩大范围。
+
+
+## Session 48: SSH session channel PTY shell local integration
+
+**Date**: 2026-10-19
+**Task**: SSH session channel PTY shell local integration
+**Branch**: `antitrust`
+
+### Summary
+
+Continued existing task; frozen SUCCESS-only channel contract, native/JNI/Java and existing terminal adapter locally implemented and checked. Device/new account use and product launcher remain open; parent task stays in progress.
+
+### Main Changes
+
+- Added six shell APIs, bounded flow/EOF/close and serial terminal owner with typed generation/UTF8 events; preserved authentication proof/revocation/deadline/owner contracts.
+
+### Git Commits
+
+(No commits - planning session)
+
+### Testing
+
+- [OK] Fresh JVM270, Flutter227/analyze, normal94 all-rerun, fixture113/lint/v2, final ARM1651641 checks exit0.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- User chose uncommitted workspace and local results only: no device operation or commit. Keep parent active, no archive/push; product launcher and independent Android runtime remain future work.
+
+
+## Session 49: SSH actual offered-host and exact NEW review local implementation
+
+**Date**: 2026-10-19
+**Task**: SSH actual offered-host and exact NEW review local implementation
+**Branch**: `antitrust`
+
+### Summary
+
+MANAGED native/JNI/Java plus bounded exact-review mailbox implemented; ARM full1724409/focused87305 and host fresh JVM288 pass. Final Docker/APK packaging pending automatic approval capacity failure; local uncommitted/no device scope retained.
+
+### Main Changes
+
+- Freeze design/ssh-launcher.md; preserve PINNED, auth/PTY, proof/revocation/original deadline/owner; exact candidate/CAS and transport-only one-shot offered-host pin.
+- Add independent NEW review mailbox and explicit JNI19 openManaged; compile synthetic managed-host Android fixture source; formal core/final delta source review no concrete findings.
+
+### Git Commits
+
+(No commits - planning session)
+
+### Testing
+
+- [OK] Strict native third6tasks13s; immutable native-third SHA00b68966, QEMU managed87305/full1724409 exit0.
+- [OK] Focused Gradle55tasks23s JNI/lint/session51+mailbox8; final host JDK recompiles changed main Java and all17 tests, JUnit288 pass39.199s. GeneratedJNI19/archive83/forbidden0.
+- [OK] New Android fixture source compile pass; complete normal/fixture APK gate not executed on three automatic review capacity failures. No device, real account or commit.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- When automatic approval service recovers, run complete local normal/fixture build and final native/APK audits per verification#20261019-managed-host; do not substitute old APKs.
+- Then research/freeze production readconf evaluator/catalog/connector; parent stays in_progress, retain uncommitted local work; no device/commit under current scope.
+
+## Session 50: Complete offered-host local packaging and independent static ARM verification
+
+**Date**: 2026-10-19
+**Task**: 10-08-ssh-terminal-client (in_progress)
+**Branch**: `antitrust`
+**Commits**: none; retained local-only uncommitted scope.
+
+### Result
+
+Resumed the existing task without creating another. Approval capacity blocker resolved;
+normal94 tasks all executed/1m30s, fresh Gradle JVM288 across17reports with zero failures,
+errors or skips. Fixture113tasks/16s (21executed/92up-to-date), assembly and lint pass.
+Three APKs v2/one matching signer; isolated fixture/test IDs/target, normal only production
+SSH library,19JNI/archive83/forbidden0; fixture peer links production library.
+
+Old /tmp evidence and board-derived dynamic Bionic runtime were absent. No device contacted.
+Rebuilt dynamic test saved but not run. Additional static NDK/Bionic test uses unchanged
+project sources/production archive, separate compat copy minus duplicate reallocarray and
+test-only native TLS alignment64. Its immutable SHA6520ff35… passed managed87300 and
+complete1724636 checks/exit0 on approved host QEMU. Build/TLS/sandbox failure logs retained;
+static and old dynamic/device evidence remain distinct. Source/spec/fixture checker found
+no concrete defect; no production source changed. Flutter unchanged, not rerun.
+
+### Evidence and next step
+
+Evidence `/tmp/ctos-ssh-managed-host-resume-20261019.ruWFiwIc`; normal APK84e98c04…,
+fixture9009448d…/test17c47f1b…. Full hashes, commands and coverage limits in
+design/verification.md#20261019-managed-host. Synced landing, contract, changelog,
+handoff, spec, task/check/current metadata and mainline; no auto-commit/archive scripts.
+Parent remains in_progress/implementation_complete=false. Next is production readconf/
+managed Include evaluator contract and implementation, then catalog/connector. New Android
+JNI/controller/managed runtime, real accounts and full product AC remain open; no device,
+real vault/account, dist, commit, archive or push this session.
+
+Final checks: restored session pointer to the existing task; source26/artifact8 SHA manifests
+pass,251 local Markdown links valid, git diff --check and task-context validation pass.
+Context validation retains preexisting source-manifest/oversize-injection warnings; child
+fallback reads are required. No task creation or protected workflow/config edits.
+
+## Session 51: Managed native readconf evaluator and local production gates
+
+**Date**: 2026-10-19
+**Branch**: `antitrust`
+**Task**: `10-08-ssh-terminal-client` (still in_progress)
+**Commits**: None; user retains local uncommitted work, no archive/push/dist/device.
+
+### Result
+
+Implemented the native-only production configuration prerequisite using pinned OpenSSH
+readconf, scoped effect hooks, managed Include and full owned Options. Added lifecycle/
+structured provenance diagnostics/atomic cancel/retryable cleanup, independent parser
+patch/runner and Gradle object integration without changing original session/KEX/JNI
+sources or the83-member production archive. Full raw fields are explicitly retained;
+summary is not a runtime launch plan. No JNI/catalog/validator/connector yet.
+
+### Verification
+
+- Final strict focused build9tasks17s passes. Immutable NDK/static Bionic ARM evaluator
+  SHA9f1fb6ba… passes3736checks/effects0/exit0. Existing full session/auth/PTY regression
+  linked with config objects SHAbe3c2f74… passes1725125checks/exit0 on approved host QEMU.
+- Normal95tasks all executed/1m36s; fresh Gradle JVM288/17reports, zero failures/errors/
+  skips. Fixture114tasks23s,31executed/83up-to-date. Lint normal0errors3warnings,
+  fixture0errors4warnings. Three APKs v2/one matching signer, isolated fixture target;
+  normal only production SSHlib/no peer class,19sessionJNI/archive83/namespaced parser.
+- Formal full-source and final focused delta reviews leave no concrete finding. Actual
+  parser tests caught upstream poison-pointer initialization vs complete cleanup and lost
+  postparse provenance; repaired with regressions. First failed logs preserved, final
+  jump decoded UTF8/255-byte guard verified. Shell syntax/ShellCheck/shfmt, input source
+  SHA and original session/KEX/JNI SHA checks pass. No Flutter changes or rerun.
+
+### Boundaries and continuation
+
+Dynamic ARM evaluator built but not run (old Bionic runtime missing; no device fetch).
+Static compat/TLS test adaptation does not establish Android/JNI/ROM acceptance. General
+xalloc OOM remains terminating; PID/UID and borrow-release failure are source-review-only.
+Next: freeze JNI/managed result/lifetime contract, then production catalog/semantic validator
+and finalized per-field plan/connector. Retained jump/forward/session fields must be handled
+or explicitly rejected. Original role/auth/PTY boundaries remain. No real vault/accounts,
+APK installs, commits or archives; parent implementation_complete=false.
+
+Evidence `/tmp/ctos-ssh-config-evaluator-20261019.DNFND9Yx`; normal APKdd2dd9a0…,
+fixture74c68d96…/test17c47f1b…. Full hashes, commands, failed rounds and coverage limits
+in design/verification.md#20261019-config-evaluator. Updated contract, design landing/plan/
+compatibility/dependencies/changelog, code-spec, task/check/current metadata, mainline and
+existing handoff. Current handoff separates completed native evaluator from pending product
+integration and preserves previous offered-host context as history. No auto-commit scripts.
+
+Final documentation checks:391 local Markdown targets valid; task context validation passes
+with only the known oversized ssh-native spec injection warning (explicit fallback reads
+used). Final source/artifact SHA checks and git diff --check pass; current task pointer kept.
+
+## Session 52: Config evaluator JNI and Java owner boundary
+
+**Date**: 2026-10-19
+**Branch**: antitrust
+**Task**: 10-08-ssh-terminal-client (in_progress)
+**Commits**: None; retain local uncommitted scope, no device/accounts/archive/push/dist.
+
+### Result
+
+Implemented64-slot opaque config registry, short busy-pin locking/atomic cross-thread
+cancel, positive cleanup handle after post-borrow open failure, strict standardUTF8
+CSEQ/CSES and six production configJNI entries. Java facade owns immutable request/
+summary/diagnostic and staged close/destroy retry; caller lease is borrowed, never closed.
+Full raw Options stays native, copied Summary is historical metadata, not a launch plan.
+Added20 JVM methods and independent exact opt-in compile-only Android fixture. Original
+native eval/parser patch/view/IO/client/KEX/sessionJNI sources remain SHA-identical12 inputs.
+
+### Verification
+
+- Strict native dynamic/static handle test + JNI/shared compile9tasks17s pass. Focused
+  Java/lint56tasks25s;20tests/1report,zero failure/error/skip. Formal full current-increment
+  source review no concrete finding/no edits; guards and failed cleanup ownership reviewed.
+- Normal95tasks all executed1m36s; fresh Gradle JVM308/18reports zero failures/errors/skips.
+  Fixture114tasks28s (40exec/74up-to-date), new test class present in test DEX. Lintnormal
+  0errors3warnings/fixture0errors4warnings. No Flutter changes or rerun.
+- First static ARM5201/effects0/exit0; production temporary paths embedded in builds made
+  initial normal vs fixture artifacts differ. Preserved initial APK3f3de185… and native
+  f03ad972…; froze final compiled archive/shared library, directly built final static handle
+  test against that archive and reused validated native inputs in normal packaging77tasks9s.
+  Final staticSHA1291cead… again5201/effects0/exit0. No production/source hashes changed
+  through final runtime/package. Both APKs now contain byte-identical production SSHlib,
+  all22allocated sections match generated. Three v2APKs/one matching signer, fixturetarget,
+  configJNI6/sessionJNI19/archive83, no stock caller/testseed/wrap/peer in normal pass.
+
+### Boundaries and next step
+
+Native tests include deterministic paused-parser cross-thread cancel, busy destroy/reentry,
+mocked PID/UID, expiry/revoke, failure-injected pending borrow/close/destroy/unmap retry,
+capacity/stale/signed token exhaustion, exact wire boundaries and repeatedFD baseline.
+Concurrent cancel/destroy independent stress and live JNI VM allocation exception paths
+remain source-reviewed. New platform method compiled only, no install/runtime. Dynamic ARM
+built/not run; old Bionic runtime missing and no device fetched. xalloc generalOOM still
+terminating. Source contract clarified C1 rejection, preserved native diagnostic before
+successful Java publication checks and accepted rejected budget line16385.
+
+Evidence /tmp/ctos-ssh-config-jni-20261019.vnQ3FInL; final normal284e9566…,
+fixturefaccd363…/testb1e3c4ce…, packaged SSHlibc58f41e9…. Commands/hashes and fixed-input
+packaging details: design/verification.md#20261019-config-jni. Synced specs, design landing/
+plan/compatibility/dependencies/changelog/launcher, task/current/check metadata, mainline and
+handoff; old native-before-JNI state preserved as history. Next research/freeze production
+catalog/semantic validator and per-field finalization/connector; SSH restore rejection gate
+remains. Parent implementation_complete=false. No auto-commit/archive scripts invoked.
+
+Final checks: source63/artifact14 and unchanged12 SHA manifests pass;411 local Markdown
+targets valid, task manifests13 entries validate (known oversized spec injection warning;
+explicit source fallback used). Final evidence reviewer confirmed no new concern or edits.
+
+## Session 53: Context-free SSH declaration catalog and preserved evaluator regressions
+
+**Date**: 2026-10-19
+**Task**: 10-08-ssh-terminal-client (in_progress; parent implementation_complete=false)
+**Commits**: - (local uncommitted; no commit/archive/push/dist)
+
+### Scope and decisions
+
+Continued the original SSH launch dependency chain with common/Trellis continuation,
+research, implementation/check and handoff workflows. Frozen design/ssh-config-catalog.md:
+same pinned readconf lexer/full Host argv, no Request/fake alias/user/passwd, literal first
+sources, conservative root-reachable static managed Include, located deferred %/$ sites.
+Match/known directive values are lexical only; strict unknown rejection ignores IgnoreUnknown.
+Catalog is declarationsOnly and cannot certify effective configuration or whole manifest.
+AppSecrets source/target/candidate/private/trust validation and restore gate remain separate;
+no production validator registration, role, credential, socket, connector or UI added.
+Research corrected attachRevocation active-view behavior to BUSY rather than replacement.
+
+### Implementation and verification
+
+Native evaluator/parser/registry/JNI plus Java facade/CSCD/19 new JVM methods and compile-only
+Android method implemented by ownership-scoped workers. Main owned all builds/QEMU/docs.
+Formal checker found only missing deterministic final-reader revoke/cancel coverage; worker
+added both before validation. Final source and evidence reviews have no unresolved finding.
+
+- Strict11tasks19s; initial/final catalog static ARM71923/effects0/exit0, ordinary evaluator
+  3736 and handle5201/effects0/exit0 regressions pass. Exact70424-byte CSCD and all budgets,
+  semantic non-certification, parser/lifetime/cleanup/FD cases exercised.
+- Focused56tasks24s/JVM39/2reports; normal95tasks all executed1m30s; fresh full JVM327/
+  19reports zero failures/errors/skips. Fixture114tasks25s (40exec/74up-to-date), new method
+  present in test DEX. Lintnormal0errors3warnings/fixture0errors4warnings.
+- Frozen final production archive/shared, built independent final static catalog test then
+  normal77tasks9s packaging from validated native inputs. Two APK production libraries byte
+  identical,22 allocated sections match generated; three v2/one signer/fixturetarget,
+  configJNI8/sessionJNI19/archive83/no forbidden symbols pass. Host readelf audit locale
+  assertion corrected with LC_ALL=C, no product change.
+- 65 source/16 protected/17 artifact hashes pass. ShellCheck/shfmt/bash -n/diff and local
+  links/task manifests checked. New seven-part spec and AppSecrets note, design landing/
+  plan/compatibility/dependencies/changelog/verification, task/check/mainline/handoff synced.
+
+Evidence /tmp/ctos-ssh-config-catalog-20261019.RiaqcP03; final normal252dc31c…,
+fixture00cda3f3…/testb31f941a…, catalogARMf0e71e3d…; full exact commands/hashes in
+design/verification.md#20261019-config-catalog. Source hash65/protected16 independently
+rechecked by formal evidence reviewer; XML and APK/ELF correspondence also verified.
+
+### Limits and next action
+
+Android catalog fixture compiled/not installed/executed; dynamic ARM built/not run, old
+Bionic runtime absent and no device fetched. Static compat/TLS adaptation is test-only.
+JNI VM exception/concurrent destroy stress and xalloc OOM limits remain. Full auth/PTY ARM
+1725125 evidence historical, Flutter unchanged/not rerun. No real vault/accounts/device.
+Next freeze actual manifest semantic validator/private/trust/reference/restore contracts,
+then per-field finalization/exact credential selection/connector to existing MANAGED session.
+No auto-commit/archive scripts invoked; original task remains active and incomplete.
