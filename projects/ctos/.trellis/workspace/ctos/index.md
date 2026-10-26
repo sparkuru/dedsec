@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-2.md`
-- **Total Sessions**: 74
+- **Total Sessions**: 75
 - **Last Active**: 2026-10-26
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-2.md` | ~870 | Active |
+| `journal-2.md` | ~906 | Active |
 | `journal-1.md` | ~1936 | Archived |
 <!-- @@@/auto:active-documents -->
 
@@ -30,6 +30,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 75 | 2026-10-26 | SSH key/config, saved passwords and Android16 real-login acceptance | `30dd1dc` | `antitrust` |
 | 74 | 2026-10-26 | Install and archive foreground password SSH delivery | `0c162418201defd425518848c7c1197ffdf084ac` | `antitrust` |
 | 73 | 2026-10-26 | Authorized Android bridge and real Flutter password SSH acceptance | - | `antitrust` |
 | 72 | 2026-10-25 | Foreground password SSH and independent sshd interoperability | - | `antitrust` |

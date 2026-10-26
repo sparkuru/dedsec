@@ -868,3 +868,39 @@ Installed the accepted formal APK on the named board, documented usable features
 ### Next Steps
 
 - No automatic continuation; choose future parent capabilities explicitly.
+
+
+## Session 75: SSH key/config, saved passwords and Android16 real-login acceptance
+
+**Date**: 2026-10-26
+**Task**: SSH key/config, saved passwords and Android16 real-login acceptance
+**Branch**: `antitrust`
+
+### Summary
+
+沿已有SSH父task实现私钥/config与可选密码保存，修复Android16的64KiB锁页和内部memfd chmod兼容性；最终APK042保留数据更新手机，原有私钥登录真实目标及PTY输出通过，用户人工验收授权提交。完整父规划继续in_progress，不新建或归档task。
+
+### Main Changes
+
+- 保护SAF key/config导入、原子身份绑定、native direct计划及key-only PTY；显式加密保存/复用/忘记密码。
+- 实际数量公开索引避免固定锁页开销；内部匿名FD核对实际属性，严格对外FD规则与正文锁页擦除保留。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `30dd1dc` | (see git log) |
+
+### Testing
+
+- [OK] 755 JVM、271 Flutter/analyze、最终normal/fixture构建与lint；59份源码和最终APK来源一致，独立Trellis复核PASS。
+- [OK] 64KiB真实子进程、原生故障/认证矩阵、Ed25519/RSA/ECDSA互通及开发板四项实际回归通过。
+- [OK] 授权手机PLR110/API36保留数据安装042，UID10497保留；原有私钥经真实主机指纹核验登录，whoami及非回显标记通过；用户人工验收，测试会话和临时资源清理。
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 真实DocumentsUI专项、复杂配置/跳板/转发、其他认证及前台服务/后台/完整恢复仍按父规划独立推进，不自动标全范围完成。
