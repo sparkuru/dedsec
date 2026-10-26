@@ -16,8 +16,9 @@ handoff. Actual platform identity comes from `SshNativeRoleBootstrap.systemIdent
 
 ## 3. Contracts
 
-Explicit form saves only public recent endpoint configuration and confirmed host keys in the
+The default form saves public recent endpoint configuration and confirmed host keys in the
 actual encrypted shared vault; password is default one-use, never a temporary saved entry.
+Explicit persistent password choices follow the saved-password scenario below.
 Fixed generated CONFIG ssh/config and KNOWN_HOSTS ssh/known_hosts, IDs/identity/alias and
 reversible quoting are frozen in the contract. Validate the entire supplied manifest against
 the supported subset, pinned parse/actual tuple, trust material/types/references/bounds;
@@ -94,3 +95,80 @@ packages/data/requests/reverse/server created in the authorized session.
 Wrong: expose a test picker, autoapprove trust, ignore unsupported config or infer FD consumption
 from an exception. Correct: one real production path with explicit public-state effects, exact
 authority, narrow post-auth session capability and evidence scoped to what actually ran.
+
+## Scenario: Optional saved password
+
+### 1. Scope / Trigger
+
+The selected R10 increment extends this same production path; follow
+[saved-password contract](../../../design/ssh-saved-password.md). The original transient default,
+real host trust/KEX, original deadlines and foreground-only connection behavior remain required.
+
+### 2. Signatures
+
+`ssh.defaults(requestId)` adds `savedPassword: bool` to the public tuple.
+`ssh.passwordStatus(requestId, host, port, username)` returns `{saved: bool}`.
+`ssh.passwordConnect` adds strict `useSavedPassword` and `savePassword` booleans;
+`ssh.forgetPassword(requestId, host, port, username, all)` returns `{forgotten: bool}`.
+No payload accepts a caller-selected entry ID/target or returns password bytes.
+For `all=true`, send empty host/username and port22; no valid current tuple is required.
+The host owns a distinct all-password mutation context rather than an invented account.
+
+### 3. Contracts
+
+Canonical Account/SSH_PASSWORD records bind exact host/port/username via domain-separated,
+length-framed UTF8 tuple digest, stable IDs and matching target; metadata is validated against
+every actual record. Reject orphan credentials, noncanonical IDs/targets, unsupported account
+kinds, changed usernames and secret length/NUL/encoding violations. Preserve TOTP, generated
+config/known_hosts and unrelated saved tuples. Save/delete account and credential atomically in
+the existing original-context entry mutation pipeline, with independent owned candidates and
+the same effect/uncertain handling. No second crypto/storage implementation.
+
+Default transient does not modify persisted passwords. Explicit save can commit before network
+connect; connection failure does not imply rollback. Complete exact own profile/password writes
+before creating the public view; never accept arbitrary epoch advances or extend the budget.
+Saved selection uses proof-bound typed reads and validates actual Account host/port/username,
+entry and target both on admission and release. Foreground, unlocked vault, original deadline,
+validator registration, exact role/selection/KEX, cancellation and final guarded copy all apply.
+
+Status replaces only its exact prior idle guard; cancelled older IDs cannot retire newer work.
+Forget uses its own request/guard and cannot be overtaken by connect. Late cancellation after
+durable mutation reports uncertain and locks as required by the shared pipeline. Complex SSH
+restore metadata review remains closed; adding accounts grants no restore approval.
+Pin the original immutable validator registration before queueing and retain its cancellation/
+deadline checks across exact own writes; this metadata-only guard does not grant old-epoch bundle
+admission. The bridge retains one successful request/connector solely for exact late cancellation;
+replace it on successful handoff, not an attempted BUSY connection. Factory identity prevents
+an old cancellation affecting a newer terminal. Ordinary event-stream disposal does not cancel
+the retained successful connector.
+
+### 4. Validation & Error Matrix
+
+Bad booleans, saved+nonempty password, saved+save, malformed tuple/password -> PARAMETERS.
+Absent saved account -> SSH_PASSWORD_MISSING; mismatched account -> fail before credential copy,
+never fall back to another entry.
+Foreign content -> SSH_PROFILE_UNSUPPORTED; changed vault/epoch -> VAULT_CHANGED.
+Cancel/lock/expiry preserve the original typed errors; durable-but-unconfirmed writes ->
+VAULT_COMMIT_UNCERTAIN. Return only fixed bounded error text, no raw secrets/exceptions.
+
+### 5. Good / Base / Bad Cases
+
+Good: explicitly save tuple A, reconnect A with an empty frontend password and exact native
+account selection, then forget A while tuple B/TOTP/trust remain. Base: old generated profile
+and pureTOTP continue; default supplied password never becomes a persistent entry.
+Bad: select by username alone, concatenate ambiguous tuple fields, silently use a saved password
+after target editing, or serialize password bytes into defaults/events.
+
+### 6. Tests Required
+
+Actual encrypted store round trips for create/update/one/all delete and mixed preservation;
+tuple boundary/Unicode/cross-port/cross-user/cross-host mismatch and metadata tampering;
+current typed read Account checks, preproof rejection and original lock/cancel/epoch/expiry cases;
+commit claim/uncertain and validator loan mutation. Flutter exact payloads/stale status/forget
+confirmations and layout remain separate; Android runtime requires current explicit authorization.
+
+### 7. Wrong vs Correct
+
+Wrong: read a saved password into Flutter and reuse it after editing the host.
+Correct: publish only saved availability; native resolves the exact Account and performs the
+existing proof-bound selected read at authentication time.

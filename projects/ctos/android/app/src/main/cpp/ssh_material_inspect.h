@@ -10,6 +10,8 @@
 #define CTOS_SSH_KEY_ASSOCIATION_WIRE_BYTES 60U
 #define CTOS_SSH_PRIVATE_MATERIAL_WIRE_BYTES 60U
 #define CTOS_SSH_CERTIFICATE_FACTS_WIRE_BYTES 168U
+#define CTOS_SSH_KEY_EXPORT_HEADER_BYTES 56U
+#define CTOS_SSH_KEY_EXPORT_BYTES (CTOS_SSH_KEY_EXPORT_HEADER_BYTES + CTOS_SSH_MATERIAL_BYTES)
 enum ctos_ssh_certificate_status {
     CTOS_CERTIFICATE_FACTS, CTOS_CERTIFICATE_MALFORMED, CTOS_CERTIFICATE_UNSUPPORTED
 };
@@ -47,4 +49,9 @@ int ctos_ssh_material_verify_private(const unsigned char *body, size_t length,
  * current validity, principal applicability, revocation or admission claim. */
 int ctos_ssh_material_inspect_certificate(const unsigned char *body, size_t length,
     uint64_t deadline, unsigned char output[CTOS_SSH_CERTIFICATE_FACTS_WIRE_BYTES]);
+/* Real public subject from a supplied unencrypted private key, after a fixed
+ * local signing proof. Caller owns/free()s the public-only allocated wire.
+ * No persistent handle, signing payload or secret bytes are returned. */
+int ctos_ssh_material_export_public(const unsigned char *body, size_t length,
+    uint64_t deadline, unsigned char **output, size_t *output_length);
 #endif

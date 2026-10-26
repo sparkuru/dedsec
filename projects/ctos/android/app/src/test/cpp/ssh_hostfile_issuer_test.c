@@ -12,6 +12,7 @@
 #include <unistd.h>
 
 #include "ssh_role_bootstrap.h"
+#include "digest.h"
 #include "hostfile.h"
 #include "ssh2.h"
 #include "sshkey.h"
@@ -56,11 +57,12 @@ static void put_text(struct wire *wire, const char *value) {
     put(wire, value, length);
 }
 
-static void put_object(struct wire *wire, const unsigned char *body, size_t length) {
+static void put_object(struct wire *wire, const unsigned char *body, size_t length,
+    const char *known_hosts_path) {
     unsigned char type = CTOS_SSH_KNOWN_HOSTS;
     put(wire, &type, sizeof(type));
     put_text(wire, "trust");
-    put_text(wire, "ssh/known_hosts");
+    put_text(wire, known_hosts_path);
     put_text(wire, "issuer public trust");
     put_u32(wire, (uint32_t)length);
     put_u32(wire, 0);
@@ -68,7 +70,8 @@ static void put_object(struct wire *wire, const unsigned char *body, size_t leng
     put(wire, body, length);
 }
 
-static void put_root_object(struct wire *wire, const char *root_path) {
+static void put_root_object(struct wire *wire, const char *root_path,
+    const char *known_hosts_path) {
     unsigned char type = CTOS_SSH_CONFIG;
     put(wire, &type, sizeof(type));
     put_text(wire, "root");
@@ -76,12 +79,12 @@ static void put_root_object(struct wire *wire, const char *root_path) {
     put_text(wire, "issuer public config");
     put_u32(wire, 0);
     put_u32(wire, 1);
-    put_text(wire, "ssh/known_hosts");
+    put_text(wire, known_hosts_path);
     put_u32(wire, 0);
 }
 
 static void make_view_wire(struct wire *wire, const unsigned char *body, size_t length,
-    uint64_t deadline, const char *root_path) {
+    uint64_t deadline, const char *root_path, const char *known_hosts_path) {
     unsigned char uuid[16] = {1};
     unsigned char binding[32] = {2};
     memset(wire, 0, sizeof(*wire));
@@ -96,34 +99,26 @@ static void make_view_wire(struct wire *wire, const unsigned char *body, size_t 
     put_text(wire, root_path);
     put(wire, binding, sizeof(binding));
     put_u32(wire, 2);
-    put_root_object(wire, root_path);
-    put_object(wire, body, length);
+    put_root_object(wire, root_path, known_hosts_path);
+    put_object(wire, body, length, known_hosts_path);
+}
+
+static struct ctos_ssh_view *load_view_paths(const unsigned char *body, size_t length,
+    uint64_t deadline, const char *root_path, const char *known_hosts_path) {
+    struct wire wire;
+    struct ctos_ssh_view *view;
+    make_view_wire(&wire, body, length, deadline, root_path, known_hosts_path);
+    view = calloc(1, sizeof(*view));
+    assert(view != NULL);
+    assert(ctos_ssh_view_allocate(view, wire.length) == 0);
+    memcpy(view->mapping, wire.bytes, wire.length);
+    assert(ctos_ssh_view_validate(view) == 0);
+    return view;
 }
 
 static struct ctos_ssh_view *load_view(const unsigned char *body, size_t length,
     uint64_t deadline) {
-    struct wire wire;
-    struct ctos_ssh_view *view;
-    make_view_wire(&wire, body, length, deadline, "ssh/config");
-    view = calloc(1, sizeof(*view));
-    assert(view != NULL);
-    assert(ctos_ssh_view_allocate(view, wire.length) == 0);
-    memcpy(view->mapping, wire.bytes, wire.length);
-    assert(ctos_ssh_view_validate(view) == 0);
-    return view;
-}
-
-static struct ctos_ssh_view *load_view_with_root(const unsigned char *body,
-    size_t length, uint64_t deadline, const char *root_path) {
-    struct wire wire;
-    struct ctos_ssh_view *view;
-    make_view_wire(&wire, body, length, deadline, root_path);
-    view = calloc(1, sizeof(*view));
-    assert(view != NULL);
-    assert(ctos_ssh_view_allocate(view, wire.length) == 0);
-    memcpy(view->mapping, wire.bytes, wire.length);
-    assert(ctos_ssh_view_validate(view) == 0);
-    return view;
+    return load_view_paths(body, length, deadline, "ssh/config", "ssh/known_hosts");
 }
 
 static void destroy_view(struct ctos_ssh_view *view) {
@@ -410,6 +405,124 @@ static void test_hashed_endpoint_isolation(const struct sshkey *known, const str
     }
 }
 
+static void test_actual_root_classifications(const struct sshkey *known, const struct sshkey *changed,
+    const unsigned char *key_line, size_t key_length, const unsigned char *revoked_line, size_t revoked_length) {
+    const char *roots[] = {"ssh/config", ".ssh/config", ".ssh/ctos-manual"};
+    const int expected[] = {CTOS_SSH_CALLBACK_HOST_NEW, CTOS_SSH_CALLBACK_HOST_KNOWN,
+        CTOS_SSH_CALLBACK_HOST_CHANGED, CTOS_SSH_CALLBACK_HOST_REVOKED};
+    const size_t capacity = CTOS_SSH_CALLBACK_MAX_FILE_BYTES + 1U;
+    unsigned char *replacement = malloc(capacity);
+    struct handoff_fixture *handoff = calloc(1, sizeof(*handoff));
+    assert(replacement != NULL && handoff != NULL);
+    for (size_t index = 0; index < sizeof(roots) / sizeof(roots[0]); index++) {
+        const char *path = index == 0 ? "ssh/known_hosts" : ".ssh/known_hosts";
+        for (unsigned int classification = 0; classification < 4U; classification++) {
+            uint64_t deadline = deadline_after(5000);
+            ctos_ssh_role_token role = open_role(deadline);
+            const unsigned char *body = classification == 0 ? NULL
+                : classification == 3 ? revoked_line : key_line;
+            size_t length = classification == 0 ? 0 : classification == 3 ? revoked_length : key_length;
+            struct ctos_ssh_view *view = load_view_paths(body, length, deadline, roots[index], path);
+            const struct sshkey *offered = classification == 2 ? changed : known;
+            struct ctos_ssh_hostfile_issue issue;
+            FILE *stream = NULL;
+            ctos_ssh_callback_token callback = 0;
+            memset(handoff, 0, sizeof(*handoff));
+            memset(replacement, 0xa5, capacity);
+            if (classification == 0) {
+                callback = open_callback(handoff, role, deadline);
+                stream = fmemopen(replacement, capacity, "w+");
+                assert(stream != NULL);
+            }
+            assert(ctos_ssh_hostfile_issue(view, role, path, "example.invalid", offered,
+                "candidate-issuer", stream, replacement, capacity, callback,
+                callback == 0 ? NULL : handoff->environment, &issue) == 0);
+            assert(issue.classification == expected[classification]);
+            char *fingerprint = sshkey_fingerprint(offered, SSH_DIGEST_SHA256, SSH_FP_DEFAULT);
+            assert(fingerprint != NULL && strcmp(issue.fingerprint, fingerprint) == 0);
+            assert(strcmp(issue.key_type, sshkey_ssh_name(offered)) == 0);
+            free(fingerprint);
+            if (classification == 0) {
+                assert(issue.handed_off == 1 && handoff->calls == 1 && handoff->body_length > 0);
+                assert(issue.replacement_body_length == handoff->body_length);
+                assert(memcmp(issue.base_digest, handoff->base_digest, 32U) == 0);
+                assert(memcmp(issue.replacement_digest, handoff->replacement_digest, 32U) == 0);
+                for (size_t byte = 0; byte < issue.replacement_body_length; byte++) assert(replacement[byte] == 0);
+                assert(fclose(stream) == 0);
+                // Reopen the exact native-written replacement at the same actual paths.
+                struct ctos_ssh_view *persisted = load_view_paths(handoff->body, handoff->body_length,
+                    deadline, roots[index], path);
+                assert(ctos_ssh_hostfile_issue(persisted, role, path, "example.invalid", known,
+                    "candidate-issuer", NULL, NULL, 0, 0, NULL, &issue) == 0);
+                assert(issue.classification == CTOS_SSH_CALLBACK_HOST_KNOWN && issue.handed_off == 0);
+                destroy_view(persisted);
+                assert(ctos_ssh_callback_close(callback, handoff->environment) == 0);
+                cases++;
+            } else {
+                assert(issue.handed_off == 0 && issue.replacement_body_length == 0);
+                assert(memcmp(issue.base_digest, issue.replacement_digest, 32U) == 0);
+            }
+            destroy_view(view);
+            assert(ctos_ssh_role_bootstrap_close(role) == 0);
+            cases++;
+        }
+    }
+    memset(replacement, 0, capacity); free(replacement);
+    memset(handoff, 0, sizeof(*handoff)); free(handoff);
+}
+
+static void test_actual_root_denials(const struct sshkey *key) {
+    const char *roots[] = {"ssh/config", ".ssh/config", ".ssh/ctos-manual"};
+    const size_t capacity = CTOS_SSH_CALLBACK_MAX_FILE_BYTES + 1U;
+    unsigned char *replacement = malloc(capacity);
+    struct handoff_fixture *handoff = calloc(1, sizeof(*handoff));
+    assert(replacement != NULL && handoff != NULL);
+    for (size_t index = 0; index < sizeof(roots) / sizeof(roots[0]); index++) {
+        const char *path = index == 0 ? "ssh/known_hosts" : ".ssh/known_hosts";
+        for (unsigned int fault = 0; fault < 9U; fault++) {
+            uint64_t deadline = deadline_after(5000);
+            ctos_ssh_role_token role = open_role(deadline);
+            struct ctos_ssh_view *view = load_view_paths(NULL, 0, deadline, roots[index], path);
+            const char *selected = path;
+            memset(handoff, 0, sizeof(*handoff));
+            ctos_ssh_callback_token callback = open_callback(handoff, role, deadline);
+            if (fault == 0) view->root = (struct ctos_ssh_slice){
+                (const unsigned char *)".ssh/missing", sizeof(".ssh/missing") - 1U};
+            if (fault == 1) view->files[0].type = CTOS_SSH_PUBLIC_KEY;
+            if (fault == 2) selected = ".ssh/missing-known_hosts";
+            if (fault == 3) view->files[1].type = CTOS_SSH_PUBLIC_KEY;
+            if (fault == 4) view->files[0].ref_count = 0;
+            if (fault == 5) view->files[0].refs[0] = (struct ctos_ssh_slice){
+                (const unsigned char *)"unselected/known_hosts", sizeof("unselected/known_hosts") - 1U};
+            if (fault == 6) selected = "/etc/passwd";
+            if (fault == 7) view->root = (struct ctos_ssh_slice){
+                (const unsigned char *)"../escape", sizeof("../escape") - 1U};
+            if (fault == 8) view->connection = (struct ctos_ssh_slice){
+                (const unsigned char *)"foreign", sizeof("foreign") - 1U};
+            memset(replacement, 0xa5, capacity);
+            FILE *stream = fmemopen(replacement, capacity, "w+");
+            struct ctos_ssh_hostfile_issue issue;
+            assert(stream != NULL);
+            errno = 0;
+            assert(ctos_ssh_hostfile_issue(view, role, selected, "example.invalid", key,
+                "candidate-issuer", stream, replacement, capacity, callback,
+                handoff->environment, &issue) != 0);
+            assert(errno == EACCES || (fault == 0 && errno == ENOENT));
+            assert(issue.classification == 0 && issue.handed_off == 0 && issue.replacement_body == NULL);
+            assert(handoff->calls == 0 && handoff->abort_calls == 0);
+            for (size_t byte = 0; byte < capacity; byte++) assert(replacement[byte] == 0);
+            assert(fclose(stream) == 0);
+            assert(ctos_ssh_callback_check_live(callback, handoff->environment) == 0);
+            assert(ctos_ssh_callback_close(callback, handoff->environment) == 0);
+            assert(ctos_ssh_role_bootstrap_close(role) == 0);
+            destroy_view(view);
+            cases++;
+        }
+    }
+    memset(replacement, 0, capacity); free(replacement);
+    memset(handoff, 0, sizeof(*handoff)); free(handoff);
+}
+
 int main(void) {
     unsigned char key_line[4096];
     unsigned char revoked_line[4096];
@@ -487,8 +600,8 @@ int main(void) {
     destroy_view(bad_view);
     cases++;
 
-    struct ctos_ssh_view *bad_root = load_view_with_root(key_line, key_line_length,
-        deadline, "ssh/other");
+    struct ctos_ssh_view *bad_root = load_view(key_line, key_line_length, deadline);
+    bad_root->files[0].type = CTOS_SSH_PUBLIC_KEY;
     errno = 0;
     assert(ctos_ssh_hostfile_issue(bad_root, role, "ssh/known_hosts",
         "example.invalid", known, "candidate-issuer", NULL, NULL, 0, 0, NULL,
@@ -523,6 +636,8 @@ int main(void) {
     assert(ctos_ssh_role_bootstrap_close(role) == 0);
     test_endpoint_isolation(known, changed);
     test_hashed_endpoint_isolation(known, changed);
+    test_actual_root_classifications(known, changed, key_line, key_line_length, revoked_line, revoked_length);
+    test_actual_root_denials(known);
     sshkey_free(known);
     sshkey_free(changed);
     sshkey_free(certificate);

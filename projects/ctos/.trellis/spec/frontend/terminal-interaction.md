@@ -24,6 +24,21 @@ Use this contract when changing the Flutter terminal page, its IME input, PTY sh
 - Remote bytes, including the historical `[session exited:` marker, never change lifecycle. Duplicate running after a terminal state cannot resurrect that generation. Data for an unknown/not-running generation is dropped before decoding; pending UTF-8 suffix cannot leak into a later session. Host checks generation again on write/resize/Stop.
 - The authenticated SSH factory creates/retains the actual session on its original serial owner. Channel/PTY/shell must reach RUNNING before an SSH state event; input queue<=65536 and one acknowledged output<=32768 keep asynchronous UI work bounded. The production password entry uses the shared protected vault, actual TCP, explicit host-key review and a one-use password. See [password connection](../../../design/ssh-password-connect.md) and [channel contract](../../../design/ssh-session-channel.md).
 - Password input never goes through terminal input/history. Clear it on submit, failure, cancel, route coverage, background and disposal. Pending cancellation and exact host-key decisions use independent methods while the terminal owner waits. Only the matching host RUNNING event enables terminal input; successful form dismissal must not cancel the attached shell. Defaults and connection request IDs are distinct, and retired defaults events cannot cancel the connection.
+- Optional saved-password controls follow [the same connection extension](../../../design/ssh-saved-password.md).
+  Default save/use choices are false. Saved availability is metadata only; never fill a password
+  controller from a host reply. Explicit saved use sends empty password and save=false. Editing
+  host/port/username clears password and both choices immediately, retires the old idle ID and
+  debounces a fresh exact tuple status; revision checks discard late replies. Disable connect
+  while status is pending. Save helper explains that a failed connection can retain the saved password.
+- Forget one/all requires an exact confirmation and independent request. All forgetting is usable
+  without a valid current tuple (empty host/username and port22 on the wire), and preserves
+  TOTP/config/trust. Valid entered tuple stays after forgetting; refresh only its saved status.
+  Pending forget and opt-in save connection cancellation wait for the original terminal write
+  result under route protection; acknowledge committed/uncertain outcomes before leaving.
+  Capture a save receipt before stale/mounted guards can discard it. Connected events do not
+  navigate while closing; if handoff won, reissue cancellation for that exact request ID.
+  Retain unacknowledged receipts after background/dialog removal. Lock/background/revision changes
+  retire stale dialogs and cannot submit old approvals.
 - `terminalOutputSnapshot` reads rendered `Terminal.lines`, joins soft-wrapped lines without adding a newline, preserves meaningful spaces, omits trailing empty buffer rows, and does not expose ANSI control codes. The selection page shows a point-in-time snapshot and does not stop the PTY.
 
 ## 4. Validation & Error Matrix
@@ -54,6 +69,10 @@ Use this contract when changing the Flutter terminal page, its IME input, PTY sh
 - Flutter widget test: picker entries and unavailable Root, read-only `TerminalView`, exactly five shortcuts with correct writes, visible bottom text, committed input/IME composing/delete/paste, candidate replacement after committed pinyin, one Enter, Tab line synchronization followed by edit/delete/send, bounded per-session Up/Down history and draft restoration, Ctrl-C/Esc reset, output selection and return, and start/stop state.
 - Flutter widget test: a 320×568 screen with a keyboard inset does not overflow; terminal status chips may collapse while the keyboard is visible.
 - Flutter widget test: protected-before-form, masked/cleared password, explicit endpoint/fingerprint review, reject/cancel/late-event handling, foreground recovery, visible errors and review actions with keyboard/large text, and successful terminal handoff. Independent SSH and Android runtime evidence remain separate from widget tests.
+- Saved-password widget cases: explicit save and use payloads, default transient, no secret-bearing
+  defaults/status, immediate tuple-edit deselection, late reply isolation, forget cancel/confirm/
+  one/all including empty defaults, lock/background/uncertain and pending-cancel receipt.
+  Exercise saved controls and destructive confirmation with small/landscape/large-text layouts.
 - Authorized Android UI test: use real controls to create the isolated vault, enter SSH fields, verify the complete offered endpoint/fingerprint, trust-and-save, submit a split-marker command and read its rendered output through the actual output snapshot page; return via its advertised AppBar control and close the session. Assert sensitive-window protection and release. Keep passwords out of shell arguments/logs/clipboard; a direct bridge fixture is separate evidence.
 - Device check with explicit serial: app requests ordinary text (`EditorInfo.inputType` text), output tap does not show IME, keyboard send executes once, Tab completes in the live Shell and the bottom input reflects its resulting command line, Up/Down restore a submitted command and draft in both places, Ctrl-C interrupts a foreground command, selection/copy works, Root behavior matches current authorization. Record device-specific IME appearance and untested input methods honestly.
 

@@ -101,7 +101,16 @@ FILE *ctos_ssh_io_open(struct ctos_ssh_io *io, const char *name, unsigned int ty
     *reader = (struct ctos_ssh_reader){.fd = -1, .length = length, .live = 1};
     io->held_bytes += (unsigned int)length; io->read_bytes += (unsigned int)length;
     reader->fd = (int)syscall(SYS_memfd_create, "ctos-ssh-read", MFD_CLOEXEC);
-    if (reader->fd < 0 || fchmod(reader->fd, 0600) != 0 || ftruncate(reader->fd, (off_t)length) != 0) goto failed;
+    if (reader->fd < 0 || ftruncate(reader->fd, (off_t)length) != 0) goto failed;
+    struct stat shape;
+    int descriptor_flags = fcntl(reader->fd, F_GETFD);
+    /* The reader is a private anonymous FD, never a pathname or exported loan.
+     * Keep the real inode mode; chmod is denied by ordinary Android app policy. */
+    if (descriptor_flags < 0 || fstat(reader->fd, &shape) != 0) goto failed;
+    if ((descriptor_flags & FD_CLOEXEC) == 0 || !S_ISREG(shape.st_mode)
+        || shape.st_uid != getuid() || shape.st_nlink != 0 || shape.st_size != (off_t)length) {
+        errno = EACCES; goto failed;
+    }
     if (length != 0) {
         void *mapping = mmap(NULL, length, PROT_READ | PROT_WRITE, MAP_SHARED, reader->fd, 0);
         if (mapping == MAP_FAILED) goto failed;
@@ -169,6 +178,7 @@ int ctos_ssh_io_stat(struct ctos_ssh_io *io, const char *name, struct stat *out)
     for (unsigned int i = 0; i < io->count; i++) {
         const struct ctos_ssh_file *file = &io->files[i];
         if (file->path.length == length && memcmp(file->path.data, relative, length) == 0) {
+            /* Logical vault metadata, not the backing anonymous inode's mode. */
             out->st_mode = S_IFREG | 0600; out->st_size = file->declared_bytes; return 0;
         }
         if (file->path.length > length && file->path.data[length] == '/'

@@ -13,6 +13,35 @@ static void fail(JNIEnv *env) {
     if ((*env)->ExceptionCheck(env)) return;
     if (error != NULL) (*env)->ThrowNew(env, error, "SSH material inspection failed");
 }
+JNIEXPORT jbyteArray JNICALL Java_im_majo_ctos_SshKeyMaterial_00024Native_inspect(
+    JNIEnv *env, jclass owner, jbyteArray input, jlong deadline) {
+    (void)owner;
+    unsigned char *body = NULL, *wire = NULL;
+    size_t wire_length = 0;
+    jbyteArray result = NULL;
+    jsize length = 0;
+    if (input == NULL || deadline <= 0 || ctos_ssh_material_deadline((uint64_t)deadline) != 0) { fail(env); goto done; }
+    length = (*env)->GetArrayLength(env, input);
+    if ((*env)->ExceptionCheck(env)) goto done;
+    if (length <= 0 || (size_t)length > CTOS_SSH_MATERIAL_BYTES) { fail(env); goto done; }
+    body = calloc((size_t)length + 1U, 1U);
+    if (body == NULL) { fail(env); goto done; }
+    (*env)->GetByteArrayRegion(env, input, 0, length, (jbyte *)body);
+    if ((*env)->ExceptionCheck(env)) goto done;
+    if (ctos_ssh_material_export_public(body, (size_t)length, (uint64_t)deadline, &wire, &wire_length) != 0) {
+        fail(env); goto done;
+    }
+    result = (*env)->NewByteArray(env, (jsize)wire_length);
+    if ((*env)->ExceptionCheck(env)) { result = NULL; goto done; }
+    if (result == NULL) { fail(env); goto done; }
+    (*env)->SetByteArrayRegion(env, result, 0, (jsize)wire_length, (const jbyte *)wire);
+    if ((*env)->ExceptionCheck(env)) { result = NULL; goto done; }
+    if (ctos_ssh_material_deadline((uint64_t)deadline) != 0) { fail(env); result = NULL; }
+done:
+    if (body != NULL) { wipe(body, (size_t)length + 1U); free(body); }
+    if (wire != NULL) { wipe(wire, wire_length); free(wire); }
+    return result;
+}
 JNIEXPORT jbyteArray JNICALL Java_im_majo_ctos_SshManifestInspector_00024Native_inspect(
     JNIEnv *env, jclass owner, jint type, jbyteArray input, jbyteArray secret, jlong deadline) {
     (void)owner;

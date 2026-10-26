@@ -159,10 +159,66 @@ static void private_policy_and_bounds(void) {
     CHECK(ctos_ssh_material_verify_private(large, 16385U, NULL, 0, deadline, wire) == -1 && errno == E2BIG && zero(wire, 60));
     memset(large, 0, CTOS_SSH_MATERIAL_LINE_BYTES + 1U); free(large);
 }
+static void public_exports(void) {
+    const int types[] = {KEY_ED25519, KEY_ECDSA, KEY_ECDSA, KEY_ECDSA, KEY_RSA};
+    const unsigned int bits[] = {0, 256, 384, 521, 2048};
+    for (unsigned int i = 0; i < 5; i++) {
+        struct sshkey *key = NULL;
+        CHECK(sshkey_generate(types[i], bits[i], &key) == 0);
+        struct sshbuf *clear = private_file(key, SSHKEY_PRIVATE_OPENSSH, "");
+        struct sshbuf *encrypted = private_file(key, SSHKEY_PRIVATE_OPENSSH, "must-not-derive");
+        unsigned char *wire = NULL, *blob = NULL;
+        size_t length = 0, blob_length = 0;
+        unsigned int before_effects = effects, before_signs = pair_signs, before_verifies = pair_verifies;
+        clock_calls = 0; observe = 1; public_export_observe = 1;
+        CHECK(ctos_ssh_material_export_public(sshbuf_ptr(clear), sshbuf_len(clear), now_ms() + 60000U,
+            &wire, &length) == 0);
+        observe = 0; public_export_observe = 0;
+        CHECK(effects == before_effects && pair_signs == before_signs + 1 && pair_verifies == before_verifies + 1);
+        CHECK(wire != NULL && u32(wire) == 0x43534b45U && u32(wire + 4) == 1);
+        CHECK(u32(wire + 8) == 0 && u32(wire + 12) == i + 1U && u32(wire + 16) == 1);
+        CHECK(sshkey_to_blob(key, &blob, &blob_length) == 0);
+        CHECK(length == CTOS_SSH_KEY_EXPORT_HEADER_BYTES + blob_length && u32(wire + 20) == blob_length);
+        CHECK(memcmp(wire + CTOS_SSH_KEY_EXPORT_HEADER_BYTES, blob, blob_length) == 0);
+        unsigned char digest[32];
+        CHECK(ssh_digest_memory(SSH_DIGEST_SHA256, blob, blob_length, digest, sizeof(digest)) == 0);
+        CHECK(memcmp(digest, wire + 24, 32) == 0);
+        memset(wire, 0, length); free(wire); free(blob); wire = NULL;
+        unsigned int before_kdf = kdf_calls, before_parses = private_parses;
+        observe = 1; public_export_observe = 1;
+        CHECK(ctos_ssh_material_export_public(sshbuf_ptr(encrypted), sshbuf_len(encrypted), now_ms() + 60000U,
+            &wire, &length) == 0);
+        observe = 0; public_export_observe = 0;
+        CHECK(private_parses == before_parses && kdf_calls == before_kdf);
+        CHECK(length == CTOS_SSH_KEY_EXPORT_HEADER_BYTES && u32(wire + 8) == CTOS_MATERIAL_NEEDS_PASSPHRASE);
+        CHECK(u32(wire + 12) == 0 && u32(wire + 16) == 2 && u32(wire + 20) == 0 && zero(wire + 24, 32));
+        free(wire); wire = NULL;
+        if (i == 0) {
+            key->ed25519_sk[0] ^= 1;
+            struct sshbuf *inconsistent = private_file(key, SSHKEY_PRIVATE_OPENSSH, "");
+            observe = 1; public_export_observe = 1;
+            CHECK(ctos_ssh_material_export_public(sshbuf_ptr(inconsistent), sshbuf_len(inconsistent), now_ms() + 60000U,
+                &wire, &length) == 0);
+            observe = 0; public_export_observe = 0;
+            CHECK(u32(wire + 8) == CTOS_MATERIAL_MALFORMED && length == CTOS_SSH_KEY_EXPORT_HEADER_BYTES);
+            CHECK(u32(wire + 12) == 0 && zero(wire + 24, 32)); free(wire); wire = NULL;
+            sshbuf_free(inconsistent);
+        }
+        observe = 1; public_export_observe = 1; sign_error = SSH_ERR_ALLOC_FAIL;
+        CHECK(ctos_ssh_material_export_public(sshbuf_ptr(clear), sshbuf_len(clear), now_ms() + 60000U,
+            &wire, &length) == -1 && errno == ENOMEM && wire == NULL && length == 0);
+        sign_error = 0; observe = 0; public_export_observe = 0;
+        CHECK(ctos_ssh_material_export_public(sshbuf_ptr(clear), sshbuf_len(clear), now_ms(), &wire, &length) == -1
+            && errno == ETIMEDOUT && wire == NULL && length == 0);
+        CHECK(ctos_ssh_material_export_public(NULL, CTOS_SSH_MATERIAL_BYTES + 1U, now_ms() + 60000U,
+            &wire, &length) == -1 && wire == NULL && length == 0);
+        sshbuf_free(clear); sshbuf_free(encrypted); sshkey_free(key);
+    }
+}
 static int private_baseline_main(void) {
     CHECK(pair_baseline_main() == 0);
     unsigned int baseline = checks, before = fd_count();
-    private_algorithms(); private_signer_failures(); private_policy_and_bounds();
+    private_algorithms(); private_signer_failures(); private_policy_and_bounds(); public_exports();
     CHECK(fd_count() == before && effects == 0 && streams == closed_streams);
     printf("SSH_PRIVATE_MATERIAL checks=%u baseline=%u signs=%u verifies=%u effects=%u cleanup=pass\n",
         checks, baseline, pair_signs, pair_verifies, effects);

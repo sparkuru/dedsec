@@ -1,5 +1,34 @@
 # Changelog
 
+## 2026-10-26 Android16 SSH兼容性修复（手机真实登录验收）
+
+- 用户实际手机复现连接前校验拒绝；用进程限额及独立App UID探针定位64KiB锁页与
+  memfd chmod EACCES两处问题。原私钥未导出，服务端配置未修改。
+- 单份受保护正文保持锁页/DONTDUMP；公开索引按实际数量分配，内部匿名FD改核验
+  真实所有者/零链接/大小/CLOEXEC，保留严格对外FD传递规则及擦除/关闭。
+- 低配额/权限故障矩阵、三类私钥互通及指定开发板四项实际回归通过；最终042包已保留
+  数据更新手机，现有私钥真实登录、主机键核验与PTY输出通过，测试会话已关闭。
+  用户人工验收并授权提交；[完整结果](verification.md#20261026-phone-ssh)，父task继续。
+
+## 2026-10-26 config 与无口令私钥连接（Android回归及正式安装）
+
+- 用户指出禁密码服务不可登录，继续已有 SSH task，优先补齐实际私钥/config 产品入口。
+- 新增受保护 SAF 内存导入/预览/替换、config 编辑和 native Host 选择；真实导出公钥，
+  文件与 KeyBinding/KEY Account 同次加密提交，复用现有主机核验、私钥认证及 PTY。
+- config 采用固定 OpenSSH 的实际 direct Options，未消费能力明确拒绝；旧选择随源或
+  身份替换失效。保留密码保存工作。[合同](ssh-key-config-connect.md)、
+  [当前验证](verification.md#20261026-key-config-device)。设备发现并修正三处旧路径消费
+  假设，755 JVM/271 Flutter、完整原生及key-only互通通过；指定板隔离回归通过后保留
+  数据安装正式APK。未读取个人私钥或连接用户目标，真实选择器/人工体验仍待验收。
+
+## 2026-10-26 SSH 可选密码保存接续（本地验证，待实机）
+
+- 用户选择沿已有父任务推进，不新建 task；默认仍为仅当次使用。
+- 同一公共加密库保存精确端点/账号密码，接入 native proof-bound 复用、公开状态和
+  确认后单条/全部忘记；保留 TOTP、生成配置及信任。[合同](ssh-saved-password.md)。
+- 新增安全生命周期及界面回归；255 Flutter、731 JVM通过，Android lint无错误。
+  [实际结果](verification.md#20261026-saved-password)，未安装/实机验收。
+
 ## 2026-10-26 前台密码SSH真实Android界面验收
 
 - 用户授权后在指定Android11板完成实际bridge的NEW确认/保存、密码PTY及KNOWN重连。

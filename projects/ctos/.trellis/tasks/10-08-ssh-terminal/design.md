@@ -1,5 +1,37 @@
 # SSH 终端与公共认证集成设计
 
+## 当前直接实施：config / 无口令私钥
+
+用户最新反馈取代继续密码保存设备验收的优先级，以真正的 publickey-only 连接为目标。
+当前合同为 [config 与私钥连接](../../../design/ssh-key-config-connect.md)，研究依据见
+research/private-key-connection-path.md 与 research/config-key-import-connection.md。
+先扩展真实 native 公钥导出/effective plan 和原子 metadata，再接宿主导入/validator/connector
+与受保护界面。保留此前修改与完整父范围；这是同一正式模型扩展，不另起格式/客户端。
+
+## 2026-10-26 已选择接续：密码保存
+
+用户选择可选保存 SSH 密码，复用本任务直接实施。沿正式 manifest 的 Account/SSH_PASSWORD
+记录保存精确端点及账号，稳定 ID/target 由无歧义 tuple 摘要生成，不从 opaque target
+反解端点。多个端点各自保存，整个实际 manifest 验证覆盖账号/密码一一绑定、规范身份、
+类型与长度；旧生成 CONFIG/KNOWN_HOSTS 和无关 TOTP 保留，其他未支持对象仍拒绝。
+
+连接表单保留默认当次密码，另提供显式保存、使用已存密码及确认后忘记单条/全部密码。
+已存密码不回填 Flutter；表单按精确 tuple 查询公开 saved 状态，编辑目标立即撤销旧选择，
+异步回执用 revision 隔离。复用密码继续经 selected credential 的真实主机键/KEX 与最终
+typed read；使用前复查 Account 与当前 role/selection。保存和 Account 同次原子事务，
+请求在排队前捕获 epoch/deadline/cancel/validator；取消和 uncertain 沿用公共写入语义。
+显式保存可在实际连接前完成，失败不宣称回滚已明确保存的密文；界面说明“连接时保存”。
+新保存完成后才创建 public view/role，不能放宽任意 epoch 变化以继续旧请求。
+
+固定通道合同：defaults 增加 savedPassword(bool)；passwordStatus(requestId,host,port,username)
+返回 saved(bool)；passwordConnect 在原字段上增加 useSavedPassword/savePassword(bool)，
+使用已存时 password 为空且 savePassword=false。forgetPassword(requestId,host,port,username,all)
+返回 forgotten(bool)。不接受任意 entryId/target 或从 Flutter 传入账号绑定。
+
+UI 决策遵循现有主题与 Form，使用可读标签的原生复选控件、忙状态和破坏性确认。
+已按 UI/UX Pro Max Flutter 查询核对 Form/Semantics/辅助技术建议；覆盖窄屏、横屏、大字、
+后台/迟到及失败重输。设备安装/真实账号不由本轮选择推定授权。
+
 2026-10-08，planning。用户已选择含 Include / ProxyJump 的兼容范围 B，要求基础及主要功能与 OpenSSH 相似；存储管理选择 A，用户主动导入后使用 App 内部私有副本；首版按建议拒绝配置驱动的本地命令执行，保留受管 ProxyJump；允许用户选择长期加密保存密码/私钥口令。生物/系统锁屏凭证验证已选择公共组件，其他内部服务可复用；config 基础 TCP 转发及默认 loopback、显式对外监听连接前确认已确定；用户已确认 config 不得绕过主机指纹核验；本设计因剩余确定范围整理完成，待共同最终审阅。依赖候选未安装或实测。需求权威见 [prd.md](prd.md)，项目入口见 [SSH 终端规划](../../../design/ssh-terminal.md)。
 
 ## 现有边界及复用

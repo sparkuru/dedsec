@@ -547,7 +547,7 @@
  /*
   * Processes a single option line as used in the configuration files. This
   * only sets those values that have not already been set.
-@@ -1206,9 +1178,35 @@
+@@ -1206,9 +1178,37 @@
  		error("%s line %d: invalid quotes", filename, linenum);
  		return -1;
  	}
@@ -555,6 +555,8 @@
  	ac = oac;
  	av = oav;
  
++	if (ctos_config_direct_keyword(keyword, *activep, ac, av) != 0)
++		goto out;
 +	/* Scan declarations after the shared keyword/argv grammar and before
 +	 * Host matching can consume the remainder of its token vector. */
 +	if (ctos_config_scan_mode()) {

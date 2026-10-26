@@ -314,6 +314,8 @@ public final class SshNativeSessionTest {
 
     private static final class ManagedShellNative extends ShellNative {
         int managedOpenCalls;
+        String expectedKnownHostsPath = "ssh/known_hosts";
+        String openedKnownHostsPath;
 
         @Override public long openManaged(long role, int ownerUid, long callback, long view,
                 int socketFd, long deadline, int stepBudget, String knownHostsPath, String host,
@@ -324,7 +326,8 @@ public final class SshNativeSessionTest {
             assertEquals(902, view);
             assertEquals(31_000, deadline);
             assertEquals(1024, stepBudget);
-            assertEquals("ssh/known_hosts", knownHostsPath);
+            assertEquals(expectedKnownHostsPath, knownHostsPath);
+            openedKnownHostsPath = knownHostsPath;
             assertEquals("example.invalid", host);
             assertEquals("candidate_1", candidateId);
             this.socketFd = socketFd;
@@ -1869,6 +1872,60 @@ public final class SshNativeSessionTest {
                 setup.closeRegistry();
             }
         }
+    }
+
+    @Test public void managedSocketUsesSelectedTrustPathAndPreservesLegacyDefault() throws Exception {
+        for (boolean privateKey : new boolean[] {false, true}) {
+            ManagedShellNative binding = new ManagedShellNative();
+            binding.expectedKnownHostsPath = privateKey ? ".ssh/known_hosts" : "ssh/known_hosts";
+            Setup setup = new Setup(true, binding);
+            int[] callerCloses = {0};
+            SshSocketOwnership socket = new SshSocketOwnership(41, descriptor -> callerCloses[0]++);
+            try {
+                select(setup, privateKey);
+                setup.session = privateKey
+                        ? SshNativeSession.openManaged(setup.callback, setup.view, socket,
+                                ".ssh/known_hosts", "candidate_1", 1024, binding)
+                        : SshNativeSession.openManaged(setup.callback, setup.view, socket,
+                                "candidate_1", 1024, binding);
+                assertEquals(binding.expectedKnownHostsPath, binding.openedKnownHostsPath);
+                assertEquals(1, binding.managedOpenCalls);
+                assertEquals(0, binding.openCalls);
+                assertTrue(socket.adopted());
+                assertArrayEquals(binding.digest, setup.session.authenticationSelectionReceipt());
+                setup.session.close(); socket.close();
+                assertEquals(0, callerCloses[0]);
+            } finally {
+                if (setup.session != null) setup.session.close();
+                socket.close(); setup.closeRegistry();
+            }
+        }
+    }
+
+    @Test public void invalidSelectedTrustPathDoesNotClaimSessionOrTransferSocket() throws Exception {
+        ManagedShellNative binding = new ManagedShellNative();
+        Setup setup = new Setup(true, binding);
+        int[] callerCloses = {0};
+        SshSocketOwnership socket = new SshSocketOwnership(41, descriptor -> callerCloses[0]++);
+        try {
+            select(setup, true);
+            for (String path : new String[] {null, "", "/.ssh/known_hosts", "../known_hosts", "bad\0path"}) {
+                assertCode("SSH_SESSION_REQUIRED", () -> SshNativeSession.openManaged(setup.callback,
+                        setup.view, socket, path, "candidate_1", 1024, binding));
+                assertEquals(0, binding.managedOpenCalls);
+                assertFalse(socket.adopted());
+                assertTrue(setup.view.active());
+            }
+            binding.expectedKnownHostsPath = ".ssh/known_hosts";
+            setup.session = SshNativeSession.openManaged(setup.callback, setup.view, socket,
+                    ".ssh/known_hosts", "candidate_1", 1024, binding);
+            assertEquals(1, binding.managedOpenCalls);
+            assertTrue(socket.adopted());
+        } finally {
+            if (setup.session != null) setup.session.close();
+            socket.close(); setup.closeRegistry();
+        }
+        assertEquals(0, callerCloses[0]);
     }
 
     @Test public void shellInvalidNativeIoResultsTerminalizeWithoutPublishing() throws Exception {

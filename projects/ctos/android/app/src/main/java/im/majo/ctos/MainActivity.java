@@ -190,7 +190,7 @@ public final class MainActivity extends FlutterActivity {
         hftpBridge = new HftpBridge(this);
         appSecrets = new AppSecretsBridge(this);
         appSecrets.attachEvents(engine.getDartExecutor().getBinaryMessenger());
-        sshPasswordConnect = new SshPasswordConnectBridge(appSecrets,
+        sshPasswordConnect = new SshPasswordConnectBridge(this, appSecrets,
                 engine.getDartExecutor().getBinaryMessenger(), this::attachAuthenticatedSsh);
         new EventChannel(engine.getDartExecutor().getBinaryMessenger(), "ctos/terminal").setStreamHandler(
                 new EventChannel.StreamHandler() {
@@ -526,6 +526,7 @@ public final class MainActivity extends FlutterActivity {
 
     @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+        if (sshPasswordConnect != null && sshPasswordConnect.onActivityResult(requestCode, resultCode, data)) return;
         if (appSecrets != null && appSecrets.onActivityResult(requestCode, resultCode, data)) return;
         if (hftpBridge != null && hftpBridge.onActivityResult(requestCode, resultCode, data)) return;
         if (toolFiles != null && toolFiles.onActivityResult(requestCode, resultCode, data)) return;

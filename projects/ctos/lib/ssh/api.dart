@@ -5,6 +5,8 @@ import 'package:flutter/services.dart';
 
 import '../secrets/api.dart';
 
+part 'library_api.dart';
+
 enum SshAttemptState { connecting, reviewing, connected, failed, cancelled }
 
 sealed class SshEvent {
@@ -109,26 +111,30 @@ class SshConnectionDefaults {
     required this.host,
     required this.port,
     required this.username,
+    required this.savedPassword,
   });
   factory SshConnectionDefaults.parse(Object? raw) {
     final value = _map(raw);
-    _keys(value, {'host', 'port', 'username'});
+    _keys(value, {'host', 'port', 'username', 'savedPassword'});
     final host = value['host'];
     final username = value['username'];
     if (host is! String ||
         (host.isNotEmpty && sshHostError(host) != null) ||
         username is! String ||
-        (username.isNotEmpty && sshUsernameError(username) != null)) {
+        (username.isNotEmpty && sshUsernameError(username) != null) ||
+        value['savedPassword'] is! bool) {
       throw _invalid();
     }
     return SshConnectionDefaults(
       host: host,
       port: _port(value['port']),
       username: username,
+      savedPassword: value['savedPassword'] as bool,
     );
   }
   final String host, username;
   final int port;
+  final bool savedPassword;
 }
 
 /// Carries connection requests; terminal bytes and RUNNING stay on ctos/terminal.
@@ -167,13 +173,17 @@ class SshPasswordApi {
     required String password,
     required int columns,
     required int rows,
+    bool useSavedPassword = false,
+    bool savePassword = false,
   }) {
     _identifier(requestId);
     if (sshHostError(host) != null ||
         port < 1 ||
         port > 65535 ||
         sshUsernameError(username) != null ||
-        sshPasswordError(password) != null ||
+        (useSavedPassword
+            ? password.isNotEmpty || savePassword
+            : sshPasswordError(password) != null) ||
         columns < 1 ||
         columns > 4096 ||
         rows < 1 ||
@@ -188,6 +198,8 @@ class SshPasswordApi {
           'port': port,
           'username': username,
           'password': password,
+          'useSavedPassword': useSavedPassword,
+          'savePassword': savePassword,
           'columns': columns,
           'rows': rows,
         })
@@ -200,6 +212,38 @@ class SshPasswordApi {
           }
         });
   }
+
+  Future<bool> passwordStatus({
+    required String requestId,
+    required String host,
+    required int port,
+    required String username,
+  }) => channel
+      .invokeMethod<Object?>(
+        'ssh.passwordStatus',
+        _tuple(requestId, host, port, username),
+      )
+      .then((raw) => _booleanReply(raw, 'saved'));
+
+  Future<bool> forgetPassword({
+    required String requestId,
+    required String host,
+    required int port,
+    required String username,
+    required bool all,
+  }) => channel
+      .invokeMethod<Object?>('ssh.forgetPassword', {
+        ...(all
+            ? {
+                'requestId': _identifier(requestId),
+                'host': '',
+                'port': 22,
+                'username': '',
+              }
+            : _tuple(requestId, host, port, username)),
+        'all': all,
+      })
+      .then((raw) => _booleanReply(raw, 'forgotten'));
 
   Future<bool> cancel(String requestId) => channel
       .invokeMethod<Object?>('ssh.cancel', {
@@ -215,6 +259,27 @@ class SshPasswordApi {
         'accept': accept,
       })
       .then((raw) => _booleanReply(raw, 'accepted'));
+}
+
+Map<String, Object> _tuple(
+  String requestId,
+  String host,
+  int port,
+  String username,
+) {
+  _identifier(requestId);
+  if (sshHostError(host) != null ||
+      port < 1 ||
+      port > 65535 ||
+      sshUsernameError(username) != null) {
+    throw const FormatException('SSH 连接参数无效');
+  }
+  return {
+    'requestId': requestId,
+    'host': host,
+    'port': port,
+    'username': username,
+  };
 }
 
 String? sshHostError(String value) =>
@@ -258,7 +323,8 @@ String sshConnectionError(Object error) {
     'VAULT_CHANGED' || 'VAULT_EXPIRED' => '秘密库或连接请求已变化，请重新打开连接页面。',
     'VAULT_FOREGROUND_REQUIRED' => '请回到前台后重新打开 SSH 连接。',
     'VAULT_PROTECTION_REQUIRED' => '未取得敏感页面保护，请重新打开 SSH 连接。',
-    'VAULT_COMMIT_UNCERTAIN' => '保存结果未能确认，请重新解锁并核验连接信息或主机密钥。',
+    'VAULT_COMMIT_UNCERTAIN' => '保存结果未能确认，请重新解锁并核验连接信息、已保存密码或主机密钥。',
+    'SSH_PASSWORD_MISSING' => '此连接没有已保存密码，请输入密码后重试。',
     'SSH_HOSTKEY_CHANGED' || 'SSH_HOST_KEY_CHANGED' => '主机密钥与已保存记录不同，连接已拒绝。',
     'SSH_HOSTKEY_REVOKED' || 'SSH_HOST_KEY_REVOKED' => '主机密钥已被撤销，连接已拒绝。',
     'SSH_HOST_KEY_CERTIFICATE' => '此连接方式暂不支持主机证书。',

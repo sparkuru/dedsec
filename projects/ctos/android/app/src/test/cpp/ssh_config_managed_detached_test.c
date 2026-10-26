@@ -8,6 +8,8 @@
 #undef __wrap_mlock
 #undef main
 #include "ssh_config_handle.h"
+#include <sys/resource.h>
+#include <sys/wait.h>
 
 static unsigned int protected_regions, locked_regions;
 static ctos_ssh_config_token cancel_during_lock;
@@ -74,8 +76,8 @@ static int copy_wire(void *opaque, int request_copy, unsigned char *out, size_t 
         memcpy(out, c->request->p, n); return 0;
     }
     c->source_calls++; CHECK(n == c->source->n);
-    CHECK(out == (unsigned char *)owned_mapping + CTOS_SSH_VIEW_FILES * sizeof(struct ctos_ssh_file));
-    CHECK(owned_length == CTOS_SSH_VIEW_FILES * sizeof(struct ctos_ssh_file) + n);
+    CHECK(out == (unsigned char *)owned_mapping);
+    CHECK(owned_length == n);
     if (c->reenter) {
         int32_t result[5]; uint32_t usage[3];
         CHECK(ctos_ssh_config_handle_run(c->token, result) == 0 && result[0] == 2 && result[4] == EBUSY);
@@ -306,6 +308,180 @@ static void result_lifetime(void) {
         finish_handle(token); drop(&w); clock_offset = 0;
     }
 }
+static struct source_wire direct_request(const char *alias, const char *user) {
+    struct source_wire w = {.p = malloc(16384), .capacity = 16384}; CHECK(w.p != NULL);
+    number(&w, 0x43534551U); number(&w, 1); number(&w, 0); number(&w, 1234);
+    const char *fields[] = {alias, user, "", "local-only", "local.example", "", ""};
+    for (unsigned int i = 0; i < 7; i++) { number(&w, (uint32_t)strlen(fields[i])); append(&w, fields[i], strlen(fields[i])); }
+    return w;
+}
+static void direct_text(const unsigned char **cursor, const char *expected) {
+    size_t n = strlen(expected);
+    CHECK(value(*cursor) == n && memcmp(*cursor + 4, expected, n) == 0);
+    *cursor += 4 + n;
+}
+static void direct_plans(void) {
+    const char *body = "Host ignored\n ProxyJump jump.invalid\nHost target !excluded\n"
+        " HostName TARGET.EXAMPLE\n User remote\n Port 2207\n Include direct.conf\n"
+        " IdentityFile ~/.ssh/id_one\n IdentityFile %d/.ssh/id_two\n UserKnownHostsFile ~/.ssh/known_hosts\n"
+        " IdentitiesOnly yes\n PasswordAuthentication no\n ConnectTimeout 5\n RequestTTY force\n"
+        " StrictHostKeyChecking yes\nHost *\n Port 22\n";
+    struct source_wire w = wire_new(6, 1024, CTOS_SSH_IO_READ_BYTES, CTOS_SSH_CONFIG_LINES);
+    record(&w, CTOS_SSH_CONFIG, ".ssh/config", body);
+    record(&w, CTOS_SSH_CONFIG, ".ssh/direct.conf", "User ignored-second\nIdentityFile ~/.ssh/id_include\n");
+    record(&w, CTOS_SSH_PRIVATE_KEY, ".ssh/id_include", NULL);
+    record(&w, CTOS_SSH_PRIVATE_KEY, ".ssh/id_one", NULL);
+    record(&w, CTOS_SSH_PRIVATE_KEY, ".ssh/id_two", NULL);
+    record(&w, CTOS_SSH_KNOWN_HOSTS, ".ssh/known_hosts", NULL);
+    struct source_wire request = direct_request("target", "");
+    ctos_ssh_config_token token = 0;
+    CHECK(ctos_ssh_config_handle_reserve_direct(&token) == 0 && token > 0);
+    unsigned char *plan = malloc(CTOS_SSH_CONFIG_DIRECT_BYTES); CHECK(plan != NULL);
+    size_t size = 123;
+    memset(plan, 0xa5, CTOS_SSH_CONFIG_DIRECT_BYTES);
+    CHECK(ctos_ssh_config_handle_direct_plan(token, plan, &size) == -1 && size == 0);
+    zeroed(plan, CTOS_SSH_CONFIG_DIRECT_BYTES);
+    CHECK(load(token, &w, 0, &request, NULL) == 0);
+    int32_t outcome[5];
+    CHECK(ctos_ssh_config_handle_run(token, outcome) == 0 && outcome[0] == 0);
+    CHECK(ctos_ssh_config_handle_direct_plan(token, plan, &size) == 0);
+    CHECK(value(plan) == 0x43534350U && value(plan + 4) == 1 && value(plan + 8) == 2207);
+    CHECK(value(plan + 12) == 1 && value(plan + 16) == 1 && value(plan + 20) == 0);
+    CHECK(value(plan + 24) == 5000 && value(plan + 28) == 3 && value(plan + 32) == 2 && value(plan + 36) == 0);
+    CHECK(value(plan + 40) == 3 && value(plan + 44) == 1);
+    const unsigned char *cursor = plan + 48;
+    direct_text(&cursor, "target"); direct_text(&cursor, "target.example"); direct_text(&cursor, "remote");
+    direct_text(&cursor, ".ssh/id_include"); direct_text(&cursor, ".ssh/id_one"); direct_text(&cursor, ".ssh/id_two");
+    direct_text(&cursor, ".ssh/known_hosts"); CHECK((size_t)(cursor - plan) == size);
+    CHECK(ctos_ssh_config_handle_direct_plan_live(token) == 0);
+    CHECK(ctos_ssh_config_handle_cancel(token) == 0);
+    CHECK(ctos_ssh_config_handle_direct_plan(token, plan, &size) == -1 && errno == ECANCELED && size == 0);
+    zeroed(plan, CTOS_SSH_CONFIG_DIRECT_BYTES); finish_handle(token); drop(&request); drop(&w);
+
+    const char *refused[] = {"ProxyJump jump.invalid", "RemoteCommand id", "LocalForward 1234 localhost:22",
+        "ServerAliveInterval 1", "Ciphers aes128-ctr", "HostKeyAlias alternate", "PubkeyAuthentication host-bound",
+        "RequestTTY no", "IdentityFile relative/key", "IdentityFile /home/owner/key", "IdentityFile ~/.ssh/../escape",
+        "IdentityFile ~/.ssh/%Q", "SetEnv TOKEN=value", "ForwardAgent yes", "LocalCommand id"};
+    for (unsigned int i = 0; i < sizeof(refused) / sizeof(refused[0]); i++) {
+        char text[1024]; snprintf(text, sizeof(text), "Host target\n HostName target.example\n User remote\n %s\n", refused[i]);
+        w = one(text); request = direct_request("target", "");
+        CHECK(ctos_ssh_config_handle_reserve_direct(&token) == 0);
+        CHECK(load(token, &w, 0, &request, NULL) == 0);
+        CHECK(ctos_ssh_config_handle_run(token, outcome) == 0 && outcome[0] == 1 && outcome[2] == 1 && outcome[3] == 4);
+        CHECK(ctos_ssh_config_handle_direct_plan(token, plan, &size) == -1 && size == 0);
+        zeroed(plan, CTOS_SSH_CONFIG_DIRECT_BYTES);
+        finish_handle(token); drop(&request); drop(&w);
+    }
+    w = wire_new(3, 1024, CTOS_SSH_IO_READ_BYTES, CTOS_SSH_CONFIG_LINES);
+    record(&w, CTOS_SSH_CONFIG, ".ssh/config", "Host target\n HostName target.example\n User remote\n"
+        " IdentityFile \"~/.ssh/key 'single' \\\"double\\\" space\"\n"
+        " UserKnownHostsFile ~/.ssh/known_hosts\n");
+    record(&w, CTOS_SSH_PRIVATE_KEY, ".ssh/key 'single' \"double\" space", NULL);
+    record(&w, CTOS_SSH_KNOWN_HOSTS, ".ssh/known_hosts", NULL);
+    request = direct_request("target", "");
+    CHECK(ctos_ssh_config_handle_reserve_direct(&token) == 0);
+    CHECK(load(token, &w, 0, &request, NULL) == 0);
+    CHECK(ctos_ssh_config_handle_run(token, outcome) == 0 && outcome[0] == 0);
+    CHECK(ctos_ssh_config_handle_direct_plan(token, plan, &size) == 0);
+    CHECK(value(plan + 40) == 1 && value(plan + 44) == 1);
+    cursor = plan + 48;
+    direct_text(&cursor, "target"); direct_text(&cursor, "target.example"); direct_text(&cursor, "remote");
+    direct_text(&cursor, ".ssh/key 'single' \"double\" space");
+    direct_text(&cursor, ".ssh/known_hosts"); CHECK((size_t)(cursor - plan) == size);
+    finish_handle(token); drop(&request); drop(&w);
+
+    w = one("Host target\n IdentityFile ~/.ssh/id_one\n"); request = direct_request("target", "explicit-user");
+    token = reserve(0); CHECK(load(token, &w, 0, &request, NULL) == 0);
+    CHECK(ctos_ssh_config_handle_run(token, outcome) == 0 && outcome[0] == 0);
+    CHECK(ctos_ssh_config_handle_direct_plan(token, plan, &size) == -1 && errno == EINVAL && size == 0);
+    finish_handle(token); drop(&request); drop(&w); free(plan);
+}
+
+static void low_memlock_child(void) {
+    const struct rlimit limit = {.rlim_cur = 65536, .rlim_max = 65536};
+    struct rlimit actual;
+    CHECK(setrlimit(RLIMIT_MEMLOCK, &limit) == 0);
+    CHECK(getrlimit(RLIMIT_MEMLOCK, &actual) == 0 && actual.rlim_cur == 65536 && actual.rlim_max == 65536);
+    const char *body = "Host ctos-key\n HostName fixture.example\n User fixture\n Port 22\n"
+        " IdentityFile ~/.ssh/id_rsa\n IdentitiesOnly yes\n UserKnownHostsFile ~/.ssh/known_hosts\n";
+    struct source_wire w = wire_new(4, 1024, CTOS_SSH_IO_READ_BYTES, CTOS_SSH_CONFIG_LINES);
+    record(&w, CTOS_SSH_CONFIG, ".ssh/ctos-manual", body);
+    record(&w, CTOS_SSH_PRIVATE_KEY, ".ssh/id_rsa", NULL);
+    record(&w, CTOS_SSH_PUBLIC_KEY, ".ssh/id_rsa.pub", NULL);
+    record(&w, CTOS_SSH_KNOWN_HOSTS, ".ssh/known_hosts", NULL);
+    CHECK(w.n < 4096);
+    unsigned int before = fd_count();
+    ctos_ssh_config_token token = 0;
+    int32_t outcome[5];
+    CHECK(ctos_ssh_config_handle_reserve_resource_audit(&token) == 0);
+    CHECK(load(token, &w, 0, NULL, NULL) == 0);
+    CHECK(owned_length == w.n);
+    CHECK(ctos_ssh_config_handle_run(token, outcome) == 0 && outcome[0] == 0);
+    const size_t result_capacity = CTOS_SSH_CONFIG_DIRECT_BYTES > CTOS_SSH_CONFIG_RESOURCE_BYTES
+        ? CTOS_SSH_CONFIG_DIRECT_BYTES : CTOS_SSH_CONFIG_RESOURCE_BYTES;
+    unsigned char *result = malloc(result_capacity);
+    size_t length = 0;
+    CHECK(result != NULL);
+    CHECK(ctos_ssh_config_handle_resource_audit(token, result, &length) == 0 && length > 0);
+    finish_handle(token);
+
+    struct source_wire selected = direct_request("ctos-key", "");
+    CHECK(ctos_ssh_config_handle_reserve_direct(&token) == 0);
+    CHECK(load(token, &w, 0, &selected, NULL) == 0);
+    CHECK(ctos_ssh_config_handle_run(token, outcome) == 0 && outcome[0] == 0);
+    CHECK(ctos_ssh_config_handle_direct_plan(token, result, &length) == 0);
+    CHECK(value(result + 8) == 22 && value(result + 40) == 1 && value(result + 44) == 1);
+    const unsigned char *cursor = result + 48;
+    direct_text(&cursor, "ctos-key"); direct_text(&cursor, "fixture.example"); direct_text(&cursor, "fixture");
+    direct_text(&cursor, ".ssh/id_rsa"); direct_text(&cursor, ".ssh/known_hosts");
+    CHECK((size_t)(cursor - result) == length);
+    finish_handle(token); drop(&selected); drop(&w);
+
+    // The original C constructor follows the same protected-bytes/public-table layout.
+    struct ctos_ssh_config_file files[] = {
+        file(CTOS_SSH_CONFIG, ".ssh/ctos-manual", body), file(CTOS_SSH_PRIVATE_KEY, ".ssh/id_rsa", NULL),
+        file(CTOS_SSH_PUBLIC_KEY, ".ssh/id_rsa.pub", NULL), file(CTOS_SSH_KNOWN_HOSTS, ".ssh/known_hosts", NULL)
+    };
+    struct ctos_ssh_config_request requested = request(); requested.alias = "ctos-key";
+    struct ctos_ssh_config_eval *evaluator = open_files(files, 4, 0, &requested);
+    struct ctos_ssh_config_error error;
+    struct ctos_ssh_config_summary summary;
+    CHECK(run(evaluator, &error) == 0);
+    CHECK(ctos_ssh_config_eval_summary(evaluator, &summary) == 0 && strcmp(summary.hostname, "fixture.example") == 0);
+    finish(evaluator);
+
+    // Real kernel quota denial must occur before JNI's trusted copy is called.
+    char *large = malloc(131073); CHECK(large != NULL);
+    memset(large, '#', 131072); large[131072] = 0;
+    w = one(large); free(large);
+    token = reserve(1);
+    struct copy_context copy = {0};
+    unsigned int locks = locked_regions;
+    CHECK(load(token, &w, 0, NULL, &copy) == -1 && errno == ENOMEM);
+    CHECK(copy.source_calls == 0 && copy.request_calls == 0 && locked_regions == locks);
+    CHECK(owned_mapping != NULL); zeroed(owned_mapping, owned_length);
+    CHECK(ctos_ssh_config_handle_run(token, outcome) == 0 && outcome[0] == 2 && outcome[4] == ENOMEM);
+    finish_handle(token); drop(&w);
+    memset(result, 0, result_capacity); free(result);
+    CHECK(fd_count() == before && owned_mapping == NULL && effects == 0 && capabilities == 0);
+    for (unsigned int i = 0; i < 256; i++) CHECK(managed[i].p == NULL);
+    printf("SSH_CONFIG_MEMLOCK limit=65536 manual_resource=pass manual_direct=pass native_direct=pass oversized_precopy=denied cleanup=pass\n");
+    fflush(stdout);
+}
+
+pid_t __real_fork(void);
+static void low_memlock(void) {
+    struct rlimit before, after;
+    CHECK(getrlimit(RLIMIT_MEMLOCK, &before) == 0);
+    // Explicit test isolation uses the real fork; parser-driven fork stays denied/observed.
+    CHECK(fflush(stdout) == 0);
+    pid_t child = __real_fork(); CHECK(child >= 0);
+    if (child == 0) { low_memlock_child(); _exit(0); }
+    int status = 0;
+    CHECK(waitpid(child, &status, 0) == child && WIFEXITED(status) && WEXITSTATUS(status) == 0);
+    CHECK(getrlimit(RLIMIT_MEMLOCK, &after) == 0 && before.rlim_cur == after.rlim_cur && before.rlim_max == after.rlim_max);
+}
+
 static void reservations(void) {
     ctos_ssh_config_token tokens[CTOS_SSH_CONFIG_HANDLE_SLOTS];
     for (unsigned int i = 0; i < CTOS_SSH_CONFIG_HANDLE_SLOTS; i++) {
@@ -320,7 +496,7 @@ static void reservations(void) {
 int main(void) {
     CHECK(ctos_detached_baseline_main() == 0);
     unsigned int before = fd_count(); observe = 1;
-    basic_registry(); malformed_wire(); request_modes(); budgets(); staged_declarations(); failures_and_cancel(); result_lifetime(); reservations();
+    basic_registry(); malformed_wire(); request_modes(); budgets(); staged_declarations(); failures_and_cancel(); result_lifetime(); direct_plans(); low_memlock(); reservations();
     CHECK(fd_count() == before && capabilities == 0 && effects == 0 && owned_mapping == NULL);
     for (unsigned int i = 0; i < 256; i++) CHECK(managed[i].p == NULL);
     observe = 0;

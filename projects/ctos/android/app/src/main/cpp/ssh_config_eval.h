@@ -51,6 +51,15 @@ struct ctos_ssh_config_summary {
      * launch plan. A connector must finalize/validate every retained field. */
     unsigned int has_raw_fields;
 };
+#define CTOS_SSH_CONFIG_HOSTFILES 32U
+struct ctos_ssh_config_direct_plan {
+    struct ctos_ssh_config_summary summary;
+    unsigned int identities_only, pubkey_authentication, password_authentication;
+    unsigned int connect_timeout_millis, strict_host_key_checking;
+    unsigned int identity_count, hostfile_count;
+    char identity_files[CTOS_SSH_CONFIG_LIST][513];
+    char user_hostfiles[CTOS_SSH_CONFIG_HOSTFILES][513];
+};
 struct ctos_ssh_config_catalog_entry {
     unsigned int object, line;
     char alias[CTOS_SSH_CONFIG_NAME_BYTES + 1];
@@ -99,6 +108,7 @@ int ctos_ssh_config_eval_open_catalog_detached(const struct ctos_ssh_config_file
  * cleanup ownership before protection; complete adopts CSDI in place. Any
  * failure leaves the owner reachable and closable, never internally freed. */
 int ctos_ssh_config_eval_prepare_detached(int, uint64_t, struct ctos_ssh_config_eval **);
+int ctos_ssh_config_eval_prepare_direct_detached(uint64_t, struct ctos_ssh_config_eval **);
 int ctos_ssh_config_eval_prepare_audit_detached(uint64_t, struct ctos_ssh_config_eval **);
 int ctos_ssh_config_eval_prepare_resource_audit_detached(uint64_t, struct ctos_ssh_config_eval **);
 int ctos_ssh_config_eval_detached_buffer(struct ctos_ssh_config_eval *, size_t, unsigned char **);
@@ -115,6 +125,7 @@ int ctos_ssh_config_eval_audit(const struct ctos_ssh_config_eval *, const struct
 int ctos_ssh_config_eval_resource_audit(const struct ctos_ssh_config_eval *, const struct ctos_ssh_config_resource_audit **);
 int ctos_ssh_config_eval_run(struct ctos_ssh_config_eval *, struct ctos_ssh_config_error *);
 int ctos_ssh_config_eval_summary(const struct ctos_ssh_config_eval *, struct ctos_ssh_config_summary *);
+int ctos_ssh_config_eval_direct_plan(const struct ctos_ssh_config_eval *, const struct ctos_ssh_config_direct_plan **);
 /* Native internal ABI only: include upstream readconf.h before this header to
  * obtain the typed full-Options getter. No pointer may survive close. */
 #ifdef READCONF_H

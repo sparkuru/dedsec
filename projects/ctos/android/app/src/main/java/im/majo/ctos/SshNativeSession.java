@@ -409,7 +409,7 @@ final class SshNativeSession implements AutoCloseable {
         try {
             if (view == null || !callback.ownsPublicView(view)) throw invalid();
             return openInternal(callback, new ProductionViewBinding(view), socketFd, hostKeyBlob,
-                    expectedFingerprint, candidateId, stepBudget, new ProductionNativeBinding(), false, null);
+                    expectedFingerprint, candidateId, stepBudget, new ProductionNativeBinding(), false, null, KNOWN_HOSTS_PATH);
         } finally { NATIVE_ENTRY.remove(); }
     }
 
@@ -424,7 +424,7 @@ final class SshNativeSession implements AutoCloseable {
         enterNative();
         try {
             return openInternal(callback, view, socketFd, hostKeyBlob, expectedFingerprint,
-                    candidateId, stepBudget, nativeBinding, false, null);
+                    candidateId, stepBudget, nativeBinding, false, null, KNOWN_HOSTS_PATH);
         } finally { NATIVE_ENTRY.remove(); }
     }
 
@@ -436,7 +436,7 @@ final class SshNativeSession implements AutoCloseable {
         try {
             if (view == null || !callback.ownsPublicView(view)) throw invalid();
             return openInternal(callback, new ProductionViewBinding(view), socketFd, null, null,
-                    candidateId, stepBudget, new ProductionNativeBinding(), true, null);
+                    candidateId, stepBudget, new ProductionNativeBinding(), true, null, KNOWN_HOSTS_PATH);
         } finally { NATIVE_ENTRY.remove(); }
     }
 
@@ -447,38 +447,50 @@ final class SshNativeSession implements AutoCloseable {
         enterNative();
         try {
             return openInternal(callback, view, socketFd, null, null, candidateId, stepBudget,
-                    nativeBinding, true, null);
+                    nativeBinding, true, null, KNOWN_HOSTS_PATH);
         } finally { NATIVE_ENTRY.remove(); }
     }
 
     /** Production handoff retains cleanup ownership even when a post-open guard fails. */
     static SshNativeSession openManaged(SshNativeCallbackAdapter callback, SshPublicFileLease view,
             SshSocketOwnership socket, String candidateId, int stepBudget) throws VaultException {
+        return openManaged(callback, view, socket, KNOWN_HOSTS_PATH, candidateId, stepBudget);
+    }
+
+    /** The caller supplies the exact trust object selected from this immutable public view. */
+    static SshNativeSession openManaged(SshNativeCallbackAdapter callback, SshPublicFileLease view,
+            SshSocketOwnership socket, String knownHostsPath, String candidateId, int stepBudget) throws VaultException {
         requireOpenOwner(callback);
         enterNative();
         try {
             if (view == null || socket == null || !callback.ownsPublicView(view)) throw invalid();
             return openInternal(callback, new ProductionViewBinding(view), socket.descriptor(), null,
-                    null, candidateId, stepBudget, new ProductionNativeBinding(), true, socket);
+                    null, candidateId, stepBudget, new ProductionNativeBinding(), true, socket, knownHostsPath);
         } finally { NATIVE_ENTRY.remove(); }
     }
 
     static SshNativeSession openManaged(SshNativeCallbackAdapter callback, ViewBinding view,
             SshSocketOwnership socket, String candidateId, int stepBudget, NativeBinding binding)
             throws VaultException {
+        return openManaged(callback, view, socket, KNOWN_HOSTS_PATH, candidateId, stepBudget, binding);
+    }
+
+    static SshNativeSession openManaged(SshNativeCallbackAdapter callback, ViewBinding view,
+            SshSocketOwnership socket, String knownHostsPath, String candidateId, int stepBudget, NativeBinding binding)
+            throws VaultException {
         requireOpenOwner(callback);
         enterNative();
         try {
             if (socket == null) throw invalid();
             return openInternal(callback, view, socket.descriptor(), null, null, candidateId,
-                    stepBudget, binding, true, socket);
+                    stepBudget, binding, true, socket, knownHostsPath);
         } finally { NATIVE_ENTRY.remove(); }
     }
 
     private static SshNativeSession openInternal(SshNativeCallbackAdapter callback, ViewBinding view,
             int socketFd, byte[] hostKeyBlob, byte[] expectedFingerprint,
             String candidateId, int stepBudget, NativeBinding nativeBinding, boolean managedHostKey,
-            SshSocketOwnership socket)
+            SshSocketOwnership socket, String knownHostsPath)
             throws VaultException {
         if (callback == null || view == null || nativeBinding == null
                 || Thread.currentThread() != callback.eventLoopThread()
@@ -487,9 +499,11 @@ final class SshNativeSession implements AutoCloseable {
                 || stepBudget > MAX_STEP_BUDGET
                 || (!managedHostKey && (!validHostKey(hostKeyBlob)
                         || !validFingerprint(expectedFingerprint)))
-                || !identifier(candidateId)) {
+                || !identifier(candidateId) || knownHostsPath == null) {
             throw invalid();
         }
+        try { VaultManifest.path(knownHostsPath); }
+        catch (VaultException failure) { throw invalid(); }
         callback.requireNativeSessionLive();
         byte[] wire = null;
         byte[] suppliedWire = null;
@@ -525,10 +539,10 @@ final class SshNativeSession implements AutoCloseable {
             try {
                 handle = managedHostKey ? nativeBinding.openManaged(callback.roleToken(),
                         callback.ownerUid(), callbackToken, viewToken, socketFd, callback.deadline(),
-                        stepBudget, KNOWN_HOSTS_PATH, callback.host(), candidateId, suppliedWire)
+                        stepBudget, knownHostsPath, callback.host(), candidateId, suppliedWire)
                         : nativeBinding.open(callback.roleToken(), callback.ownerUid(), callbackToken,
                         viewToken, socketFd, callback.deadline(), stepBudget, key, fingerprint,
-                        KNOWN_HOSTS_PATH, callback.host(), candidateId, suppliedWire);
+                        knownHostsPath, callback.host(), candidateId, suppliedWire);
             } catch (IOException | LinkageError | RuntimeException failure) { throw unavailable(); }
             if (handle <= 0) throw unavailable();
             prepared.nativeHandle = handle;

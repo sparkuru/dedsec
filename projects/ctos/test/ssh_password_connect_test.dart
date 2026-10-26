@@ -120,7 +120,7 @@ void main() {
       expect(field.autocorrect, isFalse);
       expect(field.enableSuggestions, isFalse);
       expect(field.enableIMEPersonalizedLearning, isFalse);
-      expect(find.text('保存主机信息；密码仅本次使用。'), findsOneWidget);
+      expect(find.text('保存主机信息；密码默认仅本次使用。'), findsOneWidget);
       await host.leave();
       expect(host.releases, ['protected-ssh']);
       expect(find.byKey(const Key('ssh-password')), findsNothing);
@@ -185,6 +185,8 @@ void main() {
     expect(request['port'], 2222);
     expect(request['username'], ' 用户😀 ');
     expect(request['password'], ' secret password ');
+    expect(request['useSavedPassword'], isFalse);
+    expect(request['savePassword'], isFalse);
     expect(request['columns'], 81);
     expect(request['rows'], 25);
     expect(host.passwordController.text, isEmpty);
@@ -244,6 +246,415 @@ void main() {
       await host.advance();
       expect(tester.takeException(), isNull);
       expect(host.releases, isNotEmpty);
+    },
+  );
+
+  testWidgets(
+    'saving a password requires explicit opt-in on the current tuple',
+    (tester) async {
+      final host = _SshHost(tester);
+      await host.open();
+      await host.fill();
+      final save = find.byKey(const Key('ssh-save-password'));
+      expect(tester.widget<CheckboxListTile>(save).value, isFalse);
+      await tester.ensureVisible(save);
+      await tester.tap(save);
+      await host.tapConnect();
+      expect(host.connectCalls.single['savePassword'], isTrue);
+      expect(host.connectCalls.single['useSavedPassword'], isFalse);
+      expect(host.passwordController.text, isEmpty);
+      host.completeConnect(
+        error: PlatformException(code: 'SSH_AUTHENTICATION'),
+      );
+      await host.advance();
+      await host.remove();
+    },
+  );
+
+  testWidgets(
+    'saved password is metadata only and still requires explicit selection',
+    (tester) async {
+      final host = _SshHost(tester)..saved = true;
+      await host.open();
+      await host.fill();
+      final use = find.byKey(const Key('ssh-use-saved-password'));
+      expect(tester.widget<CheckboxListTile>(use).value, isFalse);
+      expect(host.passwordController.text, 'synthetic password');
+      await tester.ensureVisible(use);
+      await tester.tap(use);
+      await tester.pump();
+      expect(host.passwordController.text, isEmpty);
+      expect(
+        tester
+            .widget<TextFormField>(find.byKey(const Key('ssh-password')))
+            .enabled,
+        isFalse,
+      );
+      await host.tapConnect();
+      expect(host.connectCalls.single['password'], isEmpty);
+      expect(host.connectCalls.single['useSavedPassword'], isTrue);
+      expect(host.connectCalls.single['savePassword'], isFalse);
+      host.completeConnect(
+        error: PlatformException(code: 'SSH_AUTHENTICATION'),
+      );
+      await host.advance();
+      await tester.ensureVisible(use);
+      await tester.tap(use);
+      await tester.pump();
+      expect(
+        tester
+            .widget<TextFormField>(find.byKey(const Key('ssh-password')))
+            .enabled,
+        isTrue,
+      );
+      await host.remove();
+    },
+  );
+
+  testWidgets(
+    'tuple changes immediately clear saved selection and ignore late metadata',
+    (tester) async {
+      final host = _SshHost(tester)..saved = true;
+      await host.open();
+      await host.fill();
+      final use = find.byKey(const Key('ssh-use-saved-password'));
+      await tester.ensureVisible(use);
+      await tester.tap(use);
+      host.deferStatus = true;
+      final field = find.byKey(const Key('ssh-host'));
+      await tester.ensureVisible(field);
+      await tester.enterText(field, 'first.invalid');
+      await host.advance();
+      expect(use, findsNothing);
+      expect(
+        tester
+            .widget<FilledButton>(find.byKey(const Key('ssh-connect')))
+            .onPressed,
+        isNull,
+      );
+      final first = host.statusCalls.last['requestId'] as String;
+      await tester.enterText(field, 'second.invalid');
+      await host.advance();
+      expect(host.cancelled, contains(first));
+      expect(host.statusCalls.last['host'], 'second.invalid');
+      host.statusResults.last.complete({'saved': false});
+      await host.advance();
+      host.statusResults.first.complete({'saved': true});
+      await host.advance();
+      expect(use, findsNothing);
+      await tester.enterText(
+        find.byKey(const Key('ssh-password')),
+        'new password',
+      );
+      await host.tapConnect();
+      expect(host.connectCalls.single['host'], 'second.invalid');
+      expect(host.connectCalls.single['useSavedPassword'], isFalse);
+      expect(host.connectCalls.single['savePassword'], isFalse);
+      host.completeConnect(error: PlatformException(code: 'SSH_CANCELLED'));
+      await host.remove();
+    },
+  );
+
+  testWidgets(
+    'forget connection and all passwords require confirmation and preserve tuple',
+    (tester) async {
+      for (final all in [false, true]) {
+        final host = _SshHost(tester)..saved = true;
+        await host.open();
+        await host.fill();
+        final action = find.byKey(
+          Key(all ? 'ssh-forget-all-passwords' : 'ssh-forget-password'),
+        );
+        await tester.ensureVisible(action);
+        await tester.tap(action);
+        await host.advance();
+        expect(host.forgetCalls, isEmpty);
+        await tester.tap(find.text('取消'));
+        await host.advance();
+        expect(host.forgetCalls, isEmpty);
+        await tester.ensureVisible(action);
+        await tester.tap(action);
+        await host.advance();
+        await tester.tap(find.byKey(const Key('ssh-forget-confirm')));
+        await host.advance();
+        final request = host.forgetCalls.single;
+        expect(request['host'], all ? '' : 'server.invalid');
+        expect(request['port'], all ? 22 : 2222);
+        expect(request['username'], all ? '' : 'alice');
+        expect(request['all'], all);
+        expect(request.keys.toSet(), {
+          'requestId',
+          'host',
+          'port',
+          'username',
+          'all',
+        });
+        expect(find.byKey(const Key('ssh-use-saved-password')), findsNothing);
+        expect(host.passwordController.text, isEmpty);
+        expect(
+          tester
+              .widget<TextFormField>(find.byKey(const Key('ssh-host')))
+              .controller!
+              .text,
+          'server.invalid',
+        );
+        expect(host.statusCalls, hasLength(2));
+        await host.remove();
+      }
+    },
+  );
+
+  testWidgets(
+    'lock during forget confirmation cancels its authority and closes dialog',
+    (tester) async {
+      final host = _SshHost(tester)..saved = true;
+      await host.open();
+      await host.fill();
+      final action = find.byKey(const Key('ssh-forget-password'));
+      await tester.ensureVisible(action);
+      await tester.tap(action);
+      await host.advance();
+      final confirm = tester
+          .widget<FilledButton>(find.byKey(const Key('ssh-forget-confirm')))
+          .onPressed!;
+      await host.emit({
+        'type': 'state',
+        'requestId': host.idleId,
+        'state': 'cancelled',
+        'reason': 'VAULT_LOCKED',
+      });
+      await host.advance();
+      // A callback captured before revocation cannot authorize a write.
+      expect(find.byKey(const Key('ssh-forget-confirm')), findsNothing);
+      expect(host.forgetCalls, isEmpty);
+      expect(host.cancelled, contains(host.idleId));
+      confirm();
+      await host.advance();
+      expect(host.forgetCalls, isEmpty);
+      await host.remove();
+    },
+  );
+
+  testWidgets(
+    'malformed password status fails closed without showing secret payload',
+    (tester) async {
+      final host = _SshHost(tester)..deferStatus = true;
+      await host.open();
+      await host.fill();
+      host.statusResults.single.complete({
+        'saved': true,
+        'password': 'must-not-display',
+      });
+      await host.advance();
+      expect(find.byKey(const Key('ssh-password')), findsNothing);
+      expect(find.text('must-not-display'), findsNothing);
+      expect(find.text('SSH 连接响应无效，请重新打开连接页面。'), findsOneWidget);
+      await host.remove();
+    },
+  );
+
+  testWidgets(
+    'uncertain forget requires reopening and never reports successful deletion',
+    (tester) async {
+      final host = _SshHost(tester)
+        ..saved = true
+        ..forgetError = PlatformException(code: 'VAULT_COMMIT_UNCERTAIN');
+      await host.open();
+      await host.fill();
+      final action = find.byKey(const Key('ssh-forget-password'));
+      await tester.ensureVisible(action);
+      await tester.tap(action);
+      await host.advance();
+      await tester.tap(find.byKey(const Key('ssh-forget-confirm')));
+      await host.advance();
+      expect(find.byKey(const Key('ssh-password')), findsNothing);
+      expect(find.text('已忘记保存的密码。'), findsNothing);
+      expect(find.text('保存结果未能确认，请重新解锁并核验连接信息、已保存密码或主机密钥。'), findsOneWidget);
+      await host.remove();
+    },
+  );
+
+  testWidgets('all-password forget works before any recent connection exists', (
+    tester,
+  ) async {
+    final host = _SshHost(tester);
+    await host.open();
+    final action = find.byKey(const Key('ssh-forget-all-passwords'));
+    await tester.ensureVisible(action);
+    await host.advance();
+    expect(action.hitTestable(), findsOneWidget);
+    expect(tester.widget<TextButton>(action).onPressed, isNotNull);
+    await tester.tap(action);
+    await host.advance();
+    await tester.tap(find.byKey(const Key('ssh-forget-confirm')));
+    await host.advance();
+    expect(host.forgetCalls.single, {
+      'requestId': host.forgetCalls.single['requestId'],
+      'host': '',
+      'port': 22,
+      'username': '',
+      'all': true,
+    });
+    expect(host.defaultsCalls, hasLength(2));
+    expect(host.statusCalls, isEmpty);
+    await host.remove();
+  });
+
+  testWidgets(
+    'cancel forgetting awaits native completion and acknowledges committed result',
+    (tester) async {
+      final host = _SshHost(tester)
+        ..saved = true
+        ..pendingForget = Completer<Map<String, Object>>();
+      await host.open();
+      await host.fill();
+      final action = find.byKey(const Key('ssh-forget-password'));
+      await tester.ensureVisible(action);
+      await tester.tap(action);
+      await host.advance();
+      await tester.tap(find.byKey(const Key('ssh-forget-confirm')));
+      await host.advance();
+      final requestId = host.forgetCalls.single['requestId'] as String;
+      await host.leave();
+      expect(host.cancelled, contains(requestId));
+      expect(host.releases, isEmpty);
+      expect(find.text('Open SSH'), findsNothing);
+      host.pendingForget!.complete({'forgotten': true});
+      await host.advance();
+      expect(find.text('密码操作结果'), findsOneWidget);
+      expect(host.releases, isEmpty);
+      await tester.tap(find.text('知道了'));
+      await host.advance();
+      expect(find.text('Open SSH'), findsOneWidget);
+      expect(host.releases, isNotEmpty);
+      await host.remove();
+    },
+  );
+
+  testWidgets('background invalidation discards a late saved-password status', (
+    tester,
+  ) async {
+    final host = _SshHost(tester)..deferStatus = true;
+    await host.open();
+    await host.fill();
+    final requestId = host.statusCalls.single['requestId'] as String;
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    await host.advance();
+    host.statusResults.single.complete({'saved': true});
+    await host.advance();
+    expect(host.cancelled, contains(requestId));
+    expect(find.byKey(const Key('ssh-use-saved-password')), findsNothing);
+    expect(find.byKey(const Key('ssh-password')), findsNothing);
+    _resumeApp(tester);
+    await host.remove();
+  });
+
+  testWidgets(
+    'cancel saving waits for native uncertain receipt under protection',
+    (tester) async {
+      final host = _SshHost(tester);
+      await host.open();
+      await host.fill();
+      final save = find.byKey(const Key('ssh-save-password'));
+      await tester.ensureVisible(save);
+      await tester.tap(save);
+      await host.tapConnect();
+      final requestId = host.connectCalls.single['requestId'] as String;
+      expect(host.connectCalls.single['savePassword'], isTrue);
+      await host.leave();
+      expect(host.cancelled, contains(requestId));
+      expect(host.releases, isEmpty);
+      expect(find.text('Open SSH'), findsNothing);
+      await host.emit({
+        'type': 'state',
+        'requestId': requestId,
+        'state': 'failed',
+        'reason': 'VAULT_COMMIT_UNCERTAIN',
+      });
+      expect(host.releases, isEmpty);
+      host.completeConnect(
+        error: PlatformException(code: 'VAULT_COMMIT_UNCERTAIN'),
+      );
+      await host.advance();
+      expect(find.text('密码操作结果'), findsOneWidget);
+      expect(find.text('保存结果未能确认，请重新解锁并核验连接信息、已保存密码或主机密钥。'), findsWidgets);
+      expect(host.releases, isEmpty);
+      final staleAcknowledge = tester
+          .widget<TextButton>(find.widgetWithText(TextButton, '知道了'))
+          .onPressed!;
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      await host.advance();
+      expect(find.text('密码操作结果'), findsNothing);
+      staleAcknowledge();
+      await host.advance();
+      expect(host.releases, isEmpty);
+      _resumeApp(tester);
+      await host.advance();
+      await host.leave();
+      expect(find.text('密码操作结果'), findsOneWidget);
+      await tester.tap(find.text('知道了'));
+      await host.advance();
+      expect(find.text('Open SSH'), findsOneWidget);
+      expect(host.releases, isNotEmpty);
+      await host.remove();
+    },
+  );
+
+  testWidgets(
+    'successful saved connection racing cancel closes only its exact request before receipt',
+    (tester) async {
+      final host = _SshHost(tester);
+      await host.open();
+      await host.fill();
+      final save = find.byKey(const Key('ssh-save-password'));
+      await tester.ensureVisible(save);
+      await tester.tap(save);
+      await host.tapConnect();
+      final requestId = host.connectCalls.single['requestId'] as String;
+      await host.leave();
+      await host.emit({
+        'type': 'state',
+        'requestId': requestId,
+        'state': 'connected',
+      });
+      expect(host.releases, isEmpty);
+      expect(find.text('Open SSH'), findsNothing);
+      host.completeConnect();
+      await host.advance();
+      expect(host.cancelled.where((id) => id == requestId), hasLength(2));
+      expect(
+        host.calls.where((call) => call.method == 'terminalStop'),
+        isEmpty,
+      );
+      expect(find.text('密码已保存到秘密库。'), findsOneWidget);
+      expect(host.releases, isEmpty);
+      await tester.tap(find.text('知道了'));
+      await host.advance();
+      expect(find.text('Open SSH'), findsOneWidget);
+      expect(host.releases, isNotEmpty);
+      await host.remove();
+    },
+  );
+
+  testWidgets(
+    'saving cancelled before commit waits for result without fabricating saved receipt',
+    (tester) async {
+      final host = _SshHost(tester);
+      await host.open();
+      await host.fill();
+      final save = find.byKey(const Key('ssh-save-password'));
+      await tester.ensureVisible(save);
+      await tester.tap(save);
+      await host.tapConnect();
+      await host.leave();
+      expect(host.releases, isEmpty);
+      host.completeConnect(error: PlatformException(code: 'SSH_CANCELLED'));
+      await host.advance();
+      expect(find.text('密码操作结果'), findsNothing);
+      expect(find.text('密码已保存到秘密库。'), findsNothing);
+      expect(find.text('Open SSH'), findsOneWidget);
+      expect(host.releases, isNotEmpty);
+      await host.remove();
     },
   );
 
@@ -367,6 +778,7 @@ void main() {
         'retry password',
       );
       await host.tapConnect();
+      expect(host.connectCalls, hasLength(2));
       final retry = host.connectCalls.last['requestId'] as String;
       await host.emit({
         'type': 'state',
@@ -416,7 +828,7 @@ void main() {
       await host.open();
       await host.fill();
       final controller = host.passwordController;
-      final idleId = host.defaultsCalls.single['requestId'] as String;
+      final idleId = host.idleId;
       for (final state in [
         AppLifecycleState.inactive,
         AppLifecycleState.hidden,
@@ -465,7 +877,7 @@ void main() {
       final host = _SshHost(tester);
       await host.open();
       await host.fill();
-      final idleId = host.defaultsCalls.single['requestId'] as String;
+      final idleId = host.idleId;
       final controller = host.passwordController;
       await host.emit({
         'type': 'state',
@@ -496,16 +908,50 @@ void main() {
   );
 
   testWidgets(
-    '320 dp keyboard and large text keep form and review actions reachable',
+    'saved controls and review remain reachable with narrow keyboard landscape and large text',
     (tester) async {
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.resetDevicePixelRatio);
       addTearDown(tester.view.resetPhysicalSize);
-      for (final size in [const Size(320, 568), const Size(1200, 800)]) {
+      for (final size in [
+        const Size(320, 568),
+        const Size(568, 320),
+        const Size(1200, 800),
+      ]) {
         tester.view.physicalSize = size;
-        final host = _SshHost(tester);
+        final host = _SshHost(tester)..saved = true;
         await host.open(scale: 2, keyboard: size.width == 320 ? 220 : 0);
         await host.fill();
+        for (final key in [
+          'ssh-use-saved-password',
+          'ssh-save-password',
+          'ssh-forget-password',
+          'ssh-forget-all-passwords',
+        ]) {
+          final control = find.byKey(Key(key));
+          await tester.ensureVisible(control);
+          await tester.pump(const Duration(milliseconds: 300));
+          await tester.ensureVisible(control);
+          await tester.pump();
+          expect(control.hitTestable(), findsOneWidget);
+          expect(
+            tester.getBottomRight(control).dx,
+            lessThanOrEqualTo(size.width),
+          );
+        }
+        final forget = find.byKey(const Key('ssh-forget-password'));
+        await tester.ensureVisible(forget);
+        await tester.pump();
+        expect(forget.hitTestable(), findsOneWidget);
+        await tester.tap(forget);
+        await host.advance();
+        final confirm = find.byKey(const Key('ssh-forget-confirm'));
+        await tester.ensureVisible(confirm);
+        expect(confirm.hitTestable(), findsOneWidget);
+        expect(tester.takeException(), isNull);
+        await tester.tap(find.text('取消'));
+        await host.advance();
+        expect(host.forgetCalls, isEmpty);
         await host.tapConnect();
         final id = host.connectCalls.single['requestId'] as String;
         await host.emit(_ticket(id));
@@ -581,7 +1027,12 @@ class _SshHost {
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
   final calls = <MethodCall>[];
   final connectResults = <Completer<Map<String, Object>>>[];
+  final statusResults = <Completer<Map<String, Object>>>[];
   Completer<Object?>? protection;
+  bool saved = false, deferStatus = false;
+  Object? forgetError;
+  Completer<Map<String, Object>>? pendingForget;
+  Map<String, Object> defaultValues = {'host': '', 'port': 22, 'username': ''};
   late SshPasswordApi api;
   int _sequence = 0;
   bool _root = false;
@@ -589,6 +1040,13 @@ class _SshHost {
   List<Map<dynamic, dynamic>> get defaultsCalls => _arguments('ssh.defaults');
   List<Map<dynamic, dynamic>> get connectCalls =>
       _arguments('ssh.passwordConnect');
+  List<Map<dynamic, dynamic>> get statusCalls =>
+      _arguments('ssh.passwordStatus');
+  List<Map<dynamic, dynamic>> get forgetCalls =>
+      _arguments('ssh.forgetPassword');
+  String get idleId =>
+      (statusCalls.isEmpty ? defaultsCalls.last : statusCalls.last)['requestId']
+          as String;
   List<Map<dynamic, dynamic>> get decisions =>
       _arguments('ssh.hostKeyDecision');
   List<String> get cancelled =>
@@ -624,7 +1082,17 @@ class _SshHost {
             ? null
             : protection?.future ?? {'owner': 'protected-ssh'};
       case 'ssh.defaults':
-        return {'host': '', 'port': 22, 'username': ''};
+        return {...defaultValues, 'savedPassword': saved};
+      case 'ssh.passwordStatus':
+        if (!deferStatus) return {'saved': saved};
+        final pendingStatus = Completer<Map<String, Object>>();
+        statusResults.add(pendingStatus);
+        return pendingStatus.future;
+      case 'ssh.forgetPassword':
+        if (forgetError != null) throw forgetError!;
+        if (pendingForget != null) return pendingForget!.future;
+        saved = false;
+        return {'forgotten': true};
       case 'ssh.passwordConnect':
         final pending = Completer<Map<String, Object>>();
         connectResults.add(pending);
@@ -752,7 +1220,19 @@ class _SshHost {
 
   Future<void> tapConnect() async {
     final action = find.byKey(const Key('ssh-connect'));
-    await tester.ensureVisible(action);
+    // Flush text-field layout and its caret reveal before scrolling to the action.
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.scrollUntilVisible(
+      action,
+      150,
+      scrollable: find
+          .descendant(
+            of: find.byType(SshPasswordConnectPage),
+            matching: find.byType(Scrollable),
+          )
+          .first,
+    );
     await tester.pump(const Duration(milliseconds: 300));
     await tester.ensureVisible(action);
     await tester.pump();
@@ -797,6 +1277,8 @@ class _SshHost {
       const StandardMethodCodec().encodeSuccessEnvelope(event),
       null,
     );
+    await tester.pump();
+    // Failure messages scroll into a lazy ListView in a post-frame callback.
     await tester.pump();
   }
 

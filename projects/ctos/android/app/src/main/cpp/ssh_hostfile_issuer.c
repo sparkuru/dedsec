@@ -13,12 +13,6 @@
 
 #define CTOS_SSH_HOSTFILE_SYNTHETIC_PATH "ctos-managed-known_hosts"
 
-static int slice_is(struct ctos_ssh_slice value, const char *literal) {
-    size_t length = strlen(literal);
-    return value.data != NULL && value.length == length
-        && memcmp(value.data, literal, length) == 0;
-}
-
 static int view_slices_are_safe(const struct ctos_ssh_view *view) {
     if (view == NULL || view->count == 0 || view->count > CTOS_SSH_VIEW_FILES
         || view->uuid.data == NULL || view->uuid.length != 16U
@@ -54,21 +48,22 @@ static int view_slices_are_safe(const struct ctos_ssh_view *view) {
     return 0;
 }
 
-static int managed_known_hosts_root(const struct ctos_ssh_view *view) {
-    static const unsigned char root_path[] = "ssh/config";
-    static const unsigned char known_hosts_path[] = "ssh/known_hosts";
+static int managed_known_hosts_root(const struct ctos_ssh_view *view,
+    const char *known_hosts_path, size_t path_length) {
     const struct ctos_ssh_file *root;
 
     if (view_slices_are_safe(view) != 0
-        || !slice_is(view->root, (const char *)root_path)) {
+        || ctos_ssh_view_path(view->root.data, view->root.length, 0) != 0
+        || ctos_ssh_view_path((const unsigned char *)known_hosts_path, path_length, 0) != 0) {
         errno = EACCES;
         return -1;
     }
-    root = ctos_ssh_view_lookup(view, root_path, sizeof(root_path) - 1U,
+    root = ctos_ssh_view_lookup(view, view->root.data, view->root.length,
         CTOS_SSH_CONFIG);
     if (root == NULL) return -1;
     for (unsigned int index = 0; index < root->ref_count; index++) {
-        if (slice_is(root->refs[index], (const char *)known_hosts_path)) return 0;
+        if (root->refs[index].length == path_length
+            && memcmp(root->refs[index].data, known_hosts_path, path_length) == 0) return 0;
     }
     errno = EACCES;
     return -1;
@@ -245,11 +240,10 @@ int ctos_ssh_hostfile_issue(const struct ctos_ssh_view *view,
         || view->deadline < snapshot.deadline
         || same_slice_text(view->connection, snapshot.connection_id) != 0
         || ctos_ssh_view_live(view) != 0
-        || managed_known_hosts_root(view) != 0) {
+        || managed_known_hosts_root(view, known_hosts_path, path_length) != 0) {
         error = errno == 0 ? EINVAL : errno;
         goto failed;
     }
-    (void)path_length;
     (void)host_length;
     /* Match upstream put_host_port without its fatal allocator path. Role and
      * callback evidence retain the original host and separate port binding. */
@@ -267,7 +261,7 @@ int ctos_ssh_hostfile_issue(const struct ctos_ssh_view *view,
             lookup_host[index] = (char)(lookup_host[index] - 'A' + 'a');
     }
     file = ctos_ssh_view_lookup(view, (const unsigned char *)known_hosts_path,
-        strlen(known_hosts_path), CTOS_SSH_KNOWN_HOSTS);
+        path_length, CTOS_SSH_KNOWN_HOSTS);
     if (file == NULL || file->body.length > CTOS_SSH_CALLBACK_MAX_FILE_BYTES
         || file->declared_bytes != file->body.length) {
         error = errno == 0 ? EACCES : errno;

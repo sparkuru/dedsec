@@ -13,8 +13,15 @@
    root零起始，deadline原BOOTTIME且<=60秒；catalog的request必须null，普通模式必须真实CSEQ。
    Java与native均只允许一次load；load前run、load期间run/close/destroy、重复load明确拒绝。
 3. native先pin原slot，释放registry mutex后准备独占DONTDUMP/锁页区域；在JNI复制之前已由
-   slot/evaluator拥有。CSDI直接复制到该受保护区域，在同一区域内校验/adopt文件表和正文，
-   不再构造第二份完整native正文副本，也不使用无owner的malloc全量scratch。
+   slot/evaluator拥有。CSDI直接复制到该精确长度受保护区域并原位校验/adopt，不再构造
+   第二份完整native正文副本，也不使用无owner的malloc全量scratch。2026-10-26修正：
+   文件表按已严格核对的实际数量单独分配，只含公开类型/长度及指向受保护源的指针，
+   所有path/CONFIG正文仍仅位于锁页源。废除每次锁定最大128项索引的固定前缀，避免
+   小配置也超过Android应用64KiB硬配额；不提高系统限制或回退未锁正文。
+   CONFIG读取使用的内部匿名memfd也不能依赖fchmod0600：Android16实测允许创建/截断，
+   但chmod因App tmpfs策略被拒绝。以实际regular/当前UID/零链接/精确长度/CLOEXEC及
+   不导出FD的所有权边界检查，仍先锁页/DONTDUMP后复制、结束擦除。实际inode mode
+   如实报告；虚拟库文件的逻辑0600与独立FILE_LOAN真实0600要求不能混淆。
 4. GetArrayRegion/JNI异常、坏wire、取消/期限或构造失败均保留已发出的token。busy解除，
    run拒绝或返回原失败诊断；close擦除并重试所有资源，destroy仅在close成功后清槽。
    pending JNI exception保留，不因清理发出替代异常。Java load抛Error也不能丢失facade。

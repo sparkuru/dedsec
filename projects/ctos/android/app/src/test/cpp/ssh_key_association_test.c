@@ -15,6 +15,7 @@ static int sign_error, verify_error, parse_error, oversized_component;
 static unsigned int pair_signs, pair_verifies;
 static unsigned int expire_at;
 static int private_proof_observe;
+static int public_export_observe;
 int __wrap_clock_gettime(clockid_t clock, struct timespec *now) {
     int result = baseline_clock_observer(clock, now);
     if (observe && clock == CLOCK_BOOTTIME && expire_at != 0 && clock_calls >= expire_at && result == 0) now->tv_sec += 61;
@@ -61,7 +62,8 @@ int __wrap_sshkey_sign(struct sshkey *key, unsigned char **signature, size_t *le
     const char *pin, unsigned int compat) {
     if (observe) {
         pair_signs++;
-        const char *domain = private_proof_observe ? "ctOS SSH private material proof v1" : "ctOS SSH key association proof v1";
+        const char *domain = public_export_observe ? "ctOS SSH public export proof v1" :
+            private_proof_observe ? "ctOS SSH private material proof v1" : "ctOS SSH key association proof v1";
         size_t domain_length = strlen(domain) + 1U;
         CHECK(size == domain_length + 32U);
         CHECK(memcmp(data, domain, domain_length) == 0);

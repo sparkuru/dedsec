@@ -20,7 +20,8 @@ general database. Use these guides for work below the Flutter presentation layer
 | [All Private Material](./ssh-private-material.md) | Full PRIVATE/nonTOTP visits, private self-signing proof, v1 phrase-owner ambiguity and opaque password targets |
 | [Certificate Facts](./ssh-certificate-facts.md) | AllCERT numeric/public facts, embedded-signature policy, strict CSCF/unsigned u64 and explicit trust/context limits |
 | [SSH Manifest](./ssh-manifest.md) | One latest model/writer, explicit key/account metadata, protected TOTP input and content-based restore review |
-| [Password SSH Connection](./ssh-password-connect.md) | Real managed trust, transient selected password, TCP/FD handoff, shell-only continuation and operable UI |
+| [Password SSH Connection](./ssh-password-connect.md) | Real managed trust, default transient/explicit saved Account password, atomic save/forget, proof-bound selected read, TCP/FD handoff and operable UI |
+| [Config and Private-key Connection](./ssh-key-config-connect.md) | Real public derivation, strict native direct plan, SAF memory import, atomic file/identity metadata and actual key-only connection |
 | [Error Handling](./error-handling.md) | Typed snapshot states, channel errors, and runtime failures |
 | [Logging](./logging-guidelines.md) | Protocol stdout, bounded HFTP diagnostics, and secret-safe logs |
 | [Quality](./quality-guidelines.md) | Layer-specific checks and tests |

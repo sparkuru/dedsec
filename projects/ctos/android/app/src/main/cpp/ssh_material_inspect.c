@@ -502,6 +502,61 @@ done:
     }
     return 0;
 }
+int ctos_ssh_material_export_public(const unsigned char *body, size_t length,
+    uint64_t deadline, unsigned char **output, size_t *output_length) {
+    if (output != NULL) *output = NULL;
+    if (output_length != NULL) *output_length = 0;
+    if (output == NULL || output_length == NULL || (body == NULL && length != 0)) { errno = EINVAL; return -1; }
+    if (length > CTOS_SSH_MATERIAL_BYTES) { errno = E2BIG; return -1; }
+    if (ctos_ssh_material_deadline(deadline) != 0) return -1;
+    struct material_result material = {.status = CTOS_MATERIAL_MALFORMED};
+    struct sshkey *private_key = NULL, *subject = NULL;
+    unsigned char digest[32] = {0}, *blob = NULL, *wire = NULL;
+    size_t blob_length = 0, wire_length = CTOS_SSH_KEY_EXPORT_HEADER_BYTES;
+    unsigned int status = CTOS_MATERIAL_MALFORMED, kind = 0, flags = 0;
+    static const unsigned char domain[] = "ctOS SSH public export proof v1";
+    int result = text_bounds(body, length, &material), error, saved;
+    if (result < 0) goto done;
+    if (result != 0) { result = 0; goto encode; }
+    if (OPENSSL_init_crypto(OPENSSL_INIT_NO_LOAD_CONFIG, NULL) != 1) { errno = EIO; result = -1; goto done; }
+    result = parse_private(body, length, NULL, 0, 1, &material, &private_key);
+    flags = (material.flags & 1U) ? 2U : 0U;
+    if (result < 0) goto done;
+    if (ctos_ssh_material_deadline(deadline) != 0) { result = -1; goto done; }
+    if (private_key == NULL) { status = material.status; goto encode; }
+    if (!pair_software_key(private_key)) { status = CTOS_MATERIAL_UNSUPPORTED; goto encode; }
+    error = sshkey_from_private(private_key, &subject);
+    if (error != 0) { result = parse_system_error(error); if (result < 0) goto done; goto encode; }
+    result = signing_proof(private_key, subject, domain, sizeof(domain), deadline, digest);
+    if (result < 0) goto done;
+    if (result == 0) { status = CTOS_MATERIAL_MALFORMED; goto encode; }
+    error = sshkey_to_blob(subject, &blob, &blob_length);
+    if (error != 0) { result = parse_system_error(error); if (result < 0) goto done; goto encode; }
+    if (blob_length == 0 || blob_length > CTOS_SSH_MATERIAL_BYTES) { errno = E2BIG; result = -1; goto done; }
+    status = CTOS_MATERIAL_PARSED; kind = key_kind(subject); flags = 1U;
+    wire_length += blob_length;
+encode:
+    if (ctos_ssh_material_deadline(deadline) != 0) { result = -1; goto done; }
+    wire = calloc(wire_length, 1);
+    if (wire == NULL) { errno = ENOMEM; result = -1; goto done; }
+    put32(wire, 0x43534b45U); put32(wire + 4, 1); put32(wire + 8, status);
+    put32(wire + 12, kind); put32(wire + 16, flags);
+    if (status == CTOS_MATERIAL_PARSED) {
+        put32(wire + 20, (uint32_t)blob_length);
+        memcpy(wire + 24, digest, sizeof(digest));
+        memcpy(wire + CTOS_SSH_KEY_EXPORT_HEADER_BYTES, blob, blob_length);
+    }
+    if (ctos_ssh_material_deadline(deadline) != 0) { result = -1; goto done; }
+    *output = wire; *output_length = wire_length; wire = NULL; result = 0;
+done:
+    saved = errno;
+    sshkey_free(subject); sshkey_free(private_key);
+    if (blob != NULL) { wipe(blob, blob_length); free(blob); }
+    if (wire != NULL) { wipe(wire, wire_length); free(wire); }
+    wipe(&material, sizeof(material)); wipe(digest, sizeof(digest));
+    errno = saved;
+    return result;
+}
 int ctos_ssh_material_verify_private(const unsigned char *body, size_t length,
     const unsigned char *passphrase, size_t passphrase_length, uint64_t deadline,
     unsigned char output[CTOS_SSH_PRIVATE_MATERIAL_WIRE_BYTES]) {

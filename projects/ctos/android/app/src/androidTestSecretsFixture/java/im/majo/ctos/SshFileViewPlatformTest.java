@@ -86,7 +86,10 @@ public final class SshFileViewPlatformTest {
         try {
             owned = adapter.openPublicFiles(adapter.fileRequest("ssh/config", "connection-1"), "ssh/config", "connection-1");
             long[] summary = owned.summary();
-            assertArrayEquals("Exact public view metadata", new long[]{3, 1, 31, 73, vault.session.epoch(), summary[5], 0600, 1}, summary);
+            assertEquals("Exact public view summary shape", 8, summary.length);
+            assertTrue("Anonymous inode permissions remain observed advisory metadata",
+                    summary[6] >= 0 && summary[6] <= 0777);
+            assertArrayEquals("Exact public view metadata", new long[]{3, 1, 31, 73, vault.session.epoch(), summary[5], summary[6], 1}, summary);
             assertTrue("Bounded exact anonymous file length", summary[5] > 31 && summary[5] <= VaultEnvelope.MAX_PLAINTEXT);
             cases++;
             try { adapter.privateKeyRequest("ssh/key", "synthetic-key", "target:x", "connection-1"); fail(); }

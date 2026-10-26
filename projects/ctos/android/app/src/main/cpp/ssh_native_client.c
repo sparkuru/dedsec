@@ -422,7 +422,6 @@ static int view_borrow_is_live(const struct ctos_ssh_view_borrow *borrow) {
 static int view_is_current(const struct ctos_ssh_native_client_config *config,
     const struct ctos_ssh_view *view,
     const struct ctos_ssh_role_snapshot *snapshot, size_t path_length) {
-    static const unsigned char root_path[] = "ssh/config";
     const struct ctos_ssh_file *root;
     const struct ctos_ssh_file *known_hosts;
     int references_known_hosts = 0;
@@ -433,13 +432,14 @@ static int view_is_current(const struct ctos_ssh_native_client_config *config,
         || view->deadline < snapshot->deadline
         || same_slice_text(view->connection,
             snapshot->connection_id, CTOS_SSH_ROLE_CONNECTION_ID_BYTES) != 0
-        || same_slice_text(view->root,
-            (const char *)root_path, sizeof(root_path) - 1U) != 0) {
+        || ctos_ssh_view_path(view->root.data, view->root.length, 0) != 0) {
         errno = EACCES;
         return -1;
     }
-    root = ctos_ssh_view_lookup(view, root_path,
-        sizeof(root_path) - 1U, CTOS_SSH_CONFIG);
+    /* The validated, borrowed view binds its actual selected CONFIG root. Legacy
+     * password, manual-key and imported-config roots need no path aliases. */
+    root = ctos_ssh_view_lookup(view, view->root.data,
+        view->root.length, CTOS_SSH_CONFIG);
     known_hosts = ctos_ssh_view_lookup(view,
         (const unsigned char *)config->known_hosts_path, path_length,
         CTOS_SSH_KNOWN_HOSTS);

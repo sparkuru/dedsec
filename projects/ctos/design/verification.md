@@ -1,5 +1,390 @@
 # Verification
 
+<a id="20261026-phone-ssh"></a>
+## 2026-10-26 Android16 手机实际私钥连接修复与验收
+
+用户指定`192.168.10.9:40051`测试其ctOS到`wkyuu@192.168.9.5:22`，原task继续，不新建。
+手机为PLR110、Android16/API36、arm64-v8a；实际APK为373f7161…，与前一轮正式产物
+一致。证据`/tmp/ctos-phone-ssh-20261026.plE6pOaG`，操作仅针对此序列号。
+
+手机TCP探测收到目标OpenSSH_10.0p2 banner；路由经tun0。目标IP经本机route确认是当前
+开发主机，可用`/etc/ssh/*_key.pub`公开主机指纹作真实核验；未读取个人私钥/SSH目录。
+使用已导入身份的公开指纹及用户确认路径`.ssh/id_rsa`，通过真实UI选择私钥并填写目标，
+实际点击连接立即得到“当前秘密库包含此连接方式不支持的SSH资料”，尚未主机核验。
+首次普通资料页返回密码模式的观察不构成已证实选择丢失；重复专用私钥选择后稳定保留
+模式、身份和tuple。未据此前者改代码。已有UI故障提示合并多个固定码，日志无额外阶段。
+
+实际ctOS进程`/proc/11186/limits`显示Max locked memory soft/hard=65536字节，页大小
+4096。查到detached CONFIG loader无论实际数量均锁定128×2128字节索引及CSDI，小输入
+最低274432字节，确定超过手机配额；零CONFIG的key library可通过，首个manual CONFIG
+校验则无法加载。这是明确的平台兼容缺陷，修复与实际登录复测结果待下方记录。
+修复保持单份源先DONTDUMP/锁页后复制，公开指针索引按实际数量独立分配；不提高
+系统限制、不要求Root、不使用未锁正文后备。用户私钥正文和已存密码未导出/读取。
+
+首轮修复a03cf27e…在指定手机保留数据更新后，用户亲自完成系统认证，真实UI仍在
+首次manual CONFIG校验失败。追加隔离合成RSA、零源CONFIG的内存候选回归，不访问
+真实库/账号或TCP，明确得到`VALIDATE_FIRST_MANUAL_CONFIG`、SSH_PROFILE_VALIDATION，
+shape及所有材料解析正常，native CONFIG_IO/object4/line0/errno13。见
+`android-rsa-diag.log`；测试包/请求/容器全部清理、正式包未变。
+
+匿名文件探针`android-memfd-probe-direct-2.log`实际在独立App UID执行：flags1创建成功，
+fstat真实mode0100777；fchmod0600返回13/EACCES；ftruncate128及close成功。
+flags9亦创建成功、mode0100666，chmod同样13、truncate/close成功。因此不是创建flag
+造成，而是内部reader/public-view依赖的chmod操作不符合该手机策略。
+该探针仅观测固定匿名对象，无密钥、用户库或网络。前一探针启动/安装未完成的记录
+不计平台通过；最终方法OK(1 test)仅表示探针完成，不表示SSH已通。
+
+对应实现将内部匿名FD的0600假设改为真实regular、当前UID、零链接、精确长度、CLOEXEC
+及不导出的所有权检查，仍保留DONTDUMP/锁页/擦除/关闭；真实mode不能伪造。跨进程
+FILE_LOAN仍要求实际0600且只读，不随此变化放宽。参考[AOSP App tmpfs基础权限](https://android.googlesource.com/platform/system/sepolicy/+/refs/heads/android16-qpr2-release/public/te_macros)
+与[/proc/pid/fd的ptrace访问检查](https://man7.org/linux/man-pages/man5/proc_pid_fd.5.html)；
+设备实际syscall结果与通用政策参考分别记录。
+
+### 最终修复、本地检查与开发板验证
+
+最终59份source/test/builder哈希为`source-memfd-final-sha256.json`，独立复核逐项一致。
+改动限于实际数量的公开指针索引及内部匿名FD形状，不改变envelope/KDF/manifest/JNI
+wire、身份/信任/凭据准入、系统限制或SELinux策略。SCM对外FD仍要求真实0600。
+
+| 实际检查 | 结果 |
+| --- | --- |
+| 主机file-view/reader矩阵 | 436 cases、1639次wipe检查；fchmod始终模拟EACCES仍0调用，错误type/UID/link/size/CLOEXEC在复制前拒绝并清理；`native-memfd-build-1.log` |
+| 主机opaque view handle | borrow/revoke/stale均pass，同一构建日志 |
+| ARM managed/detached | 4740 checks，含1262 baseline；真实child soft/hard64KiB下manual resource/direct/旧C API通过，128KiB输入在复制前ENOMEM并清理，parent限额不变；`config-managed-memfd-arm.log` |
+| ARM原审计/资源引用 | 13290/4439 checks，effects/capabilities均0；`config-{audit,resource}-memfd-arm.log` |
+| 完整ARM客户端/hostfile issuer | 1757518 checks（运行期计数）、75 cases，所有权/描述符/关闭等pass；`native-{client,issuer}-memfd-arm.log` |
+| 正式最终构建/lint | 92任务（21执行/71保留）16s，0错误/2既有警告；`android-normal-memfd.log` |
+| 隔离最终构建/lint | 110任务（24执行/86保留）15s，0错误/4既有警告；`android-fixture-memfd.log` |
+| JVM/Flutter | 生产Java/Dart未变，前序实际755/271及analyze无问题按源码保留；此轮未强制冒充重跑，JVM task为UP-TO-DATE |
+
+最终static client/issuer/key三builder来自`final-native-apk-build.log`。最初`interop64/`
+复用旧客户端，只证明既有SSH链在64KiB下可行，不绑定后来重生成archive；最终已另建
+`interop-memfd-final/`，`prlimit --memlock=65536:65536`下Ed25519、RSA SHA-2、ECDSA
+真实KEX/一次selected-copy/认证/非回显PTY/resize/exit7全部通过，第四未授权身份拒绝。
+25项输入、binary及baseline before/after核对一致，绑定当前最终archive
+`195c9d107a0047e68de3b1c1068396b52284f8237651a33c084e8b1ac0f0278d`，清理回执全true。
+
+| 最终APK | SHA256 |
+| --- | --- |
+| 正式Gradle/Flutter（逐字一致） | `042c6b73b1a6507e0e57e792d28f06c500dba977ce363742f82c9e1e3ef91252` |
+| 独立fixture | `b40f6567d5c9c8a18642426898dc8ea83ec5f59dcdfa41f4361627b9e72d65f4` |
+| fixture instrumentation | `62cf7756b460751d97b9616533aa44177ed012e29e87d9e4df46afcebc886bcc` |
+
+`apk-memfd-final-sha256.json`及上述最终构建日志含官方apksigner/aapt原始结果。三个APK
+ZIP/签名通过、同证书8d36c8be…、min28/target36，test只指向fixture。正常包无fixture/
+PlatformTest定义，应用实际lib/仅arm64且无probe库；两应用生产SSH库字节一致：
+`6be7a3c38d5aade9f4dd73e13b2d8af9d9aa8bf5a38908b4721aa9a30dcc97b3`。
+
+用户明确允许转到`192.168.9.14:5555`继续测试，重新确认AIO-3568J/API30/arm64。
+第一轮`board-validation/`的合成candidate/public-view已通过，网络方法只有status1即
+共享ADB连接中断，无结束结果，不能计成功或产品失败。恢复后设备awake、同boot id、
+uptime约9天；仅按原安装哈希清理中断轮本任务包和请求，未更换目标或清正式库。
+
+随后使用`board-owned-adb/`独立localhost临时ADB服务，所有命令同时指定自有server
+port和9.14序列号；未调用全局kill-server。该版本`-L`不支持显式hostname的首次启动
+错误已保留，最终用tcp:临时port且不带-a，按本机adb help为localhost-only。全程自有
+Popen存活检查，最终只终止其自有PID，清理回执确认停止。
+
+| 开发板实际方法 | 结果 |
+| --- | --- |
+| actualKeyOnlyManualCandidateValidation | 0.271s，方法status0、OK(1 test)，真实合成RSA、零CONFIG源、生产首次manual候选校验 |
+| SshFileViewPlatformTest#syntheticProtectedFileViews | 0.404s，方法status0、OK(1 test)，真实JNI公共视图/撤销/原始mode等 |
+| actualSafKeyImportManualThenConfigAndStaleBinding | 8.099s，方法status0、OK(1 test)，此次改用合成RSA，实际import/NEW→KNOWN/PTY/旧binding拒绝 |
+| actualBridgeNewThenKnownPasswordShellAndProtectionRelease | 6.791s，方法status0、OK(1 test)，密码保存/复用/忘记/取消/信任保留 |
+
+独立服务配置及原始认证日志确认2次RSA公钥、3次密码shell会话。`cleanup.json`确认
+请求、测试包、reverse、容器/网络全清理，正式373f7161…APK保持不变；
+`owned-adb-cleanup.json`确认自有服务停止、全局ADB未改。这是同生产字节的隔离验证，
+不是访问用户真实目标账号；选择器仍为测试provider，不冒充真实DocumentsUI。
+
+手机清理曾因自动审批将最新授权目标识别为开发板而拒绝；用户随后明确回复“允许清理
+手机临时包”。按原安装哈希卸载两本任务包，`phone-fixture-final-cleanup.json`确认
+正式a03cf27e…及用户库保留。此时最终042版尚未覆盖安装手机，真实登录待复测；后续结果如下。
+
+### 最终手机更新、真实登录与人工验收
+
+用户明确回复“允许更新手机并实测”后，重新确认同一PLR110/API36及UID10497，
+安装前核对旧a03哈希、最终042本地哈希。`install -r`成功，安装后APK读回SHA256与
+上表042完整一致，UID保持10497；未清数据或卸载正式包。
+`phone-final-install.log`和`phone-final-installed.json`记录实际结果。
+
+通过正式ctOS界面选择已有私钥（用户确认路径`.ssh/id_rsa`、公开指纹仍为
+`SHA256:Un4QkmDMNO1gYQh1N85A13SZji27cTc3gd1BuO/igRg`），填写
+`wkyuu@192.168.9.5:22`并连接。本次正常进入主机键审核，ssh-ed25519指纹
+`SHA256:z8gPu1w8ZlnmXXE25ll5fZxZjCY40c+4cVh/qaaNHTQ`与刚读取的服务端
+`/etc/ssh/ssh_host_ed25519_key.pub`公开键一致，随后在界面点击“信任并保存”。
+`ui-finalconnect.json`、`ui-finalhostaccepted.json`记录实际审核及终端状态。
+
+私钥认证成功后，正常PTY执行`whoami`返回独立输出`wkyuu`；八进制printf输入
+经远端执行，输出独立的`CTOS_SSH_PHONE_OK`，证明输出不只是输入回显。
+通过ctOS“选择输出”复核，见`ui-finaloutputsettled.json`；未复制剪贴板、读取私钥正文
+或修改sshd/authorized_keys。关闭本次测试会话后返回终端选择页，
+`ui-finalclosed.json`及最小摘要`phone-final-result.json`确认。手机两个测试包和UI临时
+XML/空目录均已清理，正式042包、原秘密库/私钥及本次核验保存的主机信任保留。
+
+用户随后明确“效果不错；人工验收可以提交；其他的内容你自行测试、提交”。本轮敏感
+连接界面人工审阅已通过，可提交已完成的私钥/config/保存密码及兼容性修复。
+真实DocumentsUI导入仍未在本轮操作，导入/config/密码路径有上述隔离实际bridge证据；
+不将此次登录推定为所有配置/认证/后台能力通过。完整父规划继续in_progress，不归档。
+
+<a id="20261026-key-config-device"></a>
+## 2026-10-26 私钥/config 与保存密码：当前授权设备回归
+
+用户在本轮明确回复“允许”，授权指定 `192.168.9.14:5555` 运行隔离回归、清理测试资源，
+通过后保留数据覆盖安装正式新版。不包含个人私钥、真实库/账号或用户目标访问。
+已核对AIO-3568J、Android11/API30、arm64-v8a；开始时只有正式包、无fixture或反向映射。
+
+首轮证据 `/tmp/ctos-ssh-key-device-20261026.dg7Nvg2w`：实际content://导入/提交已进入
+私钥连接，但native startup在banner/KEX前返回SSH_SESSION_NATIVE。该轮失败，不将
+前面的本地矩阵通过冒充设备可用。正式APK保持旧版本未安装，测试包、0600凭据请求、
+反向端口、relay、精确标签容器/网络全部清理；`cleanup.json`及请求文件缺失检查确认。
+
+定位到三处遗留路径假设：Java managed open固定`ssh/known_hosts`，native
+view_is_current固定`ssh/config`；完整链路审查又发现hostfile issuer在KEX前置核验
+仍固定旧root/trust引用。新私钥导入实际使用`.ssh/known_hosts`及
+`.ssh/ctos-manual` / `.ssh/config`。修复显式传递实际trust路径，并从已校验view获取root，
+仍要求CONFIG类型、同连接/期限及实际KNOWN_HOSTS直接引用。保留旧password默认，
+不复制假alias或跳过检查。新增Java路径/所有权及真实native startup回归；独立key-only
+互通改用实际`.ssh/`路径。
+
+### 修复后的最终检查与产物
+
+证据为同目录的`fix-checks/`；54份最终代码/测试/builder的
+`source-final-sha256.json`已独立逐项核对。正式Java全量实际执行755项/47 suites，0失败/
+错误/跳过（增加2项实际trust路径传递、非法路径/claim/socket所有权回归），
+`jvm-path-fix-xml/`、`android-normal-final.log`，92任务/1m47s。随后仅issuer C/header/test
+修改，正式最终构建/lint92任务（21执行/71保留）17s通过，Java结果保留而非冒充重跑；
+`android-normal-final-2.log`。Flutter未变，前序实际271项/分析无问题及Dart源码哈希保持。
+
+- 最终完整ARM/QEMU native client **1758247 checks**，admission/descriptor/view/close/
+  open_failure_ownership全部pass；`native-client-arm-final-2.log`。实际三根路径的正向
+  open/peer identification/客户端banner/close及缺失/类型/引用/连接/越界拒绝均纳入。
+- 实际hostfile issuer **75 cases**通过，NEW实际handoff/wipe与重载KNOWN、KNOWN/
+  CHANGED/REVOKED及三种根路径的拒绝矩阵；`native-issuer-arm-final-2.log`。
+- 最终static三builder严格编译通过，23/23/25项实际输入及各binary哈希匹配，baseline
+  before/after一致；`native-final-build-2.log`及build/ssh-device-{client,issuer,key}-final-dg7Nvg2w。
+  原生完整矩阵需允许getsockopt/socketpair；初次受限执行被描述符准入拒绝，沙箱外正向
+  启动通过后又定位新测试未发送peer identification。修正测试协议和有界步进、移除
+  临时诊断后全量通过，未放宽生产描述符或安全检查。历史失败日志仍保留，不写成通过。
+- 最终实际`.ssh/config`/`.ssh/known_hosts`独立key-only互通：Ed25519、RSA SHA-2、ECDSA
+  均KEX/publickey一次copy/SUCCESS/非回显PTY/resize/exit7，第四未授权身份被拒绝。
+  `interop-final/`原始配置、客户端/服务日志及全true清理回执绑定最终archive
+  `6b5f83fe6176c518b958ac1dec04ab4efaccec1b2778d598d47ead8268822078`。
+
+隔离最终构建/lint110任务（32执行/78保留）18s通过，显式复用正式已完整编译的原生结果；
+`android-fixture-final.log`。normal/fixture lint均0错误，分别2/4条既有警告。三个APK ZIP
+完整、官方apksigner验证通过（同证书8d36c8be…），min28/target36；正常包无fixture/
+PlatformTest定义或provider，instrumentation只指向独立fixture。两个应用实际lib/仅
+arm64-v8a、无probe/fixture原生库，生产SSH库SHA256同为
+`0417c255907dd04a94aae032156f99ab7a625a62791633a23c7414364f663d5e`。
+详见`apk-verification-final.log`、`apk-final-sha256.json`和两份lint-final.xml。
+
+| 最终产物 | SHA256 |
+| --- | --- |
+| 正式Gradle/Flutter APK（字节一致） | `373f716137414227659d9d28a78f09a687291df39e1d03c43df5897f69146b1d` |
+| 独立fixture APK | `b8366ac4e189bb0b4a099afe568c859cca9b09867bf66f978835cd154aa611cb` |
+| fixture测试APK | `5306aebd2f39b17e908893dacbb530791e41c9ec20436f083a3cbcdb88f1ff73` |
+
+### 实际设备复测、清理与正式安装
+
+第二轮`device-r2/`只到instrumentation status1即ADB中断，无最终方法结果，不能计pass。
+主机容器/网络已清理；当时设备查询失败，cleanup字段false/null表示未能确认，不表示
+正式包已被修改。用户要求“恢复”后重新核对同一设备身份，按安装哈希核对本轮包再
+卸载，清理已证明创建的0600请求，`recovered-cleanup.json`确认旧正式APK未变、测试
+包/请求/映射均已清理。未改用其他设备。
+
+第三轮`device-r3/`实际安装fixture及test后，先核对设备APK哈希与上表精确一致，再运行：
+
+| 实际方法 | 结果 |
+| --- | --- |
+| SshPasswordConnectPlatformTest#actualSafKeyImportManualThenConfigAndStaleBinding | 方法status0、OK(1 test)，7.395s |
+| SshPasswordConnectPlatformTest#actualBridgeNewThenKnownPasswordShellAndProtectionRelease | 方法status0、OK(1 test)，6.863s |
+
+私钥路径真实经过Activity result、ContentResolver内存流、公共加密提交、native公钥推导、
+持久KeyBinding/Account、手动NEW精确指纹审核、无密码认证/PTY、config KNOWN重连及
+编辑后旧binding在连接前拒绝。另一个新鲜隔离库实际验证当次密码、显式保存、空输入
+已存密码重连、精确取消/占用拒绝/重放、忘记密码后信任保留。独立服务端原始日志确认
+2次公钥及3次密码登录和shell开关；两阶段实际服务配置分别只允许publickey/password。
+两测试间只清理本轮新装的独立UID测试库，从未清理正式应用数据。
+
+`cleanup.json`全部满足：tests_passed、formal_apk_unchanged、requests_absent、container/
+network_removed均true；仅正式包存在、reverse为空、cleanup_errors为空。未在宿主写
+私钥文件。私钥测试选择器是ActivityMonitor加同UID非导出一次性provider，证明实际
+宿主链路但不证明真实DocumentsUI/grant或此次新增Flutter界面的人工体验。
+
+以上通过并独立复核后，按本轮已授权范围执行
+`adb -s 192.168.9.14:5555 install -r build/app/outputs/flutter-apk/app-release.apk`，Success。
+设备实际正式APK SHA256与上表373f7161…逐字一致，替换前后UID均10131，无正式clear/
+uninstall。MainActivity正常启动并成为resumed，进程已核对。`formal-install.log`、
+`formal-launch.log`、`formal-installed.json`保留完整结果；旧公开APK有核对后副本，未读取
+正式应用私有数据。个人密钥/真实账号/用户实际目标尚未访问，API28及其他平台未实测。
+本轮不提交、归档或替换dist/current；父task与未交付AC继续开放。
+
+<a id="20261026-key-config"></a>
+## 2026-10-26 config / 无口令私钥（本地验证，待实机）
+
+用户指出密码入口不能连接禁密码服务，并明确普通 OpenSSH 无口令私钥。继续已有父
+task，保留前序密码保存改动。[当前合同](ssh-key-config-connect.md)。证据目录：
+`/tmp/ctos-ssh-key-config-20261026.NwfXu1ag`。尚无设备安装、真实库/账号或实际用户目标登录。
+
+### 已运行的引擎及解析检查
+
+- 扩展原固定 builder 的 `--key-interop` 模式，NDK严格编译通过；actual raw public blob
+  来自新的真实 private parse/固定domain自签验签导出，不来自测试peer/摘要。
+- 独立固定镜像SSH服务实际配置为 PasswordAuthentication no、KbdInteractiveAuthentication no、
+  AuthenticationMethods publickey。临时 Ed25519、RSA SHA-2、ECDSA 三类身份均完成真实
+  签名KEX/受管KNOWN、一次selected publickey SUCCESS、非回显PTY标记、stty resize、exit7/
+  EOF/CLOSE与清理；第四把未授权Ed25519私钥实际被拒绝，未到PTY。
+- 服务仅在任务拥有的内部Docker网络，由回环relay访问，密钥在临时容器内生成、仅经
+  stdin交给QEMU客户端，无宿主私钥文件；精确标签容器/匿名卷/网络与relay均已清理。
+  `server-effective-config.txt`、`interop-{ed25519,rsa,ecdsa,untrusted}.log`、`server-auth.log`、
+  `interop-cleanup.json` 与 `key-interop-runtime.log` 保留原始结果。
+- 新native矩阵构建7任务（3执行/4保留）15s通过；ARM/QEMU实际 managed detached/direct
+  plan **4664 checks**（detached基线1262），实际私钥材料/公开导出 **20142 checks**
+  （pair13819/material7778基线），effects/capabilities为0。见 `native-focused-build.log`、
+  `config-direct-arm.log`、`key-material-arm.log`。
+- 固定parser旧矩阵另构建10任务（6执行/4保留）18s通过，并实际ARM执行 evaluator3736、
+  catalog71923、handle5201、audit13290、resource4439，全0effects/gate=pass；对应
+  `native-config-regressions-build.log` 与五份 `config-*-regression-arm.log`。
+
+以上是C引擎/原生parser证据，单独不代表新AppSecrets/SAF/UI产品路径通过。生产archive
+重编含临时路径，初轮interop自身输入/二进制绑定成立，不能直接绑定后来生成的archive。
+最终正式编译后重新构建互通客户端，以同一冻结archive另跑，结果在下方独立记录。
+
+### 宿主、界面与最终构建
+
+| 实际检查 | 结果与证据 |
+| --- | --- |
+| 首轮定向 JVM | 180项/14 suites，0失败/错误/跳过；`jvm-focused-1.log`、`jvm-focused-1-xml/` |
+| 最终全量 JVM | 753项/47 suites，0失败/错误/跳过；`jvm-full-final-xml/` |
+| 最终定向 Flutter / analyze | 44项通过，静态分析无问题；`flutter-focused-analyze-4.log` |
+| 最终全量 Flutter | 271项通过；`flutter-full-final.log` |
+| 最终正式构建/lint | 93任务（40执行/53保留），1m53s；0错误/2既有警告；`android-full-final-2.log`、`lint-release-final.xml` |
+| 最终 config ARM | 4735 checks（含detached基线1262），effects/capabilities=0；`config-direct-arm-final.log` |
+
+JVM覆盖真实加密文件/关系同次提交、取消/no-effect、替换身份失效与其他TOTP/密码/信任
+保留；新增11项关系/实际选中私钥读取回归及3项编辑候选继承/排队失败回收。最终读取
+回归使用合成host/KEX证明，不能替代真实native认证。初次全量753项中1失败是测试
+传入全零KEX绑定被正确拒绝；改成非零合成值，未放宽生产证明，随后全量通过。
+
+Flutter新增16项私钥/配置入口、导入预览/替换/取消/不确定回执、无密码key连接、Host
+选择及来源绑定、编辑/lifecycle/迟到回调与窄屏/键盘/大字布局回归；保留原28项密码
+回归。初轮编译/布局/帧时序失败日志保留，修复后44项定向与271项全量通过。
+实际native quoted-path测试覆盖空格、单/双引号，确认生成配置交给真实lexer后路径一致。
+
+源码复核修正了选中私钥资源必须使用path+NUL+identity、编辑候选继承失败所有权、
+密钥替换旧ID和config来源绑定失效等问题。最终源/测试/builder哈希在
+`source-final-sha256.json`，不能把前序731/255当本轮结果。
+
+### 冻结产物与独立互通
+
+正式 arm64 APK：`build/app/outputs/flutter-apk/app-release.apk`，36645149 bytes，
+SHA256 `971686c14c6907238d58255b31c159e99299733540cc34af738fa6d15418e9df`，
+与 Gradle release 输出逐字一致。未替换 `dist/current`，未安装设备。
+
+最终 `--key-interop` 使用正式编译后冻结archive
+`676b105404a6f8691ae1731db01336a904d91634787c1e1a1ffaa5e713745fb7`，25份输入及
+binary哈希均匹配，baseline before/after一致。`key-interop-final-build.log` 和
+`final-interop/` 的完整服务/客户端日志及清理回执证明：新生成Ed25519、RSA SHA-2、
+ECDSA均真实KEX/selected-key一次拷贝/认证成功、PTY标记/resize/exit7；未授权身份在
+selected-auth被拒绝。服务禁password/kbd，只有publickey，无密码后备。任务拥有的容器、
+匿名卷、内部网络与回环relay均已清理。此证明绑定同一最终archive，但仍是独立C客户端，
+不是Android AppSecrets/SAF/UI全路径实测。
+
+隔离构建首次lint发现测试provider的fcntlInt需要API30，改用API21公开poll(POLLOUT)
+和单writer的<=512字节写入，保留10s期限/取消/擦除，无抑制或提高minSDK。
+最终fixture构建/lint110任务（28执行/82保留）27s通过，0错误/4既有警告；
+`android-fixture-final-2.log`、`lint-fixture-final.xml`。三个APK ZIP完整、签名验证通过，
+证书SHA256 `8d36c8be418174cb4cda0b897ff3e32b2da6f84032819726e8e5671872df52ef`，
+min28/target36，包名分别im.majo.ctos、im.majo.ctos.secretsfixture及其.test，instrumentation
+只指向fixture。两应用lib/实际均仅arm64-v8a，无probe/fixture原生库，生产
+libctos_ssh_files.so完全一致：`54ad66de2f1752ec93a486dd33a72be68aa2d2664110e76c1fb815317440a037`。
+fixture显式复用已完整执行的生产编译结果，不再重生成临时路径不同的archive。
+所有产物hash和manifest/签名原始输出见`apk-final-sha256.json`、`apk-verification-final.log`。
+
+新增Android opt-in回归已编译：一次性同UID内存content:// provider和ActivityMonitor结果，
+实际经过MainActivity/ContentResolver/import/commit/native public导出及私钥手动NEW→
+config KNOWN/PTY、持久关系/信任、修改配置后旧binding拒绝；尚未设备执行。该选择器
+模拟不证明真实DocumentsUI/grant/人工界面。同步provider调用的墙钟抢占也未保证。
+独立源码及证据复核无遗留实质问题，47份最终source/test/builder哈希一致。
+设备安装、真实文件选择与用户实际端点仍须当前授权和单独验收；父完整AC继续开放。
+
+<a id="20261026-saved-password"></a>
+## 2026-10-26 SSH 可选密码保存（本地验证）
+
+用户明确不建 task，在已有父规划选择“可选保存 SSH 密码”。[合同](ssh-saved-password.md)
+沿同一正式主线，实现默认当次、显式加密保存、精确 host/port/username Account 绑定、
+主机/KEX 后 typed 复用及单条/全部忘记；TOTP、生成配置与信任保留。
+原任务继续 in_progress，原完整 R10/父 AC 不据本切片标完成。
+
+证据目录：`/tmp/ctos-ssh-saved-password-20261026.c8PVL4Mm`。最终变更源码与测试共12份，
+`source-final-sha256.json` 逐项绑定，独立审查已核对一致。未变 native 协议/依赖，
+不重复以历史 ARM/设备结果声称本轮运行；未连接设备、使用真实库账号、安装或发布。
+
+| 本轮实际检查 | 结果与证据 |
+| --- | --- |
+| 定向 JVM 初轮 | 81项/6 suites，0失败/错误/跳过；`jvm-focused.log`、`jvm-focused-xml/` |
+| 最终全量 JVM | 731项/43 suites，0失败/错误/跳过，实际重新执行；`jvm-full-final-xml/` |
+| 最终定向 Flutter | 28项通过；`flutter-focused-final.log` |
+| 最终全量 Flutter | 255项通过；`flutter-full-final.log` |
+| 最终 Flutter analyze | 无问题；`flutter-analyze-final.log`，5.3s |
+| 最终正式构建/lint | 92任务（42执行/50保留），2m04s；0错误/2既有警告；`android-full-final.log` |
+| 最终 arm64 正式 APK | `build/app/outputs/flutter-apk/app-release.apk`，SHA256 `7b8aee668df72127d25e74923bd94bb1b8e7cd0449e243500a38aaf43c9fae83`，与 Gradle release 输出一致 |
+
+JVM 包括实际加密库 Account/密码同次保存、替换、单条/全部忘记，规范 tuple framing、
+Unicode/端口/用户隔离、非法内容/no-effect、原取消/锁定/期限/注册、原子提交及最终读取。
+独立检查补强实际非空 known_hosts/CONFIG 字节与身份/reference/TOTP 保留、synthetic
+host/KEX selection 的 guarded copy/擦除/重放拒绝、无 selection namespace 绕过及认证
+source Account 替换后不交付。合成证明不是真实 Android/KEX 认证结果。
+
+Flutter 覆盖默认不保存、显式保存/已存空密码选择、目标编辑立即取消选择/迟到状态、
+单条/全部忘记确认（含无最近连接）、锁库/后台/通道失败、保存/忘记取消的最终回执、
+成功交接竞争的精确 requestId 取消与中断后的回执确认。实际 widget 布局检查包括320dp
+键盘、568dp横屏、1200dp及2倍字号；不是设备截图或 IME 实测。
+
+初轮 Flutter 3处失败与第二轮新增布局1处失败日志保留，均为旧文案断言、lazy ListView
+布局/滚动与事件帧时序，保持原可点击/重试/错误断言后修正；未削弱行为或隐藏失败。
+独立源码复核另外修复保存取消丢弃 uncertain 回执、成功交接后精确取消丢失，以及
+失败新连接不得丢弃旧会话取消权；新增3项 Flutter 回归。原校验器注册在排队前固定，
+只跨本次精确写入继续，旧 BundleContext 仍不能取得旧代次准入。
+
+两个 lint 警告为既有 QueryPermissionsNeeded、DataExtractionRules。新 Android 隔离
+回归已准备：当次 NEW、显式保存的 KNOWN、空密码已存重连、忘记后信任保留，以及
+旧ID/占用终端失败/精确当前取消与重放；尚未设备执行。
+复杂 SSH 恢复仍受 metadata 审阅门限制，API28/其他Android/真实账号和新增能力实机待验。
+
+隔离构建/lint113任务（50执行/63保留）49s通过，0错误/4既有警告（包括两项测试
+夹具自身的 UnsafeDynamicallyLoadedCode）；`android-fixture-final.log`。正常/隔离都真实
+执行了同一生产 native 编译链。独立 native 重编因临时构建路径产生不同二进制，不声称
+可重复构建；最初正式 hash `9f298921…` 与隔离包的库字节不同，严格比对未通过。
+之后仅重新打包、复用同一份已编译生产库，显式排除已执行的 compileSshFiles /
+compileSshProductionObjects / compileSshConfigEvaluator；没有修改源代码或跳过其首次构建。
+直接 Gradle 默认还打入 Flutter 的其他 ABI；最终两应用均显式 `-Ptarget-platform=android-arm64`，
+正常打包77任务（28执行/49保留）30s通过，`android-normal-arm64-final.log`。
+最终产物以本节表格及随后签名记录为准；原有255/731项结论绑定未变源码，不把打包说成重测。
+
+最终隔离 arm64 打包104任务（29执行/75保留）29s通过，
+`android-fixture-arm64-final.log`。三APK ZIP完整，正式/隔离两应用的实际 `lib/` 均只有
+arm64-v8a（不把 Python assets 中的 `.so` 路径误计为 Android ABI），没有probe/fixture
+原生库；两包生产 `libctos_ssh_files.so` SHA256完全一致：
+`148a8aeef9deaabf229521fcc25b17ec0c0cb4d008ae57d62e5173b82fab1113`。
+`apk-final-sha256.json` 与 `apk-verification-final.log` 记录实际产物：
+
+- 正式：`7b8aee668df72127d25e74923bd94bb1b8e7cd0449e243500a38aaf43c9fae83`，36,540,785 bytes。
+- 隔离应用：`e60e59442ca5422ad8c70347a47988a2f362679b780c707a30b0c3a79ef500fb`。
+- 隔离测试：`84e3081f167542153a133123bb835869590b52ff49bf5e499f30e27548d089ce`。
+
+三包实际 v2 签名验证通过，同既有单 signer
+`8d36c8be418174cb4cda0b897ff3e32b2da6f84032819726e8e5671872df52ef`。
+实际Manifest包名分别为 `im.majo.ctos`、`im.majo.ctos.secretsfixture` 与 `.secretsfixture.test`，
+instrumentation target精确为隔离应用；minSDK28/target36。普通 `app-release-androidTest.apk`
+本轮未重建，不纳入本轮产物结论。正常 Gradle/Flutter APK 输出字节一致。
+原始失败/中间构建日志保留，最终12份源码 SHA再次核对一致；无设备、dist替换、提交或归档。
+独立最终审查PASS：重新核对上述原始测试/构建日志、实际APK SHA/ZIP/AXML/DEX/v2签名块、
+同signer与arm64/同生产库；正式包无fixture/test类或探针库。无剩余源码或文档finding。
+82份Markdown/950条本地链接及22条JSONL上下文引用检查通过，`git diff --check`通过。
+新增设备路径尚未执行，提交审阅分类仍为human-required。
+
 <a id="20261026-formal-install"></a>
 ## 2026-10-26 正式APK覆盖安装与交付收尾
 

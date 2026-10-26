@@ -516,7 +516,7 @@ static void capacities(void) {
     reject_shape(files, 9, 0);
     CHECK(errno == E2BIG);
     /* The host has an 8MiB hard locked-memory cap. Exact 8MiB payload plus
-     * owned records/paths cannot be locked here. Prove it passes shape checks
+     * owned paths cannot be locked here. Prove it passes shape checks
      * and reaches the protection step, with a deterministic lock failure;
      * never substitute a fake successful lock for this boundary. */
     case_index = 102; fail_lock = 1; capture_owned = 1; e = (void *)1;

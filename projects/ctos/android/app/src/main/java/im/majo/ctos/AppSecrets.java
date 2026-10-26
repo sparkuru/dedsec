@@ -65,6 +65,7 @@ final class AppSecrets {
         final long epoch, deadline;
         private final EffectGuard guard;
         private final ValidatorRegistration validator;
+        private volatile String snapshotBinding;
         private volatile boolean cancelled;
         private boolean admitted;
         private Object proposalIdentity;
@@ -258,13 +259,20 @@ final class AppSecrets {
         private final long epoch, deadline;
         private final EffectGuard guard;
         private final ValidatorRegistration validator;
+        private final SshSavedPassword passwordAccount;
+        private final boolean forgetAllPasswords;
         private volatile boolean cancelled;
         private boolean admitted;
         private VaultOperation issued;
         private SshEntryMutationContext(AppSecrets owner, long epoch, long deadline, EffectGuard guard,
                 ValidatorRegistration validator) {
+            this(owner, epoch, deadline, guard, validator, null, false);
+        }
+        private SshEntryMutationContext(AppSecrets owner, long epoch, long deadline, EffectGuard guard,
+                ValidatorRegistration validator, SshSavedPassword passwordAccount, boolean forgetAllPasswords) {
             this.owner = owner; this.epoch = epoch; this.deadline = deadline;
             this.guard = guard; this.validator = validator;
+            this.passwordAccount = passwordAccount; this.forgetAllPasswords = forgetAllPasswords;
         }
         void cancel() {
             VaultOperation retired;
@@ -304,13 +312,19 @@ final class AppSecrets {
         private final long epoch, deadline;
         private final EffectGuard guard;
         private final ValidatorRegistration validator;
+        private final SshAuthenticationSelection passwordSelection;
         private volatile boolean cancelled;
         private boolean admitted;
         private VaultOperation issued;
         private SshSecretReadContext(AppSecrets owner, long epoch, long deadline, EffectGuard guard,
                 ValidatorRegistration validator) {
+            this(owner, epoch, deadline, guard, validator, null);
+        }
+        private SshSecretReadContext(AppSecrets owner, long epoch, long deadline, EffectGuard guard,
+                ValidatorRegistration validator, SshAuthenticationSelection passwordSelection) {
             this.owner = owner; this.epoch = epoch; this.deadline = deadline;
             this.guard = guard; this.validator = validator;
+            this.passwordSelection = passwordSelection;
         }
         void cancel() {
             VaultOperation retired;
@@ -583,6 +597,76 @@ final class AppSecrets {
             if (result != null) result.close();
             VaultCodec.wipe(key); VaultCodec.wipe(ciphertext); VaultCodec.wipe(plain);
         }
+    }
+
+    /** Host-only owned source for SSH library inspection/import; callers close every loan. */
+    SshConnectionMaterial.Snapshot sshLibrarySnapshot(BundleContext context) throws VaultException {
+        byte[] key = null, ciphertext = null, plain = null;
+        SshConnectionMaterial.Snapshot result = null;
+        long revision;
+        try {
+            synchronized (this) {
+                checkBundleContext(context); revision = contentRevision; key = session.key();
+                try { ciphertext = store.read(); }
+                catch (IOException failure) { throw new VaultException("VAULT_IO", "Unable to read the vault"); }
+                checkBundleContext(context);
+                if (ciphertext == null) throw new VaultException("VAULT_MISSING", "Create or import a vault first");
+            }
+            VaultEnvelope envelope = VaultEnvelope.parse(ciphertext);
+            String sourceBinding = SshConnectionMaterial.hex(VaultCodec.digest(ciphertext));
+            if (context.snapshotBinding != null && !context.snapshotBinding.equals(sourceBinding))
+                throw new VaultException("VAULT_CHANGED", "The vault changed; review again");
+            plain = envelope.decrypt(key);
+            checkBundleContext(context);
+            try (VaultManifest manifest = VaultManifest.decode(plain); VaultManifest loan = VaultManifest.decode(plain)) {
+                if (hasSsh(manifest)) {
+                    context.validator.validator.validate(loan);
+                    requireUnchangedLoan(loan, plain);
+                }
+                checkBundleContext(context);
+                result = new SshConnectionMaterial.Snapshot(manifest, context.epoch, revision, sourceBinding);
+            }
+            synchronized (this) {
+                checkBundleContext(context); unchanged(envelope.binding()); checkBundleContext(context);
+                if (contentRevision != revision) throw new VaultException("VAULT_CHANGED", "The vault changed; try again");
+            }
+            SshConnectionMaterial.Snapshot published = result;
+            context.guard.publish(() -> {
+                synchronized (publicationLock) { synchronized (session) {
+                    checkBundleMetadata(context);
+                    if (context.snapshotBinding == null) context.snapshotBinding = sourceBinding;
+                    else if (!context.snapshotBinding.equals(sourceBinding))
+                        throw new VaultException("VAULT_CHANGED", "The vault changed; review again");
+                    if (contentRevision != published.revision) throw new VaultException("VAULT_CHANGED", "The vault changed; try again");
+                } }
+            });
+            result = null;
+            return published;
+        } finally {
+            if (result != null) result.close();
+            VaultCodec.wipe(key); VaultCodec.wipe(ciphertext); VaultCodec.wipe(plain);
+        }
+    }
+
+    void validateSshCandidate(BundleContext context, VaultManifest candidate) throws VaultException {
+        checkBundleContext(context);
+        byte[] canonical = candidate.encode();
+        try (VaultManifest loan = VaultManifest.decode(canonical)) {
+            context.validator.validator.validate(loan);
+            requireUnchangedLoan(loan, canonical);
+            checkBundleContext(context);
+        } finally { VaultCodec.wipe(canonical); }
+    }
+
+    void inheritSshEditContext(BundleContext original, BundleContext child) throws VaultException {
+        checkBundleContext(original); checkBundleContext(child);
+        synchronized (publicationLock) { synchronized (session) {
+            checkBundleMetadata(original); checkBundleMetadata(child);
+            if (original.epoch != child.epoch || original.validator != child.validator
+                    || child.deadline > original.deadline || original.snapshotBinding == null
+                    || child.snapshotBinding != null) throw denied();
+            child.snapshotBinding = original.snapshotBinding;
+        } }
     }
 
     /** One bounded synchronous copy only; no provider/native work under the session fence. */
@@ -1547,6 +1631,45 @@ final class AppSecrets {
         return new SshEntryMutationContext(this, epoch, deadline, guard, validatorRegistration);
     }
 
+    SshEntryMutationContext newPasswordMutationContext(long epoch, long deadline, EffectGuard guard,
+            SshPasswordProfile profile, boolean all) throws VaultException {
+        if (guard == null || profile == null || deadline > clock.now() + 120000) throw VaultException.invalid();
+        return new SshEntryMutationContext(this, epoch, deadline, guard, validatorRegistration,
+                new SshSavedPassword(profile), all);
+    }
+
+    SshEntryMutationContext newPasswordForgetAllContext(long epoch, long deadline, EffectGuard guard)
+            throws VaultException {
+        if (guard == null || deadline > clock.now() + 120000) throw VaultException.invalid();
+        return new SshEntryMutationContext(this, epoch, deadline, guard, validatorRegistration, null, true);
+    }
+
+    VaultOperation beginPasswordMutation(SshEntryMutationContext context, String connectionId, boolean save)
+            throws VaultException {
+        if (context == null || context.owner != this || context.passwordAccount == null && !context.forgetAllPasswords
+                || save && (context.forgetAllPasswords || connectionId.isEmpty())) throw denied();
+        SshSavedPassword account = context.passwordAccount;
+        return beginSshEntryMutation(save ? VaultOperation.Purpose.SSH_SAVE : VaultOperation.Purpose.SSH_DELETE,
+                context.forgetAllPasswords ? SshSavedPassword.ALL_ID : account.entryId,
+                context.forgetAllPasswords ? SshPasswordProfile.TARGET : account.target,
+                save ? connectionId : "", context, () -> { });
+    }
+
+    void savePassword(VaultOperation operation, byte[] secret, EffectGuard guard) throws VaultException {
+        SshEntryMutationState state = operation == null ? null : operation.sshEntryMutationState();
+        if (state == null || state.context.passwordAccount == null || state.context.forgetAllPasswords) throw denied();
+        SshSavedPassword account = state.context.passwordAccount;
+        SshSavedPassword.validateSecret(secret);
+        saveSsh(operation, account.entryId, account.target, operation.connectionId,
+                account.profile.username, false, secret, guard);
+    }
+
+    void forgetPassword(VaultOperation operation, EffectGuard guard) throws VaultException {
+        SshEntryMutationState state = operation == null ? null : operation.sshEntryMutationState();
+        if (state == null || state.context.passwordAccount == null && !state.context.forgetAllPasswords) throw denied();
+        deleteSsh(operation, operation.resource, operation.target, guard);
+    }
+
     SshEntryMutationContext newSshEntryMutationContext(long deadline, EffectGuard guard) throws VaultException {
         synchronized (session) {
             foreground();
@@ -1687,7 +1810,7 @@ final class AppSecrets {
         if (id.isEmpty()) throw denied();
         SshEntryMutationWork work = captureSshEntryMutation(context, null, purpose, id, target, connectionId, authorization);
         try (Verified verified = openSshEntryMutation(work)) {
-            if (purpose == VaultOperation.Purpose.SSH_DELETE
+            if (purpose == VaultOperation.Purpose.SSH_DELETE && context.passwordAccount == null && !context.forgetAllPasswords
                     && !findSshEntry(verified.manifest, id).identity.equals(target)) throw denied();
             VaultOperation result = new VaultOperation(VaultOperation.Consumer.SSH, purpose, id, target,
                     connectionId, verified.envelope, context.epoch, context.deadline);
@@ -1721,7 +1844,10 @@ final class AppSecrets {
         SshEntryMutationWork work = captureSshEntryMutation(null, operation, purpose, id, target, connectionId, null);
         try (Verified verified = openSshEntryMutation(work)) {
             guard.check();
-            try (VaultManifest candidate = sshEntryCandidate(verified.manifest, id, target, replacement)) {
+            try (VaultManifest candidate = work.context.passwordAccount == null && !work.context.forgetAllPasswords
+                    ? sshEntryCandidate(verified.manifest, id, target, replacement)
+                    : SshSavedPassword.candidate(verified.manifest, work.context.passwordAccount,
+                            work.context.forgetAllPasswords, replacement)) {
                 checkSshEntryMutation(work); guard.check();
                 byte[] canonical = candidate.encode();
                 try {
@@ -2077,6 +2203,18 @@ final class AppSecrets {
         if (context != null && context.owner == this) context.cancel();
     }
 
+    /** Pins the original registration across only the connector's separately verified own writes.
+     * This is not bundle admission: callers still need each context's complete epoch checks. */
+    void requirePasswordValidationOrigin(BundleContext context) throws VaultException {
+        if (context == null || context.owner != this) throw denied();
+        if (context.cancelled) throw new VaultException("VAULT_CANCELLED", "Secret request was cancelled");
+        if (clock.now() >= context.deadline) throw new VaultException("VAULT_EXPIRED", "Secret operation expired");
+        if (validatorRegistration != context.validator)
+            throw new VaultException("VAULT_CHANGED", "SSH validation context changed; try again");
+        if (context.validator.validator == null)
+            throw new VaultException("VAULT_SSH_VALIDATION_REQUIRED", "SSH file validation is not available yet");
+    }
+
     void checkBundleContext(BundleContext context) throws VaultException {
         if (context == null || context.owner != this) throw denied();
         context.guard.check();
@@ -2155,6 +2293,9 @@ final class AppSecrets {
         VaultManifest manifest = null;
         try {
             checkBundleWork(work, proposal, operation, guard);
+            if (work.context.snapshotBinding != null && !work.context.snapshotBinding.equals(
+                    SshConnectionMaterial.hex(VaultCodec.digest(work.ciphertext))))
+                throw new VaultException("VAULT_CHANGED", "The reviewed SSH source changed");
             VaultEnvelope envelope = VaultEnvelope.parse(work.ciphertext);
             if (operation != null && (!operation.vaultId.equals(envelope.id)
                     || operation.generation != envelope.generation
@@ -2362,6 +2503,16 @@ final class AppSecrets {
         }
     }
 
+    SshSecretReadContext newSavedPasswordReadContext(long deadline, EffectGuard guard,
+            SshAuthenticationSelection selection) throws VaultException {
+        if (guard == null || selection == null || deadline > clock.now() + 120000) throw VaultException.invalid();
+        synchronized (session) {
+            foreground();
+            return new SshSecretReadContext(this, session.epoch(), deadline, guard,
+                    validatorRegistration, selection);
+        }
+    }
+
     private SshSecretReadContext newSshSecretReadContext() throws VaultException {
         return newSshSecretReadContext(clock.now() + 120000, () -> { });
     }
@@ -2493,6 +2644,7 @@ final class AppSecrets {
         if (target.isEmpty() || connectionId.isEmpty()) throw denied();
         SshSecretReadWork work = captureSshSecretRead(context, null, purpose, resource, target, connectionId, expectedType);
         try (Verified verified = openSshSecretRead(work)) {
+            checkSavedPasswordRead(verified.manifest, context, purpose, resource, target, connectionId, expectedType);
             sshSecretMaterial(verified.manifest, purpose, resource, target, expectedType, false);
             VaultOperation result = new VaultOperation(VaultOperation.Consumer.SSH, purpose, resource, target,
                     connectionId, verified.envelope, context.epoch, context.deadline);
@@ -2524,6 +2676,7 @@ final class AppSecrets {
         SshSecretReadWork work = captureSshSecretRead(null, operation, purpose, resource, target, connectionId, expectedType);
         byte[] secret = null;
         try (Verified verified = openSshSecretRead(work)) {
+            checkSavedPasswordRead(verified.manifest, work.context, purpose, resource, target, connectionId, expectedType);
             secret = sshSecretMaterial(verified.manifest, purpose, resource, target, expectedType, true);
             unchangedSshSecretRead(work);
             final byte[] borrowed = secret;
@@ -2544,6 +2697,26 @@ final class AppSecrets {
             releaseGuard.check();
             checkSshSecretRead(work);
         } finally { VaultCodec.wipe(secret); finishSshSecretRead(work); }
+    }
+
+    private static void checkSavedPasswordRead(VaultManifest manifest, SshSecretReadContext context,
+            VaultOperation.Purpose purpose, String resource, String target, String connectionId,
+            VaultManifest.EntryType expectedType) throws VaultException {
+        SshAuthenticationSelection selection = context.passwordSelection;
+        if (target.startsWith(SshConnectionMaterial.KEY_TARGET_PREFIX)) {
+            if (selection == null || purpose != VaultOperation.Purpose.SSH_PRIVATE_KEY
+                    || !(selection.path + "\0" + selection.keyIdentity).equals(resource)
+                    || !selection.role.targetIdentity.equals(target)
+                    || !selection.role.connectionId.equals(connectionId)) throw SshAuthenticationSelection.invalid();
+            SshConnectionMaterial.requireSelection(manifest, selection);
+            return;
+        }
+        if (selection == null && !target.startsWith(SshSavedPassword.TARGET_PREFIX)) return;
+        if (selection == null || purpose != VaultOperation.Purpose.SSH_CREDENTIAL
+                || expectedType != VaultManifest.EntryType.SSH_PASSWORD || !selection.entryId.equals(resource)
+                || !selection.role.targetIdentity.equals(target) || !selection.role.connectionId.equals(connectionId))
+            throw SshAuthenticationSelection.invalid();
+        SshSavedPassword.requireSelection(manifest, selection);
     }
 
     private static byte[] sshSecretMaterial(VaultManifest manifest, VaultOperation.Purpose purpose, String resource,

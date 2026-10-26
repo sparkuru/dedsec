@@ -1,5 +1,57 @@
 # SSH 终端实施计划
 
+## 2026-10-26 最终验收与提交
+
+- [x] 64KiB锁页实际child回归及内部memfd权限故障矩阵，保留锁页/擦除和严格对外FD规则。
+- [x] 最终源码/产物冻结，完整原生、三类密钥互通、构建/lint与开发板四项回归通过。
+- [x] 用户明确允许后，042版保留数据更新手机，核对APK哈希及原UID。
+- [x] 正式ctOS原有私钥实际登录，公开主机键核验/保存，whoami及非回显PTY标记通过。
+- [x] 测试会话、临时包和UI XML清理；用户人工验收并明确授权提交。
+- [x] 最终文档/证据一致性复核通过，按用户明确授权提交本轮SSH变更；会话记录单独收尾。
+
+审阅分类human-required，已由用户明确验收通过。真实DocumentsUI仍未专项操作；其余
+导入/config/保存密码具备隔离实际bridge回归，不扩大为父完整AC通过。下方是前序阶段
+记录，本轮最终证据见design/verification.md#20261026-phone-ssh。父task保留in_progress。
+
+## 最新实施：config 与无口令私钥
+
+- [x] 核对当前产品缺口，用户确认普通 OpenSSH 私钥无口令；复用原 task，不访问个人密钥。
+- [x] 调查真实 native 私钥认证、config effective Options、SAF和原子图事务，记录当前合同。
+- [x] native 真实公钥 blob 导出与 direct-plan 接口及严格测试，保留旧矩阵。
+- [x] 扩展唯一 manifest 准入/原子 metadata 变更，实际 key/config 导入预览及连接/主机核验。
+- [x] 受保护私钥/配置导入、编辑/别名选择与无密码认证 UI，保留旧密码路径及其改动。
+- [x] key-only 隔离互通、相关 JVM/Flutter、lint/产物与独立复核；设备/账号按当前授权。
+- [x] 同步 design/spec/验证，父 AC 不因该直接场景全部完成。
+- [x] 当前授权下隔离Android私钥/config及保存密码回归，清理后保留数据正式覆盖安装。
+- [ ] 真实DocumentsUI/文件grant、新界面人工体验及用户实际密钥/目标验收；未访问真实账号。
+
+主会话继续串行全部 hako/设备执行与文档；native、host、Flutter 分开归属给 Trellis
+implement，独立 check 复核。下方密码保存切片是已完成本地验证的前序记录。
+
+本轮先完成753 JVM/271 Flutter本地检查；设备发现三处legacy路径消费后修正，
+最终755 JVM、完整native1758247/issuer75、独立实际路径key-only及两项Android回归通过。
+正式373f7161…已保留数据安装并核对，见design/verification.md#20261026-key-config-device。
+真实系统选择器/人工界面/用户实际目标未验收；不提交或归档父task。
+
+## 2026-10-26 当前实施切片
+
+用户已选择可选保存 SSH 密码，不新建任务。本节取代下文历史 planning 对当前切片的描述；
+父任务此轮拥有直接 R10 工作，不重开已归档的前台密码子任务。
+
+- [x] 扩展正式 profile/validator：精确 Account/密码绑定及多个目标，保持 TOTP/信任。
+- [x] 公共原生命周期内原子保存/忘记账号与密码，接 selected saved read，默认当次不写密码。
+- [x] 精确 metadata-only status/bridge/API 与保存/复用/忘记 UI，防旧目标/迟到请求复用。
+- [x] 针对性 JVM/Flutter，然后全量731 JVM/255 Flutter/analyze、Android lint/构建与源码独立复核。
+- [x] 同步 design/spec/实际验证，见 design/verification.md#20261026-saved-password。
+- [ ] 当前未授权的新能力实机验收；隔离 Android 回归已准备，父完整 AC 继续开放。
+
+提交审阅分类：human-required。新增敏感表单和实际 saved-account/native 连接尚未实机，
+不能用 widget/JVM 或历史一次密码验收替代。先按项目设备授权约定完成隔离实机审阅，
+当前不提交/归档，不启动其他父规划范围。
+
+主会话负责文档和全部串行 hako 构建；Trellis implement 分别拥有 Java 与 Flutter，check
+独立审阅最终源码/检查结果。先完成可复核变更，再报告设备验收缺口。保留完整父 AC 未完成。
+
 状态：planning / 已确定范围整理完成，待共同最终审阅。旧完整审阅候选失效，步骤按共享底座依赖排序；此清单不是实施授权。
 
 ## 0. 规划收敛门槛

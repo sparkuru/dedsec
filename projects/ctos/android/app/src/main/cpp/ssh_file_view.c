@@ -201,11 +201,15 @@ int ctos_ssh_view_allocate(struct ctos_ssh_view *v, size_t length) {
     if (v->fd < 0) return -1;
     v->length = length;
     struct stat shape;
-    if (fchmod(v->fd, 0600) != 0 || ftruncate(v->fd, (off_t)length) != 0
-        || fstat(v->fd, &shape) != 0 || !S_ISREG(shape.st_mode)
-        || (shape.st_mode & 0777) != 0600 || shape.st_size != (off_t)length) goto failed;
+    /* This internal memfd has no pathname or exported FD. Android app policy
+     * may deny chmod on its inode; validate real anonymous ownership instead. */
+    if (ftruncate(v->fd, (off_t)length) != 0 || fstat(v->fd, &shape) != 0) goto failed;
     int flags = fcntl(v->fd, F_GETFD);
-    if (flags < 0 || (flags & FD_CLOEXEC) == 0) goto failed;
+    if (flags < 0) goto failed;
+    if (!S_ISREG(shape.st_mode) || shape.st_uid != getuid() || shape.st_nlink != 0
+        || shape.st_size != (off_t)length || (flags & FD_CLOEXEC) == 0) {
+        errno = EACCES; goto failed;
+    }
     void *mapping = mmap(NULL, length, PROT_READ | PROT_WRITE, MAP_SHARED, v->fd, 0);
     if (mapping == MAP_FAILED) goto failed;
     v->mapping = mapping;

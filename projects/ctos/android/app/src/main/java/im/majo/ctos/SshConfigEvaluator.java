@@ -19,6 +19,7 @@ final class SshConfigEvaluator implements AutoCloseable {
     static final int MAX_CATALOG_BYTES = 70424;
     static final int MAX_AUDIT_BYTES = 82732;
     static final int MAX_RESOURCE_AUDIT_BYTES = 107328;
+    static final int MAX_DIRECT_PLAN_BYTES = 48 + 3 * 259 + (256 + 32) * 516;
     static final int MAX_DETACHED_BYTES = 8455704;
     static final int MAX_OPENS = 1024, MAX_READ_BYTES = 64 * 1024 * 1024, MAX_LINES = 16384;
     private static final int REQUEST_MAGIC = 0x43534551;
@@ -44,6 +45,8 @@ final class SshConfigEvaluator implements AutoCloseable {
         default long reserveAudit() throws IOException { throw unavailable(); }
         default byte[] audit(long handle) throws IOException { throw unavailable(); }
         default long reserveDetached(boolean catalogMode) throws IOException { throw unavailable(); }
+        default long reserveDirect() throws IOException { throw unavailable(); }
+        default byte[] directPlan(long handle) throws IOException { throw unavailable(); }
         default void loadDetached(long handle, byte[] source, int root, long deadline,
                 byte[] request) throws IOException { throw unavailable(); }
         default int[] usage(long handle) throws IOException { throw unavailable(); }
@@ -64,6 +67,8 @@ final class SshConfigEvaluator implements AutoCloseable {
         static native long reserveAudit() throws IOException;
         static native byte[] audit(long handle) throws IOException;
         static native long reserveDetached(boolean catalogMode) throws IOException;
+        static native long reserveDirect() throws IOException;
+        static native byte[] directPlan(long handle) throws IOException;
         static native void loadDetached(long handle, byte[] source, int root, long deadline,
                 byte[] request) throws IOException;
         static native int[] usage(long handle) throws IOException;
@@ -87,6 +92,8 @@ final class SshConfigEvaluator implements AutoCloseable {
         @Override public long reserveDetached(boolean catalogMode) throws IOException {
             return Native.reserveDetached(catalogMode);
         }
+        @Override public long reserveDirect() throws IOException { return Native.reserveDirect(); }
+        @Override public byte[] directPlan(long handle) throws IOException { return Native.directPlan(handle); }
         @Override public void loadDetached(long handle, byte[] source, int root, long deadline,
                 byte[] request) throws IOException {
             Native.loadDetached(handle, source, root, deadline, request);
@@ -203,6 +210,44 @@ final class SshConfigEvaluator implements AutoCloseable {
             hostname = readText(buffer, false);
             user = readText(buffer, true);
             if (buffer.hasRemaining() || userRequired != user.isEmpty()) throw invalid();
+        }
+    }
+
+    /** Actual supported direct-connection options; the caller still binds a current vault/role. */
+    static final class DirectPlan {
+        final String alias, hostname, user;
+        final int port, connectTimeoutMillis, requestTty, strictHostKeyChecking;
+        final boolean identitiesOnly, pubkeyAuthentication, passwordAuthentication, userRequired;
+        final List<String> identityFiles, userKnownHostsFiles;
+        private DirectPlan(byte[] wire) throws IOException {
+            if (wire == null || wire.length < 60 || wire.length > MAX_DIRECT_PLAN_BYTES) throw invalid();
+            ByteBuffer buffer = ByteBuffer.wrap(wire);
+            if (buffer.getInt() != 0x43534350 || buffer.getInt() != 1) throw invalid();
+            port = buffer.getInt();
+            identitiesOnly = flag(buffer.getInt());
+            pubkeyAuthentication = flag(buffer.getInt());
+            passwordAuthentication = flag(buffer.getInt());
+            connectTimeoutMillis = buffer.getInt();
+            requestTty = buffer.getInt();
+            strictHostKeyChecking = buffer.getInt();
+            userRequired = flag(buffer.getInt());
+            int identities = buffer.getInt(), hosts = buffer.getInt();
+            if (port < 1 || port > 65535 || connectTimeoutMillis < 1000 || connectTimeoutMillis > 60000
+                    || connectTimeoutMillis % 1000 != 0 || (requestTty != 0 && requestTty != 2 && requestTty != 3)
+                    || (strictHostKeyChecking != 2 && strictHostKeyChecking != 3)
+                    || identities < 0 || identities > 256 || hosts < 1 || hosts > 32) throw invalid();
+            alias = readText(buffer, false); hostname = readText(buffer, false); user = readText(buffer, true);
+            if (userRequired != user.isEmpty()) throw invalid();
+            List<String> keys = new ArrayList<>(identities), known = new ArrayList<>(hosts);
+            for (int i = 0; i < identities + hosts; i++) {
+                String path = readText(buffer, false, 512);
+                try { VaultManifest.path(path); }
+                catch (VaultException error) { throw invalid(); }
+                (i < identities ? keys : known).add(path);
+            }
+            if (buffer.hasRemaining()) throw invalid();
+            identityFiles = Collections.unmodifiableList(keys);
+            userKnownHostsFiles = Collections.unmodifiableList(known);
         }
     }
 
@@ -422,7 +467,7 @@ final class SshConfigEvaluator implements AutoCloseable {
     private final ViewBinding view;
     private final DetachedGuard detachedGuard;
     private final NativeBinding binding;
-    private final boolean catalogMode, auditMode, resourceAuditMode;
+    private final boolean catalogMode, auditMode, resourceAuditMode, directMode;
     private volatile long handle;
     private volatile boolean cancelled;
     private boolean inFlight, attempted, ready, nativeClosed;
@@ -436,6 +481,7 @@ final class SshConfigEvaluator implements AutoCloseable {
         this.catalogMode = catalogMode;
         auditMode = false;
         resourceAuditMode = false;
+        directMode = false;
     }
 
     private SshConfigEvaluator(DetachedGuard guard, NativeBinding binding, boolean catalogMode) {
@@ -449,12 +495,18 @@ final class SshConfigEvaluator implements AutoCloseable {
 
     private SshConfigEvaluator(DetachedGuard guard, NativeBinding binding, boolean catalogMode,
             boolean auditMode, boolean resourceAuditMode) {
+        this(guard, binding, catalogMode, auditMode, resourceAuditMode, false);
+    }
+
+    private SshConfigEvaluator(DetachedGuard guard, NativeBinding binding, boolean catalogMode,
+            boolean auditMode, boolean resourceAuditMode, boolean directMode) {
         view = null;
         detachedGuard = guard;
         this.binding = binding;
         this.catalogMode = catalogMode;
         this.auditMode = auditMode;
         this.resourceAuditMode = resourceAuditMode;
+        this.directMode = directMode;
     }
 
     static SshConfigEvaluator prepareDetached(DetachedGuard guard, boolean catalogMode)
@@ -465,6 +517,13 @@ final class SshConfigEvaluator implements AutoCloseable {
     static SshConfigEvaluator prepareDetached(DetachedGuard guard, NativeBinding binding,
             boolean catalogMode) throws IOException {
         return prepareDetachedMode(guard, binding, catalogMode, false);
+    }
+    static SshConfigEvaluator prepareDirectDetached(DetachedGuard guard) throws IOException {
+        return prepareDirectDetached(guard, PRODUCTION);
+    }
+
+    static SshConfigEvaluator prepareDirectDetached(DetachedGuard guard, NativeBinding binding) throws IOException {
+        return prepareDetachedMode(guard, binding, false, false, false, true);
     }
 
     static SshConfigEvaluator prepareDetachedAudit(DetachedGuard guard) throws IOException {
@@ -492,13 +551,18 @@ final class SshConfigEvaluator implements AutoCloseable {
 
     private static SshConfigEvaluator prepareDetachedMode(DetachedGuard guard, NativeBinding binding,
             boolean catalogMode, boolean auditMode, boolean resourceAuditMode) throws IOException {
+        return prepareDetachedMode(guard, binding, catalogMode, auditMode, resourceAuditMode, false);
+    }
+
+    private static SshConfigEvaluator prepareDetachedMode(DetachedGuard guard, NativeBinding binding,
+            boolean catalogMode, boolean auditMode, boolean resourceAuditMode, boolean directMode) throws IOException {
         if (guard == null || binding == null) throw invalid();
         SshConfigEvaluator evaluator = new SshConfigEvaluator(guard, binding, catalogMode, auditMode,
-                resourceAuditMode);
+                resourceAuditMode, directMode);
         evaluator.enter();
         try {
             guard.check();
-            long token = resourceAuditMode ? binding.reserveResourceAudit()
+            long token = directMode ? binding.reserveDirect() : resourceAuditMode ? binding.reserveResourceAudit()
                     : auditMode ? binding.reserveAudit() : binding.reserveDetached(catalogMode);
             if (token <= 0) throw unavailable();
             evaluator.handle = token;
@@ -652,6 +716,20 @@ final class SshConfigEvaluator implements AutoCloseable {
         finally { wipe(wire); leave(); }
     }
 
+    DirectPlan directPlan() throws IOException {
+        enter();
+        byte[] wire = null;
+        try {
+            live();
+            if (!ready || !directMode) throw unavailable();
+            wire = binding.directPlan(handle);
+            DirectPlan plan = new DirectPlan(wire);
+            live();
+            return plan;
+        } catch (IOException | LinkageError failure) { throw unavailable(); }
+        finally { wipe(wire); leave(); }
+    }
+
     Catalog catalog() throws IOException {
         return catalog(MAX_CATALOG_BYTES, 512);
     }
@@ -749,9 +827,13 @@ final class SshConfigEvaluator implements AutoCloseable {
     }
 
     private static String readText(ByteBuffer buffer, boolean empty) throws IOException {
+        return readText(buffer, empty, 255);
+    }
+
+    private static String readText(ByteBuffer buffer, boolean empty, int maximum) throws IOException {
         if (buffer.remaining() < 4) throw invalid();
         int length = buffer.getInt();
-        if (length < 0 || length > 255 || length > buffer.remaining() || (!empty && length == 0))
+        if (length < 0 || length > maximum || length > buffer.remaining() || (!empty && length == 0))
             throw invalid();
         ByteBuffer text = buffer.slice();
         text.limit(length);

@@ -28,6 +28,13 @@ JNIEXPORT jlong JNICALL Java_im_majo_ctos_SshConfigEvaluator_00024Native_reserve
     if (ctos_ssh_config_handle_reserve_audit(&token) != 0) { fail(env); return 0; }
     return (jlong)token;
 }
+JNIEXPORT jlong JNICALL Java_im_majo_ctos_SshConfigEvaluator_00024Native_reserveDirect(
+    JNIEnv *env, jclass type) {
+    (void)type;
+    ctos_ssh_config_token token = 0;
+    if (ctos_ssh_config_handle_reserve_direct(&token) != 0) { fail(env); return 0; }
+    return (jlong)token;
+}
 JNIEXPORT jlong JNICALL Java_im_majo_ctos_SshConfigEvaluator_00024Native_reserveResourceAudit(
     JNIEnv *env, jclass type) {
     (void)type;
@@ -126,6 +133,24 @@ JNIEXPORT void JNICALL Java_im_majo_ctos_SshConfigEvaluator_00024Native_cancel(
     JNIEnv *env, jclass type, jlong token) {
     (void)type;
     if (ctos_ssh_config_handle_cancel((ctos_ssh_config_token)token) != 0) fail(env);
+}
+JNIEXPORT jbyteArray JNICALL Java_im_majo_ctos_SshConfigEvaluator_00024Native_directPlan(
+    JNIEnv *env, jclass type, jlong token) {
+    (void)type;
+    unsigned char *wire = calloc(CTOS_SSH_CONFIG_DIRECT_BYTES, 1);
+    size_t length = 0;
+    jbyteArray result = NULL;
+    if (wire == NULL) { fail(env); return NULL; }
+    if (ctos_ssh_config_handle_direct_plan((ctos_ssh_config_token)token, wire, &length) != 0) { fail(env); goto done; }
+    result = (*env)->NewByteArray(env, (jsize)length);
+    if ((*env)->ExceptionCheck(env)) { result = NULL; goto done; }
+    if (result == NULL) { fail(env); goto done; }
+    (*env)->SetByteArrayRegion(env, result, 0, (jsize)length, (const jbyte *)wire);
+    if ((*env)->ExceptionCheck(env)) { result = NULL; goto done; }
+    if (ctos_ssh_config_handle_direct_plan_live((ctos_ssh_config_token)token) != 0) { fail(env); result = NULL; }
+done:
+    wipe(wire, CTOS_SSH_CONFIG_DIRECT_BYTES); free(wire);
+    return result;
 }
 JNIEXPORT void JNICALL Java_im_majo_ctos_SshConfigEvaluator_00024Native_close(
     JNIEnv *env, jclass type, jlong token) {

@@ -43,6 +43,53 @@
       "account_authorized": false
     },
     "full_scope_complete": false,
+    "current_increment": {
+      "name": "config_unencrypted_private_key_connection",
+      "date": "2026-10-26",
+      "user_selection": "普通 OpenSSH 私钥，无私钥口令；修复禁密码服务不可登录及 config/私钥入口缺失",
+      "scope": "R3/R7 direct parent work: actual SAF key/config import, atomic identity metadata, native effective direct plan, key-only authentication and PTY; preserve prior saved-password work; no new task",
+      "status": "phone_real_key_login_verified_human_accepted",
+      "device_authorized": true,
+      "account_authorized": true,
+      "verification": "design/verification.md#20261026-phone-ssh",
+      "apk_sha256": "042c6b73b1a6507e0e57e792d28f06c500dba977ce363742f82c9e1e3ef91252",
+      "device_authorization": {
+        "date": "2026-10-26",
+        "response": "允许",
+        "target": "192.168.9.14:5555",
+        "scope": "隔离回归、清理测试资源，保留数据覆盖安装新版；不含个人私钥或真实账号访问"
+      },
+      "remaining_review": "真实DocumentsUI/grant尚未专项操作；本轮手机实际私钥登录及界面人工验收已通过，父完整配置/认证/后台AC仍开放",
+      "human_review": "human-required；用户明确：效果不错；人工验收可以提交；其他的内容你自行测试、提交",
+      "commit_authorized": true,
+      "phone_diagnosis": {
+        "serial": "192.168.10.9:40051",
+        "model": "PLR110",
+        "sdk": 36,
+        "target": "wkyuu@192.168.9.5:22",
+        "scope": "正常ctOS流程实际连接测试及兼容性修复；不导出私钥/密码、不修改sshd",
+        "memlock_bytes": 65536,
+        "page_bytes": 4096,
+        "verification": "design/verification.md#20261026-phone-ssh",
+        "phone_current_apk": "042c6b73b1a6507e0e57e792d28f06c500dba977ce363742f82c9e1e3ef91252",
+        "actual_login_verified": true,
+        "result": "正式ctOS选择已有私钥，核对并保存准确主机键；whoami返回wkyuu，八进制printf非回显标记通过；测试会话已关闭，临时资源清理",
+        "final_update_authorized": true,
+        "final_update_authorization": "用户明确回复允许更新手机并实测；保留数据更新042版，通过ctOS使用已导入私钥测试wkyuu@192.168.9.5；不导出密钥或修改sshd",
+        "cleanup_authorized": "用户明确允许清理手机临时包；两包已清理，正式库保留",
+        "board_followup": "用户明确允许192.168.9.14继续测试；四项隔离回归通过，资源已清理，正式373包未变"
+      }
+    },
+    "previous_increment": {
+      "name": "optional_saved_ssh_password",
+      "date": "2026-10-26",
+      "user_selection": "可选保存 SSH 密码（建议，延续现有连接流程）",
+      "scope": "R10 direct parent work: explicit encrypted save, exact account-bound reuse, forget one/all; no new task",
+      "status": "integrated_device_verified_installed",
+      "device_authorized": true,
+      "account_authorized": false,
+      "verification": "design/verification.md#20261026-key-config-device"
+    },
     "archived_client_delivery_scope": "Foreground password SSH only; config/import/key/cert/KBI/credentials/jump/forward/rekey/background/full restore remain deferred"
   }
 }

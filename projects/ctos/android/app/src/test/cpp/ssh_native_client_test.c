@@ -125,26 +125,27 @@ static void wire_text(struct wire *wire, const char *value) {
     wire_put(wire, value, length);
 }
 
-static void wire_root(struct wire *wire) {
+static void wire_root_paths(struct wire *wire, const char *root_path,
+    const char *known_hosts_path) {
     unsigned char type = CTOS_SSH_CONFIG;
 
     wire_put(wire, &type, sizeof(type));
     wire_text(wire, "root");
-    wire_text(wire, "ssh/config");
+    wire_text(wire, root_path);
     wire_text(wire, "native client managed config");
     wire_u32(wire, 0);
     wire_u32(wire, 1);
-    wire_text(wire, "ssh/known_hosts");
+    wire_text(wire, known_hosts_path);
     wire_u32(wire, 0);
 }
 
-static void wire_known_hosts(struct wire *wire, const unsigned char *body,
-    size_t length) {
+static void wire_known_hosts_path(struct wire *wire, const unsigned char *body,
+    size_t length, const char *known_hosts_path) {
     unsigned char type = CTOS_SSH_KNOWN_HOSTS;
 
     wire_put(wire, &type, sizeof(type));
     wire_text(wire, "trust");
-    wire_text(wire, "ssh/known_hosts");
+    wire_text(wire, known_hosts_path);
     wire_text(wire, "native client host evidence");
     CHECK(length <= UINT32_MAX);
     wire_u32(wire, (uint32_t)length);
@@ -153,8 +154,8 @@ static void wire_known_hosts(struct wire *wire, const unsigned char *body,
     wire_put(wire, body, length);
 }
 
-static struct ctos_ssh_view *load_view(const unsigned char *body, size_t length,
-    uint64_t deadline) {
+static struct ctos_ssh_view *load_view_paths(const unsigned char *body, size_t length,
+    uint64_t deadline, const char *root_path, const char *known_hosts_path) {
     struct wire wire = {0};
     unsigned char uuid[16] = {9};
     unsigned char binding[32] = {8};
@@ -168,11 +169,11 @@ static struct ctos_ssh_view *load_view(const unsigned char *body, size_t length,
     wire_u64(&wire, deadline);
     wire_text(&wire, "native-client-request");
     wire_text(&wire, "native-client-connection");
-    wire_text(&wire, "ssh/config");
+    wire_text(&wire, root_path);
     wire_put(&wire, binding, sizeof(binding));
     wire_u32(&wire, 2);
-    wire_root(&wire);
-    wire_known_hosts(&wire, body, length);
+    wire_root_paths(&wire, root_path, known_hosts_path);
+    wire_known_hosts_path(&wire, body, length, known_hosts_path);
 
     view = calloc(1, sizeof(*view));
     CHECK(view != NULL);
@@ -180,6 +181,11 @@ static struct ctos_ssh_view *load_view(const unsigned char *body, size_t length,
     memcpy(view->mapping, wire.bytes, wire.length);
     CHECK(ctos_ssh_view_validate(view) == 0);
     return view;
+}
+
+static struct ctos_ssh_view *load_view(const unsigned char *body, size_t length,
+    uint64_t deadline) {
+    return load_view_paths(body, length, deadline, "ssh/config", "ssh/known_hosts");
 }
 
 static void destroy_view(struct ctos_ssh_view *view) {
@@ -1823,6 +1829,85 @@ static void test_malformed_view_slice(void) {
         volatile unsigned char *bytes = fixture.public_blob;
         for (size_t index = 0; index < fixture.public_blob_length; index++) bytes[index] = 0;
         free(fixture.public_blob);
+    }
+}
+
+static void test_actual_view_roots(void) {
+    const char *roots[] = {"ssh/config", ".ssh/config", ".ssh/ctos-manual"};
+
+    for (size_t root_index = 0; root_index < sizeof(roots) / sizeof(roots[0]); root_index++) {
+        const char *hosts = root_index == 0 ? "ssh/known_hosts" : ".ssh/known_hosts";
+        for (unsigned int fault = 0; fault < 8U; fault++) {
+            struct fixture fixture = {0};
+            struct ctos_ssh_native_client_config config;
+            struct ctos_ssh_role_request request;
+            unsigned char banner[256] = {0};
+
+            fixture.deadline = deadline_after(5000);
+            fixture.view = load_view_paths(NULL, 0, fixture.deadline, roots[root_index], hosts);
+            CHECK(ctos_ssh_view_borrow_owned_view(fixture.view, &fixture.view_borrow) == 0);
+            request = role_request(fixture.deadline);
+            CHECK(ctos_ssh_role_bootstrap_open(&request, &fixture.role) == 0);
+            fixture.callback_token = open_callback(&fixture.callback, fixture.role, fixture.deadline);
+            CHECK(socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0, fixture.pair) == 0);
+            fixture.callback.release_fd = fixture.pair[0];
+            config = (struct ctos_ssh_native_client_config){
+                .role = fixture.role, .socket_fd = fixture.pair[0], .owner_uid = getuid(),
+                .owns_socket = 1, .callback = fixture.callback_token,
+                .callback_environment = fixture.callback.environment,
+                .deadline = fixture.deadline, .step_budget = 64U,
+                .host_key_mode = CTOS_SSH_HOST_KEY_MANAGED,
+                .managed_view_borrow = fixture.view_borrow,
+                .known_hosts_path = hosts, .host = "example.invalid", .candidate_id = "actual-root-candidate"
+            };
+            // Metadata corruption probes retain a real validated/borrowed view and exercise
+            // native open's final CONFIG/type/reference/connection admission, before transport.
+            if (fault == 1U) fixture.view->root = (struct ctos_ssh_slice){
+                (const unsigned char *)".ssh/missing", sizeof(".ssh/missing") - 1U};
+            if (fault == 2U) fixture.view->files[0].type = CTOS_SSH_PUBLIC_KEY;
+            if (fault == 3U) config.known_hosts_path = ".ssh/missing-known_hosts";
+            if (fault == 4U) fixture.view->files[1].type = CTOS_SSH_PUBLIC_KEY;
+            if (fault == 5U) fixture.view->files[0].ref_count = 0;
+            if (fault == 6U) fixture.view->connection = (struct ctos_ssh_slice){
+                (const unsigned char *)"foreign-connection", sizeof("foreign-connection") - 1U};
+            if (fault == 7U) fixture.view->root = (struct ctos_ssh_slice){
+                (const unsigned char *)"../escape", sizeof("../escape") - 1U};
+            errno = 0;
+            if (fault == 0U) {
+                static const unsigned char peer_banner[] = "SSH-2.0-ctos-root-fixture\r\n";
+                size_t length = 0, written = 0;
+                CHECK(ctos_ssh_native_client_open(&config, &fixture.client) == 0 && fixture.client != NULL);
+                // The production packet reader waits for peer identification before emitting
+                // its own identification. Supply only that bounded protocol prerequisite.
+                CHECK(send(fixture.pair[1], peer_banner, sizeof(peer_banner) - 1U, MSG_NOSIGNAL)
+                    == (ssize_t)(sizeof(peer_banner) - 1U));
+                for (unsigned int attempt = 0; attempt < 16U && length < 8U; attempt++) {
+                    struct ctos_ssh_native_client_step step = {0};
+                    CHECK(ctos_ssh_native_client_step(fixture.client, &step) == 0);
+                    written += step.bytes_written;
+                    ssize_t received = recv(fixture.pair[1], banner + length, sizeof(banner) - length, MSG_DONTWAIT);
+                    if (received > 0) length += (size_t)received;
+                    else CHECK(received < 0 && (errno == EAGAIN || errno == EWOULDBLOCK));
+                }
+                CHECK(written > 0 && fixture.callback.host_evidence_calls == 0);
+                CHECK(length >= 8U && memcmp(banner, "SSH-2.0-", 8U) == 0);
+                cleanup_fixture(&fixture, 1);
+            } else {
+                CHECK(ctos_ssh_native_client_open(&config, &fixture.client) != 0 && fixture.client == NULL);
+                CHECK(errno == EACCES || (fault == 3U && errno == ENOENT));
+                CHECK(fcntl(fixture.pair[0], F_GETFD) >= 0 && fixture.callback.release_calls == 0);
+                CHECK(recv(fixture.pair[1], banner, sizeof(banner), MSG_DONTWAIT) < 0
+                    && (errno == EAGAIN || errno == EWOULDBLOCK));
+                CHECK(fixture.callback.host_evidence_calls == 0 && fixture.callback.kex_complete_calls == 0);
+                CHECK(ctos_ssh_view_borrow_live(fixture.view_borrow) == 0);
+                CHECK(ctos_ssh_callback_close(fixture.callback_token, fixture.callback.environment) == 0);
+                CHECK(fixture.callback.release_calls == 1 && fixture.callback.release_saw_fd_open == 1);
+                CHECK(close(fixture.pair[0]) == 0 && close(fixture.pair[1]) == 0);
+                CHECK(ctos_ssh_role_bootstrap_close(fixture.role) == 0);
+                CHECK(ctos_ssh_view_borrow_release(fixture.view_borrow) == 0);
+                destroy_view(fixture.view);
+            }
+        }
     }
 }
 
@@ -4424,6 +4509,11 @@ static void test_managed_host_denials(void) {
 }
 
 int main(int argc, char **argv) {
+    if (argc == 2 && strcmp(argv[1], "--view-roots-only") == 0) {
+        test_actual_view_roots();
+        printf("SSH_NATIVE_VIEW_ROOTS checks=%u gate=pass runtime=synthetic\n", checks);
+        return 0;
+    }
     if (argc == 2 && strcmp(argv[1], "--managed-host-only") == 0) {
         test_pending_host_guard();
         test_managed_host_denials();
@@ -4448,6 +4538,7 @@ int main(int argc, char **argv) {
     test_prepare_tcp_descriptor();
     test_failed_open_releases_kex_role();
     test_malformed_view_slice();
+    test_actual_view_roots();
     test_step_and_close();
     test_verify_known_host_key_proof();
     test_fragmented_identification_is_atomic();

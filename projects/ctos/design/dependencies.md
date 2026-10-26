@@ -1,5 +1,13 @@
 # Dependency provenance
 
+2026-10-26 当前[config/无口令私钥路径](ssh-key-config-connect.md)沿固定 OpenSSH10.6p1、
+OpenSSL3.5.9 与 NDK27，没有新增运行依赖。项目自有 readconf hook 增加严格 direct-plan
+模式，仍用同一 pinned lexer；当前补丁 SHA256 为
+`1aaa7df21678bc522a550ddb708e64deb2557327c6f148e2b85d3d9b781780cf`，构建器固定值同步。
+私钥公开导出复用真实解析及固定 domain 自签/验签，不引入其他 SSH 库。
+隔离互通继续只用既有缓存镜像 `d42d0d9d40e02c441870792bd3f679b446715cee38f81354366a33c9b0d84573`，
+关闭密码、临时生成身份并清理；不打包测试服务或测试密钥。
+
 2026-10-26归档收尾：9份固定SSH构建/测试runner与6份patch迁入`android/ssh/`，Gradle
 和runner不再依赖活动任务目录。补丁字节、固定source/archive SHA、baseline/no-symlink/
 forbidden检查及脚本权限保留；没有新增依赖或产品运行代码变化。原研究记录保留历史

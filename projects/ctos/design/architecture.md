@@ -1,5 +1,24 @@
 # Architecture
 
+2026-10-26：[私钥/config 直接连接](ssh-key-config-connect.md)沿唯一 AppSecrets 与
+VaultManifest 扩展受管文件及精确 KeyBinding/KEY Account，SshImportProposal 在一次
+受保护事务中提交文件和关系。SshProfilesBridge 直接从 SAF 有界读入独占内存，预览与
+提交使用同一候选；Flutter 只收公开身份和配置内容。SshConnectionMaterial 用真实 native
+direct plan、源绑定与 typed private selection 接入既有 SshPasswordConnector 的主机/KEX/
+USERAUTH/PTY；类名保留，但连接现已支持所选私钥，无第二套 SSH 引擎或 config 解析器。
+
+## SSH 密码保存接续（2026-10-26，本地实现）
+
+[密码保存合同](ssh-saved-password.md)扩展同一正式入口。`SshSavedPassword` 将精确
+host/port/username 映射到规范 Account/SSH_PASSWORD；`SshPasswordProfile` 的整库子集
+检查覆盖一一绑定。`AppSecrets` 复用原 entry mutation/read 生命周期，账号与密码同次
+候选提交，selected typed read 在准入及实际读取复查账号和 role/selection。
+`SshPasswordConnectBridge` 仅公开保存状态并拥有独立 status/forget 请求；connector
+在创建 public view 前完成本次精确写入，已存密码经过真实主机核验/KEX 后才交 native。
+默认输入仍走一次临时 lease，Flutter 不接收已存秘密。显式保存/忘记取消等待最终回执，
+成功交接只按原请求精确取消，旧 connector 的 factory 身份不能误停新终端。
+[本地验证](verification.md#20261026-saved-password)与已安装版分列。
+
 2026-10-13 实机增量：Android已resume但窗口尚无焦点时，Flutter仍可能inactive；添加页只缓存有效请求的稳定非敏感失败提示，回前台可恢复。成功图片元数据在同请求/epoch/revision/当前路由条件下最多等待3秒，等待中不渲染秘密，恢复后重验可见性并扣除已耗预览时间，不续原生期限；取消/锁库/覆盖/离开使旧请求退场。两项修复共7个widget回归，最终221 Flutter通过；真实0相机恢复及其他设备结果见 [验证](verification.md)。
 
 ## Authenticator TOTP（2026-10-13，本地实现完成）

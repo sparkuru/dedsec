@@ -68,12 +68,15 @@ struct ctos_ssh_config_eval {
     struct ctos_ssh_view_borrow *borrow;
     unsigned char *owned;
     size_t owned_length;
+    struct ctos_ssh_file *owned_files;
+    size_t owned_file_bytes;
     int owned_locked, detached;
     uint64_t deadline;
     struct ctos_ssh_io io;
     Options options;
     struct ctos_ssh_config_error error;
     struct ctos_ssh_config_summary summary;
+    struct ctos_ssh_config_direct_plan *direct_plan;
     struct ctos_ssh_config_request request;
     char alias[256], user[256], fallback[256], local_user[256], local_host[256], tag[256];
     char command[CTOS_SSH_CONFIG_LINE_BYTES + 1];
@@ -82,6 +85,7 @@ struct ctos_ssh_config_eval {
     unsigned int stack, total_lines, max_lines;
     size_t staged_length;
     struct config_origin host_origin, user_origin, diagnostic_origin, algorithm_origin[6];
+    struct config_origin identity_origin[CTOS_SSH_CONFIG_LIST], hostfile_origin[CTOS_SSH_CONFIG_HOSTFILES];
     struct config_input input[CTOS_SSH_CONFIG_DEPTH + 1];
     int options_live;
     enum ctos_ssh_config_mode mode;
@@ -151,6 +155,35 @@ void ctos_config_mark_options(const Options *o) {
         o->hostbased_accepted_algos, o->pubkey_accepted_algos, o->ca_sign_algorithms};
     for (unsigned int i = 0; i < 6; i++) if (algorithms[i] != NULL && current->algorithm_origin[i].object == 0)
         current->algorithm_origin[i] = here;
+    if (current->direct_plan != NULL) {
+        for (int i = 0; i < o->num_identity_files && i < (int)CTOS_SSH_CONFIG_LIST; i++)
+            if (current->identity_origin[i].object == 0) current->identity_origin[i] = here;
+        for (unsigned int i = 0; i < o->num_user_hostfiles && i < CTOS_SSH_CONFIG_HOSTFILES; i++)
+            if (current->hostfile_origin[i].object == 0) current->hostfile_origin[i] = here;
+    }
+}
+int ctos_config_direct_keyword(const char *keyword, int active, int count, char **args) {
+    if (current == NULL || current->direct_plan == NULL || !active) return 0;
+    static const char *const accepted[] = {"host", "match", "include", "hostname", "user", "port",
+        "identityfile", "identitiesonly", "userknownhostsfile", "stricthostkeychecking", "connecttimeout",
+        "requesttty", "pubkeyauthentication", "passwordauthentication"};
+    for (size_t i = 0; i < sizeof(accepted) / sizeof(accepted[0]); i++) if (strcmp(keyword, accepted[i]) == 0) {
+        if (count == 1 && ((strcmp(keyword, "requesttty") == 0 &&
+                (strcasecmp(args[0], "no") == 0 || strcasecmp(args[0], "false") == 0)) ||
+                (strcmp(keyword, "pubkeyauthentication") == 0 && strcasecmp(args[0], "host-bound") == 0) ||
+                (strcmp(keyword, "userknownhostsfile") == 0 && strcasecmp(args[0], "none") == 0)))
+            return ctos_config_reject(CTOS_CONFIG_UNSUPPORTED, ENOTSUP);
+        return 0;
+    }
+    /* Explicit no-op commands/providers are also safe; the existing full Options
+     * policy still checks them after the actual pinned value parser. */
+    if (count == 1 && strcasecmp(args[0], "none") == 0 &&
+            (strcmp(keyword, "proxycommand") == 0 || strcmp(keyword, "localcommand") == 0 ||
+             strcmp(keyword, "knownhostscommand") == 0 || strcmp(keyword, "identityagent") == 0 ||
+             strcmp(keyword, "globalknownhostsfile") == 0)) return 0;
+    if (count == 1 && strcmp(keyword, "preferredauthentications") == 0 && strcmp(args[0], "publickey") == 0)
+        return 0;
+    return ctos_config_reject(CTOS_CONFIG_UNSUPPORTED, ENOTSUP);
 }
 void ctos_config_defaults_error(const char *field) {
     static const char *fields[6] = {"ciphers", "macs", "kex_algorithms",
@@ -627,7 +660,7 @@ int ctos_ssh_config_eval_open_catalog(struct ctos_ssh_view_borrow *borrow, struc
 static int detached_shape(const struct ctos_ssh_config_file *files, unsigned int count,
     unsigned int root, size_t *length) {
     if (files == NULL || count == 0 || count > CTOS_SSH_VIEW_FILES || root >= count) { errno = EINVAL; return -1; }
-    *length = count * sizeof(struct ctos_ssh_file);
+    *length = 0;
     size_t body_bytes = 0;
     for (unsigned int i = 0; i < count; i++) {
         const struct ctos_ssh_config_file *f = &files[i];
@@ -675,8 +708,13 @@ static int open_detached(const struct ctos_ssh_config_file *files, unsigned int 
     if (madvise(mapping, length, MADV_DONTDUMP) != 0 || mlock(mapping, length) != 0) goto failed;
     e->owned_locked = 1;
     if (live(e) != 0) goto failed;
-    struct ctos_ssh_file *owned_files = mapping;
-    unsigned char *next = e->owned + count * sizeof(*owned_files);
+    /* Only pointer/type/length metadata lives outside protected storage, like
+     * the live view's parsed table. Every path and CONFIG byte stays locked. */
+    e->owned_file_bytes = count * sizeof(*e->owned_files);
+    e->owned_files = calloc(count, sizeof(*e->owned_files));
+    if (e->owned_files == NULL) goto failed;
+    struct ctos_ssh_file *owned_files = e->owned_files;
+    unsigned char *next = e->owned;
     for (unsigned int i = 0; i < count; i++) {
         if (live(e) != 0) goto failed;
         owned_files[i].type = files[i].type;
@@ -722,6 +760,17 @@ int ctos_ssh_config_eval_prepare_detached(int catalog_mode, uint64_t deadline,
     e->mode = catalog_mode ? CTOS_CONFIG_CATALOG : CTOS_CONFIG_EFFECTIVE; e->detached = 1; e->deadline = deadline;
     e->state = CTOS_CONFIG_LOADING; *out = e; return 0;
 }
+int ctos_ssh_config_eval_prepare_direct_detached(uint64_t deadline, struct ctos_ssh_config_eval **out) {
+    if (ctos_ssh_config_eval_prepare_detached(0, deadline, out) != 0) return -1;
+    struct ctos_ssh_config_eval *e = *out;
+    e->direct_plan = calloc(1, sizeof(*e->direct_plan));
+    if (e->direct_plan == NULL) {
+        int failure = errno;
+        (void)ctos_ssh_config_eval_close(e); (void)ctos_ssh_config_eval_destroy(e);
+        *out = NULL; errno = failure; return -1;
+    }
+    return 0;
+}
 int ctos_ssh_config_eval_prepare_audit_detached(uint64_t deadline, struct ctos_ssh_config_eval **out) {
     if (ctos_ssh_config_eval_prepare_detached(1, deadline, out) != 0) return -1;
     struct ctos_ssh_config_eval *e = *out;
@@ -750,14 +799,13 @@ int ctos_ssh_config_eval_detached_buffer(struct ctos_ssh_config_eval *e, size_t 
     if (live(e) != 0) return -1;
     if (!e->detached || e->state != CTOS_CONFIG_LOADING || e->owned != NULL) { errno = EALREADY; return -1; }
     if (length < 24 || length > CTOS_SSH_CONFIG_SOURCE_BYTES) { errno = E2BIG; return -1; }
-    size_t prefix = CTOS_SSH_VIEW_FILES * sizeof(struct ctos_ssh_file);
-    void *mapping = mmap(NULL, prefix + length, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    void *mapping = mmap(NULL, length, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (mapping == MAP_FAILED) return -1;
-    e->owned = mapping; e->owned_length = prefix + length; e->staged_length = length;
+    e->owned = mapping; e->owned_length = length; e->staged_length = length;
     if (madvise(mapping, e->owned_length, MADV_DONTDUMP) != 0 || mlock(mapping, e->owned_length) != 0) return -1;
     e->owned_locked = 1;
     if (live(e) != 0) return -1;
-    *out = e->owned + prefix; return 0;
+    *out = e->owned; return 0;
 }
 int ctos_ssh_config_eval_loading_live(const struct ctos_ssh_config_eval *e) {
     if (live(e) != 0) return -1;
@@ -779,10 +827,11 @@ static int source_slice(struct source_cursor *c, struct ctos_ssh_slice *out, siz
 int ctos_ssh_config_eval_complete_detached(struct ctos_ssh_config_eval *e, unsigned int root,
     const struct ctos_ssh_config_request *request) {
     if (live(e) != 0) return -1;
-    if (e->state != CTOS_CONFIG_LOADING || !e->owned_locked || e->staged_length == 0) { errno = EALREADY; return -1; }
+    if (e->state != CTOS_CONFIG_LOADING || !e->owned_locked || e->staged_length == 0
+        || e->owned_files != NULL) { errno = EALREADY; return -1; }
     if ((e->mode != CTOS_CONFIG_EFFECTIVE && request != NULL) ||
         (e->mode == CTOS_CONFIG_EFFECTIVE && set_request(e, request) != 0)) { errno = EINVAL; return -1; }
-    struct source_cursor c = {e->owned + CTOS_SSH_VIEW_FILES * sizeof(struct ctos_ssh_file), e->staged_length};
+    struct source_cursor c = {e->owned, e->staged_length};
     uint32_t magic, version, count, opens, bytes, lines;
     if (source_u32(&c, &magic) != 0 || source_u32(&c, &version) != 0 || source_u32(&c, &count) != 0 ||
         source_u32(&c, &opens) != 0 || source_u32(&c, &bytes) != 0 || source_u32(&c, &lines) != 0) return -1;
@@ -800,7 +849,10 @@ int ctos_ssh_config_eval_complete_detached(struct ctos_ssh_config_eval *e, unsig
     size_t unused;
     if (c.left != 0) { errno = EINVAL; return -1; }
     if (detached_shape(files, count, root, &unused) != 0) return -1;
-    struct ctos_ssh_file *table = (struct ctos_ssh_file *)e->owned;
+    e->owned_file_bytes = count * sizeof(*e->owned_files);
+    e->owned_files = calloc(count, sizeof(*e->owned_files));
+    if (e->owned_files == NULL) return -1;
+    struct ctos_ssh_file *table = e->owned_files;
     for (unsigned int i = 0; i < count; i++) {
         table[i].type = files[i].type; table[i].path = files[i].path;
         table[i].body = files[i].body; table[i].declared_bytes = (unsigned int)files[i].body.length;
@@ -810,6 +862,62 @@ int ctos_ssh_config_eval_complete_detached(struct ctos_ssh_config_eval *e, unsig
     e->io.max_opens = opens; e->io.max_read_bytes = bytes; e->max_lines = lines;
     if (live(e) != 0) return -1;
     e->state = CTOS_CONFIG_NEW; return 0;
+}
+static int direct_path(struct ctos_ssh_config_eval *e, const char *raw, unsigned int type,
+    struct config_origin origin, char out[513]) {
+    e->diagnostic_origin = origin;
+    char *expanded = ctos_config_include(raw, &e->options, e->alias, e->alias, 1);
+    if (expanded == NULL) return -1;
+    char absolute[sizeof(CTOS_SSH_VIRTUAL_HOME) + 514];
+    const char *path = expanded;
+    if (strncmp(expanded, "~/", 2) == 0) {
+        if (strlen(expanded + 2) > 512) { free(expanded); return ctos_config_reject(CTOS_CONFIG_PATH, EACCES); }
+        snprintf(absolute, sizeof(absolute), "%s/%s", CTOS_SSH_VIRTUAL_HOME, expanded + 2);
+        path = absolute;
+    }
+    if (ctos_ssh_io_resolve(path, 0, out) != 0) { free(expanded); return ctos_config_reject(CTOS_CONFIG_PATH, EACCES); }
+    free(expanded);
+    size_t n = strlen(out);
+    for (unsigned int i = 0; i < e->io.count; i++) {
+        const struct ctos_ssh_file *file = &e->io.files[i];
+        if (file->path.length == n && memcmp(file->path.data, out, n) == 0 && file->type != type)
+            return ctos_config_reject(CTOS_CONFIG_PATH, EACCES);
+    }
+    e->diagnostic_origin = (struct config_origin){0};
+    return 0;
+}
+static int finish_direct_plan(struct ctos_ssh_config_eval *e) {
+    struct ctos_ssh_config_direct_plan *plan = e->direct_plan;
+    if (plan == NULL) return 0;
+    const Options *o = &e->options;
+    if (o->num_identity_files < 0 || o->num_identity_files > (int)CTOS_SSH_CONFIG_LIST ||
+        o->num_user_hostfiles > CTOS_SSH_CONFIG_HOSTFILES || o->request_tty == REQUEST_TTY_NO ||
+        o->session_type != SESSION_TYPE_DEFAULT || !clear_or_none(o->jump_host) ||
+        !clear_or_none(o->remote_command) || o->num_local_forwards != 0 || o->num_remote_forwards != 0 ||
+        o->num_certificate_files != 0 || o->host_key_alias != NULL ||
+        (o->strict_host_key_checking != SSH_STRICT_HOSTKEY_ASK && o->strict_host_key_checking != SSH_STRICT_HOSTKEY_YES))
+        return ctos_config_reject(CTOS_CONFIG_UNSUPPORTED, ENOTSUP);
+    plan->summary = e->summary;
+    plan->identities_only = o->identities_only != 0;
+    plan->pubkey_authentication = (o->pubkey_authentication & SSH_PUBKEY_AUTH_UNBOUND) != 0;
+    plan->password_authentication = o->password_authentication != 0 && o->preferred_authentications == NULL;
+    plan->connect_timeout_millis = o->connection_timeout > 0 && o->connection_timeout < 60
+        ? (unsigned int)o->connection_timeout * 1000U : 60000U;
+    plan->strict_host_key_checking = (unsigned int)o->strict_host_key_checking;
+    for (int i = 0; i < o->num_identity_files; i++) {
+        if (strcasecmp(o->identity_files[i], "none") == 0) continue;
+        if (direct_path(e, o->identity_files[i], CTOS_SSH_PRIVATE_KEY, e->identity_origin[i],
+            plan->identity_files[plan->identity_count]) != 0) return -1;
+        plan->identity_count++;
+    }
+    for (unsigned int i = 0; i < o->num_user_hostfiles; i++) {
+        if (strcasecmp(o->user_hostfiles[i], "none") == 0) continue;
+        if (direct_path(e, o->user_hostfiles[i], CTOS_SSH_KNOWN_HOSTS, e->hostfile_origin[i],
+            plan->user_hostfiles[plan->hostfile_count]) != 0) return -1;
+        plan->hostfile_count++;
+    }
+    if (plan->hostfile_count == 0) return ctos_config_reject(CTOS_CONFIG_UNSUPPORTED, ENOTSUP);
+    return ctos_config_check();
 }
 int ctos_ssh_config_eval_run(struct ctos_ssh_config_eval *e, struct ctos_ssh_config_error *error) {
     if (error != NULL) memset(error, 0, sizeof(*error));
@@ -894,6 +1002,7 @@ int ctos_ssh_config_eval_run(struct ctos_ssh_config_eval *e, struct ctos_ssh_con
     e->summary.has_remote_command = o->remote_command != NULL;
     e->summary.request_tty = o->request_tty; e->summary.session_type = o->session_type;
     e->summary.has_raw_fields = 1;
+    if (finish_direct_plan(e) != 0) goto done;
     if (ctos_config_check() != 0) goto done;
     ret = 0;
  done:
@@ -922,6 +1031,15 @@ int ctos_ssh_config_eval_summary(const struct ctos_ssh_config_eval *e, struct ct
     if (result_live(e) != 0) return -1;
     if (e->mode != CTOS_CONFIG_EFFECTIVE) { errno = EINVAL; return -1; }
     *out = e->summary; return 0;
+}
+int ctos_ssh_config_eval_direct_plan(const struct ctos_ssh_config_eval *e,
+    const struct ctos_ssh_config_direct_plan **out) {
+    if (out == NULL) { errno = EINVAL; return -1; }
+    *out = NULL;
+    if (result_live(e) != 0) return -1;
+    if (e->direct_plan == NULL || e->mode != CTOS_CONFIG_EFFECTIVE) { errno = EINVAL; return -1; }
+    *out = e->direct_plan;
+    return 0;
 }
 int ctos_ssh_config_eval_options(const struct ctos_ssh_config_eval *e, const Options **out) {
     if (out == NULL) { errno = EINVAL; return -1; }
@@ -965,7 +1083,15 @@ int ctos_ssh_config_eval_close(struct ctos_ssh_config_eval *e) {
     if (e->audit != NULL) { explicit_bzero(e->audit, sizeof(*e->audit)); free(e->audit); e->audit = NULL; }
     if (e->catalog != NULL) { explicit_bzero(e->catalog, sizeof(*e->catalog)); free(e->catalog); e->catalog = NULL; }
     if (e->options_live) { ctos_config_upstream_free_options(&e->options); e->options_live = 0; }
+    if (e->direct_plan != NULL) {
+        explicit_bzero(e->direct_plan, sizeof(*e->direct_plan)); free(e->direct_plan); e->direct_plan = NULL;
+    }
     (void)ctos_ssh_io_destroy(&e->io);
+    if (e->owned_files != NULL) {
+        explicit_bzero(e->owned_files, e->owned_file_bytes);
+        free(e->owned_files); e->owned_files = NULL; e->owned_file_bytes = 0;
+        e->io.files = NULL; e->io.count = 0;
+    }
     int failure = 0;
     if (e->owned != NULL) {
         explicit_bzero(e->owned, e->owned_length);

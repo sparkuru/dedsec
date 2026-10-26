@@ -2656,13 +2656,22 @@ declared contents and the complete view to12MiB. Reject trailing bytes.
 Native admission and lookup check CLOCK_BOOTTIME against the exact
 elapsedRealtime request deadline, including suspend; clock failure denies access.
 
-Copy directly from the bounded JNI byte array into an owned0600 raw memfd,
+Copy directly from the bounded JNI byte array into an owned anonymous raw memfd,
 mapped/locked with MADV_DONTDUMP before copying. Wipe the Java encoding in a
 finally block; do not expose native pointers, FDs, bodies or arbitrary filenames
 over MethodChannel. One live opaque native token is allowed; stale close must
 never affect a later token. No fallback to disk or unlocked memory. Cleanup
 wipes and verifies its owned mapping before munlock/unmap, truncates the held
 file to zero and closes once. Any cleanup uncertainty poisons new admission.
+
+Android16 correction: do not require `fchmod(memfd,0600)` or inode mode0600 for
+these internal same-process objects. Actual app policy can allow memfd creation,
+read/write/map/truncate but deny chmod/setattr with EACCES. Validate real regular
+anonymous FD shape (current UID, zero links, exact length, CLOEXEC), retain opaque
+PID/UID/role ownership and never export the raw FD. Report real fstat mode without
+inventing0600. This does not weaken the separate FILE_LOAN contract below: its
+exported descriptor still requires actual readonly/CLOEXEC/0600. No named-file,
+Root, chmod fallback or unlocked mapping is permitted.
 
 Register the returned lease against the exact VaultSession epoch before
 publication, then repeat the operation's cancellation/snapshot/deadline guard.
@@ -2929,7 +2938,8 @@ this closed metadata graph, with no ordinary stat/opendir fallback. Check the
 expanded pattern before glob and each actual match's CONFIG type before reading.
 Private metadata may support stat, but cannot produce a readable FILE.
 
-For each required public read create a fresh0600/CLOEXEC memfd and lock its
+For each required public read create a fresh anonymous/CLOEXEC memfd, validate its
+real regular/current-UID/zero-link/exact-size shape, and lock its
 true-length mapping before copying. Empty files have no payload mapping. FILE
 offsets are independent and stdio buffering is disabled. Close verifies the
 wipe, confirms unmap before truncating, and makes held descriptors EOF. Uncertain

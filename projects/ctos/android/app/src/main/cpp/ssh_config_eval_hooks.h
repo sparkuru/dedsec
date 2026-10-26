@@ -9,6 +9,7 @@ int ctos_config_catalog_mode(void);
 int ctos_config_audit_mode(void);
 int ctos_config_scan_mode(void);
 int ctos_config_resource_mode(void);
+int ctos_config_direct_keyword(const char *, int, int, char **);
 int ctos_config_resource_line(unsigned int, int, char **);
 int ctos_config_catalog_line(int, int, char **);
 int ctos_config_catalog_defer(const char *);

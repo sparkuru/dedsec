@@ -93,6 +93,24 @@ public final class SshPasswordProfileTest {
                         .getBytes(StandardCharsets.UTF_8)));
     }
 
+    @Test public void connectionOriginPinsRegistrationAcrossOwnWriteWithoutRelaxingBundleEpoch() throws Exception {
+        try (Fixture f = new Fixture(totp())) {
+            AppSecrets.BundleContext origin = f.vault.newBundleContext(60000, () -> { });
+            SshPasswordProfile next = new SshPasswordProfile("fixture.invalid", 22, "user");
+            f.save(next, () -> { });
+            f.vault.requirePasswordValidationOrigin(origin);
+            code("VAULT_CHANGED", () -> f.vault.passwordProfile(origin));
+            f.vault.attachSshValidator(source -> SshPasswordProfile.checkShape(source));
+            code("VAULT_CHANGED", () -> f.vault.requirePasswordValidationOrigin(origin));
+            AppSecrets.BundleContext fresh = f.vault.newBundleContext(60000, () -> { });
+            f.vault.cancelBundleContext(fresh);
+            code("VAULT_CANCELLED", () -> f.vault.requirePasswordValidationOrigin(fresh));
+            AppSecrets.BundleContext timed = f.vault.newBundleContext(60000, () -> { });
+            f.clock.now = 60000;
+            code("VAULT_EXPIRED", () -> f.vault.requirePasswordValidationOrigin(timed));
+        }
+    }
+
     @Test public void pureTotpDefaultsDoNotRunNativeAndExactBundlePreservesSeedWithoutPasswordEntry() throws Exception {
         try (Fixture f = new Fixture(totp())) {
             AppSecrets.BundleContext defaults = f.vault.newBundleContext(60000, () -> { });

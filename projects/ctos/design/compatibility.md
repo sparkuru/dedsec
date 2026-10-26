@@ -1,5 +1,28 @@
 # Compatibility
 
+2026-10-26 Android16 PLR110实测限制：App硬锁页64KiB，匿名memfd可创建/截断而
+fchmod0600返回EACCES。修正detached索引固定开销及内部FD的600假设，仍先锁页/
+DONTDUMP后复制、严格anonymous/current-UID/zero-link/exact-size/CLOEXEC且不导出。
+实际mode如实报告，SCM FILE_LOAN真实600要求保留。
+[最终本地、开发板及手机回归](verification.md#20261026-phone-ssh)通过；最终042版在
+指定PLR110保留数据更新后，现有私钥登录真实目标与PTY输出通过，并获用户人工验收。
+该结果限于此次实际设备、身份和目标，不推广为所有Android16机型或认证/config能力。
+
+2026-10-26 接续：[config 与无口令私钥](ssh-key-config-connect.md)新增同一加密图内的
+CONFIG、真实私钥/公钥、KeyBinding/KEY Account 与直接连接，保留前序密码资料及 TOTP。
+新增原生 public export/direct-plan wire，复用同一固定 OpenSSH；支持的配置由实际原生
+选项求值，未消费选项明确拒绝。加密私钥、证书/agent、ProxyJump、转发和后台能力仍待
+父规划落实；复杂整库恢复不因新增 validator 图支持而开放。
+[本轮设备验证](verification.md#20261026-key-config-device)在指定Android11/API30板通过
+私钥/config及保存密码实际bridge回归，正式APK已安装；不推广为API28/其他设备、真实
+DocumentsUI/个人密钥或实际账号验收。
+
+2026-10-26 接续：[可选保存密码](ssh-saved-password.md)继续唯一 manifest/writer，允许
+规范的 Account + SSH_PASSWORD 扩展既有生成配置子集；旧前台生成配置及 TOTP 保留。
+多条端点密码按精确 host/port/username 隔离，默认当次不修改已存密码。
+不改变 envelope/KDF/依赖或 native 协议；复杂 SSH 恢复仍受实际 metadata 审阅门限制。
+[本轮本地结果](verification.md#20261026-saved-password)没有新增设备结论，也未覆盖安装正式应用。
+
 2026-10-26：[指定Android11开发板](verification.md#20261026-password-android)的前台密码
 SSH完整界面实测通过；使用同一正式Dart/Java/JNI/C代码，测试包独立UID。实际设备为
 AIO-3568J、arm64-v8a、已解锁。API28兼容仍为已有编译/本地边界证据，不能把API30实测

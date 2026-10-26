@@ -5,3 +5,11 @@
 {"file":".trellis/tasks/10-08-ssh-terminal/design.md","reason":"完整 SSH 技术规划：配置/认证契约、禁止本地执行与绕过信任、转发暴露确认、远端输入职责、后台服务和技术关卡；实施前使用获批准版。"}
 {"file":"design/app-authentication.md","reason":"统一主口令/KDF/密文库/会话/设备快捷/设置/ctOS 完整备份/隐私配套权威契约；先验收底座，再分别接入 TOTP 和 SSH，最新完整规划已于 2026-10-10 批准，公共底座先行实施。"}
 {"file":".trellis/tasks/10-08-ssh-terminal/prd.md","reason":"SSH R1–R11/AC1–AC10 保留客户端与信任/输入/转发要求，R10/R11 改为统一秘密库，统一模型最新规划已批准。"}
+{"file":"design/ssh-saved-password.md","reason":"2026-10-26 用户已选择的直接 R10 切片：默认当次、显式加密保存、精确 tuple Account、proof-bound 复用与单条/全部忘记。"}
+{"file":".trellis/spec/backend/ssh-password-connect.md","reason":"正式密码连接、saved metadata API、原请求/原子账号凭据写入、实际 host/KEX 最终交付与取消/uncertain。"}
+{"file":".trellis/spec/backend/app-secrets.md","reason":"复用共享 entry mutation/read 生命周期，不复制加密提交实现或放宽 metadata 恢复门。"}
+{"file":".trellis/spec/frontend/app-secrets.md","reason":"敏感路由、原请求/回执、异步 mutation 完成前不释放保护。"}
+{"file":"design/ssh-key-config-connect.md","reason":"用户当前明确的无口令私钥与 config 实际产品闭环，保留密码保存改动及单一正式模型。"}
+{"file":".trellis/tasks/10-08-ssh-terminal/research/private-key-connection-path.md","reason":"真实 USERAUTH API、公钥 blob 缺口及私钥/账号最终消费要求。"}
+{"file":".trellis/tasks/10-08-ssh-terminal/research/config-key-import-connection.md","reason":"原生完整 Options、SAF 内存读取、逻辑路径与原子 KeyBinding/Account 事务缺口。"}
+{"file": ".trellis/spec/backend/ssh-detached-config-managed.md", "reason": "Android16实际64KiB MEMLOCK兼容修复；单份受保护源、实际数量公开索引和失败清理"}

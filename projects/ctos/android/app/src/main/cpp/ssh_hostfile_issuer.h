@@ -27,8 +27,9 @@ struct ctos_ssh_hostfile_issue {
 
 /*
  * Classify one offered host key against the exact public KNOWN_HOSTS object in
- * `view`.  The view must be rooted at the managed `ssh/config` object and
- * that root must reference `ssh/known_hosts`. `known_hosts_path` is only a
+ * `view`. Its actual selected root must be a canonical managed CONFIG object
+ * directly referencing this exact `known_hosts_path` and KNOWN_HOSTS type.
+ * Legacy and imported roots share these checks. `known_hosts_path` is only a
  * virtual-object selector; it is never opened or passed to OpenSSH.
  * `replacement_stream` must be a fresh,
  * caller-owned seekable in-memory stream backed by `replacement_body` (with

@@ -196,6 +196,9 @@ final class SshCredentialBridge {
             if (kex != null) kex.requireMatches(role, hostKey);
         });
         origin.check();
+        if (role.targetIdentity.startsWith(SshSavedPassword.TARGET_PREFIX)
+                || role.targetIdentity.startsWith(SshConnectionMaterial.KEY_TARGET_PREFIX))
+            return vault.newSavedPasswordReadContext(role.deadline, origin, selection);
         return vault.newSshSecretReadContext(role.deadline, origin);
     }
 

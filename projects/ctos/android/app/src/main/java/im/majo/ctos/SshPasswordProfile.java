@@ -82,12 +82,15 @@ final class SshPasswordProfile {
         final SshPasswordProfile profile;
         final long epoch, revision;
         final VaultManifest.FileObject config, knownHosts;
+        final List<VaultSshMetadata.Account> accounts;
         Snapshot(VaultManifest manifest, long epoch, long revision) throws VaultException {
             this.epoch = epoch; this.revision = revision;
             SshPasswordProfile parsed = checkShape(manifest);
+            accounts = VaultCollections.copyList(manifest.accounts);
             VaultManifest.FileObject cfg = null, hosts = null;
             try {
                 for (VaultManifest.FileObject file : manifest.files) {
+                    if (!file.path.equals(CONFIG_PATH) && !file.path.equals(HOSTS_PATH)) continue;
                     VaultManifest.FileObject copy = new VaultManifest.FileObject(file.type, file.id, file.path,
                             file.identity, file.content, file.references);
                     if (file.type == VaultManifest.FileType.CONFIG) cfg = copy; else hosts = copy;
@@ -132,13 +135,12 @@ final class SshPasswordProfile {
 
     static SshPasswordProfile checkShape(VaultManifest manifest) throws VaultException {
         manifest.validate();
-        if (!manifest.keyBindings.isEmpty() || !manifest.accounts.isEmpty()) throw unsupported();
-        for (VaultManifest.Entry entry : manifest.entries)
-            if (entry.type != VaultManifest.EntryType.TOTP) throw unsupported();
+        SshSavedPassword.checkAccounts(manifest);
         if (manifest.files.isEmpty()) return null;
-        if (manifest.files.size() != 2) throw unsupported();
+        if (SshConnectionMaterial.extended(manifest)) SshConnectionMaterial.checkShape(manifest);
         VaultManifest.FileObject config = null, hosts = null;
         for (VaultManifest.FileObject file : manifest.files) {
+            if (file.path.startsWith(".ssh/")) continue;
             if (file.type == VaultManifest.FileType.CONFIG && CONFIG_PATH.equals(file.path)
                     && CONFIG_ID.equals(file.id) && CONFIG_IDENTITY.equals(file.identity)
                     && file.references.equals(List.of(HOSTS_PATH))) config = file;
@@ -147,6 +149,7 @@ final class SshPasswordProfile {
                     && file.references.isEmpty()) hosts = file;
             else throw unsupported();
         }
+        if (config == null && hosts == null) return null;
         if (config == null || hosts == null) throw unsupported();
         return parse(config.content);
     }

@@ -12,9 +12,10 @@
 #include <time.h>
 #include <unistd.h>
 
-static unsigned int cases, wipe_checks, expected_wipes;
-static int fault, inspect_wipe;
-enum { FAULT_LOCK = 1, FAULT_ADVISE, FAULT_UNLOCK, FAULT_UNMAP, FAULT_TRUNCATE, FAULT_CLOSE, FAULT_CLOCK };
+static unsigned int cases, wipe_checks, expected_wipes, chmod_calls;
+static int fault, inspect_wipe, rejected_fd = -1;
+enum { FAULT_LOCK = 1, FAULT_ADVISE, FAULT_UNLOCK, FAULT_UNMAP, FAULT_TRUNCATE, FAULT_CLOSE, FAULT_CLOCK,
+    FAULT_TYPE, FAULT_UID, FAULT_LINK, FAULT_SIZE, FAULT_CLOEXEC };
 int __real_mlock(const void *, size_t);
 int __real_madvise(void *, size_t, int);
 int __real_munlock(const void *, size_t);
@@ -22,9 +23,32 @@ int __real_munmap(void *, size_t);
 int __real_ftruncate(int, off_t);
 int __real_close(int);
 int __real_clock_gettime(clockid_t, struct timespec *);
+int __real_fstat(int, struct stat *);
+int __real_fcntl(int, int, ...);
 static int consume(int wanted) {
     if (fault != wanted) return 0;
     fault = 0; errno = EIO; return 1;
+}
+int __wrap_fchmod(int fd, mode_t mode) {
+    (void)fd; (void)mode; chmod_calls++; errno = EACCES; return -1;
+}
+int __wrap_fstat(int fd, struct stat *shape) {
+    int result = __real_fstat(fd, shape);
+    if (result == 0 && fault >= FAULT_TYPE && fault <= FAULT_SIZE) {
+        int injected = fault; fault = 0; rejected_fd = fd;
+        if (injected == FAULT_TYPE) shape->st_mode = S_IFDIR | (shape->st_mode & 0777);
+        if (injected == FAULT_UID) shape->st_uid = getuid() + 1U;
+        if (injected == FAULT_LINK) shape->st_nlink = 1;
+        if (injected == FAULT_SIZE) shape->st_size++;
+    }
+    return result;
+}
+int __wrap_fcntl(int fd, int command, ...) {
+    // The production view/reader and this matrix query only this FD property.
+    assert(command == F_GETFD);
+    int result = __real_fcntl(fd, command);
+    if (result >= 0 && fault == FAULT_CLOEXEC) { fault = 0; rejected_fd = fd; result &= ~FD_CLOEXEC; }
+    return result;
 }
 int __wrap_mlock(const void *p, size_t n) { return consume(FAULT_LOCK) ? -1 : __real_mlock(p, n); }
 int __wrap_madvise(void *p, size_t n, int advice) {
@@ -108,6 +132,31 @@ static void mutate_byte(struct wire *w, const char *needle, unsigned char value)
     assert(0);
 }
 
+static void backing_guards(const struct wire *w) {
+    for (int injected = FAULT_TYPE; injected <= FAULT_CLOEXEC; injected++) {
+        struct ctos_ssh_view *v = calloc(1, sizeof(*v)); assert(v != NULL);
+        fault = injected; rejected_fd = -1; errno = 0;
+        assert(ctos_ssh_view_allocate(v, w->length) != 0 && errno == EACCES && fault == 0);
+        assert(v->fd == -1 && v->mapping == NULL && !v->locked);
+        assert(rejected_fd >= 0 && fcntl(rejected_fd, F_GETFD) < 0 && errno == EBADF);
+        assert(ctos_ssh_view_destroy(v) == 0); free(v); cases++;
+
+        v = load(w, w->length); assert(ctos_ssh_view_validate(v) == 0);
+        struct ctos_ssh_io *io = calloc(1, sizeof(*io));
+        assert(io != NULL && ctos_ssh_io_init(io, v, fclose) == 0);
+        fault = injected; rejected_fd = -1; errno = 0;
+        assert(ctos_ssh_io_open(io, CTOS_SSH_VIRTUAL_HOME "/ssh/config", CTOS_SSH_CONFIG) == NULL
+            && errno == EACCES && fault == 0);
+        assert(rejected_fd >= 0 && fcntl(rejected_fd, F_GETFD) < 0 && errno == EBADF);
+        assert(io->held_bytes == 0 && io->error == EACCES);
+        // Rejection cannot copy a CONFIG byte or damage the parent view.
+        for (unsigned int i = 0; i < CTOS_SSH_IO_STREAMS; i++)
+            assert(io->readers[i].mapping == NULL && !io->readers[i].live);
+        assert(ctos_ssh_view_live(v) == 0);
+        assert(ctos_ssh_io_destroy(io) != 0); free(io); clear(v); cases++;
+    }
+}
+
 static void io_checks(struct wire *w) {
     struct ctos_ssh_view *v = load(w, w->length); assert(ctos_ssh_view_validate(v) == 0);
     struct ctos_ssh_io *io = calloc(1, sizeof(*io)); assert(io != NULL);
@@ -116,7 +165,8 @@ static void io_checks(struct wire *w) {
     FILE *b = ctos_ssh_io_open(io, CTOS_SSH_VIRTUAL_HOME "/ssh/config", 1);
     assert(a != NULL && b != NULL && a != b && fgetc(a) == 'H' && fgetc(b) == 'H'); cases++;
     struct stat shape;
-    assert(fstat(fileno(a), &shape) == 0 && S_ISREG(shape.st_mode) && (shape.st_mode & 0777) == 0600 && shape.st_size == 4); cases++;
+    assert(fstat(fileno(a), &shape) == 0 && S_ISREG(shape.st_mode) && shape.st_uid == getuid()
+        && shape.st_nlink == 0 && shape.st_size == 4 && (fcntl(fileno(a), F_GETFD) & FD_CLOEXEC) != 0); cases++;
     int held = dup(fileno(a)); assert(held >= 0);
     inspect_wipe = 1; expected_wipes++;
     assert(ctos_ssh_io_close(io, a) == 0);
@@ -191,6 +241,7 @@ static void io_checks(struct wire *w) {
 }
 int main(void) {
     struct wire w; fixture(&w);
+    backing_guards(&w);
     struct ctos_ssh_view *v = load(&w, w.length);
     assert(ctos_ssh_view_validate(v) == 0 && v->count == 3 && v->private_count == 1
         && v->public_bytes == 11 && v->generation == 73 && v->epoch == 7);
@@ -315,7 +366,7 @@ int main(void) {
         assert(ctos_ssh_view_destroy(v) != 0 && v->cleanup_failed);
         inspect_wipe = 0; free(v); cases++;
     }
-    assert(wipe_checks == expected_wipes);
+    assert(wipe_checks == expected_wipes && chmod_calls == 0);
     printf("SSH_VIEW_HOST cases=%u wipe_checks=%u state=pass\n", cases, wipe_checks);
     return 0;
 }

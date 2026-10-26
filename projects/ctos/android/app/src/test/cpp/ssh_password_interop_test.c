@@ -7,6 +7,14 @@
 #include <poll.h>
 #include <signal.h>
 #include "log.h"
+#ifdef CTOS_INTEROP_PRIVATE_KEY
+#include "ssh_material_inspect.h"
+#define INTEROP_LABEL "SSH_KEY_INTEROP"
+#define INTEROP_INPUT_BYTES CTOS_SSH_MATERIAL_BYTES
+#else
+#define INTEROP_LABEL "SSH_PASSWORD_INTEROP"
+#define INTEROP_INPUT_BYTES CTOS_SSH_NATIVE_CLIENT_MAX_PASSWORD_BYTES
+#endif
 
 static volatile sig_atomic_t interop_cancelled;
 
@@ -47,7 +55,7 @@ static int interop_password(unsigned char *password, size_t *length) {
         ssize_t count = read(STDIN_FILENO, input, sizeof(input));
         if (count < 0) { if (errno == EINTR) continue; break; }
         if (count == 0) { interop_wipe(input, sizeof(input)); return 0; }
-        if ((size_t)count > CTOS_SSH_NATIVE_CLIENT_MAX_PASSWORD_BYTES - *length
+        if ((size_t)count > INTEROP_INPUT_BYTES - *length
             || memchr(input, 0, (size_t)count) != NULL) { errno = EINVAL; break; }
         memcpy(password + *length, input, (size_t)count);
         *length += (size_t)count;
@@ -137,12 +145,21 @@ static int interop_wait_for(struct ctos_ssh_native_client *client,
         if (phase == INTEROP_KEX) ready = ctos_ssh_native_client_complete(client);
         if (phase == INTEROP_SERVICE) ready = ctos_ssh_native_client_userauth_service_ready(client);
         if (phase == INTEROP_PASSWORD) {
+#ifdef CTOS_INTEROP_PRIVATE_KEY
+            enum ctos_ssh_native_client_private_key_auth_result status;
+            if (ctos_ssh_native_client_private_key_auth_result(client, &status) != 0) return -1;
+            if (status != CTOS_SSH_PRIVATE_KEY_AUTH_PENDING && status != CTOS_SSH_PRIVATE_KEY_AUTH_SUCCESS) {
+                errno = EACCES; return -1;
+            }
+            ready = status == CTOS_SSH_PRIVATE_KEY_AUTH_SUCCESS;
+#else
             enum ctos_ssh_native_client_password_auth_result status;
             if (ctos_ssh_native_client_password_auth_result(client, &status) != 0) return -1;
             if (status != CTOS_SSH_PASSWORD_AUTH_PENDING && status != CTOS_SSH_PASSWORD_AUTH_SUCCESS) {
                 errno = EACCES; return -1;
             }
             ready = status == CTOS_SSH_PASSWORD_AUTH_SUCCESS;
+#endif
         }
         if (phase == INTEROP_SHELL || phase == INTEROP_CLOSED) {
             struct ctos_ssh_native_shell_status status;
@@ -220,7 +237,11 @@ static int interop_number(const char *text, unsigned long maximum, unsigned long
 
 int main(int argc, char **argv) {
     struct fixture fixture = {0};
-    unsigned char password[CTOS_SSH_NATIVE_CLIENT_MAX_PASSWORD_BYTES] = {0}, known_hosts[8192];
+    unsigned char password[INTEROP_INPUT_BYTES] = {0}, known_hosts[8192];
+#ifdef CTOS_INTEROP_PRIVATE_KEY
+    unsigned char *public_wire = NULL;
+    size_t public_wire_length = 0;
+#endif
     size_t password_length = 0;
     unsigned long port = 0, hold_seconds = 0;
     struct sockaddr_in address = {.sin_family = AF_INET};
@@ -233,7 +254,7 @@ int main(int argc, char **argv) {
     signal(SIGTERM, interop_cancel);
     signal(SIGPIPE, SIG_IGN);
     /* Isolated test driver only: diagnose negotiation without packet payload dumps. */
-    log_init("ctos-password-interop", SYSLOG_LEVEL_DEBUG3, SYSLOG_FACILITY_AUTH, 1);
+    log_init(INTEROP_LABEL, SYSLOG_LEVEL_DEBUG3, SYSLOG_FACILITY_AUTH, 1);
 #define INTEROP_REQUIRE(condition) do { if (!(condition)) goto done; } while (0)
     if ((argc != 5 && argc != 7) || interop_number(argv[2], 65535U, &port) != 0 || port == 0
         || (argc == 7 && (strcmp(argv[5], "--hold-seconds") != 0
@@ -241,13 +262,20 @@ int main(int argc, char **argv) {
         || inet_pton(AF_INET, argv[1], &address.sin_addr) != 1
         || (ntohl(address.sin_addr.s_addr) >> 24) != 127U
         || strlen(argv[3]) == 0 || strlen(argv[3]) > 255U) {
-        fprintf(stderr, "Usage: %s <loopback-ipv4> <port> <username> <server-public-key> [--hold-seconds 0..120]\nPassword: exact bytes on stdin followed by EOF; no newline stripping.\n", argv[0]);
+        fprintf(stderr, "Usage: %s <loopback-ipv4> <port> <username> <server-public-key> [--hold-seconds 0..120]\nAuthentication input: exact bytes on stdin followed by EOF.\n", argv[0]);
         errno = EINVAL;
         goto done;
     }
     address.sin_port = htons((uint16_t)port);
     phase = "password-input";
     INTEROP_REQUIRE(interop_password(password, &password_length) == 0);
+#ifdef CTOS_INTEROP_PRIVATE_KEY
+    phase = "actual-private-public-proof";
+    INTEROP_REQUIRE(ctos_ssh_material_export_public(password, password_length,
+        deadline_after(30000U), &public_wire, &public_wire_length) == 0);
+    INTEROP_REQUIRE(public_wire != NULL && public_wire_length > CTOS_SSH_KEY_EXPORT_HEADER_BYTES
+        && public_wire[8] == 0 && public_wire[9] == 0 && public_wire[10] == 0 && public_wire[11] == 0);
+#endif
     phase = "public-key";
     fixture.host_key = interop_public_key(argv[4]);
     INTEROP_REQUIRE(fixture.host_key != NULL);
@@ -264,7 +292,12 @@ int main(int argc, char **argv) {
     known_stream = NULL;
     INTEROP_REQUIRE(stream_close == 0);
     fixture.deadline = deadline_after(60000U);
+#ifdef CTOS_INTEROP_PRIVATE_KEY
+    fixture.view = load_view_paths(known_hosts, (size_t)known_length, fixture.deadline,
+        ".ssh/config", ".ssh/known_hosts");
+#else
     fixture.view = load_view(known_hosts, (size_t)known_length, fixture.deadline);
+#endif
     INTEROP_REQUIRE(ctos_ssh_view_borrow_owned_view(fixture.view, &fixture.view_borrow) == 0);
     struct ctos_ssh_role_request request = role_request(fixture.deadline);
     /* example.invalid is mapped only here to the explicitly supplied loopback peer.
@@ -274,7 +307,11 @@ int main(int argc, char **argv) {
     fixture.callback.environment = &fixture.callback;
     fixture.callback.expected_role = fixture.role;
     fixture.callback.expected_port = (unsigned int)port;
+#ifdef CTOS_INTEROP_PRIVATE_KEY
+    fixture.callback.selected_kind = CTOS_SSH_CALLBACK_CREDENTIAL_PRIVATE_KEY;
+#else
     fixture.callback.selected_kind = CTOS_SSH_CALLBACK_CREDENTIAL_PASSWORD;
+#endif
     fixture.callback.selected_body_override = 1;
     fixture.callback.selected_body = password;
     fixture.callback.selected_body_length = password_length;
@@ -291,9 +328,20 @@ int main(int argc, char **argv) {
     INTEROP_REQUIRE(ctos_ssh_role_bootstrap_snapshot(fixture.role, &snapshot) == 0);
     struct ctos_ssh_slice fields[5] = {
         {(const unsigned char *)argv[3], strlen(argv[3])},
+#ifdef CTOS_INTEROP_PRIVATE_KEY
+        {NULL, 0},
+        {(const unsigned char *)".ssh/interop-key", sizeof(".ssh/interop-key") - 1U},
+        {(const unsigned char *)"interop-unencrypted", sizeof("interop-unencrypted") - 1U},
+        {public_wire + CTOS_SSH_KEY_EXPORT_HEADER_BYTES, public_wire_length - CTOS_SSH_KEY_EXPORT_HEADER_BYTES}
+#else
         {(const unsigned char *)"interop-once", 12U}, {NULL, 0}, {NULL, 0}, {NULL, 0}
+#endif
     };
+#ifdef CTOS_INTEROP_PRIVATE_KEY
+    make_selection_wire(&fixture.selection_wire, &snapshot, 4U, fields);
+#else
     make_selection_wire(&fixture.selection_wire, &snapshot, 1U, fields);
+#endif
     INTEROP_REQUIRE(ssh_digest_memory(SSH_DIGEST_SHA256, fixture.selection_wire.bytes,
         fixture.selection_wire.length, fixture.callback.expected_selection_receipt, 32U) == 0);
     phase = "tcp-connect";
@@ -305,7 +353,12 @@ int main(int argc, char **argv) {
         .callback = fixture.callback_token, .callback_environment = fixture.callback.environment,
         .deadline = fixture.deadline, .step_budget = CTOS_SSH_NATIVE_CLIENT_MAX_STEP_BYTES,
         .host_key_mode = CTOS_SSH_HOST_KEY_MANAGED, .managed_view_borrow = fixture.view_borrow,
-        .known_hosts_path = "ssh/known_hosts", .host = "example.invalid", .candidate_id = "interop-unused",
+#ifdef CTOS_INTEROP_PRIVATE_KEY
+        .known_hosts_path = ".ssh/known_hosts",
+#else
+        .known_hosts_path = "ssh/known_hosts",
+#endif
+        .host = "example.invalid", .candidate_id = "interop-unused",
         .authentication_selection_wire = fixture.selection_wire.bytes,
         .authentication_selection_wire_length = fixture.selection_wire.length
     };
@@ -316,25 +369,33 @@ int main(int argc, char **argv) {
     INTEROP_REQUIRE(interop_wait_for(fixture.client, INTEROP_KEX, fixture.deadline) == 0);
     INTEROP_REQUIRE(fixture.callback.host_evidence_calls == 1U && fixture.callback.kex_complete_calls == 1U
         && fixture.callback.last_host_classification == CTOS_SSH_CALLBACK_HOST_KNOWN);
-    printf("SSH_PASSWORD_INTEROP phase=kex status=pass trust=managed-known\n");
+    printf(INTEROP_LABEL " phase=kex status=pass trust=managed-known\n");
     log_change_level(SYSLOG_LEVEL_QUIET);
     phase = "userauth-service";
     INTEROP_REQUIRE(ctos_ssh_native_client_begin_userauth_service(fixture.client) == 0);
     INTEROP_REQUIRE(interop_wait_for(fixture.client, INTEROP_SERVICE, fixture.deadline) == 0);
-    phase = "password-auth";
+    phase = "selected-auth";
+#ifdef CTOS_INTEROP_PRIVATE_KEY
+    INTEROP_REQUIRE(ctos_ssh_native_client_begin_private_key_auth(fixture.client) == 0);
+#else
     INTEROP_REQUIRE(ctos_ssh_native_client_begin_password_auth(fixture.client) == 0);
+#endif
     interop_wipe(password, sizeof(password));
     INTEROP_REQUIRE(interop_wait_for(fixture.client, INTEROP_PASSWORD, fixture.deadline) == 0);
     INTEROP_REQUIRE(fixture.callback.selected_calls == 1U && fixture.callback.credential_calls == 0U
         && fixture.callback.credential_bytes_calls == 0U);
-    printf("SSH_PASSWORD_INTEROP phase=password-auth status=success selected_calls=1\n");
+#ifdef CTOS_INTEROP_PRIVATE_KEY
+    printf(INTEROP_LABEL " phase=publickey-auth status=success selected_calls=1\n");
+#else
+    printf(INTEROP_LABEL " phase=password-auth status=success selected_calls=1\n");
+#endif
     phase = "pty-shell";
     INTEROP_REQUIRE(ctos_ssh_native_client_begin_shell(fixture.client, 80U, 24U) == 0);
     uint64_t session_deadline = deadline_after((unsigned int)hold_seconds * 1000U + 30000U);
     INTEROP_REQUIRE(interop_wait_for(fixture.client, INTEROP_SHELL, session_deadline) == 0);
     phase = "command-output";
     INTEROP_REQUIRE(interop_marker(fixture.client, "CTOS_INTEROP_ONE", session_deadline) == 0);
-    printf("SSH_PASSWORD_INTEROP phase=pty-command status=pass\n");
+    printf(INTEROP_LABEL " phase=pty-command status=pass\n");
     phase = "resize";
     int resized;
     do {
@@ -344,21 +405,21 @@ int main(int argc, char **argv) {
     } while (!resized);
     INTEROP_REQUIRE(interop_send(fixture.client, "stty size\n", session_deadline) == 0);
     INTEROP_REQUIRE(interop_expect(fixture.client, "\r\n37 91\r\n", session_deadline) == 0);
-    printf("SSH_PASSWORD_INTEROP phase=resize status=pass rows=37 columns=91\n");
+    printf(INTEROP_LABEL " phase=resize status=pass rows=37 columns=91\n");
     if (hold_seconds != 0U) {
         phase = "post-auth-hold";
-        printf("SSH_PASSWORD_INTEROP phase=hold status=running seconds=%lu\n", hold_seconds);
+        printf(INTEROP_LABEL " phase=hold status=running seconds=%lu\n", hold_seconds);
         uint64_t hold_end = deadline_after((unsigned int)hold_seconds * 1000U);
         while (deadline_after(0) < hold_end)
             INTEROP_REQUIRE(interop_turn(fixture.client, session_deadline) == 0);
         if (deadline_after(0) >= fixture.deadline) {
             INTEROP_REQUIRE(ctos_ssh_role_bootstrap_snapshot(fixture.role, &snapshot) != 0 && errno == ETIMEDOUT);
             INTEROP_REQUIRE(ctos_ssh_view_borrow_live(fixture.view_borrow) != 0);
-            printf("SSH_PASSWORD_INTEROP phase=auth-authority status=expired\n");
+            printf(INTEROP_LABEL " phase=auth-authority status=expired\n");
         }
         INTEROP_REQUIRE(interop_marker(fixture.client, "CTOS_INTEROP_AFTER_HOLD", session_deadline) == 0);
         INTEROP_REQUIRE(fixture.callback.selected_calls == 1U);
-        printf("SSH_PASSWORD_INTEROP phase=post-auth-traffic status=pass\n");
+        printf(INTEROP_LABEL " phase=post-auth-traffic status=pass\n");
     }
     phase = "exit-eof-close";
     INTEROP_REQUIRE(interop_send(fixture.client, "exit 7\n", session_deadline) == 0);
@@ -373,11 +434,14 @@ int main(int argc, char **argv) {
     INTEROP_REQUIRE(ctos_ssh_native_client_shell_status(fixture.client, &final_status) == 0);
     INTEROP_REQUIRE(final_status.remote_eof && final_status.local_eof
         && final_status.exit_status_known && final_status.exit_status == 7U && !final_status.exit_signal);
-    printf("SSH_PASSWORD_INTEROP phase=exit-eof-close status=pass exit_status=7\n");
+    printf(INTEROP_LABEL " phase=exit-eof-close status=pass exit_status=7\n");
     result = 0;
 done:
     saved_error = errno;
     interop_wipe(password, sizeof(password));
+#ifdef CTOS_INTEROP_PRIVATE_KEY
+    if (public_wire != NULL) { interop_wipe(public_wire, public_wire_length); free(public_wire); }
+#endif
     if (known_stream != NULL && fclose(known_stream) != 0) result = 1;
     if (opened) {
         if (ctos_ssh_native_client_close(fixture.client) != 0) result = 1;
@@ -399,8 +463,8 @@ done:
     if (fixture.view != NULL && fixture.view_borrow == NULL) destroy_view(fixture.view);
     sshkey_free(fixture.host_key);
     if (opened && (fixture.callback.release_calls != 1U || !fixture.callback.release_saw_fd_open)) result = 1;
-    if (result != 0) fprintf(stderr, "SSH_PASSWORD_INTEROP phase=%s status=fail errno=%d\n", phase, saved_error);
-    else printf("SSH_PASSWORD_INTEROP gate=pass scope=c-engine-independent-sshd android_ui=not-tested cleanup=pass\n");
+    if (result != 0) fprintf(stderr, INTEROP_LABEL " phase=%s status=fail errno=%d\n", phase, saved_error);
+    else printf(INTEROP_LABEL " gate=pass scope=c-engine-independent-sshd android_ui=not-tested cleanup=pass\n");
     return result;
 #undef INTEROP_REQUIRE
 }

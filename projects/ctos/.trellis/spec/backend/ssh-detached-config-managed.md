@@ -32,8 +32,12 @@ internal to JNI, not an arbitrary Java/configuration callback.
 Reserve owns only a slot; preallocated Java facade saves the positive token without a
 post-reserve failure fence that could lose it. Load pins before attaching eval, releases
 registry lock before allocation/copy/parse, records mapping ownership before DONTDUMP/mlock
-and GetArrayRegion. One native CSDI copy is adopted in place after a fixed128-file-table
-prefix. No whole-source unowned malloc scratch, fake vault tuple/view or unlocked fallback.
+and GetArrayRegion. One exact-length native CSDI mapping is adopted in place. The actual-count
+file table contains only public type/length/pointer metadata; allocate it separately after
+strict bounded header validation, as with live-view metadata. All path/CONFIG bytes stay only
+inside the DONTDUMP+locked source mapping. Never lock a maximum128-file prefix for a tiny
+source: Android apps may have a64KiB hard MEMLOCK limit. No whole-source unowned malloc
+scratch, fake vault tuple/view, raised system limits or unlocked plaintext fallback.
 
 CSDI v1 big-endian header is six u32: magic0x43534449, version1, fileCount, remaining opens,
 readBytes, lines. Each original-order record is type/pathLength/path/bodyLength/CONFIG-only
@@ -86,8 +90,13 @@ the existing user Include anchor; a fixture must supply that exact managed path.
 Run actual parser ARM staged and old eval/catalog/handle/direct-detached/host IO matrices.
 Assert single protected copy adoption, no view capabilities/host effects, reserve/load busy,
 cancel attachment, mode/wire/size limits, sequential remaining budgets, actual usage and
-retryable partial-copy/close/destroy failures. JVM tests cover actual loan/copy exclusivity,
-all/orphan/noCONFIG roots, source ordinals, preflight/retention quotas before decoding,
+retryable partial-copy/close/destroy failures.
+Run a real child with64KiB RLIMIT_MEMLOCK: minimal key-only/manual CONFIG resource audit and
+direct plan succeed, genuinely oversized source fails before copying and retains cleanup;
+parent resource limit remains unchanged. Public metadata must be released after IO destruction
+and before protected source wipe/unlock/unmap, including failed-load/retry paths.
+JVM tests cover actual loan/copy exclusivity, all/orphan/noCONFIG roots, source ordinals,
+preflight/retention quotas before decoding,
 path/UTF8/C1 limits, reserve cancellation race, paused load/run, reentry/Throwable cleanup,
 stale cancellation forwarding and final publication fences. Compile isolated JNI fixture;
 Android execution is a separate currently unrun gate. Full JVM/lint/normal and fixture APK

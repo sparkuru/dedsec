@@ -1,5 +1,20 @@
 # ctOS 信息入口
 
+2026-10-26 最新：实际Android16手机SSH排查发现64KiB锁页额度及内部memfd chmod两处
+兼容缺陷，均已修复。按用户指定在开发板完成四项隔离回归，最终修复APK042c6b73…已
+保留数据更新手机并通过真实私钥登录与PTY命令验证，用户人工验收通过并授权提交。
+[排查与验证](verification.md#20261026-phone-ssh)，沿原task，不新建或归档。
+
+2026-10-26 最新交付：[config 与无口令私钥连接](ssh-key-config-connect.md)及可选密码
+保存已沿原task完成实现，在指定Android11板通过隔离回归，并保留数据安装正式APK。
+[功能入口](ssh-terminal.md)、[当前设备证据与安装](verification.md#20261026-key-config-device)。
+真实DocumentsUI仍待专项验证；个人私钥及用户目标已在上述手机复测通过。
+父完整规划继续，不新建task或归档。
+
+2026-10-26 接续：用户选择[SSH 密码保存与复用](ssh-saved-password.md)，不新建 task，
+沿已有 SSH 父规划实现默认当次、显式加密保存和忘记。[前序本地验证](verification.md#20261026-saved-password)；
+本轮已随私钥/config新增能力完成设备回归及正式安装，以上最新记录为准。
+
 2026-10-26：正式SSH APK已覆盖安装到指定开发板；[功能与使用入口](ssh-terminal.md)和
 [安装记录](verification.md#20261026-formal-install)已更新。本轮已按前台密码连接交付归档，
 其他SSH能力保留在父规划，仍只有一个正式主线。

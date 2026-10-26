@@ -20,7 +20,7 @@ struct config_slot {
     struct ctos_ssh_config_eval *eval;
     struct ctos_ssh_view_borrow *pending_borrow;
     int open_errno, busy, published, closed, cancelled, attempted;
-    int detached, load_attempted, loaded;
+    int detached, load_attempted, loaded, direct_mode;
     enum ctos_ssh_config_mode mode;
 };
 static pthread_mutex_t config_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -171,7 +171,7 @@ int ctos_ssh_config_handle_open(ctos_ssh_view_token view, const unsigned char *w
 int ctos_ssh_config_handle_open_catalog(ctos_ssh_view_token view, ctos_ssh_config_token *out) {
     return open_handle(view, NULL, 0, 1, out);
 }
-static int reserve_mode(enum ctos_ssh_config_mode mode, ctos_ssh_config_token *out) {
+static int reserve_mode(enum ctos_ssh_config_mode mode, int direct_mode, ctos_ssh_config_token *out) {
     if (out == NULL) return bad(EINVAL);
     *out = 0;
     if (lock_registry() != 0) return -1;
@@ -180,18 +180,21 @@ static int reserve_mode(enum ctos_ssh_config_mode mode, ctos_ssh_config_token *o
         if (slots[i].token == 0) { s = &slots[i]; break; }
     if (s == NULL) { pthread_mutex_unlock(&config_lock); return bad(EBUSY); }
     *s = (struct config_slot){.token = ++next_token, .owner = pthread_self(), .pid = getpid(),
-        .uid = getuid(), .published = 1, .detached = 1, .mode = mode};
+        .uid = getuid(), .published = 1, .detached = 1, .mode = mode, .direct_mode = direct_mode};
     *out = s->token; pthread_mutex_unlock(&config_lock); return 0;
 }
 int ctos_ssh_config_handle_reserve_detached(int catalog_mode, ctos_ssh_config_token *out) {
     if (catalog_mode != 0 && catalog_mode != 1) { if (out != NULL) *out = 0; return bad(EINVAL); }
-    return reserve_mode(catalog_mode ? CTOS_CONFIG_CATALOG : CTOS_CONFIG_EFFECTIVE, out);
+    return reserve_mode(catalog_mode ? CTOS_CONFIG_CATALOG : CTOS_CONFIG_EFFECTIVE, 0, out);
+}
+int ctos_ssh_config_handle_reserve_direct(ctos_ssh_config_token *out) {
+    return reserve_mode(CTOS_CONFIG_EFFECTIVE, 1, out);
 }
 int ctos_ssh_config_handle_reserve_audit(ctos_ssh_config_token *out) {
-    return reserve_mode(CTOS_CONFIG_AUDIT, out);
+    return reserve_mode(CTOS_CONFIG_AUDIT, 0, out);
 }
 int ctos_ssh_config_handle_reserve_resource_audit(ctos_ssh_config_token *out) {
-    return reserve_mode(CTOS_CONFIG_RESOURCE_AUDIT, out);
+    return reserve_mode(CTOS_CONFIG_RESOURCE_AUDIT, 0, out);
 }
 int ctos_ssh_config_handle_load_detached(ctos_ssh_config_token token, size_t length,
     unsigned int root, uint64_t deadline, int request_present, size_t request_length,
@@ -209,7 +212,8 @@ int ctos_ssh_config_handle_load_detached(ctos_ssh_config_token token, size_t len
         (s->mode != CTOS_CONFIG_EFFECTIVE && request_present) ||
         (s->mode == CTOS_CONFIG_EFFECTIVE && (!request_present || request_length == 0)) ||
         request_length > sizeof(request_wire)) goto done;
-    int prepared = s->mode == CTOS_CONFIG_RESOURCE_AUDIT ? ctos_ssh_config_eval_prepare_resource_audit_detached(deadline, &e) :
+    int prepared = s->direct_mode ? ctos_ssh_config_eval_prepare_direct_detached(deadline, &e) :
+        s->mode == CTOS_CONFIG_RESOURCE_AUDIT ? ctos_ssh_config_eval_prepare_resource_audit_detached(deadline, &e) :
         s->mode == CTOS_CONFIG_AUDIT ? ctos_ssh_config_eval_prepare_audit_detached(deadline, &e) :
         ctos_ssh_config_eval_prepare_detached(s->mode == CTOS_CONFIG_CATALOG, deadline, &e);
     if (prepared != 0) { failure = errno; goto done; }
@@ -304,6 +308,44 @@ int ctos_ssh_config_handle_summary_live(ctos_ssh_config_token token) {
     struct ctos_ssh_config_summary summary = {0};
     int ret = read_summary(s, &summary), failure = errno;
     wipe(&summary, sizeof(summary)); unpin(s);
+    return ret == 0 ? 0 : bad(failure);
+}
+static int read_direct_plan(struct config_slot *s, const struct ctos_ssh_config_direct_plan **plan) {
+    if (!s->direct_mode || s->closed) return bad(EINVAL);
+    if (!s->loaded || s->eval == NULL) return bad(s->open_errno ? s->open_errno : EAGAIN);
+    return ctos_ssh_config_eval_direct_plan(s->eval, plan);
+}
+int ctos_ssh_config_handle_direct_plan(ctos_ssh_config_token token,
+    unsigned char out[CTOS_SSH_CONFIG_DIRECT_BYTES], size_t *length) {
+    if (out == NULL || length == NULL) return bad(EINVAL);
+    *length = 0; wipe(out, CTOS_SSH_CONFIG_DIRECT_BYTES);
+    struct config_slot *s = pin(token);
+    if (s == NULL) return -1;
+    const struct ctos_ssh_config_direct_plan *plan = NULL;
+    int ret = read_direct_plan(s, &plan), failure = errno;
+    if (ret == 0) {
+        unsigned char *p = out;
+        put_u32(&p, 0x43534350U); put_u32(&p, 1);
+        uint32_t values[] = {plan->summary.port, plan->identities_only, plan->pubkey_authentication,
+            plan->password_authentication, plan->connect_timeout_millis, (uint32_t)plan->summary.request_tty,
+            plan->strict_host_key_checking, plan->summary.user_required, plan->identity_count, plan->hostfile_count};
+        for (unsigned int i = 0; i < sizeof(values) / sizeof(values[0]); i++) put_u32(&p, values[i]);
+        put_text(&p, plan->summary.alias); put_text(&p, plan->summary.hostname); put_text(&p, plan->summary.user);
+        for (unsigned int i = 0; i < plan->identity_count; i++) put_text(&p, plan->identity_files[i]);
+        for (unsigned int i = 0; i < plan->hostfile_count; i++) put_text(&p, plan->user_hostfiles[i]);
+        *length = (size_t)(p - out);
+        ret = read_direct_plan(s, &plan); failure = errno;
+    }
+    unpin(s);
+    if (ret != 0) { wipe(out, CTOS_SSH_CONFIG_DIRECT_BYTES); *length = 0; return bad(failure); }
+    return 0;
+}
+int ctos_ssh_config_handle_direct_plan_live(ctos_ssh_config_token token) {
+    struct config_slot *s = pin(token);
+    if (s == NULL) return -1;
+    const struct ctos_ssh_config_direct_plan *plan = NULL;
+    int ret = read_direct_plan(s, &plan), failure = errno;
+    unpin(s);
     return ret == 0 ? 0 : bad(failure);
 }
 static int read_catalog(struct config_slot *s, const struct ctos_ssh_config_catalog **catalog) {

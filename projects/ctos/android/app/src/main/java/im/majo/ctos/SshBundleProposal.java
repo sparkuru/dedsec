@@ -14,6 +14,20 @@ import java.util.Set;
 final class SshBundleProposal implements AutoCloseable {
     enum Action { ADD, REPLACE, DELETE }
 
+    /** Exact public relationship replacement, bound to the authenticated source metadata. */
+    static final class Relations {
+        final String expected, replacement;
+        final List<VaultSshMetadata.KeyBinding> keys;
+        final List<VaultSshMetadata.Account> accounts;
+        Relations(VaultManifest source, List<VaultSshMetadata.KeyBinding> keys,
+                List<VaultSshMetadata.Account> accounts) throws VaultException {
+            this.keys = VaultManifest.boundedList(keys, VaultManifest.MAX_KEY_BINDINGS);
+            this.accounts = VaultManifest.boundedList(accounts, VaultManifest.MAX_ACCOUNTS);
+            expected = relationsBinding(source.keyBindings, source.accounts);
+            replacement = relationsBinding(this.keys, this.accounts);
+        }
+    }
+
     /** Nonsecret approval metadata; the digest binds the complete replacement, including its bytes. */
     static final class Summary {
         final Action action;
@@ -118,10 +132,16 @@ final class SshBundleProposal implements AutoCloseable {
     final String binding;
     final Object requestIdentity = new Object();
     private final List<Change> changes;
+    private final Relations relations;
     private volatile boolean closed;
 
     SshBundleProposal(List<Change> input) throws VaultException {
-        if (input == null || input.isEmpty() || input.size() > VaultManifest.MAX_FILES) throw VaultException.invalid();
+        this(input, null);
+    }
+
+    SshBundleProposal(List<Change> input, Relations relations) throws VaultException {
+        if (input == null || input.isEmpty() && relations == null || input.size() > VaultManifest.MAX_FILES)
+            throw VaultException.invalid();
         List<Change> owned = new ArrayList<>();
         try {
             Set<String> paths = new HashSet<>();
@@ -136,7 +156,9 @@ final class SshBundleProposal implements AutoCloseable {
             }
             owned.sort((left, right) -> left.path.compareTo(right.path));
             changes = VaultCollections.copyList(owned);
-            binding = proposalBinding(changes);
+            this.relations = relations;
+            binding = relations == null ? proposalBinding(changes)
+                    : proposalRelationsBinding(proposalBinding(changes), relations);
         } catch (VaultException failure) {
             for (Change change : owned) change.close();
             throw failure;
@@ -164,6 +186,8 @@ final class SshBundleProposal implements AutoCloseable {
 
     synchronized VaultManifest applyTo(VaultManifest previous) throws VaultException {
         requireOpen();
+        if (relations != null && !relations.expected.equals(relationsBinding(previous.keyBindings, previous.accounts)))
+            throw new VaultException("VAULT_CHANGED", "SSH identities changed; review the bundle again");
         Map<String, VaultManifest.FileObject> old = new HashMap<>();
         for (VaultManifest.FileObject file : previous.files) old.put(file.path, file);
         Map<String, Change> edits = new HashMap<>();
@@ -190,7 +214,8 @@ final class SshBundleProposal implements AutoCloseable {
                         change.identity, change.content, change.references));
             }
             // Whole-library validation rejects dangling references and associated key-passphrase entries.
-            return previous.withObjects(entries, files);
+            return relations == null ? previous.withObjects(entries, files)
+                    : new VaultManifest(entries, files, relations.keys, relations.accounts);
         } catch (Throwable failure) {
             for (VaultManifest.Entry entry : entries) VaultCodec.wipe(entry.secret);
             for (VaultManifest.FileObject file : files) VaultCodec.wipe(file.content);
@@ -246,6 +271,39 @@ final class SshBundleProposal implements AutoCloseable {
                 VaultCodec.writeText(out, change.path);
                 VaultCodec.writeText(out, change.expected);
                 VaultCodec.writeText(out, change.replacement);
+            }
+            return digestBuffer(buffer);
+        } catch (IOException error) { throw new AssertionError(error); }
+    }
+
+    private static String proposalRelationsBinding(String files, Relations relations) {
+        try (VaultCodec.SecretBuffer buffer = new VaultCodec.SecretBuffer(); DataOutputStream out = new DataOutputStream(buffer)) {
+            VaultCodec.writeText(out, "ctos-ssh-bundle-relations-v1");
+            VaultCodec.writeText(out, files);
+            VaultCodec.writeText(out, relations.expected);
+            VaultCodec.writeText(out, relations.replacement);
+            return digestBuffer(buffer);
+        } catch (IOException error) { throw new AssertionError(error); }
+    }
+
+    private static String relationsBinding(List<VaultSshMetadata.KeyBinding> keys,
+            List<VaultSshMetadata.Account> accounts) {
+        try (VaultCodec.SecretBuffer buffer = new VaultCodec.SecretBuffer(); DataOutputStream out = new DataOutputStream(buffer)) {
+            VaultCodec.writeText(out, "ctos-ssh-relations-v1");
+            out.writeInt(keys.size());
+            for (VaultSshMetadata.KeyBinding key : keys) {
+                VaultCodec.writeText(out, key.id); VaultCodec.writeText(out, key.privateFileId);
+                VaultCodec.writeText(out, key.publicFileId == null ? "" : key.publicFileId);
+                out.writeInt(key.certificateFileIds.size());
+                for (String certificate : key.certificateFileIds) VaultCodec.writeText(out, certificate);
+                VaultCodec.writeText(out, key.passphraseEntryId == null ? "" : key.passphraseEntryId);
+            }
+            out.writeInt(accounts.size());
+            for (VaultSshMetadata.Account account : accounts) {
+                VaultCodec.writeText(out, account.id); VaultCodec.writeText(out, account.targetIdentity);
+                VaultCodec.writeText(out, account.host); out.writeInt(account.port);
+                VaultCodec.writeText(out, account.username); out.writeInt(account.authKind.ordinal());
+                VaultCodec.writeText(out, account.credentialId);
             }
             return digestBuffer(buffer);
         } catch (IOException error) { throw new AssertionError(error); }
