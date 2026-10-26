@@ -1,0 +1,14 @@
+# Local development tools, credentials and generated artifacts.
+.devhome/
+build/
+coverage/
+android/.gradle/
+android/.kotlin/
+android/local.properties
+android/key.properties
+*.jks
+*.keystore
+*.p12
+*.hprof
+*.iml
+.idea/

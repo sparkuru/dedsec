@@ -1,0 +1,10 @@
+<resources>
+    <item type="id" name="diagnostics_scroll" />
+    <item type="id" name="snapshot_time" />
+    <item type="id" name="loading_status" />
+    <item type="id" name="framework_status" />
+    <item type="id" name="host_status" />
+    <item type="id" name="probe_status" />
+    <item type="id" name="read_error" />
+    <item type="id" name="refresh_status" />
+</resources>

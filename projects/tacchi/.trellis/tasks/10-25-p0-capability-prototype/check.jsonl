@@ -1,0 +1,12 @@
+{"file": ".trellis/spec/trellis-plus/index.md", "reason": "Project-owned P0 development and acceptance policy"}
+{"file": ".trellis/spec/trellis-plus/development-principles.md", "reason": "Project-owned P0 development and acceptance policy"}
+{"file": ".trellis/spec/trellis-plus/development.md", "reason": "Project-owned P0 development and acceptance policy"}
+{"file": ".trellis/spec/trellis-plus/ui.md", "reason": "Project-owned P0 development and acceptance policy"}
+{"file": ".trellis/spec/trellis-plus/validation.md", "reason": "Project-owned P0 development and acceptance policy"}
+{"file": ".trellis/spec/trellis-plus/completion.md", "reason": "Project-owned P0 development and acceptance policy"}
+{"file": ".trellis/tasks/10-25-p0-capability-prototype/research/vector-contract.md", "reason": "Verified P0 contract and implementation constraints"}
+{"file": ".trellis/tasks/10-25-p0-capability-prototype/research/toolchain.md", "reason": "Verified P0 contract and implementation constraints"}
+{"file": ".trellis/tasks/10-25-p0-capability-prototype/research/ui.md", "reason": "Verified P0 contract and implementation constraints"}
+{"file": ".trellis/tasks/10-25-p0-capability-prototype/research/android-auth.md", "reason": "Runtime API guards and crypto-bound authentication review"}
+{"file": ".trellis/tasks/10-25-p0-capability-prototype/research/size-scope-feedback.md", "reason": "Review editable scope and package-size claims against primary evidence"}
+{"file": ".trellis/spec/trellis-plus/native-android.md", "reason": "Review native migration contracts and honest device evidence"}

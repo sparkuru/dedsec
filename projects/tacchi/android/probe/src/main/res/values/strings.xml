@@ -1,0 +1,8 @@
+<resources>
+    <string name="app_name">tacchi P0 测试宿主</string>
+    <string name="probe_instructions">仅用于开发验证。先在 Vector 启用 tacchi 并选择本测试宿主，然后重新启动本应用。探针只处理随机测试数据，需要分别认证加密和解密。</string>
+    <string name="module_unconfirmed">模块未确认加载</string>
+    <string name="probe_run">运行硬件认证探针</string>
+    <string name="probe_cancel">取消探针</string>
+    <string name="probe_waiting">等待模块处理；无响应表示尚未加载</string>
+</resources>

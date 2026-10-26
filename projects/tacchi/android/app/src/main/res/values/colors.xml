@@ -1,0 +1,9 @@
+<resources>
+    <color name="page_background">#F7FAF8</color>
+    <color name="card_background">#FFFFFF</color>
+    <color name="text_primary">#17211E</color>
+    <color name="text_secondary">#46564F</color>
+    <color name="card_border">#CAD9D1</color>
+    <color name="accent">#315A50</color>
+    <color name="on_accent">#FFFFFF</color>
+</resources>

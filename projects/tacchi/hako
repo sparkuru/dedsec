@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+# hako - Run tacchi Android development commands with JDK 21 and Android SDK.
+# Reuses the pinned cached Cirrus image; Flutter is not part of the app build.
+# The host only needs Docker; writable SDK copies and caches stay in .devhome.
+# Usage: ./hako java -version
+#        ./hako ./tooling/prepare-android.sh
+#        ./hako bash -c 'cd android && ./gradlew :app:assembleRelease'
+#        ./hako bash -c 'cd android && ./gradlew :app:testDebugUnitTest lintDebug'
+# Native APK project: no server, published ports, device or Docker socket mounts.
+# Build downloads use Docker's default network; HAKO_NETWORK=none disables it.
+# No agent sandbox or approval policy is changed by this wrapper.
+set -Eeuo pipefail
+
+readonly IMAGE='ghcr.io/cirruslabs/flutter@sha256:d271a49ddd8ce1be6c7954f7eabe0e03766c8a1bf1430f0dce780888a21ed408'
+REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+readonly REPO_ROOT
+# Editable network default. There are deliberately no host/port settings.
+readonly BUILD_NETWORK="${HAKO_NETWORK:-bridge}"
+step_index=0
+
+usage() {
+  printf 'Usage: ./hako <command> [arguments...]\nExample: ./hako java -version\n' >&2
+}
+
+require_command() {
+  command -v "$1" >/dev/null 2>&1 || {
+    printf '[hako] required command not found: %s\n' "$1" >&2
+    exit 127
+  }
+}
+
+log_step() {
+  step_index=$((step_index + 1))
+  printf '#%s [hako] ' "$step_index" >&2
+  printf '%q ' "$@" >&2
+  printf '\n' >&2
+}
+
+main() {
+  if [[ $# -eq 0 || $1 == --help || $1 == -h ]]; then
+    usage
+    return 0
+  fi
+  require_command docker
+  require_command id
+  require_command mkdir
+  [[ "$BUILD_NETWORK" == bridge || "$BUILD_NETWORK" == none ]] || {
+    printf '[hako] HAKO_NETWORK must be bridge or none\n' >&2
+    return 2
+  }
+  log_step mkdir -p -- "$REPO_ROOT/.devhome"
+  mkdir -p -- "$REPO_ROOT/.devhome"
+  local -a tty_flags=()
+  [[ ! -t 0 ]] || tty_flags+=(-i)
+  [[ ! -t 0 || ! -t 1 ]] || tty_flags+=(-t)
+  local -a command=(
+    docker run --rm "${tty_flags[@]}"
+    --user "$(id -u):$(id -g)" --network "$BUILD_NETWORK"
+    --cap-drop ALL --security-opt no-new-privileges
+    --env HOME=/app/.devhome
+    --env GRADLE_USER_HOME=/app/.devhome/gradle
+    --env ANDROID_HOME=/app/.devhome/android-sdk
+    --env ANDROID_SDK_ROOT=/app/.devhome/android-sdk
+    --env CI=true
+    --mount "type=bind,source=$REPO_ROOT,target=/app"
+    --workdir /app --label "hako.repo=$REPO_ROOT"
+    --label hako.scope=manual --label hako.service=
+    --entrypoint /bin/bash "$IMAGE" /app/tooling/container-entry.sh "$@"
+  )
+  log_step "${command[@]}"
+  exec "${command[@]}"
+}
+
+main "$@"
