@@ -6,7 +6,7 @@ readonly G1_ROOT=/app/build/ssh-native-g1
 readonly G2_ROOT=/app/build/ssh-native-g2
 readonly NDK_BIN=/app/.devhome/android-sdk/ndk/27.0.12077973/toolchains/llvm/prebuilt/linux-x86_64/bin
 readonly SOURCE=/app/android/app/src/main/cpp/ssh_upstream_probe.c
-readonly ABI_PATCH=/app/.trellis/tasks/10-08-ssh-terminal-client/research/openssh-10.6p1-bionic-includes.patch
+readonly ABI_PATCH=/app/android/ssh/openssh-10.6p1-bionic-includes.patch
 readonly SSH_ARCHIVE_SHA=a9dc9565dffe8640f64d863cd29a32bc4a3dbdec0566a7fc44c5d6ee767d5f39
 readonly SSL_ARCHIVE_SHA=603f5602e2eef00d77fbd429d34dcd5822bb301757a1bc9cdb24c670f1eb859a
 readonly PATCH_SHA=ea81738f191e7d9fb70ce0943b45ea06b07c4057d3d0128a694331b3a32f8b89
@@ -115,7 +115,7 @@ main() {
 	trap 'retained_exit "$?"' EXIT
 	for tool in bash realpath sha256sum cmp timeout mkdir mktemp cp mv find grep make env cat sort xargs; do require_command "$tool"; done
 	[[ -f /.dockerenv && -f "$PROJECT_ROOT/hako-env.sh" ]] || die 'run inside the project hako container'
-	[[ "$(realpath -e -- "${BASH_SOURCE[0]}")" == /app/.trellis/tasks/10-08-ssh-terminal-client/research/android-upstream-build.sh ]] || die 'runner must come from the fixed project mount'
+	[[ "$(realpath -e -- "${BASH_SOURCE[0]}")" == /app/android/ssh/android-upstream-build.sh ]] || die 'runner must come from the fixed project mount'
 	[[ "$baseline" =~ ^/app/build/ssh-native-g1/stock-run\.[A-Za-z0-9]+$ && -d "$baseline" && ! -L "$baseline" ]] || die 'baseline must be a fixed G1 run'
 	[[ "$baseline" == "$G1_ROOT/stock-run.lOHF9Oai" ]] || die 'aggregate pin supports only the approved lOH baseline'
 	[[ "$(realpath -e -- "$baseline")" == "$baseline" && "$(realpath -e -- "$G1_ROOT")" == "$G1_ROOT" ]] || die 'symlinked baseline path rejected'

@@ -1,5 +1,48 @@
 # App 统一秘密库与公共认证规划
 
+2026-10-26：[Android真实界面验收](verification.md#20261026-password-android)通过：实际
+创建共享秘密库、受保护SSH表单输入、完整主机指纹确认、密码认证及终端输出。敏感表单
+的原生FLAG_SECURE与成功交接后的释放均有实际断言；bridge首次NEW保存与KNOWN重连
+通过。只使用本轮隔离库和合成账号，测试包及临时凭据均已清理。
+
+2026-10-25：[正式前台密码SSH](ssh-password-connect.md)接入真实AppSecretsOwner/VaultStore，
+在进程owner注册覆盖整个受支持子集的validator；只支持TOTP与精确应用生成的CONFIG/
+KNOWN_HOSTS，其他SSH资料拒绝。公开profile与NEW主机键经原bundle/精确审批/CAS保存，
+密码使用绑定实际role/selection/host/KEX和原期限的一次数组能力，不临时存入库。
+仅认证阶段依赖表单敏感保护；成功交给终端后解除表单保护不撤销已建立shell，显式锁库/
+撤销仍停止会话。纯TOTP初始化不强制加载SSH JNI。[实际验证](verification.md#20261025-password-connect)。
+
+2026-10-25 用户更正：[SSH最新模型是唯一正式主线](ssh-manifest.md)，统一构造与写入；
+已交付纯TOTP旧输入只在序列化边界适配为同一模型，读取无写入、正常内容修改/换口令/
+恢复用正式编码。原认证plaintext/cipher/preview绑定保留，独立expected字节防loan篡改。
+恢复按实际非空关系/账号metadata审阅缺口判断，原provider/权限/原子guard继续生效。
+[本轮实测](verification.md#20261025-ssh-mainline)。以下为历史记录。
+
+2026-10-22最新：原SSH task已迁移[public文件读取](ssh-public-read-lifecycle.md)的原请求
+context、锁外认证/独立loan校验/closure、一次同步交付和native lease最终挂接；原role
+期限/view及own-CAS精确延续保持。定向178通过；全量JVM431、normal92全重跑/fixture114与三APK审计通过。
+[验证](verification.md#20261022-ssh-public-read)。其他secret/mutation/trust仍旧路径，
+不注册生产全语义provider或开放恢复；无设备/真实库账号/安装/提交。
+
+2026-10-22最新：原SSH task已迁移[TOTP typed读取](totp-read-lifecycle.md)的原请求
+context、锁外实际认证loan校验/生成、一次effect及opaque receipt。纯TOTP不依赖provider，
+混合库绑定原注册；实际列表/复制保留当前窗口/锁库披露顺序，copied回执及cleanup锁外。
+定向140/fresh全量JVM410、normal92全重跑/fixture114和APK审计通过，[验证](verification.md#20261022-totp-read-validation)。
+管理preview与其他SSH typed/mutation/trust路径独立，生产全语义/恢复仍关闭；实际Android/
+Binder/剪贴板未运行，本地未提交，无设备/真实库账号。
+
+2026-10-22：原SSH task新增 [bundle 生命周期](ssh-bundle-lifecycle.md)，将文件图变更的
+source/candidate校验、独占临时loan和加密准备移到core外，原context贯穿审批/一次消费/
+最终metadata检查；AtomicFile事务中不再重读存储。最终定向81/fresh全量JVM391与
+normal92全重跑/lint/Release通过，[验证](verification.md#20261022-bundle-validation)。
+其他typed与信任CAS仍旧路径，生产语义provider/恢复仍关闭；无设备或真实库账号操作。
+
+2026-10-21：原SSH task继续推进[恢复预览校验生命周期](ssh-validation-lifecycle.md)，将
+实际认证来源/目标的校验与信任审阅移到core monitor外，补齐原期限/取消、临时loan与
+注册身份、同名请求隔离和最终交付/commit复查。纯TOTP与locked-start管理导入合同维持；
+其他typed/bundle路径仍待迁移，不据此注册缺少完整语义证明的SSH生产provider或开放恢复。
+当前本地结果见[验证](verification.md#20261021-preview-validation)，无设备/真实库账号操作。
+
 2026-10-13 后续授权安装/自动测试：TOTP最终前台交接修复主包 `3bc762d9…` 已安装当前`.14`开发板并读回一致，221 Flutter/86定向/analyze通过；隔离UID的7项原生验证含同设备独立内存非空纯TOTP恢复通过，真实Flutter管理与Home/锁库路径已执行；完整结果见 [验证](verification.md)。不据此推定跨设备持久恢复、混合SSH/native、真实进程死亡或其余平台验收完成，未操作用户真实库/账号。
 
 2026-10-13：核对源码及最新记录后，用户明确复用已有task、先TOTP后SSH，已授权 [Authenticator](authenticator.md) 本地业务接入/测试/构建。公共主体与API30凭证快捷已有代码和证据；底座仍in_progress，API28/29、生物、真实进程死亡和混合/native业务关卡保持开放。按既有合同/联合验收拆分接入业务，不把尚未存在的SSH业务当作TOTP实施的前置循环；生产SSH语义/reviewer缺失继续拒绝相关导入，不以此授权设备或真实账号。

@@ -1,5 +1,94 @@
 # Compatibility
 
+2026-10-26：[指定Android11开发板](verification.md#20261026-password-android)的前台密码
+SSH完整界面实测通过；使用同一正式Dart/Java/JNI/C代码，测试包独立UID。实际设备为
+AIO-3568J、arm64-v8a、已解锁。API28兼容仍为已有编译/本地边界证据，不能把API30实测
+推广为其他Android版本或后台行为验收。
+
+2026-10-25：[前台密码SSH](ssh-password-connect.md)沿同一正式模型，支持empty/纯TOTP和
+精确的应用生成CONFIG/KNOWN_HOSTS整库子集；保留无关TOTP和已确认主机键，其他SSH资料
+明确拒绝而不覆盖。使用公开Os/PFD API，非22端口使用`[host]:port`主机键记录；既有
+App/Root入口和terminal事件协议保留。Android实际运行结论单独记录于[验证](verification.md#20261025-password-connect)。
+
+2026-10-25：[SSH唯一正式主线](ssh-manifest.md)取消instance格式选择和双writer，所有
+构造/create/重新编码使用最新模型；内部wire tag仅用于文件识别。CTOSVLT1/crypto/KDF/
+AAD/generation/12MiB不变。窄旧输入适配仅接受empty/纯TOTP，读取不写库；export保留
+原envelope，正常内容修改/换口令/恢复编码正式模型。旧SSH输入拒绝，不推断关联或清库。
+恢复门检查实际未审阅的关系/账号，纯TOTP/empty不因内部tag受阻。
+[实测](verification.md#20261025-ssh-mainline)，无设备或真实库操作。
+
+以下为历史兼容记录，旧双格式主线政策不再适用。
+
+2026-10-24：[全部证书事实与签名政策](ssh-certificate-facts.md)已实现CSCF168、三份公开摘要/unsigned数值/实际record来源及现代CA签名政策，保留trust/time/principal/revocation未验证。ARM22239与旧材料矩阵、定向145/全量638 JVM、normal100全重跑/fixture111及三APK审计通过；[实测](verification.md#20261024-certificate-facts)。持久graph/账号、完整信任/reviewer/provider/恢复/connector与父AC仍开放；本地未提交，无设备/真实库账号。
+
+2026-10-23：[全部私钥材料与凭据归属](ssh-private-material-ownership.md)已实现全PRIVATE自签/验签、v1口令唯一owner/phrase审计和password namespace/deferred target。ARM19976/独立pair13812/material7784、定向120/全量613 JVM、normal98全重跑/fixture111及三APK审计通过；[实测](verification.md#20261023-private-material)。仍不提供持久关系图/真实密码账号/完整信任/provider/恢复/connector准入，父AC开放；本地未提交，无设备/真实库账号。
+
+2026-10-23：[显式密钥配对证明](ssh-key-association.md)已实现精确ID/所选口令、证书plain subject及固定domain实签验签，拒绝仅公开字段相等的伪配对。ARM13814/独立材料7784/fresh认证1748333、定向80/全量586 JVM、normal96全重跑/fixture111与三APK审计通过；[验证](verification.md#20261023-key-association)。报告只覆盖明确所选pairs；全库关联authority/覆盖、凭据目标、完整信任/reviewer/provider/恢复/connector与父AC仍开放。本地未提交，无设备/真实库账号。
+
+## 2026-10-23 — CONFIG 显式资源引用
+
+[RESOURCE_AUDIT](ssh-config-resources.md)为显式第四mode，不改变旧mode/wire。只收集显式资源声明，STATIC仅literal base/type/directrefs；relative保持CWD，缺精确I/Cert基名为KEY_RESOLUTION，不猜suffix或私钥关联。Global字面$/其他kind裸$与${区别、Certificate none字面、Revoked PUBLIC-only边界有真实矩阵。材料/签名/信任/最终消费未认证，报告admissionComplete=false。[门禁与未测](verification.md#20261023-config-resources)。
+
+## 2026-10-23 — CONFIG 静态引用与本地效果审计
+
+[AUDIT](ssh-config-audit.md)是独立显式模式；旧EFFECTIVE/CATALOG与CSEQ/CSES/CSCD不升级。新CSCA嵌套原CSCD，收集真实静态边/核对父直接引用，所有分支检查有限禁止效果政策；保留raw命令/argv字符串差异、固定Match语法与Include锚点，编译禁用优先。动态/非Include/值/身份/信任仍未完整，报告admissionComplete=false，生产恢复不开放。[门禁与未测范围](verification.md#20261023-config-audit)。
+
+## 2026-10-23 — 实际清单受管配置检查
+
+[受管检查](ssh-detached-config-managed.md)已接实际caller清单，不占live view、只复制CONFIG正文。逐root保留原始来源与原期限/取消，累计IO/行数/结果预算，不续期；路径沿用既有managed相对路径，bare Include仍锚定`.ssh/`。report恒声明only/admissionComplete=false，不能当作Include引用边、完整身份/凭据/信任或生产恢复准入。真实ARM/JVM与编译门禁通过，Android/JNI/锁页未运行；[实际验证](verification.md#20261023-detached-managed)。
+
+## 2026-10-23 独立 native 配置输入
+
+[独立输入](ssh-detached-config.md)已在本地真实ARM/host矩阵验证，可选实际CONFIG root并保留原始ordinal，不占活动view；原live借用、Include目录基准、声明only和raw Options边界保持。C-only尚无Java/JNI整库入口，不验证Include精确引用边或完整身份/凭据/信任，SSH恢复仍关闭。
+
+8MiB为格式正文限额，系统锁页还需metadata/readers；额度不足明确资源失败并清理。宿主8192KiB额度下6MiB实际锁页解析通过，8MiB仅格式入场/注入失败清理；Android锁页/ROM/JNI未实测。专项1261/原配置矩阵/IO426及JVM483、normal94/fixture111/APK审计通过，[实际证据](verification.md#20261023-detached-config)。
+
+## 2026-10-21 恢复预览生命周期边界
+
+[当前合同](ssh-validation-lifecycle.md)只迁移preview路径；legacy validator/reviewer
+可在回调前后被原deadline/cancel fence拒绝，不保证抢占单次第三方解析/KDF。
+UI一次交付claim后外部回调在锁外执行；后续失效拒绝commit，但不撤回已claimed摘要。
+Bridge同名外部requestId不共享私有preview owner，已返回预览沿用精确previewId取消。
+其他typed/bundle仍持core monitor，尚无生产全图语义/信任provider，SSH恢复继续拒绝。
+本轮Java/JVM及编译证据见[验证](verification.md#20261021-preview-validation)，不是Android
+实际运行/混合恢复/真实账号或完整SSH客户端验收；native/Flutter未改，旧结果保持历史。
+
+## 2026-10-19 实际清单离线文件检查
+
+[材料检查器](ssh-manifest-inspection.md)直接解析候选文件副本，覆盖既有软件私钥、
+公钥/证书与known_hosts所有记录；报告恒contentOnly=true/admissionComplete=false。CONFIG、
+引用/身份/凭据目标、证书有效期/主体和信任语义尚未认证，SSH恢复门保持。
+OpenSSH私钥CRLF仍受固定LF标记拒绝；传统PEM按固定parser支持换行。SK因固定构建
+禁用而不能解析；BAD_PASSPHRASE可能表示密文损坏。未加密PEM补查单DER SEQUENCE
+边界，传统加密PEM解密后的DER全消费未获证明；不宣称private/public数学一致性。
+原认证策略共用、原配置求值/目录保留。独立Android方法只编译，动态ARM不运行；
+具体已运行结果与工件对应见[验证](verification.md#20261019-manifest-inspection)。
+
+## 2026-10-19 SSH声明catalog兼容边界
+
+同一固定readconf lexer支持无Request的literal Host声明发现、静态managed Include遍历和
+动态Include未解析来源；[]为literal，通配/否定不生成条目。IgnoreUnknown不掩盖未知指令。
+Match仅词法消费，已识别指令的非法参数值可能通过目录扫描，不能用于语义校验/恢复准入。
+目录ARM71923、原求值3736/handle5201项均effects0，定向JVM39通过。平台fixture只编译，
+Android/JNI新版实际运行未执行；实际构建/工件与范围见[验证](verification.md#20261019-config-catalog)。
+仍缺候选清单/私钥/信任语义validator、逐字段最终计划和connector，SSH恢复门保留。
+
+## 2026-10-19 SSH配置JNI/Java兼容边界
+
+生产JNI/Java已借用同一受管lease接到真实native evaluator；标准UTF8 CSEQ/CSES严格有界，
+拒绝坏编码/ISO控制字符，保留有来源的错误和raw字段标记。ARM registry/parser5201项、
+JVM308与构建/签名隔离通过；独立Android fixture已编译但未安装执行，动态ARM也未运行。
+完整Options不经Java导出；语义validator/SSH导入恢复、最终逐字段计划及connector仍未接，
+原恢复拒绝门保留。[本轮实测与限制](verification.md#20261019-config-jni)。
+
+## 2026-10-19 SSH native配置求值边界
+
+固定OpenSSH10.6p1真实readconf已支持受管Include/Host/first-value/Match final及完整Options
+保留；跳板/forward/session字段仍可能需要后续展开，has_raw_fields不是可执行连接计划。
+显式拒绝命令、外部provider、信任绕过和需宿主DNS/接口/环境的声明，不回退宿主配置。
+本地静态NDK/Bionic ARM3736项/effects0通过，动态test只构建未运行；不扩展Android/JNI、
+设备、外部服务器或产品启动器兼容结论。[具体证据](verification.md#20261019-config-evaluator)。
+
 ## 2026-10-13 当前开发板增量
 
 用户授权后，最终 `3bc762d9…` 已安装AIO-3568J/Android11/API30/arm64，读回一致；221 Flutter/86定向/analyze通过，独立UID7项原生检查通过，真实无相机失败恢复通过。该板公开能力为0相机，硬件扫描不能验证。系统选图与真实生命周期最新结果见 [验证](verification.md)；同UID自有图片不能证明跨UID临时授权强制/撤销。用户专项批准后，当前ROM原生合成复制/敏感标记1项6.616秒通过；真实Flutter复制按钮E2E、服务MFA及其他ROM/API关卡保持，以下“本地/未安装”是初轮历史。

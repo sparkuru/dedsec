@@ -63,6 +63,13 @@ int ctos_ssh_role_bootstrap_snapshot(ctos_ssh_role_token,
 int ctos_ssh_role_bootstrap_active(ctos_ssh_role_token);
 int ctos_ssh_role_bootstrap_close(ctos_ssh_role_token);
 
+/* Internal transport continuation retains only revocable metadata. Ordinary
+ * snapshot/active/encode remain deadline-bound and grant no renewed authority. */
+int ctos_ssh_role_transport_retain(ctos_ssh_role_token);
+int ctos_ssh_role_transport_snapshot(ctos_ssh_role_token,
+    struct ctos_ssh_role_snapshot *);
+int ctos_ssh_role_transport_release(ctos_ssh_role_token);
+
 /* Encode only the snapshot metadata for a future typed Java/native handoff. */
 int ctos_ssh_role_bootstrap_encode(ctos_ssh_role_token, unsigned char *,
     size_t, size_t *);

@@ -1,5 +1,101 @@
 # ctOS 信息入口
 
+2026-10-26：正式SSH APK已覆盖安装到指定开发板；[功能与使用入口](ssh-terminal.md)和
+[安装记录](verification.md#20261026-formal-install)已更新。本轮按前台密码连接交付归档，
+其他SSH能力保留在父规划，仍只有一个正式主线。
+
+2026-10-26 当前：[前台密码 SSH 连接](ssh-password-connect.md)已在授权的 Android 11
+开发板通过实际界面验收：建库、输入连接信息、完整指纹确认、密码登录、终端命令与
+渲染输出，以及关闭会话。实际bridge的首次保存/KNOWN重连也通过；仍沿唯一正式主线。
+[实机证据与清理](verification.md#20261026-password-android)。正式APK已构建，测试包已清理。
+
+2026-10-25 用户更正：[最新模型作为唯一SSH正式主线](ssh-manifest.md)，统一构造、创建、
+写入和内容审阅，清理双格式业务分支。已交付TOTP通过窄输入适配保留原数据。
+接下来以实际可用的SSH连接为目标，补齐同一主线的关系校验、账号使用和信任审阅。
+[本轮检查](verification.md#20261025-ssh-mainline)，本地未提交。
+
+以下为历史增量记录，不再按其中的格式划分维护主线。
+
+2026-10-24：[全部证书事实与签名政策](ssh-certificate-facts.md)已实现CSCF168、三份公开摘要/unsigned数值/实际record来源及现代CA签名政策，保留trust/time/principal/revocation未验证。ARM22239与旧材料矩阵、定向145/全量638 JVM、normal100全重跑/fixture111及三APK审计通过；[实测](verification.md#20261024-certificate-facts)。持久graph/账号、完整信任/reviewer/provider/恢复/connector与父AC仍开放；本地未提交，无设备/真实库账号。
+
+2026-10-23：[全部私钥材料与凭据归属](ssh-private-material-ownership.md)已实现全PRIVATE自签/验签、v1口令唯一owner/phrase审计和password namespace/deferred target。ARM19976/独立pair13812/material7784、定向120/全量613 JVM、normal98全重跑/fixture111及三APK审计通过；[实测](verification.md#20261023-private-material)。仍不提供持久关系图/真实密码账号/完整信任/provider/恢复/connector准入，父AC开放；本地未提交，无设备/真实库账号。
+
+2026-10-23：[显式密钥配对证明](ssh-key-association.md)已实现精确ID/所选口令、证书plain subject及固定domain实签验签，拒绝仅公开字段相等的伪配对。ARM13814/独立材料7784/fresh认证1748333、定向80/全量586 JVM、normal96全重跑/fixture111与三APK审计通过；[验证](verification.md#20261023-key-association)。报告只覆盖明确所选pairs；全库关联authority/覆盖、凭据目标、完整信任/reviewer/provider/恢复/connector与父AC仍开放。本地未提交，无设备/真实库账号。
+
+2026-10-23：[显式资源引用绑定](ssh-config-resources.md)已实现RESOURCE_AUDIT/CSCR、五类声明静态类型与真实parent直接引用，保留动态/cwd/key-loader未决。真实ARM4439含基线/全部旧矩阵/IO426，定向151/fresh全量564 JVM、normal94全重跑/fixture111与三APK审计通过；[验证](verification.md#20261023-config-resources)。材料数学关联、凭据/信任/provider/恢复/connector与父AC仍开放，本地未提交，无设备/真实库账号。
+
+2026-10-23：[CONFIG静态引用与本地效果审计](ssh-config-audit.md)已实现独立AUDIT、真实Include父/行/子与parent直接references核对，以及所有分支有限政策。真实ARM13290含基线/原矩阵/IO426、定向124/fresh全量537 JVM、normal94全重跑/fixture111与三APK审计通过；[验证](verification.md#20261023-config-audit)。报告仍partial-only，动态/非Include引用、身份/凭据/信任完整语义provider、恢复/connector与父AC仍开放。本地未提交，无设备/真实库账号。
+
+2026-10-23：[实际清单受管配置检查](ssh-detached-config-managed.md)已实现Java/JNI两阶段owner、全部CONFIG声明扫描与整job累计预算。ARM3683（含基线）/原矩阵/IO426、fresh JVM514及normal94全重跑/fixture111与三APK审计通过；[实际验证](verification.md#20261023-detached-managed)。引用/全分支政策、身份/凭据/证书/信任完整语义provider、恢复/connector与父AC仍开放。本地未提交，无设备/真实库账号。
+
+2026-10-23：[独立 native 配置输入](ssh-detached-config.md)已实现，不占活动view。专项ARM1261/原配置矩阵/IO426、JVM483与normal94/fixture111及三APK审计通过；[验证与锁页/未测边界](verification.md#20261023-detached-config)。下一步Java整库编排与引用/身份/凭据/信任语义，恢复/connector与父AC仍开放。
+
+2026-10-23：[TOTP写入与预览票据生命周期](totp-mutation-lifecycle.md)已实现原预算、锁外校验、精确交接与及时取消。定向196/全量483 JVM通过；普通与fixture构建/lint通过，APK审计见[验证](verification.md#20261023-totp-mutation)。下一步完整语义provider/恢复/connector，父任务保持进行中。
+
+
+- SSH 最新：[trust CAS 生命周期](ssh-trust-cas-lifecycle.md)已实现原审批context、锁外校验、可取消provider与精确view延续，落盘后交付失败明确uncertain。定向202/全量JVM469、normal/fixture及三APK审计通过。[验证](verification.md#20261022-ssh-trust-cas)。下一项为剩余TOTP mutation，完整语义/恢复/connector仍开放。
+
+- SSH 最新：[普通凭据保存/删除生命周期](ssh-entry-mutation-lifecycle.md)已实现原context、锁外source/candidate校验与独占候选，保留唯一effect写入claim。定向152/全量JVM455、normal92全重跑/fixture114及三APK审计通过。[验证](verification.md#20261022-ssh-entry-mutation)。下一项为trust CAS，完整语义/恢复/connector继续开放。
+
+- SSH 最新：[typed秘密读取生命周期](ssh-secret-read-lifecycle.md)已实现原请求/role期限、锁外校验与最终host/KEX绑定受管复制；定向196/全量JVM444、normal92全重跑/fixture114及三APK审计通过。[验证](verification.md#20261022-ssh-secret-read)。下一项为普通mutation/trust CAS，完整语义/恢复/connector及父AC继续开放。
+
+- SSH 最新：[public文件读取生命周期](ssh-public-read-lifecycle.md)已实现原context、锁外校验/
+  closure、一次同步loan与native lease最终attach，保留原role预算/view和own-CAS。
+  定向178通过；全量JVM431、normal92全重跑/fixture114与三APK审计通过。[验证](verification.md#20261022-ssh-public-read)。
+  下一项为secret typed读取/host-KEX释放，完整语义/恢复与父AC继续开放。
+
+- SSH 前一增量：[TOTP typed读取生命周期](totp-read-lifecycle.md)已实现原context、锁外校验/
+  生成、一次receipt及最终当前窗口/锁库复查；pure不新增SSH依赖。定向140/fresh全量
+  JVM410、normal92全重跑/fixture114与三APK签名隔离通过；[验证与限制](verification.md#20261022-totp-read-validation)。
+  下一项为SSH public snapshot/sessionManifest原请求/role/view/loan释放；全语义/恢复仍后续。
+
+- SSH 当前：[bundle 原请求与候选生命周期](ssh-bundle-lifecycle.md)已实现：原期限/直接取消/
+  注册、独占候选与锁外校验、精确审批和一次消费，事务内禁止重读AtomicFile。
+  最终定向81/fresh全量JVM391、normal92全重跑/fixture114及三APK签名隔离通过；
+  [验证](verification.md#20261022-bundle-validation)。其他typed、完整语义provider与生产SSH恢复仍后续。
+
+- SSH本轮：[清单语义义务与恢复预览生命周期](ssh-validation-lifecycle.md)：先明确完整
+  语义/配置引用/身份/信任与真实Request的待证义务，再迁移preview的锁外校验/审阅、
+  原期限/取消/注册绑定和一次交付claim。其他typed/bundle入口仍待迁移，生产SSH恢复门
+  保持关闭；实际本地检查见[验证](verification.md#20261021-preview-validation)。
+
+- SSH本轮：[实际清单离线内容检查](ssh-manifest-inspection.md)已实现，检查实际候选密钥/信任文件副本；ARM材料7784/effects0、完整认证/PTY1741410、fresh JVM358、normal95/fixture114及APK审计通过。报告恒contentOnly=true/admissionComplete=false，语义validator与SSH恢复仍未开放。[验证](verification.md#20261019-manifest-inspection)。
+
+- SSH接续：[无上下文声明catalog](ssh-config-catalog.md)已实现；复用readconf词法入口，
+  收集静态Include和literal Host来源，动态Include明确未解析。ARM目录71923/effects0，
+  原求值3736/handle5201、fresh JVM327、normal95/fixture114及三APK审计通过。
+  [本轮验证](verification.md#20261019-config-catalog)。
+  不挂整库语义validator，SSH恢复门继续关闭；本地未提交，无设备/真实账号操作。
+
+- SSH当前：[JNI/Java配置求值边界](ssh-config-managed.md)已实现，caller lease借用、独立
+  token registry、标准UTF8 wire与有界来源诊断；ARM5201/effects0、fresh JVM308、normal95/
+  fixture114及APK审计通过。[前置验证](verification.md#20261019-config-jni)。语义validator/
+  最终连接计划及connector仍后续，保持本地未提交、不设备/真实账号。
+
+- SSH当前增量：[受管配置求值器](ssh-config-evaluator.md)已实现native入口，复用固定readconf、
+  managed Include、返回式输入诊断与完整Options；最终ARM3736项/effects0通过。
+  [构建与验证](verification.md#20261019-config-evaluator)；JNI/catalog已由上方增量补齐，语义validator/connector仍后续。
+
+## 2026-10-19 SSH 实际主机键与精确审批
+
+启动器第一前置增量已实现：MANAGED open使用真实KEX offered key，复用KNOWN/NEW-CAS，
+有界审批邮箱保留原认证/PTY安全约束。完整normal94项全重跑、fresh JVM288、fixture113项、
+三APK验签/隔离与19JNI审计已通过；另用独立静态Bionic ARM测试完成1,724,636项完整回归。
+旧动态运行环境已失，不混用其证据；产品config/catalog/connector及新版设备验收尚缺。
+继续仅本地未提交，无设备操作。[合同](ssh-launcher.md) · [验证](verification.md#20261019-managed-host)。
+
+- SSH 继续：[生产启动器合同与第一增量](ssh-launcher.md)，实际offered host key与精确NEW审批；认证/PTY基线保留。
+
+- SSH 当前增量：[session channel / PTY / shell 合同与实现](ssh-session-channel.md)；沿用已完成认证基线。
+
+## 2026-10-19 SSH shell 本地实现与终端接入
+
+已完成单session channel/PTY/shell及native/JNI/Java六API，接现有终端host-only真实会话
+factory、typed生命周期/代次/UTF8和SSH方向键；保留原认证proof/撤销/期限/线程边界。
+本地normal94项全重跑、fresh JVM270、Flutter227/analyze、fixture113项和ARM合成协议通过。
+生产profile/connector启动器、forward/service、设备与真实账号验收仍开放，父任务保持进行中。
+[合同](ssh-session-channel.md) · [验证与工件](verification.md#20261019-ssh-shell)。
+
 ## 2026-10-19 Android/JNI 与私钥认证：已实现并完成独立实测
 
 Java/JNI 已接入密码与私钥认证，支持 Ed25519、ECDSA p256/p384/p521、RSA SHA-2；

@@ -41,6 +41,9 @@
 static unsigned int checks;
 
 #define TEST_STEP_BUDGET 3U
+/* Complete QEMU handshakes before deliberately expiring the original deadline. */
+#define TEST_EXPIRY_PREPARATION_MS 5000U
+#define TEST_EXPIRY_WAIT_ATTEMPTS 6000U
 
 #define CHECK(condition) do { \
     checks++; \
@@ -65,8 +68,8 @@ static uint32_t read_u32(const unsigned char *bytes) {
         | ((uint32_t)bytes[2] << 8) | (uint32_t)bytes[3];
 }
 
-static void wait_until_deadline(uint64_t deadline) {
-    for (unsigned int attempt = 0; attempt < 1000U; attempt++) {
+static void wait_until_deadline_attempts(uint64_t deadline, unsigned int attempts) {
+    for (unsigned int attempt = 0; attempt < attempts; attempt++) {
         struct timespec now;
         uint64_t current;
         struct timespec pause = {.tv_sec = 0, .tv_nsec = 1000000L};
@@ -84,6 +87,10 @@ static void wait_until_deadline(uint64_t deadline) {
         CHECK((uint64_t)now.tv_sec * 1000U
             + (uint64_t)now.tv_nsec / 1000000U >= deadline);
     }
+}
+
+static void wait_until_deadline(uint64_t deadline) {
+    wait_until_deadline_attempts(deadline, 1000U);
 }
 
 struct wire {
@@ -228,6 +235,7 @@ struct callback_fixture {
     unsigned char *caller_output;
     size_t caller_capacity;
     int fail_host_evidence;
+    int host_action;
     ctos_ssh_role_token expected_role;
     unsigned int expected_hop;
     unsigned int expected_port;
@@ -328,6 +336,15 @@ static int host_evidence(void *context, void *environment,
         sizeof(result->replacement_digest));
     fixture->last_host_outcome = result->outcome;
     fixture->last_host_cas_status = result->cas_status;
+    if (fixture->host_action == 1) result->replacement_digest[0] ^= 1U;
+    if (fixture->host_action == 2) CHECK(ctos_ssh_callback_cancel(fixture->selected_callback) == 0);
+    if (fixture->host_action == 3) fixture->selected_view->valid = 0;
+    if (fixture->host_action == 4) fixture->selected_view->deadline = deadline_after(0);
+    if (fixture->host_action == 5)
+        wait_until_deadline_attempts(fixture->selected_deadline, TEST_EXPIRY_WAIT_ATTEMPTS);
+    if (fixture->host_action == 6) fixture->environment = NULL;
+    if (fixture->host_action == 7) CHECK(ctos_ssh_role_bootstrap_close(fixture->selected_role) == 0);
+    if (fixture->host_action == 8) result->cas_status = CTOS_SSH_CALLBACK_HOST_CAS_NOT_REQUIRED;
     return 0;
 }
 
@@ -467,7 +484,8 @@ static int credential_bytes_selected(void *context, void *environment, int kind,
     if (fixture->selected_action == 2) fixture->selected_view->valid = 0;
     if (fixture->selected_action == 3) CHECK(ctos_ssh_callback_cancel(fixture->selected_callback) == 0);
     if (fixture->selected_action == 4) CHECK(ctos_ssh_role_bootstrap_close(fixture->selected_role) == 0);
-    if (fixture->selected_action == 5) wait_until_deadline(fixture->selected_deadline);
+    if (fixture->selected_action == 5)
+        wait_until_deadline_attempts(fixture->selected_deadline, TEST_EXPIRY_WAIT_ATTEMPTS);
     if (fixture->selected_action == 6) *length = capacity + 1U;
     for (size_t index = 0; index < fixture->caller_capacity; index++)
         CHECK(fixture->caller_output[index] == 0);
@@ -699,6 +717,12 @@ struct fixture {
     const char *identity_algorithm;
     const char *signature_advertisement;
     unsigned int private_requests;
+    int shell_expected, shell_stage, shell_reject;
+    uint32_t shell_window, shell_maxpacket, shell_credit;
+    unsigned int shell_resize_count, shell_eof_count, shell_close_count;
+    unsigned int shell_unknown_failures;
+    unsigned char shell_input[65536];
+    size_t shell_input_length;
 };
 
 static void make_kex_params(struct kex_params *params) {
@@ -855,10 +879,11 @@ static void exercise_selection_admission(struct fixture *fixture,
     }
 }
 
-static void finish_fixture_setup_selected(struct fixture *fixture,
+static void finish_fixture_setup_selected_mode(struct fixture *fixture,
     unsigned int lifetime_ms, const struct sshkey *known_hosts_key,
     const char *known_hosts_prefix, int empty_known_hosts,
-    int fail_descriptor_duplication, unsigned int selection_kind, int admission_matrix) {
+    int fail_descriptor_duplication, unsigned int selection_kind, int admission_matrix,
+    enum ctos_ssh_native_host_key_mode host_key_mode) {
     struct ctos_ssh_role_request request;
     struct ctos_ssh_native_client_config config;
     unsigned char known_hosts_body[4096] = {0};
@@ -916,6 +941,30 @@ static void finish_fixture_setup_selected(struct fixture *fixture,
         .host = "example.invalid",
         .candidate_id = "native-candidate"
     };
+    if (host_key_mode == CTOS_SSH_HOST_KEY_MANAGED) {
+        config.host_key_mode = host_key_mode;
+        config.server_host_public_key_blob = NULL;
+        config.server_host_public_key_length = 0;
+        config.expected_host_fingerprint = NULL;
+        for (unsigned int invalid = 0; invalid < 7U; invalid++) {
+            struct ctos_ssh_native_client_config bad = config;
+            if (invalid == 0) bad.host_key_mode = 2;
+            if (invalid == 1) bad.server_host_public_key_blob = fixture->public_blob;
+            if (invalid == 2) bad.server_host_public_key_length = fixture->public_blob_length;
+            if (invalid == 3) bad.expected_host_fingerprint = fixture->fingerprint;
+            if (invalid == 4) bad.host_key_mode = CTOS_SSH_HOST_KEY_PINNED;
+            if (invalid == 5) {
+                bad.host_key_mode = CTOS_SSH_HOST_KEY_PINNED;
+                bad.server_host_public_key_blob = fixture->public_blob;
+                bad.server_host_public_key_length = fixture->public_blob_length;
+            }
+            if (invalid == 6) {
+                bad.host_key_mode = CTOS_SSH_HOST_KEY_PINNED;
+                bad.expected_host_fingerprint = fixture->fingerprint;
+            }
+            reject_selection_open(fixture, &bad, NULL, 0, EINVAL);
+        }
+    }
     if (selection_kind != 0U) {
         struct ctos_ssh_role_snapshot snapshot;
         struct ctos_ssh_slice fields[5] = {
@@ -984,6 +1033,20 @@ static void finish_fixture_setup_selected(struct fixture *fixture,
         /* The same ownership tuple must now retry without a stale KEX slot. */
     }
     CHECK(ctos_ssh_native_client_open(&config, &fixture->client) == 0);
+    if (host_key_mode == CTOS_SSH_HOST_KEY_MANAGED) {
+        CHECK(ctos_ssh_native_client_verify_host_key(fixture->client,
+            fixture->public_blob, fixture->public_blob_length) != 0 && errno == EACCES);
+        CHECK(fixture->callback.host_evidence_calls == 0U);
+    }
+}
+
+static void finish_fixture_setup_selected(struct fixture *fixture,
+    unsigned int lifetime_ms, const struct sshkey *known_hosts_key,
+    const char *known_hosts_prefix, int empty_known_hosts,
+    int fail_descriptor_duplication, unsigned int selection_kind, int admission_matrix) {
+    finish_fixture_setup_selected_mode(fixture, lifetime_ms, known_hosts_key,
+        known_hosts_prefix, empty_known_hosts, fail_descriptor_duplication,
+        selection_kind, admission_matrix, CTOS_SSH_HOST_KEY_PINNED);
 }
 
 static void finish_fixture_setup(struct fixture *fixture,
@@ -1391,6 +1454,102 @@ static void accept_private_request(struct fixture *fixture) {
     send_password_reply(fixture);
 }
 
+static void peer_channel_packet(struct fixture *fixture, int type) {
+    CHECK(sshpkt_start(fixture->server, type) == 0);
+    CHECK(sshpkt_put_u32(fixture->server, 0) == 0);
+}
+
+static void peer_channel_data(struct fixture *fixture, int extended,
+    const unsigned char *bytes, size_t length) {
+    peer_channel_packet(fixture, extended ? SSH2_MSG_CHANNEL_EXTENDED_DATA : SSH2_MSG_CHANNEL_DATA);
+    if (extended) CHECK(sshpkt_put_u32(fixture->server, 1) == 0);
+    CHECK(sshpkt_put_string(fixture->server, bytes, length) == 0);
+    CHECK(sshpkt_send(fixture->server) == 0);
+}
+
+static void accept_shell_packet(struct fixture *fixture, int type) {
+    struct ssh *ssh = fixture->server;
+    const unsigned char *text;
+    size_t length;
+    uint32_t value;
+    u_char flag;
+    if (type == SSH2_MSG_CHANNEL_OPEN) {
+        CHECK(fixture->shell_stage == 0);
+        CHECK(sshpkt_get_string_direct(ssh, &text, &length) == 0);
+        CHECK(length == 7U && memcmp(text, "session", 7U) == 0);
+        CHECK(sshpkt_get_u32(ssh, &value) == 0 && value == 0);
+        CHECK(sshpkt_get_u32(ssh, &value) == 0 && value == 65536U);
+        CHECK(sshpkt_get_u32(ssh, &value) == 0 && value == 32768U);
+        CHECK(sshpkt_get_end(ssh) == 0);
+        fixture->shell_stage = 1;
+        peer_channel_packet(fixture, fixture->shell_reject == 1
+            ? SSH2_MSG_CHANNEL_OPEN_FAILURE : SSH2_MSG_CHANNEL_OPEN_CONFIRMATION);
+        if (fixture->shell_reject == 1) {
+            CHECK(sshpkt_put_u32(ssh, 1) == 0);
+            CHECK(sshpkt_put_cstring(ssh, "refused") == 0);
+            CHECK(sshpkt_put_cstring(ssh, "en") == 0);
+        } else {
+            CHECK(sshpkt_put_u32(ssh, 77) == 0);
+            CHECK(sshpkt_put_u32(ssh, fixture->shell_window) == 0);
+            CHECK(sshpkt_put_u32(ssh, fixture->shell_maxpacket) == 0);
+        }
+        CHECK(sshpkt_send(ssh) == 0);
+        return;
+    }
+    CHECK(sshpkt_get_u32(ssh, &value) == 0 && value == 77);
+    if (type == SSH2_MSG_CHANNEL_REQUEST) {
+        CHECK(sshpkt_get_string_direct(ssh, &text, &length) == 0);
+        CHECK(sshpkt_get_u8(ssh, &flag) == 0);
+        if (length == 7U && memcmp(text, "pty-req", 7U) == 0) {
+            CHECK(fixture->shell_stage == 1 && flag == 1);
+            CHECK(sshpkt_get_string_direct(ssh, &text, &length) == 0
+                && length == 14U && memcmp(text, "xterm-256color", 14U) == 0);
+            CHECK(sshpkt_get_u32(ssh, &value) == 0 && value == 80);
+            CHECK(sshpkt_get_u32(ssh, &value) == 0 && value == 24);
+            CHECK(sshpkt_get_u32(ssh, &value) == 0 && value == 0);
+            CHECK(sshpkt_get_u32(ssh, &value) == 0 && value == 0);
+            CHECK(sshpkt_get_string_direct(ssh, &text, &length) == 0 && length == 1U && text[0] == 0);
+            fixture->shell_stage = 2;
+        } else if (length == 5U && memcmp(text, "shell", 5U) == 0) {
+            CHECK(fixture->shell_stage == 2 && flag == 1);
+            fixture->shell_stage = 3;
+        } else {
+            CHECK(length == 13U && memcmp(text, "window-change", 13U) == 0 && flag == 0);
+            CHECK(fixture->shell_stage == 3);
+            CHECK(sshpkt_get_u32(ssh, &value) == 0 && value == 132);
+            CHECK(sshpkt_get_u32(ssh, &value) == 0 && value == 43);
+            CHECK(sshpkt_get_u32(ssh, &value) == 0 && value == 0);
+            CHECK(sshpkt_get_u32(ssh, &value) == 0 && value == 0);
+            fixture->shell_resize_count++;
+        }
+        CHECK(sshpkt_get_end(ssh) == 0);
+        if (flag) {
+            peer_channel_packet(fixture, fixture->shell_reject == fixture->shell_stage
+                ? SSH2_MSG_CHANNEL_FAILURE : SSH2_MSG_CHANNEL_SUCCESS);
+            CHECK(sshpkt_send(ssh) == 0);
+        }
+    } else if (type == SSH2_MSG_CHANNEL_DATA) {
+        CHECK(fixture->shell_stage == 3);
+        CHECK(sshpkt_get_string_direct(ssh, &text, &length) == 0);
+        CHECK(length <= sizeof(fixture->shell_input) - fixture->shell_input_length);
+        memcpy(fixture->shell_input + fixture->shell_input_length, text, length);
+        fixture->shell_input_length += length;
+        CHECK(sshpkt_get_end(ssh) == 0);
+    } else if (type == SSH2_MSG_CHANNEL_WINDOW_ADJUST) {
+        CHECK(sshpkt_get_u32(ssh, &value) == 0 && value != 0);
+        CHECK(value <= UINT32_MAX - fixture->shell_credit);
+        fixture->shell_credit += value;
+        CHECK(sshpkt_get_end(ssh) == 0);
+    } else if (type == SSH2_MSG_CHANNEL_EOF || type == SSH2_MSG_CHANNEL_CLOSE) {
+        CHECK(sshpkt_get_end(ssh) == 0);
+        if (type == SSH2_MSG_CHANNEL_EOF) fixture->shell_eof_count++;
+        else fixture->shell_close_count++;
+    } else if (type == SSH2_MSG_CHANNEL_FAILURE) {
+        CHECK(sshpkt_get_end(ssh) == 0);
+        fixture->shell_unknown_failures++;
+    } else CHECK(0);
+}
+
 static int pump_synthetic_server(struct fixture *fixture, size_t chunk,
     int *read_would_block, int *partial_write) {
     unsigned char input[64];
@@ -1435,6 +1594,12 @@ static int pump_synthetic_server(struct fixture *fixture, size_t chunk,
         accept_password_request(fixture);
     } else if (packet_type == SSH2_MSG_USERAUTH_REQUEST && fixture->private_expected) {
         accept_private_request(fixture);
+    } else if (fixture->shell_expected && packet_type >= SSH2_MSG_CHANNEL_OPEN
+        && packet_type <= SSH2_MSG_CHANNEL_FAILURE) {
+        accept_shell_packet(fixture, packet_type);
+    } else if (packet_type == SSH2_MSG_REQUEST_FAILURE && fixture->shell_expected) {
+        CHECK(sshpkt_get_end(fixture->server) == 0);
+        fixture->shell_unknown_failures++;
     } else if (packet_type != SSH_MSG_NONE && packet_type != SSH2_MSG_EXT_INFO) {
         return -1;
     }
@@ -1486,6 +1651,37 @@ static void test_failed_open_releases_kex_role(void) {
     fixture.host_key = fixture.public_key;
     finish_fixture_setup(&fixture, 15000U, NULL, NULL, 0, 1);
     cleanup_fixture(&fixture, 1);
+}
+
+static void test_prepare_tcp_descriptor(void) {
+    int pair[2], descriptor;
+    CHECK(socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0, pair) == 0);
+    descriptor = dup(pair[0]);
+    CHECK(descriptor >= 0 && (fcntl(descriptor, F_GETFD) & FD_CLOEXEC) == 0);
+    int original_flags = fcntl(pair[0], F_GETFL);
+    CHECK(ctos_ssh_native_client_prepare_tcp_descriptor(descriptor) == 0);
+    CHECK((fcntl(descriptor, F_GETFD) & FD_CLOEXEC) != 0);
+    CHECK(fcntl(descriptor, F_GETFL) == original_flags && fcntl(pair[0], F_GETFL) == original_flags);
+    CHECK(ctos_ssh_native_client_prepare_tcp_descriptor(descriptor) == 0);
+    unsigned char byte = 0;
+    CHECK(write(descriptor, "x", 1U) == 1 && read(pair[1], &byte, 1U) == 1 && byte == 'x');
+    CHECK(close(descriptor) == 0 && close(pair[0]) == 0 && close(pair[1]) == 0);
+
+    for (unsigned int mode = 0; mode < 4U; mode++) {
+        if (mode < 2U) {
+            CHECK(socketpair(AF_UNIX, mode == 0 ? SOCK_STREAM : SOCK_DGRAM | SOCK_NONBLOCK,
+                0, pair) == 0);
+            descriptor = pair[0];
+        } else descriptor = open("/dev/null", (mode == 2 ? O_RDWR : O_RDONLY) | O_NONBLOCK);
+        CHECK(descriptor >= 0);
+        int descriptor_flags = fcntl(descriptor, F_GETFD);
+        int file_flags = fcntl(descriptor, F_GETFL);
+        CHECK(ctos_ssh_native_client_prepare_tcp_descriptor(descriptor) != 0 && errno == EINVAL);
+        CHECK(fcntl(descriptor, F_GETFD) == descriptor_flags && fcntl(descriptor, F_GETFL) == file_flags);
+        CHECK(close(descriptor) == 0);
+        if (mode < 2U) CHECK(close(pair[1]) == 0);
+    }
+    CHECK(ctos_ssh_native_client_prepare_tcp_descriptor(-1) != 0 && errno == EINVAL);
 }
 
 static void test_admission_and_descriptor(void) {
@@ -1977,7 +2173,8 @@ static void test_userauth_service_liveness(void) {
             struct fixture fixture;
             int expected_error = EACCES;
 
-            setup_service_fixture(&fixture, 0, failure == 4U ? 1000U : 15000U, 0);
+            setup_service_fixture(&fixture, 0,
+                failure == 4U ? TEST_EXPIRY_PREPARATION_MS : 15000U, 0);
             if (active_step)
                 CHECK(ctos_ssh_native_client_begin_userauth_service(fixture.client) == 0);
             switch (failure) {
@@ -1999,7 +2196,7 @@ static void test_userauth_service_liveness(void) {
                     expected_error = ETIMEDOUT;
                     break;
                 case 4:
-                    wait_until_deadline(fixture.deadline);
+                    wait_until_deadline_attempts(fixture.deadline, TEST_EXPIRY_WAIT_ATTEMPTS);
                     expected_error = ETIMEDOUT;
                     break;
             }
@@ -2875,7 +3072,8 @@ static void test_selected_handoff_failures_keep_secret_private(void) {
         int expected_error = mode == 0 ? ENOSYS : mode == 1 || mode == 2 ? EACCES
             : mode == 5 ? ETIMEDOUT : mode == 6 ? EINVAL : ECANCELED;
 
-        setup_selected_service_fixture(&fixture, mode % 2, 1U, mode == 5 ? 1000U : 15000U, mode == 0);
+        setup_selected_service_fixture(&fixture, mode % 2, 1U,
+            mode == 5 ? TEST_EXPIRY_PREPARATION_MS : 15000U, mode == 0);
         CHECK(ctos_ssh_native_client_begin_userauth_service(fixture.client) == 0);
         drive_service(&fixture, 0);
         fixture.callback.selected_action = mode;
@@ -2924,8 +3122,8 @@ static void expect_password_result_error(const struct fixture *fixture, int expe
     CHECK(fixture->callback.selected_calls == calls);
 }
 
-static void setup_password_fixture(struct fixture *fixture, int new_host,
-    unsigned int lifetime_ms) {
+static void setup_password_fixture_mode(struct fixture *fixture, int new_host,
+    unsigned int lifetime_ms, enum ctos_ssh_native_host_key_mode mode) {
     memset(fixture, 0, sizeof(*fixture));
     fixture->password_expected = 1;
     fixture->password_methods = (const unsigned char *)"publickey,password";
@@ -2937,7 +3135,7 @@ static void setup_password_fixture(struct fixture *fixture, int new_host,
     CHECK(sshkey_generate(KEY_ED25519, 0, &fixture->private_key) == 0);
     CHECK(sshkey_from_private(fixture->private_key, &fixture->public_key) == 0);
     fixture->host_key = fixture->public_key;
-    finish_fixture_setup_selected(fixture, lifetime_ms, NULL, NULL, new_host, 0, 1U, 0);
+    finish_fixture_setup_selected_mode(fixture, lifetime_ms, NULL, NULL, new_host, 0, 1U, 0, mode);
     fixture->callback.selected_kind = CTOS_SSH_CALLBACK_CREDENTIAL_PASSWORD;
     memcpy(fixture->callback.expected_selection_receipt, fixture->selection_receipt, 32U);
     fixture->callback.selected_view = fixture->view;
@@ -2954,6 +3152,11 @@ static void setup_password_fixture(struct fixture *fixture, int new_host,
     CHECK(ctos_ssh_native_client_begin_userauth_service(fixture->client) == 0);
     drive_service(fixture, 0);
     assert_password_result(fixture, CTOS_SSH_PASSWORD_AUTH_NOT_STARTED);
+}
+
+static void setup_password_fixture(struct fixture *fixture, int new_host,
+    unsigned int lifetime_ms) {
+    setup_password_fixture_mode(fixture, new_host, lifetime_ms, CTOS_SSH_HOST_KEY_PINNED);
 }
 
 static void drive_password(struct fixture *fixture,
@@ -3280,7 +3483,8 @@ static void test_password_auth_admission_and_provider_failure(void) {
         int expected = action == 1 || action == 2 ? EACCES
             : action == 5 ? ETIMEDOUT : action == 6 ? EINVAL : ECANCELED;
 
-        setup_password_fixture(&fixture, action % 2, action == 5 ? 1000U : 15000U);
+        setup_password_fixture(&fixture, action % 2,
+            action == 5 ? TEST_EXPIRY_PREPARATION_MS : 15000U);
         fixture.callback.selected_action = action;
         errno = 0;
         CHECK(ctos_ssh_native_client_begin_password_auth(fixture.client) != 0 && errno == expected);
@@ -3298,7 +3502,8 @@ static void test_password_auth_active_liveness(void) {
         int expected = failure == 1U || failure == 2U ? EACCES
             : failure == 4U ? ETIMEDOUT : ECANCELED;
 
-        setup_password_fixture(&fixture, failure % 2U, failure == 4U ? 1000U : 15000U);
+        setup_password_fixture(&fixture, failure % 2U,
+            failure == 4U ? TEST_EXPIRY_PREPARATION_MS : 15000U);
         CHECK(ctos_ssh_native_client_begin_password_auth(fixture.client) == 0);
         if (failure == 0U) CHECK(ctos_ssh_callback_cancel(fixture.callback_token) == 0);
         if (failure == 1U) fixture.view->valid = 0;
@@ -3311,7 +3516,8 @@ static void test_password_auth_active_liveness(void) {
             CHECK(ctos_ssh_role_bootstrap_close(fixture.role) == 0);
             fixture.role = 0;
         }
-        if (failure == 4U) wait_until_deadline(fixture.deadline);
+        if (failure == 4U)
+            wait_until_deadline_attempts(fixture.deadline, TEST_EXPIRY_WAIT_ATTEMPTS);
         struct ctos_ssh_native_client_step step = {.cancelled = failure == 5U};
         errno = 0;
         CHECK(ctos_ssh_native_client_step(fixture.client, &step) != 0 && errno == expected
@@ -3336,10 +3542,11 @@ static void test_close_retry_order(void) {
     cleanup_fixture(&fixture, 2);
 }
 
-static void setup_private_fixture_version(struct fixture *fixture, int new_host,
+static void setup_private_fixture_version_mode(struct fixture *fixture, int new_host,
     const struct sshkey *identity, const struct sshbuf *file,
     const unsigned char *expected, size_t expected_length,
-    const char *advertisement, int no_advertisement, int version) {
+    const char *advertisement, int no_advertisement, int version,
+    enum ctos_ssh_native_host_key_mode mode) {
     memset(fixture, 0, sizeof(*fixture));
     fixture->private_expected = 1;
     fixture->encrypted_identity = version == 2;
@@ -3357,7 +3564,7 @@ static void setup_private_fixture_version(struct fixture *fixture, int new_host,
     CHECK(sshkey_generate(KEY_ED25519, 0, &fixture->private_key) == 0);
     CHECK(sshkey_from_private(fixture->private_key, &fixture->public_key) == 0);
     fixture->host_key = fixture->public_key;
-    finish_fixture_setup_selected(fixture, 15000U, NULL, NULL, new_host, 0, 4U, 0);
+    finish_fixture_setup_selected_mode(fixture, 15000U, NULL, NULL, new_host, 0, 4U, 0, mode);
     fixture->callback.selected_kind = CTOS_SSH_CALLBACK_CREDENTIAL_PRIVATE_KEY;
     fixture->callback.selected_body_override = 1;
     fixture->callback.selected_body = sshbuf_ptr(file);
@@ -3375,6 +3582,14 @@ static void setup_private_fixture_version(struct fixture *fixture, int new_host,
         && result == CTOS_SSH_PRIVATE_KEY_AUTH_NOT_STARTED);
     CHECK(ctos_ssh_native_client_password_auth_result(fixture->client,
         &(enum ctos_ssh_native_client_password_auth_result){0}) != 0 && errno == EACCES);
+}
+
+static void setup_private_fixture_version(struct fixture *fixture, int new_host,
+    const struct sshkey *identity, const struct sshbuf *file,
+    const unsigned char *expected, size_t expected_length,
+    const char *advertisement, int no_advertisement, int version) {
+    setup_private_fixture_version_mode(fixture, new_host, identity, file, expected,
+        expected_length, advertisement, no_advertisement, version, CTOS_SSH_HOST_KEY_PINNED);
 }
 
 static void setup_private_fixture(struct fixture *fixture, int new_host,
@@ -3704,8 +3919,533 @@ static void test_encrypted_private_auth(void) {
     }
 }
 
-int main(void) {
+static struct ctos_ssh_native_shell_status shell_status(struct fixture *fixture) {
+    struct ctos_ssh_native_shell_status status;
+    memset(&status, 0xff, sizeof(status));
+    CHECK(ctos_ssh_native_client_shell_status(fixture->client, &status) == 0);
+    return status;
+}
+
+static int shell_turn(struct fixture *fixture) {
+    struct ctos_ssh_native_client_step step = {0};
+    int result = ctos_ssh_native_client_step(fixture->client, &step);
+    CHECK(step.bytes_read <= TEST_STEP_BUDGET && step.bytes_written <= TEST_STEP_BUDGET);
+    CHECK(step.input_appended == step.bytes_read && step.output_consumed == step.bytes_written);
+    int saved_errno = errno;
+    CHECK(pump_synthetic_server(fixture, 64U, NULL, NULL) == 0);
+    errno = saved_errno;
+    return result;
+}
+
+static void drive_shell_phase(struct fixture *fixture, enum ctos_ssh_native_shell_phase phase) {
+    for (unsigned int turn = 0; turn < 100000U; turn++) {
+        CHECK(shell_turn(fixture) == 0);
+        if (shell_status(fixture).phase == phase) return;
+    }
+    CHECK(0);
+}
+
+static void setup_shell_fixture_mode(struct fixture *fixture, int kind, uint32_t window,
+    uint32_t maximum, int reject, enum ctos_ssh_native_host_key_mode mode, int new_host) {
+    if (kind == 1) {
+        setup_password_fixture_mode(fixture, new_host, 60000U, mode);
+        CHECK(shell_status(fixture).phase == CTOS_SSH_SHELL_DISABLED);
+        CHECK(ctos_ssh_native_client_begin_shell(fixture->client, 80, 24) != 0 && errno == EACCES);
+        CHECK(ctos_ssh_native_client_begin_password_auth(fixture->client) == 0);
+        drive_password(fixture, CTOS_SSH_PASSWORD_AUTH_SUCCESS, 0);
+    } else {
+        struct sshkey *key = NULL;
+        unsigned char *blob = NULL;
+        size_t length = 0;
+        struct sshbuf *file = sshbuf_new();
+        CHECK(file != NULL && sshkey_generate(KEY_ED25519, 0, &key) == 0);
+        CHECK(sshkey_to_blob(key, &blob, &length) == 0);
+        CHECK(sshkey_private_to_fileblob(key, file, "", "channel", SSHKEY_PRIVATE_OPENSSH, NULL, 0) == 0);
+        setup_private_fixture_version_mode(fixture, new_host, key, file, blob, length, NULL, 0, 1, mode);
+        CHECK(ctos_ssh_native_client_begin_private_key_auth(fixture->client) == 0);
+        drive_private(fixture, CTOS_SSH_PRIVATE_KEY_AUTH_SUCCESS, 0);
+        sshbuf_free(file);
+        free(blob);
+        sshkey_free(key);
+        fixture->identity = NULL;
+    }
+    fixture->shell_expected = 1;
+    fixture->shell_window = window;
+    fixture->shell_maxpacket = maximum;
+    fixture->shell_reject = reject;
+    CHECK(ctos_ssh_native_client_begin_shell(fixture->client, 0, 24) != 0 && errno == EINVAL);
+    CHECK(ctos_ssh_native_client_begin_shell(fixture->client, 80, 4097) != 0 && errno == EINVAL);
+    CHECK(ctos_ssh_native_client_begin_shell(fixture->client, 80, 24) == 0);
+    CHECK(ctos_ssh_native_client_begin_shell(fixture->client, 80, 24) != 0 && errno == EALREADY);
+    CHECK(shell_status(fixture).phase == CTOS_SSH_SHELL_OPENING);
+}
+
+static void setup_shell_fixture(struct fixture *fixture, int kind, uint32_t window,
+    uint32_t maximum, int reject) {
+    setup_shell_fixture_mode(fixture, kind, window, maximum, reject, CTOS_SSH_HOST_KEY_PINNED, 0);
+}
+
+static void send_channel_exit(struct fixture *fixture, int signalled) {
+    peer_channel_packet(fixture, SSH2_MSG_CHANNEL_REQUEST);
+    CHECK(sshpkt_put_cstring(fixture->server, signalled ? "exit-signal" : "exit-status") == 0);
+    CHECK(sshpkt_put_u8(fixture->server, 0) == 0);
+    if (signalled) {
+        CHECK(sshpkt_put_cstring(fixture->server, "TERM") == 0);
+        CHECK(sshpkt_put_u8(fixture->server, 0) == 0);
+        CHECK(sshpkt_put_cstring(fixture->server, "synthetic") == 0);
+        CHECK(sshpkt_put_cstring(fixture->server, "en") == 0);
+    } else CHECK(sshpkt_put_u32(fixture->server, UINT32_MAX) == 0);
+    CHECK(sshpkt_send(fixture->server) == 0);
+}
+
+static void send_window(struct fixture *fixture, uint32_t value) {
+    peer_channel_packet(fixture, SSH2_MSG_CHANNEL_WINDOW_ADJUST);
+    CHECK(sshpkt_put_u32(fixture->server, value) == 0);
+    CHECK(sshpkt_send(fixture->server) == 0);
+}
+
+static void test_shell_roundtrip(void) {
+    for (int scenario = 0; scenario < 6; scenario++) {
+        int kind = scenario % 2 + 1;
+        struct fixture fixture;
+        size_t accepted, length, sent = 0;
+        unsigned char output[64];
+        static const unsigned char command[] = "printf channel\\n\n";
+        setup_shell_fixture_mode(&fixture, kind, 16U, 8U, 0,
+            scenario < 2 ? CTOS_SSH_HOST_KEY_PINNED : CTOS_SSH_HOST_KEY_MANAGED,
+            scenario >= 4);
+        drive_shell_phase(&fixture, CTOS_SSH_SHELL_RUNNING);
+        CHECK(fixture.shell_stage == 3);
+        CHECK(ctos_ssh_native_client_shell_write(fixture.client, command, sizeof(command) - 1U,
+            &accepted) == 0 && accepted == 8U);
+        sent += accepted;
+        CHECK(ctos_ssh_native_client_shell_write(fixture.client, command + sent,
+            sizeof(command) - 1U - sent, &accepted) == 0 && accepted == 8U);
+        sent += accepted;
+        CHECK(ctos_ssh_native_client_shell_write(fixture.client, command + sent,
+            sizeof(command) - 1U - sent, &accepted) == 0 && accepted == 0);
+        send_window(&fixture, 32U);
+        for (unsigned int turn = 0; turn < 10000U && sent < sizeof(command) - 1U; turn++) {
+            CHECK(shell_turn(&fixture) == 0);
+            CHECK(ctos_ssh_native_client_shell_write(fixture.client, command + sent,
+                sizeof(command) - 1U - sent, &accepted) == 0);
+            sent += accepted;
+        }
+        CHECK(sent == sizeof(command) - 1U);
+        CHECK(ctos_ssh_native_client_shell_resize(fixture.client, 132, 43) == 1);
+        CHECK(ctos_ssh_native_client_shell_eof(fixture.client) == 1);
+        CHECK(ctos_ssh_native_client_shell_eof(fixture.client) != 0 && errno == EACCES);
+        CHECK(ctos_ssh_native_client_shell_write(fixture.client, command, 1, &accepted) != 0
+            && accepted == 0 && errno == EACCES);
+        for (unsigned int turn = 0; turn < 10000U && fixture.shell_eof_count == 0; turn++)
+            CHECK(shell_turn(&fixture) == 0);
+        CHECK(fixture.shell_input_length == sizeof(command) - 1U
+            && memcmp(fixture.shell_input, command, sizeof(command) - 1U) == 0);
+        CHECK(fixture.shell_resize_count == 1 && fixture.shell_eof_count == 1);
+        peer_channel_data(&fixture, 0, (const unsigned char *)"channel\r\n", 9U);
+        peer_channel_data(&fixture, 1, (const unsigned char *)"stderr\n", 7U);
+        send_channel_exit(&fixture, kind == 2);
+        peer_channel_packet(&fixture, SSH2_MSG_CHANNEL_EOF);
+        CHECK(sshpkt_send(fixture.server) == 0);
+        peer_channel_packet(&fixture, SSH2_MSG_CHANNEL_CLOSE);
+        CHECK(sshpkt_send(fixture.server) == 0);
+        drive_shell_phase(&fixture, CTOS_SSH_SHELL_CLOSED);
+        struct ctos_ssh_native_shell_status status = shell_status(&fixture);
+        CHECK(status.buffered_bytes == 16U && status.remote_eof && status.local_eof);
+        CHECK(status.exit_status_known == (kind == 1) && status.exit_signal == (kind == 2));
+        CHECK(status.exit_status == (kind == 1 ? UINT32_MAX : 0));
+        CHECK(ctos_ssh_native_client_shell_read(fixture.client, output, 4U, &length) == 0 && length == 4U);
+        CHECK(memcmp(output, "chan", 4U) == 0);
+        CHECK(ctos_ssh_native_client_shell_read(fixture.client, output, sizeof(output), &length) == 0 && length == 12U);
+        CHECK(memcmp(output, "nel\r\nstderr\n", 12U) == 0);
+        CHECK(ctos_ssh_native_client_shell_read(fixture.client, output, sizeof(output), &length) == 0 && length == 0);
+        CHECK(fixture.shell_credit == 0);
+        for (unsigned int turn = 0; turn < 1000U && fixture.shell_close_count == 0; turn++)
+            CHECK(pump_synthetic_server(&fixture, 64U, NULL, NULL) == 0);
+        CHECK(fixture.shell_close_count == 1 && fixture.callback.selected_calls == 1);
+        fixture.callback.release_failures_remaining = 1;
+        CHECK(ctos_ssh_native_client_close(fixture.client) != 0 && errno == EIO);
+        CHECK(fcntl(fixture.pair[0], F_GETFD) >= 0);
+        cleanup_fixture(&fixture, 2);
+    }
+}
+
+static void test_shell_rejection_and_auth_gate(void) {
+    for (int reject = 1; reject <= 3; reject++) {
+        struct fixture fixture;
+        setup_shell_fixture(&fixture, 1, 16U, 8U, reject);
+        drive_shell_phase(&fixture, CTOS_SSH_SHELL_REJECTED);
+        CHECK(ctos_ssh_native_client_step(fixture.client,
+            &(struct ctos_ssh_native_client_step){0}) != 0 && errno == EALREADY);
+        for (unsigned int turn = 0; turn < 1000U && reject != 1 && fixture.shell_close_count == 0; turn++)
+            CHECK(pump_synthetic_server(&fixture, 64U, NULL, NULL) == 0);
+        CHECK(fixture.shell_close_count == (reject == 1 ? 0U : 1U));
+        CHECK(fixture.shell_stage == reject);
+        cleanup_fixture(&fixture, 1);
+    }
+    for (int reply = PASSWORD_REPLY_REJECTED; reply <= PASSWORD_REPLY_CHANGE; reply++) {
+        struct fixture fixture;
+        setup_password_fixture(&fixture, 0, 15000U);
+        fixture.password_reply = (enum password_reply)reply;
+        CHECK(ctos_ssh_native_client_begin_password_auth(fixture.client) == 0);
+        drive_password(&fixture, (enum ctos_ssh_native_client_password_auth_result)(reply + 2), 0);
+        CHECK(ctos_ssh_native_client_begin_shell(fixture.client, 80, 24) != 0 && errno == EACCES);
+        CHECK(shell_status(&fixture).phase == CTOS_SSH_SHELL_DISABLED);
+        cleanup_fixture(&fixture, 1);
+    }
+}
+
+static void test_shell_window_and_backpressure(void) {
+    struct fixture fixture;
+    unsigned char bytes[32768], output[32768];
+    size_t accepted, length;
+    memset(bytes, 'w', sizeof(bytes));
+    setup_shell_fixture(&fixture, 1, 0, 32768U, 0);
+    drive_shell_phase(&fixture, CTOS_SSH_SHELL_RUNNING);
+    CHECK(ctos_ssh_native_client_shell_write(fixture.client, bytes, sizeof(bytes), &accepted) == 0 && accepted == 0);
+    send_window(&fixture, UINT32_MAX);
+    for (unsigned int turn = 0; turn < 1000U; turn++) CHECK(shell_turn(&fixture) == 0);
+    unsigned int queued = 0;
+    do {
+        CHECK(ctos_ssh_native_client_shell_write(fixture.client, bytes, sizeof(bytes), &accepted) == 0);
+        if (accepted != 0) queued++;
+    } while (accepted != 0 && queued < 20U);
+    CHECK(queued >= 2U && queued < 5U && accepted == 0);
+    /* Do not drain the synthetic peer's stdin buffer beyond its test bound. */
+    cleanup_fixture(&fixture, 1);
+    setup_shell_fixture(&fixture, 1, 16, 8, 0);
+    drive_shell_phase(&fixture, CTOS_SSH_SHELL_RUNNING);
+    peer_channel_data(&fixture, 0, bytes, sizeof(bytes));
+    peer_channel_data(&fixture, 1, bytes, sizeof(bytes));
+    for (unsigned int turn = 0; turn < 40000U && shell_status(&fixture).buffered_bytes != 65536U; turn++)
+        CHECK(shell_turn(&fixture) == 0);
+    CHECK(shell_status(&fixture).buffered_bytes == 65536U && fixture.shell_credit == 0);
+    CHECK(ctos_ssh_native_client_shell_read(fixture.client, output, sizeof(output), &length) == 0 && length == sizeof(output));
+    CHECK(memcmp(output, bytes, length) == 0);
+    for (unsigned int turn = 0; turn < 1000U && fixture.shell_credit == 0; turn++) CHECK(shell_turn(&fixture) == 0);
+    CHECK(fixture.shell_credit == 32768U);
+    peer_channel_data(&fixture, 0, bytes, sizeof(bytes));
+    for (unsigned int turn = 0; turn < 40000U && shell_status(&fixture).buffered_bytes != 65536U; turn++)
+        CHECK(shell_turn(&fixture) == 0);
+    CHECK(shell_status(&fixture).buffered_bytes == 65536U);
+    peer_channel_data(&fixture, 0, bytes, 1U);
+    int failed = 0;
+    for (unsigned int turn = 0; turn < 1000U; turn++) {
+        if (shell_turn(&fixture) != 0) { CHECK(errno == EPROTO); failed = 1; break; }
+    }
+    CHECK(failed);
+    memset(output, 0xaa, sizeof(output));
+    length = 99U;
+    CHECK(ctos_ssh_native_client_shell_read(fixture.client, output, sizeof(output), &length) != 0 && length == 0);
+    for (size_t index = 0; index < sizeof(output); index++) CHECK(output[index] == 0);
+    cleanup_fixture(&fixture, 1);
+}
+
+static void test_shell_bad_packets(void) {
+    for (int mode = 0; mode < 12; mode++) {
+        struct fixture fixture;
+        setup_shell_fixture(&fixture, 1, mode == 2 ? UINT32_MAX : 16U, 8U, 0);
+        drive_shell_phase(&fixture, CTOS_SSH_SHELL_RUNNING);
+        if (mode == 0) {
+            CHECK(sshpkt_start(fixture.server, SSH2_MSG_CHANNEL_EOF) == 0);
+            CHECK(sshpkt_put_u32(fixture.server, 1) == 0);
+        } else if (mode == 1 || mode == 2) {
+            peer_channel_packet(&fixture, SSH2_MSG_CHANNEL_WINDOW_ADJUST);
+            CHECK(sshpkt_put_u32(fixture.server, mode == 1 ? 0 : 1) == 0);
+        } else if (mode == 3) {
+            peer_channel_packet(&fixture, SSH2_MSG_CHANNEL_EXTENDED_DATA);
+            CHECK(sshpkt_put_u32(fixture.server, 2) == 0);
+            CHECK(sshpkt_put_cstring(fixture.server, "x") == 0);
+        } else if (mode == 4 || mode == 5) {
+            peer_channel_packet(&fixture, SSH2_MSG_CHANNEL_EOF);
+            CHECK(sshpkt_send(fixture.server) == 0);
+            if (mode == 4) peer_channel_packet(&fixture, SSH2_MSG_CHANNEL_EOF);
+            else {
+                peer_channel_packet(&fixture, SSH2_MSG_CHANNEL_DATA);
+                CHECK(sshpkt_put_cstring(fixture.server, "late") == 0);
+            }
+        } else if (mode == 6 || mode == 7) {
+            send_channel_exit(&fixture, 0);
+            if (mode == 6) send_channel_exit(&fixture, 0);
+            else send_channel_exit(&fixture, 1);
+        } else if (mode == 8) {
+            peer_channel_packet(&fixture, SSH2_MSG_CHANNEL_SUCCESS);
+        } else if (mode == 9) {
+            peer_channel_packet(&fixture, SSH2_MSG_CHANNEL_EOF);
+            CHECK(sshpkt_put_u8(fixture.server, 0) == 0);
+        } else if (mode == 10) {
+            peer_channel_packet(&fixture, SSH2_MSG_CHANNEL_REQUEST);
+            CHECK(sshpkt_put_cstring(fixture.server, "exit-status") == 0);
+            CHECK(sshpkt_put_u8(fixture.server, 1) == 0);
+            CHECK(sshpkt_put_u32(fixture.server, 0) == 0);
+        } else {
+            unsigned char oversized[32769] = {0};
+            peer_channel_packet(&fixture, SSH2_MSG_CHANNEL_DATA);
+            CHECK(sshpkt_put_string(fixture.server, oversized, sizeof(oversized)) == 0);
+        }
+        if (mode != 6 && mode != 7) CHECK(sshpkt_send(fixture.server) == 0);
+        int failed = 0;
+        for (unsigned int turn = 0; turn < 20000U; turn++) {
+            int result = shell_turn(&fixture);
+            if (result != 0) { CHECK(errno == EPROTO); failed = 1; break; }
+        }
+        CHECK(failed);
+        cleanup_fixture(&fixture, 1);
+    }
+}
+
+static void test_shell_after_auth_expiry(void) {
+    struct fixture fixture;
+    struct ctos_ssh_role_snapshot snapshot;
+    unsigned char receipt[32], output[32];
+    size_t length = 0, accepted = 0;
+    setup_password_fixture(&fixture, 0, 3000U);
+    CHECK(ctos_ssh_native_client_begin_password_auth(fixture.client) == 0);
+    drive_password(&fixture, CTOS_SSH_PASSWORD_AUTH_SUCCESS, 0);
+    fixture.shell_expected = 1;
+    fixture.shell_window = 16U;
+    fixture.shell_maxpacket = 8U;
+    CHECK(ctos_ssh_native_client_begin_shell(fixture.client, 80, 24) == 0);
+    drive_shell_phase(&fixture, CTOS_SSH_SHELL_RUNNING);
+    /* Expiring both clocks cannot renew authentication, credential or file authority. */
+    fixture.view->deadline = fixture.deadline;
+    wait_until_deadline_attempts(fixture.deadline, 5000U);
+    CHECK(ctos_ssh_role_bootstrap_snapshot(fixture.role, &snapshot) != 0 && errno == ETIMEDOUT);
+    CHECK(ctos_ssh_view_borrow_live(fixture.view_borrow) != 0);
+    CHECK(ctos_ssh_native_client_authentication_selection_receipt(fixture.client, receipt) != 0
+        && errno == ETIMEDOUT);
+    CHECK(ctos_ssh_native_client_selected_credential_bytes(fixture.client,
+        output, sizeof(output), &length) != 0 && length == 0);
+    CHECK(ctos_ssh_native_client_shell_write(fixture.client,
+        (const unsigned char *)"x", 1U, &accepted) == 0 && accepted == 1U);
+    CHECK(ctos_ssh_native_client_shell_resize(fixture.client, 132, 43) == 1);
+    peer_channel_data(&fixture, 0, (const unsigned char *)"alive", 5U);
+    for (unsigned int turn = 0; turn < 1000U && shell_status(&fixture).buffered_bytes != 5U; turn++)
+        CHECK(shell_turn(&fixture) == 0);
+    CHECK(ctos_ssh_native_client_shell_read(fixture.client, output, sizeof(output), &length) == 0
+        && length == 5U && memcmp(output, "alive", 5U) == 0);
+    CHECK(ctos_ssh_native_client_shell_eof(fixture.client) == 1);
+    /* Explicit revocation remains terminal even after natural expiry. */
+    CHECK(ctos_ssh_callback_cancel(fixture.callback_token) == 0);
+    CHECK(ctos_ssh_native_client_shell_read(fixture.client, output, sizeof(output), &length) != 0
+        && length == 0);
+    cleanup_fixture(&fixture, 1U);
+}
+
+static void test_shell_liveness_and_eof(void) {
+    for (int mode = 0; mode < 5; mode++) {
+        struct fixture fixture;
+        unsigned char output[32];
+        size_t length = 99;
+        setup_shell_fixture(&fixture, 1, 16U, 8U, 0);
+        drive_shell_phase(&fixture, CTOS_SSH_SHELL_RUNNING);
+        peer_channel_data(&fixture, 0, (const unsigned char *)"kept", 4U);
+        for (unsigned int turn = 0; turn < 1000U && shell_status(&fixture).buffered_bytes != 4U; turn++)
+            CHECK(shell_turn(&fixture) == 0);
+        CHECK(shell_status(&fixture).buffered_bytes == 4U);
+        if (mode == 0) {
+            struct ctos_ssh_native_client_step step = {.cancelled = 1};
+            CHECK(ctos_ssh_native_client_step(fixture.client, &step) != 0 && errno == ECANCELED);
+        } else if (mode == 1) {
+            CHECK(ctos_ssh_callback_cancel(fixture.callback_token) == 0);
+        } else if (mode == 2) {
+            fixture.view->valid = 0;
+        } else if (mode == 3) {
+            peer_channel_packet(&fixture, SSH2_MSG_CHANNEL_EOF);
+            CHECK(sshpkt_send(fixture.server) == 0);
+            for (unsigned int turn = 0; turn < 1000U && !shell_status(&fixture).remote_eof; turn++)
+                CHECK(shell_turn(&fixture) == 0);
+            size_t accepted;
+            CHECK(ctos_ssh_native_client_shell_write(fixture.client, (const unsigned char *)"x", 1U, &accepted) == 0 && accepted == 1U);
+            CHECK(shell_status(&fixture).exit_status_known == 0);
+            CHECK(shutdown(fixture.pair[1], SHUT_WR) == 0);
+            int failed = 0;
+            for (unsigned int turn = 0; turn < 1000U; turn++) {
+                struct ctos_ssh_native_client_step step = {0};
+                if (ctos_ssh_native_client_step(fixture.client, &step) != 0) {
+                    CHECK(errno == EPIPE); failed = 1; break;
+                }
+            }
+            CHECK(failed);
+        } else {
+            /* Queue valid data/status/EOF/CLOSE into transport, then half-close
+             * before the client can consume its one-packet-per-turn backlog. */
+            peer_channel_data(&fixture, 0, (const unsigned char *)"tail", 4U);
+            send_channel_exit(&fixture, 0);
+            peer_channel_packet(&fixture, SSH2_MSG_CHANNEL_EOF);
+            CHECK(sshpkt_send(fixture.server) == 0);
+            peer_channel_packet(&fixture, SSH2_MSG_CHANNEL_CLOSE);
+            CHECK(sshpkt_send(fixture.server) == 0);
+            size_t pending;
+            for (unsigned int turn = 0; turn < 1000U; turn++) {
+                CHECK(pump_synthetic_server(&fixture, 64U, NULL, NULL) == 0);
+                (void)ssh_output_ptr(fixture.server, &pending);
+                if (pending == 0) break;
+            }
+            CHECK(pending == 0 && shutdown(fixture.pair[1], SHUT_WR) == 0);
+            for (unsigned int turn = 0; turn < 1000U && shell_status(&fixture).phase != CTOS_SSH_SHELL_CLOSED; turn++) {
+                struct ctos_ssh_native_client_step step = {0};
+                CHECK(ctos_ssh_native_client_step(fixture.client, &step) == 0);
+            }
+            CHECK(shell_status(&fixture).phase == CTOS_SSH_SHELL_CLOSED);
+            CHECK(ctos_ssh_native_client_shell_read(fixture.client, output, sizeof(output), &length) == 0 && length == 8U);
+            CHECK(memcmp(output, "kepttail", 8U) == 0);
+            cleanup_fixture(&fixture, 1);
+            continue;
+        }
+        memset(output, 0xaa, sizeof(output));
+        CHECK(ctos_ssh_native_client_shell_read(fixture.client, output, sizeof(output), &length) != 0 && length == 0);
+        for (size_t index = 0; index < sizeof(output); index++) CHECK(output[index] == 0);
+        cleanup_fixture(&fixture, 1);
+    }
+}
+
+static void test_pending_host_guard(void) {
+    struct sshkey *key = NULL, *other = NULL;
+    unsigned char fingerprint[32];
+    CHECK(sshkey_generate(KEY_ED25519, 0, &key) == 0);
+    CHECK(sshkey_generate(KEY_ED25519, 0, &other) == 0);
+    CHECK(expected_fingerprint(key, fingerprint) == 0);
+    for (unsigned int mode = 0; mode < 9U; mode++) {
+        struct ssh *ssh = NULL;
+        struct kex_params params;
+        ctos_ssh_role_token role = 0;
+        struct ctos_ssh_role_request request = role_request(deadline_after(mode == 6 ? 100U : 5000U));
+        struct ctos_ssh_role_snapshot snapshot;
+        CHECK(ctos_ssh_role_bootstrap_open(&request, &role) == 0);
+        CHECK(ctos_ssh_role_bootstrap_snapshot(role, &snapshot) == 0);
+        make_kex_params(&params);
+        CHECK(ssh_init(&ssh, 0, &params) == 0);
+        if (mode == 5) CHECK(ctos_ssh_kex_bind_role(ssh, role, fingerprint) == 0);
+        else CHECK(ctos_ssh_kex_bind_pending_host(ssh, role) == 0);
+        CHECK(ctos_ssh_kex_bind_pending_host(ssh, role) != 0);
+        CHECK(ctos_ssh_kex_bind_role(ssh, role, fingerprint) != 0);
+        CHECK(ctos_ssh_kex_ready(ssh, snapshot.hop, snapshot.role_nonce,
+            snapshot.connection_binding) == 0);
+        CHECK(ctos_ssh_kex_pin_offered_host(ssh, key) != 0);
+        CHECK(ctos_ssh_kex_begin(ssh) == 0);
+        if (mode == 1) CHECK(ctos_ssh_kex_approved(ssh, key) != 0);
+        else if (mode == 2) CHECK(ctos_ssh_kex_signed(ssh, key) != 0);
+        else if (mode == 3) CHECK(ctos_ssh_kex_complete(ssh) != 0);
+        else if (mode == 4) {
+            CHECK(ctos_ssh_kex_pin_offered_host(ssh, key) == 0);
+            CHECK(ctos_ssh_kex_pin_offered_host(ssh, other) != 0);
+            CHECK(ctos_ssh_kex_approved(ssh, key) == 0);
+            CHECK(ctos_ssh_kex_signed(ssh, other) != 0);
+        } else if (mode == 5) {
+            CHECK(ctos_ssh_kex_pin_offered_host(ssh, other) != 0);
+            CHECK(ctos_ssh_kex_approved(ssh, key) == 0);
+        } else if (mode == 6) {
+            wait_until_deadline(snapshot.deadline);
+            CHECK(ctos_ssh_kex_pin_offered_host(ssh, key) != 0);
+        } else if (mode == 7) {
+            CHECK(ctos_ssh_kex_approved(ssh, key) != 0);
+            CHECK(ctos_ssh_kex_begin(ssh) == 0);
+            CHECK(ctos_ssh_kex_pin_offered_host(ssh, key) != 0);
+        } else {
+            CHECK(ctos_ssh_kex_pin_offered_host(ssh, NULL) != 0);
+            CHECK(ctos_ssh_kex_pin_offered_host(ssh, key) == 0);
+            CHECK(ctos_ssh_kex_approved(ssh, key) == 0);
+            CHECK(ctos_ssh_kex_signed(ssh, key) == 0);
+            CHECK(ctos_ssh_kex_pin_offered_host(ssh, key) != 0);
+        }
+        CHECK(ctos_ssh_kex_ready(ssh, snapshot.hop, snapshot.role_nonce,
+            snapshot.connection_binding) == 0);
+        ctos_ssh_kex_unbind(ssh);
+        ssh_free(ssh);
+        if (mode == 6) CHECK(ctos_ssh_role_bootstrap_close(role) != 0 && errno == ENOENT);
+        else CHECK(ctos_ssh_role_bootstrap_close(role) == 0);
+    }
+    sshkey_free(other);
+    sshkey_free(key);
+}
+
+static void test_managed_host_denials(void) {
+    for (unsigned int mode = 0; mode < 13U; mode++) {
+        struct fixture fixture = {0};
+        struct sshkey *different = NULL;
+        const struct sshkey *known = NULL;
+        const char *prefix = NULL;
+        fixture.pair[0] = fixture.pair[1] = -1;
+        fixture.callback.release_fd = -1;
+        if (mode == 12) {
+            fixture.private_key = make_host_certificate(&fixture.certificate_authority);
+        } else CHECK(sshkey_generate(KEY_ED25519, 0, &fixture.private_key) == 0);
+        CHECK(sshkey_from_private(fixture.private_key, &fixture.public_key) == 0);
+        fixture.host_key = fixture.public_key;
+        if (mode == 0) {
+            CHECK(sshkey_generate(KEY_ED25519, 0, &different) == 0);
+            known = different;
+        }
+        if (mode == 1) prefix = "@revoked ";
+        finish_fixture_setup_selected_mode(&fixture,
+            mode == 8 ? TEST_EXPIRY_PREPARATION_MS : 15000U,
+            known, prefix, mode >= 3 && mode < 12, 0, 1U, 0, CTOS_SSH_HOST_KEY_MANAGED);
+        fixture.callback.selected_callback = fixture.callback_token;
+        fixture.callback.selected_view = fixture.view;
+        fixture.callback.selected_role = fixture.role;
+        fixture.callback.selected_deadline = fixture.deadline;
+        if (mode == 2) {
+            struct ctos_ssh_file *file = &fixture.view->files[1];
+            CHECK(file->type == CTOS_SSH_KNOWN_HOSTS && file->body.length > 0);
+            memset((void *)file->body.data, '!', file->body.length);
+        }
+        if (mode == 3) fixture.callback.fail_host_evidence = 1;
+        if (mode >= 4 && mode <= 11) fixture.callback.host_action = (int)mode - 3;
+        unsigned char output[32];
+        size_t length = 99;
+        memset(output, 0xaa, sizeof(output));
+        CHECK(ctos_ssh_native_client_selected_credential_bytes(fixture.client,
+            output, sizeof(output), &length) != 0 && length == 0);
+        for (size_t index = 0; index < sizeof(output); index++) CHECK(output[index] == 0);
+        setup_synthetic_server(&fixture);
+        int failed = 0;
+        for (unsigned int turn = 0; turn < 100000U; turn++) {
+            if (ctos_ssh_native_client_step(fixture.client,
+                    &(struct ctos_ssh_native_client_step){0}) != 0) {
+                failed = 1;
+                break;
+            }
+            CHECK(!ctos_ssh_native_client_complete(fixture.client));
+            CHECK(pump_synthetic_server(&fixture, 64U, NULL, NULL) == 0);
+        }
+        CHECK(failed && !ctos_ssh_native_client_complete(fixture.client));
+        CHECK(fixture.callback.kex_complete_calls == 0 && fixture.callback.selected_calls == 0);
+        CHECK(fixture.callback.host_evidence_calls == (mode >= 3 && mode < 12 ? 1U : 0U));
+        CHECK(ctos_ssh_native_client_step(fixture.client,
+            &(struct ctos_ssh_native_client_step){0}) != 0 && errno == EALREADY);
+        CHECK(ctos_ssh_native_client_begin_password_auth(fixture.client) != 0);
+        CHECK(fixture.callback.selected_calls == 0);
+        fixture.callback.environment = &fixture.callback;
+        if (mode == 8 || mode == 10) fixture.role = 0;
+        cleanup_fixture(&fixture, 1);
+        sshkey_free(different);
+    }
+}
+
+int main(int argc, char **argv) {
+    if (argc == 2 && strcmp(argv[1], "--managed-host-only") == 0) {
+        test_pending_host_guard();
+        test_managed_host_denials();
+        test_shell_roundtrip();
+        printf("SSH_NATIVE_MANAGED_HOST checks=%u gate=pass runtime=synthetic\n", checks);
+        return 0;
+    }
+    if (argc == 2 && strcmp(argv[1], "--shell-only") == 0) {
+        test_shell_roundtrip();
+        test_shell_rejection_and_auth_gate();
+        test_shell_window_and_backpressure();
+        test_shell_bad_packets();
+        test_shell_liveness_and_eof();
+        test_shell_after_auth_expiry();
+        printf("SSH_NATIVE_SHELL checks=%u gate=pass runtime=synthetic\n", checks);
+        return 0;
+    }
+    CHECK(argc == 1);
+    test_pending_host_guard();
+    test_managed_host_denials();
     test_admission_and_descriptor();
+    test_prepare_tcp_descriptor();
     test_failed_open_releases_kex_role();
     test_malformed_view_slice();
     test_step_and_close();
@@ -3745,6 +4485,12 @@ int main(void) {
     test_password_auth_active_liveness();
     test_private_auth();
     test_encrypted_private_auth();
+    test_shell_roundtrip();
+    test_shell_rejection_and_auth_gate();
+    test_shell_window_and_backpressure();
+    test_shell_bad_packets();
+    test_shell_liveness_and_eof();
+    test_shell_after_auth_expiry();
     printf("SSH_NATIVE_CLIENT checks=%u admission=pass descriptor=pass view=pass close=pass open_failure_ownership=pass runtime=synthetic\n",
         checks);
     return 0;

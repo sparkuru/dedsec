@@ -1,5 +1,299 @@
 # App secrets host contract
 
+2026-10-25 当前用户决定：[一个正式SSH模型与writer](ssh-manifest.md)。所有构造/create/
+重新编码使用最新metadata模型，无instance格式选择。旧empty/纯TOTP输入只读适配同一
+模型，保留raw认证来源；rekey/import单独编码并wipe，export/quick wrapper可保留原cipher。
+恢复逐侧auth后/validator前检查实际关系/账号metadata审阅缺口，bind亦防御，纯TOTP/
+empty不按tag拒绝。原source-first/provider/guard/所有权不变；覆盖下方历史格式政策。
+
+2026-10-24：[证书事实规范](ssh-certificate-facts.md)新增全CERT/CSCF168公开事实和嵌入签名政策；CA/time/principal/revocation仍未验证，不改变生产证书拒绝/完整provider/恢复门。
+
+2026-10-23：[全部private与凭据归属](ssh-private-material.md)新增CSKP实际self-proof及v1元数据唯一owner扫描；不改变v1/生产provider/恢复，完整graph/password account/trust仍待完成。
+
+2026-10-23：新增[显式key pair规范](ssh-key-association.md)，精确supplied IDs/口令与plain subject的固定本地签名证明；旧CSMI/auth不变，不作为完整validator/信任/恢复准入。
+
+## TOTP mutation and preview origin (2026-10-23)
+
+### 1. Scope / Trigger
+
+Follow [TOTP mutation lifecycle](../../../design/totp-mutation-lifecycle.md) for all TOTP
+write operations and host preview handoff. Focused196/full483 JVM tests pass; see [dated evidence](../../../design/verification.md#20261023-totp-mutation).
+The scope includes Bridge request timing and opaque pending publication, not parser/UI changes.
+
+### 2. Signatures
+
+`TotpMutationOrigin` captures prequeue owner/epoch/deadline/original guard/validator registration.
+Each admission uses its own child context and opaque `VaultOperation` state. Original capture
+and up to16 candidates share the first authenticated source binding/revision/mixed fact.
+`checkTotpMutationOrigin(origin)` validates authority before manager replacement.
+`bindTotpPreview(origin,ticket,candidates)` binds exact issued operations;
+`publishTotpPending(origin,ticket,transport)` publishes that opaque group, not snapshot scalars.
+
+### 3. Contracts
+
+Source/candidate/validator loans own separate arrays; slow work runs outside core/session and
+preview-manager locks. Pure TOTP has no SSH validator dependency; mixed checks the original
+registration through source, candidate, pending publication and effect. Add-only absence is
+checked against the same authenticated effect source; rename preserves identity and seed.
+The original Request guard applies until successful preview handoff. Retained ticket authority
+survives that Request finishing, preserves its budget, and can be cancelled independently.
+The new commit Request supplies the only durable effect.beforeCommit claim. No extra phase.
+
+### 4. Validation & Error Matrix
+
+Wrong binding/replay is rejected; valid BUSY does not consume the original operation.
+Cancel/expiry/stale raw snapshot or mixed registration rejects before effect/publication.
+Failed preview transport revokes its exact retained ticket; late workers cannot replace or
+cancel newer tickets. Before replacement, reject foreign owner and stale epoch/pinned revision;
+manager comparisons use safely published pin metadata and never acquire session.
+Uncertain disk commit locks; no safe-retry promise or rollback claim.
+
+### 5. Good / Base / Bad Cases
+
+Good: publish metadata, finish original Request, then confirm a selected candidate with a new
+Request before the original deadline. Base: rename pure TOTP without a registered SSH validator.
+Bad: fresh120second candidate budget after image return, or binding effect to old Request.active.
+
+### 6. Tests Required
+
+Paused pure/mixed source and candidate stages with cancellation/lock/expiry/registration/store
+changes; owned arrays/Throwable cleanup; add-only and namespace checks; exact handoff and
+transport failure; pending no-storage publication; capture cleanup versus group cancellation;
+unique claim, wrappers and uncertain handling. Host tests do not prove Android Activity runtime.
+
+### 7. Wrong vs Correct
+
+Wrong: call core validation while holding TotpPreviews, or take publication after a guard already
+holds session. Correct: reserve/detach briefly, keep worker-owned seeds, and publish with original
+phase→publication→session ordering; synchronous metadata invalidation precedes queued cleanup.
+
+
+## Trust CAS lifecycle (2026-10-22)
+
+### 1. Scope / Trigger
+
+Follow the [trust CAS contract](../../../design/ssh-trust-cas-lifecycle.md) for exact NEW
+known_hosts updates. Focused202/full469 JVM pass; see the
+[dated evidence](../../../design/verification.md#20261022-ssh-trust-cas). No production semantic provider or
+restore gate is enabled by this lifecycle migration.
+
+### 2. Signatures
+
+`SshTrustContext` pins owner, proposal identity, epoch, deadline and validator registration.
+`beginTrustUpdate(proposal, context, authorization)` issues the once-use trust operation;
+`updateTrust(operation, proposal, effectGuard)` retains the original authority.
+
+### 3. Contracts
+
+The production context precedes external proposal review and inherits the minimum original
+role/snapshot deadline. Provider monitors cover reservation/detachment only, not validators.
+Source, candidate and callback loans own independent arrays. Authentication, validation and
+crypto run outside core; final raw equality/wrapper reads precede the Store transaction.
+Store guards remain bounded metadata checks; original effect.beforeCommit is the sole claim.
+Only the exact attached public view may survive own-CAS; never restore a revoked loan/key.
+Validation authorization linearizes at the final core continuation fence. Later receipt checks
+delivery liveness; later registration changes alone do not retroactively undo that commit.
+
+### 4. Validation & Error Matrix
+
+Wrong binding/replay is rejected; accepted effect consumes once, valid BUSY does not consume.
+Cancellation before admission issuance must invalidate the pre-review context. After confirmed
+persistence, failed continuation or receipt delivery locks/revokes and reports
+VAULT_COMMIT_UNCERTAIN. This never promises a safe retry or rollback.
+
+### 5. Good / Base / Bad Cases
+
+Good: the approved base is replaced while preserving unrelated entries and the exact view.
+Base: legacy source-only admission still compares the actual base during effect.
+Bad: renewing the budget after review, shallow candidates, or resetting the own-CAS session.
+
+### 6. Tests Required
+
+Paused validators with close/lock/expiry/registration invalidation, proposal identity, loan
+mutation/Throwable cleanup, once consumption/BUSY, exact view continuation, bounded commit
+guards, wrapper preservation, and persisted-but-undeliverable receipts. Actual AtomicFile
+runtime behavior is not established by MemoryStore tests.
+
+### 7. Wrong vs Correct
+
+Wrong: an external guard after the final metadata check but before epoch continuation.
+Correct: run external checks first, then check authoritative metadata and advance under the
+same session fence, accepting only this commit's own revision change. Postcommit failure is
+uncertain; precommit failure retains its original error. Existing Store Error/RuntimeException
+rollback limitations remain outside this increment.
+
+
+## Ordinary SSH entry mutation lifecycle (2026-10-22)
+
+### 1. Scope / Trigger
+
+SSH_SAVE/SSH_DELETE follow the [entry mutation contract](../../../design/ssh-entry-mutation-lifecycle.md).
+Focused152/full455 JVM and local build gates pass; see
+[dated evidence](../../../design/verification.md#20261022-ssh-entry-mutation).
+TOTP mutation still uses its existing helpers; trust CAS follows the newer section above;
+own-NEW-CAS continuation must not be replaced with ordinary mutation's session reset.
+
+### 2. Signatures
+
+`newSshEntryMutationContext(deadline, guard)` creates original metadata authority;
+`beginSshSave(id,target,connection,context,authorization)` and
+`beginSshDelete(id,target,context)` retain it in opaque `VaultOperation.sshEntryMutationState()`.
+`SshVaultAdapter.mutationContext(deadline,guard)` and explicit save/delete request overloads
+let future callers preserve pre-queue budgets; default save context precedes host approval.
+
+### 3. Contracts
+
+Original owner/epoch/deadline/registration/context guard and admission host authorization remain
+bound. Save capability approves id/target/connection, not a future secret/label/type supplied
+only at effect. Source and complete candidate use independent canonical validator loans;
+candidate owns all arrays, including retained TOTP/file objects. Pure-TOTP source skips SSH
+source validation, but first/last-SSH candidates always require the registered validator.
+Capture is short; authenticate/validate/candidate/encrypt/readback are outside core. Final core
+serializes quick-wrapper capture, raw equality and the existing Store transaction. Store guards
+never reopen storage. Context is continuous check/publication only; effect.beforeCommit is the
+sole durable claim, exactly once. Preserve old id/generation/salt, wrapper and success/uncertain
+session behavior. No late postcommit snapshot check against the revision just advanced by self.
+
+### 4. Validation & Error Matrix
+
+- Wrong owner/purpose/id/target/connection or valid effect BUSY: no consumption.
+- Accepted effect: consume/remove once; failures cannot replay.
+- Cancel/expiry/registration/revision/raw-store changes: reject before durable claim.
+- Cross-type or wrong-target overwrite/delete: reject; original state retained.
+- Candidate/loan modification or validation failure: wipe temporary owners, no commit.
+- `VAULT_COMMIT_UNCERTAIN`: preserve lock/operation/preview invalidation, no safe-retry claim.
+
+### 5. Good / Base / Bad Cases
+
+Good: replace a password while preserving unrelated TOTP/files and wrapper bytes.
+Base: remove the final SSH entry and validate the resulting pure-TOTP candidate.
+Bad: shallow candidate aliases, reusing a fake bundle operation, or validating only source.
+
+### 6. Tests Required
+
+Paused source/candidate invalidation, host-gate budget, independent loan/Throwable wipe,
+BUSY/reentry/replay, first/last SSH, cross-type/target refusal, final-read/claim seams,
+transaction reread prohibition, wrapper preservation and uncertain-state locking.
+JVM MemoryStore results do not establish Android AtomicFile runtime behavior.
+
+### 7. Wrong vs Correct
+
+Wrong: `guard.check()` instead of `beforeCommit()`, or `protectedEffect()` inside Store.commit.
+Correct: delegate the effect's original beforeCommit once, surround it with metadata checks,
+and perform raw equality/quickMaterial reads before entering the transaction. Existing
+VaultStore RuntimeException/Error failWrite limitations remain outside this scoped migration.
+
+## SSH typed secret read lifecycle (2026-10-22)
+
+### 1. Scope / Trigger
+
+Credential, private-key and encrypted-key-bundle reads follow the
+[secret-read contract](../../../design/ssh-secret-read-lifecycle.md). This scenario supersedes
+legacy synchronized secret-read descriptions below; mutations/trust CAS remain separate.
+Focused196/full444 JVM and local build gates pass; verification and platform limits are recorded
+in [the dated evidence](../../../design/verification.md#20261022-ssh-secret-read).
+
+### 2. Signatures
+
+`newSshSecretReadContext(deadline, guard)` creates metadata-only original authority;
+the typed `beginSshCredential`, `beginSshPrivateKey`, `beginSshPrivateKeyBundle` overloads
+accept it. `VaultOperation.sshSecretReadState()` carries opaque owner/context/revision/type.
+`SshCredentialBridge.openSelection(role, host, selection, kex, effectGuard)` receives the
+production callback's original guard before admission. `SshRoleGuard.withRole(publication)`
+separates the final role/view fence from outer `EffectGuard.publish`.
+
+### 3. Contracts
+
+Capture real ciphertext/key/revision under short core/session fences; authenticate, decode,
+independently validate canonical loan and prepare secret bytes outside core. Original role
+deadline and view never renew. One accepted effect consumes/removes its exact operation;
+cleanup retains the single in-flight slot until all work buffers are wiped. Last raw store
+equality precedes publication; revision/registration/epoch/deadline are rechecked inside it.
+Final bounded copy order is original callback guard → request → publication → session →
+operation → role → actual view. No core reentry, native work or blocking receiver in this
+fence. Preserve `publish`, not just `check`. Public snapshot role fencing uses the same
+inner ordering but its public receiver remains outside locks. Cleanup stays outside fences.
+Public native attach holds operation only for `attachRevocation`, before inner role checks;
+never across lease liveness/session attachment, so cancellation can revoke immediately.
+All five operation registration sites share the publication-fenced capacity check/put;
+bundle registration takes publication before session to avoid inversion.
+
+### 4. Validation & Error Matrix
+
+- Cancelled context/operation/request → cancellation error, no new receiver.
+- Expired original budget or closed role/view → expiry/view rejection, no fresh budget.
+- Registration/revision/raw ciphertext changes → `VAULT_CHANGED`.
+- Wrong owner/purpose/resource/target/connection/type → operation denial without consumption.
+- Valid effect while another secret read owns the slot → `BUSY` without consumption.
+- Accepted failed effect or duplicate delivery → no replay; guard/loan/receiver errors wipe buffers.
+
+### 5. Good / Base / Bad Cases
+
+Good: selected encrypted key binds exact path/identity/passphrase entry/remote and original KEX.
+Base: legacy native-only typed entry uses one default budget and still requires release guard.
+Bad: using a public loan claim to release secrets later, or treating a completed clone as
+proof that a subsequent JNI/native observation remains authorized.
+
+### 6. Tests Required
+
+Paused admission/effect invalidation, loan mutation/Error cleanup, wrong bindings/BUSY/replay,
+last-store/publication gap, final receiver ordering against cancel/lock/role/view, exact
+selected proof changes, provider clone cleanup, and public/known_hosts own-CAS regressions.
+Host JVM fences do not establish Android JNI execution.
+
+### 7. Wrong vs Correct
+
+Wrong: wrap the original guard as `() -> parent.check()` or hold role before publication.
+Correct: preserve outer `parent.publish`, then enter role/view via `withRole` after
+publication/session/operation; perform only the trusted bounded copy there.
+
+2026-10-22: [SSH public reads](../../../design/ssh-public-read-lifecycle.md) use original
+metadata contexts and detached authenticated source/validator loans/closure. Synchronous public
+receivers run outside locks after one metadata claim; native leases use a separate prepare/create/
+final attach fence. Existing-role snapshots retain the exact role/view and original role deadline.
+Published leases keep existing exact operation/session revocation and own-NEW-CAS continuation;
+The typed secret scenario above supersedes legacy secret reads; mutations/trust and other
+sessionManifest consumers remain separate.
+
+2026-10-22: [TOTP typed reads](../../../design/totp-read-lifecycle.md) now use original
+metadata-only contexts, detached authenticated source/validator loans/generation and opaque
+once-reserved read receipts. Pure TOTP does not depend on SSH providers; mixed reads retain
+their immutable registration through actual disclosure. Read-specific phase→publication→session
+ordering preserves the existing guarded list/clipboard disclosure boundary. Management previews,
+mutations and SSH typed/trust paths remain separate; no production semantic hook is registered.
+
+2026-10-22: [Bundle lifecycle](../../../design/ssh-bundle-lifecycle.md) now detaches bundle
+admission/effect validation and crypto from core. One original cancellable BundleContext,
+immutable validator registration, independent candidate/loan arrays and once-only accepted
+effect capture bind the final store. In-transaction guards must never reopen AtomicFile.
+The scenario below defines the new API; other typed/sessionManifest/trust paths remain legacy.
+
+2026-10-21: [Preview validation lifecycle](../../../design/ssh-validation-lifecycle.md)
+moves only import-preview authentication, supplied-input validator loans, restore review and
+canonical binding outside the core monitor. Immutable validator registrations, original
+admission deadline, direct request invalidation and one-shot metadata delivery claims bind
+preview publication/commit. See the focused scenario below. Other typed/bundle/sessionManifest
+callbacks other than the subsequently migrated bundle still hold the core monitor. No production semantic validator/reviewer is registered;
+SSH restore remains closed. Earlier whole-callback lock descriptions remain true for those
+unconverted paths, not the new preview path.
+
+2026-10-19: [Offline material inspection](../../../design/ssh-manifest-inspection.md) examines
+the actual supplied manifest with owned temporary copies. It never enters current vault,
+creates a lease or implements SshContentValidator; CONFIG/reference/identity/trust semantics
+remain pending and Report.admissionComplete is always false. The legacy callback remains
+synchronous under the core monitor for unmigrated typed paths; preview and bundle fence their
+callbacks outside that monitor. Full integration still requires all caller migrations and
+complete semantic/restore proof. Missing phrase/ambiguous association or
+PARSED material is not whole-manifest admission. Production restore gate remains closed.
+
+2026-10-19: [SSH declaration catalog](../../../design/ssh-config-catalog.md) is lexical
+metadata from a current public lease. It is not SshContentValidator and cannot certify a
+different source/target/candidate manifest, private key, trust or reference binding.
+Production attachSshValidator is still absent; SSH import/restore admission remains closed.
+Unlock alone does not perform SSH semantic validation. An active public lease makes a
+second attachRevocation fail BUSY; it does not replace/revoke that active lease. Snapshot
+closure follows declared manifest references, not newly discovered parser Include paths.
+
 2026-10-19: exact role-bound NEW known_hosts CAS may advance epoch while retaining
 only its same already attached active public loan; lock, arbitrary mutation,
 re-unlock and original file-operation cancellation still revoke. No deadline or
@@ -71,8 +365,10 @@ contains immutable type/ID/path/identity/length/references for every selected
 object, including private-key metadata. `publicFiles` contains only CONFIG,
 PUBLIC_KEY, CERTIFICATE and KNOWN_HOSTS bodies. Both lists follow the same
 snapshot/epoch/deadline/connection/once-use checks as useFiles; all borrowed
-Java content is wiped on callback return or throw. The receiver copies into
-its request-owned native view and revokes it on cancellation/lock. Metadata and
+Java content is wiped on callback return or throw. The synchronous receiver may make
+managed owned public copies with their own lifecycle; production native leases instead use
+the separate exact prepare/create/final-attach path below. A generic receiver is not the
+lease-publication boundary. Metadata and
 the ciphertext binding are descriptions, never private-key release authority.
 Private-key bodies still require privateKeyRequest/usePrivateKey and the final
 actual-hop host guard. The bounded native callback seam may use only the
@@ -82,7 +378,8 @@ native buffers on failure. Do not expose this snapshot through MethodChannel or
 treat these JVM-only boundary checks as registration of the production SSH
 config/known-hosts provider.
 
-SSH file graph writes use `SshVaultAdapter.bundleRequest(SshBundleProposal)` and
+SSH file graph writes use `SshVaultAdapter.bundleRequest(SshBundleProposal)` (or the explicit
+original BundleContext overload described below) and
 `commitBundle(VaultOperation, SshBundleProposal, EffectGuard)`, with
 `Purpose.SSH_BUNDLE_WRITE`. Proposal `Change.add/replace/delete` records full
 old/new object bindings (type/ID/path/identity/references/content digest). The
@@ -200,7 +497,7 @@ confirmTrust, EffectGuard)` rechecks the same binding at storage boundaries.
 - Bundle approval is a separate default-deny `ExactBundleApproval` for the exact
   whole proposal at admission/effect/final storage guard; host-key success never
   replaces bundle/trust approval. Entire resulting manifest validates and
-  commits via `commitManifest`, preserving unrelated entries/files and optional
+  commits via the detached bundle preparation and guarded store path, preserving unrelated entries/files and optional
   key wrapper. Reject shared dangling references/associated key-passphrase
   removal; never silently cascade. Replace/delete require expected whole-object
   CAS, a different proposal or stale snapshot cannot reuse the capability.
@@ -233,8 +530,8 @@ confirmTrust, EffectGuard)` rechecks the same binding at storage boundaries.
   trust semantics remain required before enabling mixed import.
   Do not implement a reduced OpenSSH parser or separate KDF/persistence.
 - `SensitiveClipboard.copyCode(code)` is an internal effect helper invoked only
-  by explicit `secrets.totpCopy`: worker generation/current snapshot then
-  `AppSecrets.publishTotp` checks request/epoch/revision/deadline and the current
+  by explicit `secrets.totpCopy`: detached worker generation/current snapshot then
+  `AppSecrets.publishTotpRead` checks its opaque read receipt/request/epoch/revision/deadline and the current
   wall-clock window at the actual clipboard effect. Never call it with Flutter
   supplied codes or without the native publication guard. It writes the
   sensitive hint. User owns cleanup. No read/listener/clear call,
@@ -692,3 +989,422 @@ Wrong: successful restore must have `Arrays.equals(backup, localCiphertext)`.
 Correct: require equal complete authenticated manifests and the fresh local
 envelope contract; keep byte equality for failed/cancelled operations and for
 the unchanged external backup.
+
+## Scenario: outside-core import-preview validation
+
+### 1. Scope / Trigger
+
+Use when changing AppSecrets.preview, SSH validator/reviewer registration, Bridge import
+preview/cancellation/delivery, or VaultRequestPhase publication. This is lifecycle protection,
+not a production semantic validator. The detailed [contract](../../../design/ssh-validation-lifecycle.md)
+defines pending configuration/reference/identity/credential/trust and final-plan obligations.
+
+### 2. Signatures
+
+```java
+AppSecrets.preview(byte[] source, char[] sourcePassword, char[] targetPassword,
+    String requestId, long deadline, EffectGuard guard);
+AppSecrets.invalidatePreviewRequest(String requestId);
+AppSecrets.deliverPreview(ImportPreview pending, EffectGuard owner, EffectGuard delivery);
+EffectGuard.publish(EffectGuard publication);
+VaultRequestPhase.publish(AppSecrets.EffectGuard publication);
+```
+
+Legacy preview overload captures one admission deadline at entry. Functional validator and
+reviewer signatures remain compatible with existing synthetic fixtures. Every validator
+attach/detach, including same-instance reattachment, creates a different immutable registration.
+
+### 3. Contracts
+
+- One in-flight PreviewWork per core; reject concurrent/reentrant work with BUSY. Keep that
+  slot until all owned source/target/loan/review cleanup finishes, including Error paths.
+- Capture target ciphertext, epoch, validator and reviewer registrations before expensive
+  work. Validate actual authenticated source/target through independent decoded loans;
+  reject changed loan encodings and wipe on return/throw. Never pass retained Verified.manifest.
+- The preview worker's KDF, parser, review/canonical binding and callback-loan/temporary-input
+  cleanup run outside core/request/session locks. Existing registration/cancelPreview retirement
+  can still wipe under core, after releasing session; no wiping runs under the phase fence.
+  Bridge passes its existing absolute Request.deadline unchanged; legacy callbacks can only
+  be fenced before/after, not forcibly interrupted. Preview's separate 120-second consent
+  lifetime starts at final publication after the last target store read.
+- Final capture publication orders core → request phase → session. Last store.read is before
+  the phase fence; recheck exact work/registration/cancel/epoch/foreground/deadline afterward.
+  Assignment and metadata checks only inside the phase fence. boundGuard.publish must forward
+  through parent.publish so composition retains the parent's cancellation ordering. An epoch assertion can lazily
+  expire/revoke a session: while holding session, reject background before assertEpoch, so
+  this fence cannot invoke attached native cleanup. Do not use unlocked() as a metadata check.
+- UI delivery takes no core lock or store/parser path. Its phase → session claim is once-only;
+  external result/cleanup runs after releasing locks. Invalidation before the claim rejects;
+  invalidation after a winning claim may coexist with claimed summary delivery, but revokes
+  commit. Do not claim external delivery is atomic with later lock/cancel.
+- Bridge maps each admitted Request to a private unique preview owner token; it passes that
+  token to core and resolves cancel/timeout only through its own active Request. Identical
+  external request IDs from two Bridges never share preview cancellation authority. Retained
+  previews keep exact previewId/importCancel cleanup. Generic failed/BUSY cleanup must not
+  invalidate another request merely by user-visible id.
+- Direct invalidatePreviewRequest marks only matching work/preview under session; it neither
+  waits for the parser's worker queue nor wipes arrays still borrowed by that worker. Actual
+  cancelRequest/owner cleanup retires only its own preview. Never acquire core while holding
+  session/phase. Keep existing restore reviewer/exact consent/source/target/final store guards,
+  and recheck the same validator registration through importCommit's final guard.
+- Pure TOTP source/target needs no SSH providers and locked-start management import still
+  uses fresh passwords. SSH on either side requires the original providers. Failed new work
+  preserves unrelated old preview unless explicit lock/registration invalidation applies.
+
+### 4. Validation & Error Matrix
+
+| Trigger | Required result |
+| --- | --- |
+| Callback modifies a loan or supplies partial/incorrect canonical review | VAULT_CONTENT; wipe loans, retain storage |
+| Missing validator/reviewer with SSH on either side | VAULT_SSH_VALIDATION_REQUIRED / VAULT_SSH_REVIEW_REQUIRED |
+| Original deadline reached / request cancelled | VAULT_EXPIRED / VAULT_CANCELLED; Bridge retains its VAULT_TIMED_OUT guard |
+| Validator/reviewer registration, epoch or target changed | VAULT_CHANGED or already-invalid preview VAULT_EXPIRED; no commit |
+| Background publication / concurrent admission | VAULT_FOREGROUND_REQUIRED / BUSY |
+| Invalid/duplicate/expired delivery claim | Reject without external success or clearing a newer preview |
+
+### 5. Good / Base / Bad Cases
+
+Good: pause target validator; lock/cancel/re-register on another thread returns; worker
+eventually rejects, wipes its own loan and preserves original ciphertext. Base: locked-start
+pure TOTP import keeps its password-only path. Bad: infer whole-core responsiveness from
+preview-only migration, or use contentOnly inspection/catalog as semantic admission.
+
+### 6. Tests Required
+
+SshPreviewValidationTest covers actual distinct inputs, mutation/body-secret wiping, Error and
+slot release, paused source/target/reviewer with concurrent invalidation, bounded direct cancel,
+BUSY/reentry, original/final-read deadlines, separate review lifetime, same-instance registration,
+final commit guards and late/once-only/after-claim delivery. Assert callbacks and cleanup are
+outside tiny locks and exact background expiry cannot revoke under phase. Keep SshRestoreTest,
+SshBundleTest and VaultSessionTest regressions; fresh full JVM/lint/fixture compilation separately
+from actual Android runtime. No production provider registration or restore opening is implied.
+
+### 7. Wrong vs Correct
+
+Wrong: remove validateBusiness's synchronized and assume synchronized callers stop holding
+core; validate a mutable retained manifest; check UI validity then call it atomic delivery.
+Correct: owned capture → isolated callback loans outside core → exact final fenced publication;
+explicit once-only delivery claim with external callbacks outside locks. Migrate each remaining
+typed entry separately before registering the full production semantic validator. Bundle has
+since migrated under the next scenario; this historical preview boundary is not whole-core completion.
+
+## Scenario: outside-core bundle validation
+
+### 1. Scope / Trigger
+
+Use for native-only SSH bundle admission/effect, SshBundleProposal ownership, VaultOperation
+bundle bindings and final Store guards. This protects lifecycle/transactions with synthetic
+validators; it does not complete OpenSSH semantics or register production SSH restore hooks.
+
+### 2. Signatures
+
+```java
+AppSecrets.BundleContext newBundleContext(long deadline, EffectGuard originalGuard);
+AppSecrets.BundleContext newBundleContext(EffectGuard originalGuard);
+void AppSecrets.BundleContext.cancel();
+void AppSecrets.cancelBundleContext(BundleContext context);
+VaultOperation SshVaultAdapter.bundleRequest(SshBundleProposal proposal, BundleContext context);
+void SshVaultAdapter.commitBundle(VaultOperation operation, SshBundleProposal proposal, EffectGuard guard);
+```
+
+The default adapter overload creates a context before exact approval. Callers with prior
+queue/approval work must create the explicit context at origin. No channel constructor,
+serialized token, native handle or public secret getter is added.
+
+### 3. Contracts
+
+- Context binds its owning core, original epoch/absolute deadline/guard and immutable validator
+  registration. Explicit deadline cannot exceed now+120000; earlier deadlines are preserved.
+  Expired deadlines reject at use. Each admission attempt consumes its context once, including
+  BUSY; an issued operation inherits that same context/deadline and exact proposal metadata identity.
+- Context.cancel orders with issuance under session metadata; original publication uses
+  phase → session. It never wipes worker arrays. Guard checks persist after issuance; effect's
+  caller owns its beforeCommit durable claim. No second phase or renewed deadline is fabricated.
+- One bundle-work slot persists through cleanup. Capture ciphertext/key under core; parse,
+  decrypt, source validation, apply, candidate validation, encode/encrypt/readback and temporary
+  cleanup run outside core/session/phase. Avoid sessionManifest/commitManifest on this path.
+- Each provider receives a separate decoded loan; compare encoding to canonical authenticated
+  bytes, reject modifications and wipe on return/Throwable. Candidate owns full Entry and
+  FileObject arrays, including retained unrelated secrets. Both close orders must be independent.
+  Candidate validation is unconditional, even after deleting the last SSH object.
+- Issuance rechecks last ciphertext read and original metadata/registration. Its publication
+  callback only checks metadata and inserts the operation; exact approval runs outside the
+  phase/session fence. Recheck approval/context/proposal after publication; on Throwable remove
+  only that exact provisional operation and cancel it. No orphan capability may remain.
+- Initial adapter approval denial/wrong proposal remain nonconsuming. Once matching effect
+  capture is accepted, consume/remove before detached work; no parse/provider/IO failure restores
+  it. Already-consumed replay returns VAULT_OPERATION, rather than a stale-session error from
+  an earlier adapter context precheck. Concurrent work may return BUSY until cleanup finishes.
+- Recheck original registration, cancellation, exact proposal, epoch/foreground/deadline after
+  final Store.read/quickMaterial and after caller.beforeCommit. Final snapshot read is BEFORE
+  Store.commit. Inside an AtomicFile transaction, guards check metadata/approval only: never
+  call Store.read/quickMaterial/openRead, which can discard the in-progress file. Core serializes
+  writes. Keep envelope/wrapper transaction, fresh nonce, generation/material binding,
+  contentRevision, uncertainty mapping and unlockIfEpoch; trust loan continuation stays separate.
+
+### 4. Validation & Error Matrix
+
+| Trigger | Required result |
+| --- | --- |
+| Foreign/reused context, wrong/replayed operation or proposal identity | VAULT_OPERATION; no unrelated operation consumption |
+| Context/operation cancellation or exact deadline | VAULT_CANCELLED / VAULT_EXPIRED; no later stage/write |
+| Missing validator / changed registration, including same-instance reattach | VAULT_SSH_VALIDATION_REQUIRED / VAULT_CHANGED |
+| Changed ciphertext/epoch or modified callback loan | VAULT_CHANGED / VAULT_CONTENT; preserve persisted data |
+| Exact approval withdrawn / concurrent or reentrant work | VAULT_TRUST_REVIEW / BUSY |
+| Store failure before claim / unconfirmed persistence after finalization | VAULT_IO / existing VAULT_COMMIT_UNCERTAIN handling |
+
+### 5. Good / Base / Bad Cases
+
+Good: cancel original context on another thread while candidate validator is paused; it
+returns promptly, worker rejects and wipes its own copies. Base: complete bundle preserves
+unrelated TOTP/password/passphrase objects and wrapper. Bad: renew deadline after admission,
+close a shallow candidate over original secrets or reopen AtomicFile in beforeCommit.
+
+### 6. Tests Required
+
+SshBundleValidationTest pauses admission/effect source/candidate callbacks across cancellation,
+lock, foreground, same/new registration and exact deadline. Assert validators lack core/session/
+phase locks and mutator acquires core before callback resumes. Cover original approval budget,
+cross-core/reused context, original guard publication, provisional capability cleanup, loan
+mutation/wiping, checked/runtime/Error cleanup across both phases/stages, IO/replay, both close
+orders, final read/quick/beforeCommit metadata invalidation and BUSY/reentry. Store fixture
+must reject read while commit is active, so memory-only tests cannot hide recursive AtomicFile
+reads. Keep SshBundleTest's precise approvals/last-SSH deletion/unrelated data/after-claim race,
+preview/restore/VaultOperation/VaultSession and fresh full JVM/lint/fixture compilation gates.
+Real AtomicFile persistence, Android lifecycle and native semantics remain separate runtime gates.
+
+### 7. Wrong vs Correct
+
+Wrong: use old synchronized sessionManifest/commitManifest after moving only bundle's signature;
+read Store from beforeCommit to strengthen CAS; approve a mutable retained candidate.
+Correct: origin context → isolated authenticated capture/loans/candidate → once-used effect
+→ pre-transaction snapshot read → metadata-only final guard and original durable claim.
+
+## Scenario: detached TOTP list/code reads
+
+### 1. Scope / Trigger
+
+Use for TOTP_CODE/TOTP_LIST, their Bridge queue/admission/delivery, TotpVaultAdapter read methods
+and AppSecrets.TotpReadState attached to VaultOperation. Full [contract](../../../design/totp-read-lifecycle.md) preserves
+actual code disclosure ordering. This migration does not cover TOTP_SAVE management previews,
+ordinary mutations, native SSH secret/trust consumers or whole-manifest semantic completeness.
+
+### 2. Signatures
+
+```java
+AppSecrets.TotpReadContext newTotpReadContext(long epoch, long deadline, EffectGuard originalGuard);
+VaultOperation beginTotp(String entryId, TotpReadContext context);
+VaultOperation beginTotpList(TotpReadContext context);
+Map<String, Object> totpList(VaultOperation operation, long unixSeconds);
+String totpCode(VaultOperation operation, String entryId, long unixSeconds);
+void publishTotpRead(VaultOperation operation, EffectGuard actualEffect);
+void publishTotpRead(VaultOperation operation, LongSupplier unixSeconds, EffectGuard actualEffect);
+void AppSecrets.TotpReadContext.cancel();
+```
+
+Legacy read overloads create one local context at entry. Bridge must supply the original
+Request.epoch/deadline before queueing. `totpPublication(operation)` now accepts only the legacy
+TOTP_SAVE preview path; scalar `publishTotp(...)` remains that path's separate helper, not read
+receipt authority. Wire maps, read_ admission, TOTP profile and clipboard write-only policy stay.
+
+### 3. Contracts
+
+- Origin construction takes no core lock, key or store. Context binds core owner, original
+  epoch/deadline/guard/immutable registration, cancellation and one admission attempt (BUSY
+  consumes that context). Deadline <=now+120000, never renewed. Its exact issued-op reference
+  closes cancellation-before-Request.totpRead-assignment: cancel marks under session, then
+  cancels/removes that operation outside session. No external revocation under this owner lock.
+- One read-work slot through all owner cleanup. Capture raw ciphertext/key/revision under core;
+  parse/decrypt/decode/validator/generation and owned work/Verified/loan cleanup outside core/phase/pub/session.
+  The final raw Store.read comparison buffer is still wiped under the existing core snapshot
+  check, before any phase/publication/session fence; this is opaque ciphertext, not a parser loan.
+  Never use legacy sessionManifest or a fabricated bundle operation. Validators borrow independent
+  decoded canonical loans; reject changed encoding and wipe every return/checked/runtime/Error path.
+- Require/compare original registration only after actual authenticated hasSsh is known. Pure
+  TOTP needs no validator and tolerates provider churn. Mixed missing provider rejects; same
+  instance reattach cannot revive old admission/operation/receipt. Snapshot binds mixed/pure fact.
+- Shape/owner/purpose/resource mismatch does not consume an unrelated capability. Accepted matching
+  effect consumes/removes before detached work; failures never restore it. Cancel-first/effect
+  replay VAULT_OPERATION priorities remain. Last worker raw ciphertext/revision check precedes
+  metadata publication, with metadata recheck after store seam. Whole completion catches Throwable,
+  including a publication callback that marks complete then throws, and revokes that exact op.
+- Read-specific Bridge guard.check reads only bounded Request fields (owner/cancel/resumed/time),
+  publish takes original phase ONLY. Core then acquires publicationLock→session for issuance,
+  successful-read completion and once receipt reservation. Do not nest legacy requestGuard.publish
+  (phase→session) around publicationLock. Foreground precedes lazy session getters in these fences.
+- Opaque state attaches to the exact issued object and binds context, source revision/mixed fact,
+  successful-read status, native generation window and once reservation. No code/seed/array owner
+  is retained there. Provisional issuance failure removes exact op; final publication has no
+  core/store/crypto/provider or plaintext cleanup. No arbitrary callbacks in tiny metadata claims.
+- After reservation releases phase, actual bounded list transport or clipboard write runs under
+  inherited publicationLock→session, with original metadata/registration/revision rechecks and a
+  fresh wall sample compared to native generation window. Recheck metadata after the bounded clock
+  supplier. Reservation-to-effect cancellation/lock/window changes still reject; do not import
+  preview's post-claim summary permission into code disclosure. No retry after attempted/failed
+  reservation/effect. Core historical unixSeconds vectors remain valid until current delivery is asked.
+- All cleanup and copied:true Result run outside locks. List Result.success is the explicit
+  inherited transport-only/nonreentrant exception under pub/session; it cannot call core. Its
+  throwing transport still retires the completed Request. Actual Binder/transport can delay
+  session.lock/context.cancel; phase.cancel remains free. Arbitrary Result reentry lock cycles,
+  Binder preemption and immediate Bridge UI completion on worker Error are NOT solved here.
+- Request cancel/cleanup uses its private context and exact read operation, never public ID
+  lookup in another Bridge. Clipboard Error/Runtime paths clean owned Request without duplicate
+  disclosure; no clipboard read/listen/clear, raw seed channel or actual device probe is added.
+
+### 4. Validation & Error Matrix
+
+| Trigger | Result |
+| --- | --- |
+| Foreign/reused context, wrong resource/purpose, consumed read or immediate duplicate receipt | VAULT_OPERATION; no unrelated consumption |
+| Cancelled context/operation / exact deadline | VAULT_CANCELLED / VAULT_EXPIRED (Bridge original guard retains VAULT_TIMED_OUT) |
+| Missing original mixed provider / registration replacement | VAULT_SSH_VALIDATION_REQUIRED / VAULT_CHANGED |
+| Changed raw snapshot/revision/epoch or modified canonical loan | VAULT_CHANGED / VAULT_CONTENT |
+| Foreground lost / concurrent or recursive read | VAULT_FOREGROUND_REQUIRED / BUSY |
+| Negative generation time, including empty list / crossed current code window | PARAMETERS / TOTP_TIME_CHANGED |
+
+### 5. Good / Base / Bad Cases
+
+Good: cancel an original queued/mixed read while validator is paused; another thread obtains
+core, then worker rejects and wipes owned loan/key/cipher. Base: pure TOTP works with absent or
+changing SSH registration. Bad: mint +120s after parse, expose source manifest to provider,
+or copy a code after its once-reserved receipt became stale before the actual effect.
+
+### 6. Tests Required
+
+TotpReadValidationTest exercises list/code × admission/effect paused mixed invalidations, pure
+absence/churn, original queue budget/epoch, wrong owner/shape/replay, BUSY/context reuse, owned
+key/cipher/loan wiping, mutation/close/checked/runtime/Error recovery, final raw snapshot mismatch
+and metadata seams, provisional/completion callback-then-throw cleanup, once receipt and actual
+effect lock topology/window/clock metadata invalidations. Assert no store/crypto in final claim,
+blocking background revocation cannot seize phase, actual effect has no phase/core and inherited
+session blocking is explicit. TotpTest retains vectors/read_ namespace/projection and legacy save
+preview; VaultTest arms the same registered provider to test lock during effect rather than only
+new-registration rejection. Keep preview/bundle/VaultOperation/VaultSession and fresh full JVM/
+lint/Release/fixture gates. JVM stubs are not actual Android Result/Binder/clipboard or lifecycle.
+
+### 7. Wrong vs Correct
+
+Wrong: create origin context on worker after queue, always require SSH validator, call old
+sessionManifest, then publish a freely supplied epoch/revision scalar as read authority.
+Correct: original metadata context → independent authenticated source/loan outside core →
+once-used effect with exact receipt → phase-only reservation → guarded current actual disclosure.
+
+## Scenario: detached SSH public-file reads
+
+### 1. Scope / Trigger
+
+Use for SSH_FILES admission, sshFiles/sshFileSnapshot synchronous borrowed public bodies,
+sshPublicFiles native bootstrap and SshManagedKnownHostsProvider.snapshotFor. The old
+synchronized sessionManifest helper remains for excluded credential/private-key/mutation/trust
+paths. No MethodChannel, full semantic provider registration or production restore opening.
+
+### 2. Signatures
+
+```java
+AppSecrets.SshPublicReadContext newSshPublicReadContext(
+    long epoch, long deadline, EffectGuard guard) throws VaultException;
+AppSecrets.SshPublicReadContext newSshPublicReadContext(
+    long deadline, EffectGuard guard) throws VaultException;
+VaultOperation beginSshFiles(String rootPath, String connectionId,
+    SshPublicReadContext context) throws VaultException;
+SshPublicReadPreparation prepareSshPublicRead(VaultOperation operation,
+    String rootPath, String connectionId) throws VaultException;
+void attachSshPublicRead(SshPublicReadPreparation prepared,
+    VaultSession.Revocation exactLocalLease) throws VaultException;
+```
+
+SshVaultAdapter supplies fileContext(deadline,guard) and fileRequest(root,connection,context).
+SshPublicReadContext.cancel invalidates directly and cancels its exact issued operation.
+Opaque AppSecrets.SshPublicReadState belongs to the exact VaultOperation. Preparation owns
+one native-mode consumed work/snapshot through close; it is not a reusable scalar receipt.
+
+### 3. Contracts
+
+- Construct context before queueing: owner/epoch/original absolute deadline/metadata guard/
+  immutable validator registration/once admission. No core acquisition, store read or key copy.
+  Immediate bootstrap default captures one120s budget before admission. Existing-role
+  snapshotFor uses the original role.deadline, exact role/clock/view guard and current epoch;
+  role-first metadata publish cannot take session before publicationLock. Default context
+  foreground+epoch, capture metadata+session.key, and pre-ownership foreground+attachedRevocation
+  getter each share one session monitor. External role guards stay outside the capture session
+  fence; this prevents a background transition from triggering lazy revoke under core without
+  adding a session→role lock inversion.
+- One public-read work slot lasts through cleanup. Matching accepted effect consumes/removes
+  before detached work; BUSY preserves a valid effect, wrong owner/purpose/root/connection
+  does not consume, replay is VAULT_OPERATION with cancellation checked first.
+- Capture actual cipher/key/revision under core. Parse/decrypt/decode, independent canonical
+  validator loan, unchanged-loan check and closure/snapshot preparation run outside core/
+  phase/publication/session. Same-instance provider reattachment invalidates the context.
+  Require an original SSH validator; attaching one later cannot rescue an old missing provider.
+- Private-key bodies never enter publicFiles or native public wire. Preserve metadata/declared
+  references/root/connection/vault/generation/epoch/deadline/binding. Keep Verified alive through
+  the synchronous loan; worker finally wipes all owned arrays on checked/runtime/Error paths.
+  Do not concurrently wipe a receiver's borrowed arrays on the cancellation thread.
+- Final raw source equality occurs under core BEFORE phase publication, with a metadata recheck
+  after the store seam. Only its temporary opaque comparison buffer wipes under core. Issuance
+  and claims use original guard→publicationLock→session; foreground first prevents lazy native
+  revocation under the phase fence. No parser/store/receiver/native create/close or loan cleanup
+  in those tiny fences. A publish hook that invokes its callback then throws must roll back.
+- Synchronous public loan: claim once, release ALL locks, invoke receiver, then recheck original
+  metadata before returning success. Claim-before-invalidation rejects; invalidation after claim
+  may allow already-started public copying, but cannot return a successful stale receipt.
+  Borrowed arrays may not be retained; managed owned public copies need their own lifecycle.
+  Already observed/copied public bytes cannot be retracted and never grant host/KEX/trust/secret
+  authority. This claim policy does not apply to credential/private-key/code disclosure.
+- Native lease: prepare native-mode snapshot, encode/create outside locks, then final raw store
+  equality, release core, then exact-state attach under the publication fence. The revision
+  recheck rejects a commit in that gap. Reserve one attach attempt so replay cannot revoke an
+  already-published view; a rejected pre-ownership lease remains caller-owned. Require a genuinely local-owned
+  provisional lease; reject the current session's already attached identical view before taking
+  ownership. The helper is not an arbitrary foreign-view ownership transfer API. Attach operation FIRST, same session epoch SECOND, check
+  context/operation and active lease before acknowledging, and recheck before return. Reject
+  inactive/foreign/closed/delivered preparations, repeated attach or an existing active session
+  view. Never replace another active view. Every failure closes/revokes the local lease outside
+  locks on the production path; rejected pre-ownership helper parameters remain caller-owned.
+  An inactive failed attachment may remain replaceable, never active and unreturned.
+- Native preparation and synchronous delivered state are separate: a general receiver cannot
+  take its consumed operation and publish an arbitrary second revocation. Tests may use a local
+  fake Revocation through the same opaque preparation; no mutable global native factory.
+- Context checks end at successful publication; do not add a permanent old-epoch/registration
+  revoker. Exact own-NEW-CAS may advance epoch retaining only its same attached active view,
+  with no deadline renewal; old operation/context cancellation still revokes that exact loan.
+  snapshotFor's separate consumed request must not own/cancel the role's original view.
+
+### 4. Validation & Error Matrix
+
+| Condition | Required result |
+| --- | --- |
+| Wrong core, purpose, root, connection, replay/foreign preparation | VAULT_OPERATION; mismatches nonconsuming |
+| Accepted work already active | BUSY; no valid effect consumption or slot replacement |
+| Original context/operation cancelled | VAULT_CANCELLED; no successful issuance/return/active unreturned lease |
+| Deadline/epoch/background/revision/ciphertext/registration changed | Explicit expired/changed/foreground rejection; no fresh budget |
+| Original SSH validator absent | VAULT_SSH_VALIDATION_REQUIRED; no later-provider rescue |
+| Validator loan mutated/closed or callback throws | Reject, wipe owned arrays, keep original store unchanged |
+| Claim succeeds then invalidation during receiver | Let active public loan finish; postcheck rejects and worker wipes |
+| Existing active view or inactive provisional native lease | BUSY/changed; never replace/revoke other owner's view |
+| Guard throws after issuance/attach callback | Cancel exact provisional operation/local lease outside locks |
+
+### 5. Good / Base / Bad Cases
+
+Good: one original snapshot yields a bounded public closure; native creation happens outside
+core and its final attach orders with cancellation and lock. Base: JVM fake revocation proves
+attachment ordering, not actual JNI lifecycle. Bad: create a fresh120s context at effect time,
+run validator against retained manifest, call JNI under core, or continuously reject a preserved
+own-CAS public view because its originating epoch changed.
+
+### 6. Tests Required
+
+Pause admission/effect validators and verify core access plus direct cancel/lock/background/
+original deadline/same-new registration invalidations; retained independent loans/key/cipher
+wipe including Error. Cover mutation, final raw read seams, wrong bindings/replay/BUSY/reentry,
+private-body exclusion, all-lock-out receiver and post-claim invalidation. Fake native prepare/
+attach tests cover cancel/lock/BUSY/inactive/repeated/foreign work and post-callback guard throw,
+with exact local cleanup and other view preservation. Role deadline/close/view revocation and
+existing exact own-CAS retention/old-operation cancel regressions must pass. Real JNI/platform
+execution is independent of JVM tests and APK compilation.
+
+### 7. Wrong vs Correct
+
+Wrong: sshPublicFiles calls a generic claimed receiver and attaches later, or a receiver/validator
+retains authenticated manifest arrays. Correct: separate opaque native preparation, lock-out
+create, final exact attachment; independent validator loan and worker-owned synchronous cleanup.

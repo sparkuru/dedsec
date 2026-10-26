@@ -49,6 +49,22 @@ final class VaultCodec {
         try { writeBytes(out, bytes); } finally { wipe(bytes); }
     }
 
+    static byte[] sshText(String text, int maximum) throws VaultException {
+        if (text == null || text.isEmpty() || text.length() > maximum
+                || text.codePoints().anyMatch(Character::isISOControl)) throw VaultException.invalid();
+        ByteBuffer encoded = null;
+        try {
+            encoded = StandardCharsets.UTF_8.newEncoder()
+                    .onMalformedInput(CodingErrorAction.REPORT)
+                    .onUnmappableCharacter(CodingErrorAction.REPORT).encode(CharBuffer.wrap(text));
+            if (encoded.remaining() > maximum) throw VaultException.invalid();
+            byte[] bytes = new byte[encoded.remaining()];
+            encoded.get(bytes);
+            return bytes;
+        } catch (CharacterCodingException failure) { throw VaultException.invalid(); }
+        finally { if (encoded != null && encoded.hasArray()) wipe(encoded.array()); }
+    }
+
     static byte[] password(char[] password) throws VaultException {
         if (password.length < 1 || password.length > 1024) {
             throw new VaultException("PARAMETERS", "Use a password between 1 and 1024 characters");

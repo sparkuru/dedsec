@@ -1,10 +1,539 @@
 # SSH Native Gates
 
+2026-10-25: [foreground password connection](ssh-password-connect.md) now connects the
+production UI, supported whole-manifest admission, actual TCP and managed host-key approval.
+The current session JNI surface has 20 exports: the previous 19 plus caller-owned TCP
+descriptor preparation for API28. Known-host matching/writing binds the actual port and
+lowercases only the internal lookup identifier, including hashed entries. Only fresh selected
+SUCCESS may promote that same client to shell-only lifetime; original auth/file/secret budgets
+remain unchanged. Historical factory-only/no-provider statements below are superseded only
+for this complete narrow password subset. Android runtime evidence remains a separate gate.
+
+2026-10-24：[证书事实规范](ssh-certificate-facts.md)新增全CERT/CSCF168公开事实和嵌入签名政策；CA/time/principal/revocation仍未验证，不改变生产证书拒绝/完整provider/恢复门。
+
+2026-10-23：[全部private与凭据归属](ssh-private-material.md)新增CSKP实际self-proof及v1元数据唯一owner扫描；不改变v1/生产provider/恢复，完整graph/password account/trust仍待完成。
+
+2026-10-23：新增[显式key pair规范](ssh-key-association.md)，精确supplied IDs/口令与plain subject的固定本地签名证明；旧CSMI/auth不变，不作为完整validator/信任/恢复准入。
+
+2026-10-23: [explicit resource auditing](ssh-config-resources.md) adds fourth-mode CSCR with typed literal-base/direct-parent references and explicit context/cwd/key-resolution deferrals. Existing modes below stay unchanged; no material/math/trust/admission proof. [Evidence](../../../design/verification.md#20261023-config-resources).
+
+2026-10-23: the later [CONFIG audit spec](ssh-config-audit.md) adds explicit AUDIT/CSCA, finite all-branch policy and actual static Include direct-reference checks. Original effective/catalog/input contracts below remain; audit is partial-only and does not open semantic provider/restore. [Evidence](../../../design/verification.md#20261023-config-audit).
+
+2026-10-23 managed detached configuration inspection: [focused spec](ssh-detached-config-managed.md) extends Java/JNI actual-manifest input with reserve/load owner, single protected CSDI copy, remaining native IO/line budgets and all CONFIG declaration catalogs. Original cancellation/deadline and retryable cleanup govern final publication; report remains partial-only. No full semantic provider/restore/connector. [Evidence](../../../design/verification.md#20261023-detached-managed).
+
+2026-10-23 detached native configuration input: use the focused [API/ownership spec](ssh-detached-config.md) and [contract](../../../design/ssh-detached-config.md). Own CONFIG copies without synthetic live view/tuple, retain original root ordinal/deadline/cancel, preserve live borrow and errno precedence. Failed construction can return a CLOSING cleanup owner. Current input is C-only; Include-edge/full-manifest semantics and production provider/restore remain pending. [Actual evidence](../../../design/verification.md#20261023-detached-config).
+
+2026-10-22 typed-secret lifecycle: [focused contract](../../../design/ssh-secret-read-lifecycle.md)
+preserves original role deadline/view, selected host/KEX/receipt guard through detached admission
+and release. Actual managed copy is bounded and fenced stateLock→request→publication→session→
+operation→role→view; `SshRoleGuard.withRole` separates inner role fencing from outer publish.
+Public snapshot uses the same inner role order, while native attach retains short operation
+binding and immediate cancellation after bind. Do not execute native calls or reenter core
+inside a secret receiver. Already completed managed copies cannot be retracted; later JNI/
+native checks and scratch wipe remain required. Host JVM evidence is not Android execution.
+
+2026-10-22 public-file lifecycle: see [focused contract](../../../design/ssh-public-read-lifecycle.md)
+and the App Secrets detached SSH public-read scenario. SSH_FILES now separates synchronous
+public loan claims from provisional native create/final attach. Existing-role known_hosts
+snapshotFor uses its exact role/view and original role.deadline. This adds no host/KEX/secret
+authority and no permanent old-epoch lease revoker: exact own-NEW-CAS continuation below
+retains its existing operation/session ownership and original deadlines. Other secret reads
+and trust/mutation implementation remain separate; production semantic/restore gates stay closed.
+
+## Supplied-manifest material inspection (2026-10-19)
+
+### 1. Scope / Trigger
+
+Use [the inspection contract](../../../design/ssh-manifest-inspection.md) to inspect actual
+source/target/candidate file bytes. Never reopen current AppSecrets/session/public lease or
+fabricate a vault capability tuple. Report is always contentOnly=true/admissionComplete=false;
+CONFIG, reference/identity/credential semantics, certificate authority and trust admission
+are pending. Do not register this as SshContentValidator or open restore admission.
+
+### 2. Signatures
+
+Java `new SshManifestInspector().inspect(manifest, deadline, cancellation)` returns immutable
+Report/Entry metadata; injected `(Clock, NativeBinding)` constructor is for host tests.
+`Cancellation.cancel()` is one-way atomic. JNI adds only
+`SshManifestInspector.Native.inspect(int type, byte[] body, byte[] passphrase, long deadline):byte[]`.
+C `ctos_ssh_material_inspect(type, body, length, passphrase, passphrase_length, deadline, output60)`
+returns0 for a material outcome, -1/errno for API/system/deadline failure and clears output.
+No persistent registry, view, role, session, descriptor or credential-provider callback.
+
+### 3. Contracts
+
+Exclusive caller manifest loan; independently owned arrays for every body and relevant exact
+`SSH_KEY_PASSPHRASE.identity == "key:" + file.identity` entry before the first native call.
+Never copy unrelated TOTP/password secrets or close/mutate the caller manifest. Cleanup slots
+exist before sensitive copies; wipe every success/IO/Linkage/Error/cancel path. Multiple
+matching passphrase entries yield AMBIGUOUS_PASSPHRASE, CONFIG yields CONFIG_DEFERRED.
+No filename-based public/private association. Global ThreadLocal reentry guard; establish
+before job state, finally remove. One original BOOTTIME deadline, <=60s at admission,
+checked across copy/native/cleanup/publication. Cancel blocks later work/publication but
+does not preempt a synchronous bounded crypto/KDF call.
+
+Extracted `ssh_key_policy.[ch]` is shared with original authentication, preserving software
+Ed25519/EC/RSA and pinned RSA floor1024, OpenSSH aes256-ctr/bcrypt salt/rounds1..64 and bounded
+traditional RSA/EC AES128/256 PEM. Known encrypted headers must pass this policy BEFORE any
+private parser call; absent passphrase returns NEEDS without parsing/decrypting payload.
+Reuse sshkey parsing, one complete outer private envelope, unencrypted PEM single top-level
+DER SEQUENCE, one physical public/cert record plus standard comments, and public blob SHA256.
+Traditional encrypted PEM decoded-DER full consumption and private/public mathematical
+consistency are not certified. No signing, cert validity/principal or remote trust approval.
+
+Known_hosts uses hostkeys_foreach_file with NULL host/IP, PARSE_KEY only and fixed source
+label. Reject every invalid row; supplement skipped hash checks with exact |1| salt/digest
+Base64 decode20 bytes each, no fake host/HMAC. Ordinary host patterns remain opaque parsed
+fields. Check stream read/close failure. Fixed safe diagnostics are counted separately from
+file/network/env/exec effects; do not mutate global logger or enable DEBUG_PK/DEBUG_PKOK.
+
+### 4. Validation & Error Matrix
+
+| Condition | Required result |
+| --- | --- |
+| Body/passphrase/rows | <=1MiB / <=8192 no-NUL bytes / <=16384 rows of <=65536 bytes; limits fail, no truncation |
+| Type | Native tags2 PRIVATE,3 PUBLIC,4 CERT,5 KNOWN_HOSTS; other API tags fail |
+| Material status |0 PARSED,1 MALFORMED,2 UNSUPPORTED,3 NEEDS_PASSPHRASE,4 BAD_PASSPHRASE; last is upstream class and may mean corruption |
+| Text framing | NUL rejects; second physical public key or private armor/nonempty suffix rejects; same-line public suffix is a comment |
+| OpenSSH private CRLF | Pinned exact LF marker rejects; do not normalize because outer framing recognizes CRLF |
+| SK public input | Current pinned config disables SK, upstream cannot recognize type: MALFORMED, no hardware/provider invocation |
+| Cancel/deadline/invalid JNI/crypto IO | Fixed IOException; no partial Report/output capability |
+| Failed material parse | Metadata outcome only, zero kind/records/digest, bounded source line; no partial parsed success |
+
+CSMIv1 is exactly60 big-endian bytes: magic0x43534d49/version1/status/keyKind/flags/records/line,
+then32 digest bytes. keyKind0 none/1Ed25519/2EC256/3EC384/4EC521/5RSA. Flags1 encrypted only
+PRIVATE,2 certificate only PARSED CERT,4 contentOnly mandatory; no other bits. PARSED key
+kind1..5/records1/nonzero digest/line0; PARSED KNOWN kind/digest0,records0..16384,line0. Other
+statuses kind/records/digest0,line0..16384; NEEDS/BAD only PRIVATE+encrypted. Java checks all
+typed combinations, length/magic/version/enums/counts and trailing. JNI preallocates result,
+copies into owned scratch, wipes it and rechecks deadline after array writes.
+
+### 5. Good / Base / Bad Cases
+
+Good: a distinct candidate's actual private bytes and exact unique passphrase are inspected.
+Base: CONFIG or an encrypted key without a phrase remains explicitly pending. Bad: equating
+PARSED certificate or known_hosts with trusted identity or restore approval.
+
+### 6. Tests Required
+
+Real parser matrices cover supported algorithms/formats/AES/KDF bounds, exact8192 phrase,
+public/cert type mismatch and record framing, DER suffix, all known_hosts records/markers/
+hashes, body/row/NUL bounds, API/stream/deadline failures, cleanup/FD and forbidden effects.
+Count fixed safe logs separately. Prove rejected/missing encrypted input invokes no private
+parser/KDF. JVM independently tests supplied candidates/deep copies/all files/ambiguity,
+strict wire, cleanup/Error/reentry/cancel/final publication. Compile exact opt-in platform
+method; Android execution is separate. Rerun full auth/PTY ARM after shared helper extraction.
+Keep original config/evaluator/catalog regressions and archive83/configJNI8/sessionJNI19;
+only one material JNI added. Production must exclude wrap observers/test seed/fixture peer.
+
+### 7. Wrong vs Correct
+
+Wrong: inspect a current live lease in the candidate validator, trial-decrypt every secret,
+or publish native private buffers as metadata. Correct: actual supplied exclusive loan,
+exact ambiguity handling, scoped copies/final fences and explicit partial-only outcomes.
+In new C adapters, include platform stdlib before pinned includes then undef allocator
+shims; do not suppress undeclared allocator errors. Expiry fixtures must reach the intended
+callback before deliberately waiting for expiry: synthetic preparation budget may differ
+from production lifetime, but every original expiry/evidence assertion must remain.
+[Actual evidence and limits](../../../design/verification.md#20261019-manifest-inspection).
+
+## Context-free declaration catalog (2026-10-19)
+
+### 1. Scope / Trigger
+
+Use [the catalog contract](../../../design/ssh-config-catalog.md) to discover literal Host
+declarations from a public lease before a real target/user Request exists. Every result is
+declarationsOnly. Catalog is lexical discovery; semantic validation, effective profile,
+private/trust validation, final launch plan and AppSecrets restore admission remain separate.
+
+### 2. Signatures
+
+`ctos_ssh_config_eval_open_catalog(borrow, &eval)` and guarded
+`ctos_ssh_config_eval_catalog(eval, &catalog)` share the evaluator lifecycle. The opaque
+handle layer adds open_catalog/catalog/catalog_live. Java uses
+`SshConfigEvaluator.openCatalog(lease)` then run/catalog; Native adds
+`openCatalog(long view):long` and `catalog(long handle):byte[]` to the original six methods.
+NativeBinding defaults fail closed. No Request, synthetic hostname, passwd or user is supplied.
+
+### 3. Contracts
+
+Hook the same namespaced readconf after keyword/argv parsing and before Host matching.
+Inspect the full Host token vector; skip leading !, * or ?, invalid hostname/UTF8/control
+selectors, marking omittedSelectors. Square brackets are literal in pinned Host matching.
+Deduplicate exact alias bytes, retaining first object/line and depth-first Include order.
+Traverse root-reachable static managed Include regardless of branch activation, CONFIG only;
+never scan orphan view entries. Any % or $ Include is deferred before expansion, with unique
+object/line and includesIncomplete. Match sets a flag without predicate evaluation; other
+known directives are lexically consumed. IgnoreUnknown does not hide unknown keywords.
+
+Use the original parser trylock, owner/PID/UID, deadline/cancel, borrow and reader retry rules.
+Catalog owns and wipes its heap metadata. Summary/Options reject catalog mode; catalog getter
+rejects ordinary mode. Recheck lifetime after final reader cleanup and JNI array publication.
+Java immutable copied metadata is historical; fresh getters still check native lifetime.
+
+### 4. Validation & Error Matrix
+
+| Condition | Required result |
+| --- | --- |
+| Alias or deferred capacity | At most256 each; a257th distinct item is LIMIT, no partial catalog |
+| Literal alias length |1..255 standard UTF8 bytes; longer positive literal is LIMIT, no truncation |
+| Static Include | Existing path/type/missing/cycle/depth/IO diagnostics; no environment or host FS lookup |
+| Dynamic Include | Skip token; unique located deferredSite, includesIncomplete iff deferredCount>0 |
+| Bad recognized Port/Match arguments | May pass lexical catalog; effective evaluation must reject |
+| Unknown keyword, including after IgnoreUnknown | Reject |
+| Wrong-mode getter, cancel/revoke/expiry | Reject, publish no catalog pointer or wire |
+| Failed post-borrow open/cleanup | Retain positive cleanup handle and original retry point |
+
+CSCDv1 is big-endian magic0x43534344,version1,flags,scannedFiles,aliasCount,deferredCount,
+then alias object/line/byteLength/bytes and deferred object/line. Only flags1/2/4/8 are valid;
+1 is mandatory,8 iff deferredCount>0. Maximum70424 bytes. scannedFiles1..128, object1..128,
+line1..16384. Java rejects duplicate aliases/sites, bad UTF8/C1/NUL/controls, length/count/flags
+and trailing bytes. Existing view128/1MiB/8MiB, IO1024/64MiB, depth8, line8192/total16384 apply.
+
+### 5. Good / Base / Bad Cases
+
+Good: static Include under an inactive branch still contributes a located declaration.
+Base: wildcard-only config yields empty aliases plus omittedSelectors. Bad: turning a
+successful catalog with an invalid Port into a usable connection profile or restore approval.
+
+### 6. Tests Required
+
+Real parser tests cover full Host argv/negation/comments/quotes, []/UTF8, first-source order,
+static branches/glob/orphan/path/type/cycle, deferred-site dedup, semantic non-certification,
+all budgets and exact70424-byte frame. Include EBUSY/wrong-thread/cancel/revoke/expiry,
+deterministic late reader-close revoke/cancel, retryable cleanup and FD/effect0 checks.
+Rerun ordinary evaluator and registry parser tests. JVM separately tests codec/immutable
+lists/mode separation/default binding and lifecycle. Compile the exact opt-in independent
+platform method; Android execution is separate evidence. Production exports eight config
+JNI and19 session JNI, archive83, no test observers/seed/peer or stock parser exports.
+
+### 7. Wrong vs Correct
+
+Wrong: invent an alias/user to scan, use Host matcher short-circuit results as a declaration
+index, expand dynamic Include with fake context, or attach catalog as SshContentValidator.
+Correct: shared lexer/full tokens, conservative managed static traversal, located deferred
+sites, and a later real Request plus whole-manifest validation. Current runtime results:
+[verification](../../../design/verification.md#20261019-config-catalog).
+
+## Managed config JNI / Java (2026-10-19)
+
+### 1. Scope / Trigger
+
+Use `SshConfigEvaluator` for the production Java/native evaluation boundary described in
+[the managed contract](../../../design/ssh-config-managed.md). It borrows the caller lease;
+no catalog/validator/connector, role, secret or socket authority is created.
+
+### 2. Signatures
+
+Six `SshConfigEvaluator.Native` entries: `open(long view, byte[] request):long`,
+`run(long):int[5]`, `summary(long):byte[]`, `cancel(long)`, `close(long)`, `destroy(long)`.
+All native methods throw fixed-text IOException on JNI/binding failures. `run()` in the Java
+facade throws `EvaluationException` retaining immutable Diagnostic on a nonzero native status.
+`ssh_config_handle.h` owns registry/wire limits and declarations; no JNI Options-pointer API.
+
+### 3. Contracts
+
+64 slots, positive signed64 monotonically increasing tokens, never pointer casts or reuse.
+Reserve/copy/decode before borrow. A post-borrow eval_open failure still returns a positive
+cleanup handle retaining pendingBorrow/open_errno; Java preallocates its wrapper and cannot
+discard that handle via a failing post-open lease check. Close releases only its borrow,
+then destroy clears the tombstone; each failure retains its retry point. Never lease.close().
+Owner pthread/PID/UID for ordinary methods, PID/UID for cross-thread cancel. Busy pin protects
+the slot while the registry mutex is released across parser/IO; cancel atomically touches
+the retained evaluator under a short lock, shared with destroy. Do not hold Java's monitor
+across run. Java ThreadLocal entry guards reject reentry; establish them before inFlight so
+an Error during setup cannot leave the object uncloseable. Finally clears guards after Error.
+
+### 4. Validation & Error Matrix
+
+| Condition | Required result |
+| --- | --- |
+| Request | CSEQv1 big-endian,7 length-prefixed standard UTF8 texts,9766 bytes maximum; explicit u32 virtual UID/numeric port; no NUL/surrogate/ISO controls/trailing bytes |
+| Summary | CSESv1,11 fixed ints+alias/host/user texts,829 bytes maximum; flags/counts/TTY0..3/session0..2 validated; hasRawFields=1 |
+| Successful run | Exactly `[0,0,0,0,0]` |
+| Configuration rejection | `[1,reason,object,line,errno]`, reason1..13, object0..128, line0..16385; rejected budget line16385 is valid |
+| Admission/lifecycle error | `[2,0,0,0,errno]`; preserve original errno, never fabricate INPUT for EBUSY/EALREADY/EPERM |
+| Getter after cancel/revoke/expiry | Fail; no cached Java summary bypass |
+| Pre-borrow open failure | No handle or borrow retained |
+| Post-borrow open failure | Positive handle, run reports error, close retries pendingBorrow release |
+| JNI allocation/region exception | Preserve pending exception, stop normal JNI calls; keep known handle/resources |
+
+JNI uses byte arrays, never modifiedUTF8/NewStringUTF. Preallocate run's Java array before
+one-shot parsing. Recheck native summary lifetime after JNI array writes; wipe temporary
+wire copies. A returned Summary is historical metadata, not a live capability or final plan;
+full raw Options stays native and future consumers must finalize every retained field.
+
+### 5. Good / Base / Bad Cases
+
+Good: real managed Include yields UTF8 target/user metadata; evaluator close leaves caller
+lease usable. Base: User absent yields userRequired and empty user. Bad: included command
+policy failure preserves reason/object/line and fixed message; later close still succeeds.
+
+### 6. Tests Required
+
+Independent real native registry/parser tests: CSEQ/CSES exact limits, malformed frames,
+retained full Options, failed-open cleanup handle, injected release/close/destroy/unmap retry,
+64 slots/stale tokens/INT64 exhaustion, wrong pthread/PID/UID, expiry/revoke, FD baseline and
+deterministic fread-paused cross-thread cancel with busy destroy rejection. Effect count0.
+JVM tests separately verify request/summary/diagnostic codecs, owner/reentry/cancel races and
+Error cleanup. The exact opt-in platform fixture must compile; actual Android/JNI execution
+needs its own evidence and current scope. Production exports six config JNI and19 session
+JNI, excludes test token seed/wrap observers/fixture peer, and keeps archive83.
+
+### 7. Wrong vs Correct
+
+Wrong: release then discard a failed cleanup borrow, close the shared lease, lock around
+the entire parser, or cache a Summary as authority. Correct: cleanup-capable opaque slot,
+borrow-only release, busy pin with short locks, and fresh guarded getters. Actual local
+results and limitations: [verification](../../../design/verification.md#20261019-config-jni).
+
+## Managed native config evaluation (2026-10-19)
+
+### 1. Scope / Trigger
+
+Production native prerequisite, implemented against [the evaluator contract](../../../design/ssh-config-evaluator.md).
+Pinned readconf has translation-unit-local effect hooks and namespaced exports; independent
+objects link into the existing shared library. Keep the original 83-member archive intact.
+No new JNI/catalog/validator/socket authority is implied.
+
+### 2. Signatures
+
+`ctos_ssh_config_eval_open(borrow, request, &eval)` transfers borrow only on success;
+`run(eval, &error)` runs once; `summary(eval, &summary)` and native-internal
+`options(eval, &const_options)` require READY; `cancel(eval)` alone permits cross-thread use;
+`close(eval)` is retryable and `destroy(eval)` requires a closed tombstone.
+Exact declarations and named limits live in `ssh_config_eval.h`.
+
+### 3. Contracts
+
+Owner pthread/PID/UID, original view deadline/revocation and atomic cancellation guard
+every read and result publication. A dedicated trylock protects parser caches/current context.
+Preserve full owned Options and managed Include first/final semantics. `remote_user` is a
+literal override; `remote_user_fallback` supplies Match/%r context without overriding User.
+`summary.has_raw_fields=1`: paths/session/forward fields require later finalization; consumers
+must implement or explicitly reject jump/forward behavior. Never treat this as a launch plan.
+No host FS/env/NSS/DNS/exec/network/log effects or global logger/environment mutation.
+
+### 4. Validation & Error Matrix
+
+| Condition | Required outcome |
+|---|---|
+| Relative/~/Include glob | Resolve only under virtual /ctos-vault, lexical order, no GLOB_TILDE env lookup |
+| Path escape, missing object, cycle | Located PATH rejection, no host fallback |
+| Input-triggered fatal/helper failure | Structured reason/object/line/errno with allocation cleanup |
+| Algorithm assembly failure | DEFAULTS with first-assignment source, including included files |
+| Missing remote username needed by expansion | USER_REQUIRED; never derive remote user from local UID |
+| >8 jumps, >32 combined forwards, >256 other list items | LIMIT, never truncate |
+| Host/user (including decoded jump fields) >255 bytes / invalid UTF-8 | LIMIT/E2BIG / INPUT/EILSEQ |
+| Active canonicalization/localnetwork/host environment effects | Explicit UNSUPPORTED or EXPANSION rejection |
+| Reentry/concurrent parser use | EBUSY |
+| Failed reader unmap | Preserve mapped reader and borrow for retryable close |
+
+Upstream xalloc system-OOM behavior remains terminating; input limits are not an OOM excuse.
+Initialize both canonical-domain/permitted-CNAME pointer containers to NULL before complete
+cleanup: pinned initialize_options otherwise leaves poison pointers for zero-length arrays.
+Free all owned arrays/strings and inactive/duplicate forward temporaries.
+
+### 5. Good / Base / Bad Cases
+
+Good: nested managed Include with Match final and additive identities preserves full Options.
+Base: no User yields user_required, ordinary target defaults remain available.
+Bad: Match exec, external provider, trust bypass, service-name port, malformed token or URI
+fails without effects; the following independent valid evaluation must still succeed.
+
+### 6. Tests Required
+
+Run real pinned parser matrices, exact list/line/depth/jump boundaries, independent %C vector,
+root/included diagnostic provenance, cancel/revoke/deadline, real CSPV registry ownership,
+wrong pthread/reentry, injected read/unmap errors and repeated FD/reader cleanup. Test-link
+effect observers must report zero; they do not replace scoped production hooks. Build strict
+dynamic/static ARM tests and shared library; record actual ARM execution separately from
+Android/JNI and unavailable dynamic runtime. Audit original archive and JNI exports.
+
+### 7. Wrong vs Correct
+
+Wrong: final-link global `--wrap`, setjmp/longjmp across allocations, dropping failed munmap
+state, or exposing only HostName/User/Port as a complete plan.
+Correct: scoped parser hooks, returning cleanup paths, retained retry state and full owned
+Options with guarded getters. Never retain the Options pointer after close or bypass getters
+after revoke. Evidence: [local verification](../../../design/verification.md#20261019-config-evaluator).
+
+## Actual offered host key and exact NEW review (2026-10-19)
+
+Frozen contract: [launcher prerequisite](../../../design/ssh-launcher.md).
+This increment does not provide production config evaluation, catalog or socket startup.
+
+### 1. Scope / Trigger
+
+Use explicit MANAGED mode when the caller does not already possess the server key.
+Existing PINNED callers and authentication/PTY contracts remain unchanged.
+
+### 2. Signatures
+
+Native config appends `host_key_mode`: PINNED=0 requires the original key/fingerprint;
+MANAGED=1 requires NULL key, length0, NULL fingerprint. Mixed/unknown modes fail before
+socket transfer. Java `openManaged(callback, lease, fd, candidateId, stepBudget)` uses
+its own JNI entry (19 session exports total), shares admission/claims/view ownership,
+and has no key argument. NativeBinding default fails closed. No key/secret getter.
+
+### 3. Contracts
+
+`ctos_ssh_kex_bind_pending_host` reserves the exact role/route slot without approval.
+`ctos_ssh_kex_pin_offered_host` can bind once only during begun initial cycle1 before
+approval/signature/completion. Unbound guards cannot approve, sign, complete or become
+ready. Actual transport verifier alone classifies the offered key through the existing
+issuer/candidate/exact managed evidence path. Only KNOWN or approved CAS_COMMITTED NEW
+may pin after renewed owner/env/role/view/cancel/deadline checks. Manual verifyHostKey
+is forbidden in MANAGED mode; Java refusal is local/nonterminal. Upstream signature and
+NEWKEYS still determine KEX; final selected SUCCESS alone authorizes a channel.
+
+SshHostKeyReviewMailbox binds the exact Review and role objects, immutable public
+metadata and unique ticket identity. One current decision only; approval still requires
+the caller's exact proposal/CAS. Original role deadline and a hard30s wall ceiling bound
+wait, with <=50ms slices and repeated live checks. UI resolve/cancel uses its independent
+monitor without owner queue or session JNI; late/cross/reused tickets fail. Missing UI,
+reject, interrupt, cancel or lost liveness cannot produce approval. Sink present/dismiss
+must publish without blocking; the ceiling cannot constrain arbitrary sink code.
+
+JNI still holds its global sessions_lock during the callback, so waiting blocks other
+session JNI. Do not promise concurrent-hop progress. Cross-thread cancellation wakes the
+mailbox directly; owner performs cleanup afterward. Do not extend role/loan deadlines.
+Failed connection cleanup does not undo an already committed user-approved trust write.
+
+### 4. Validation & Error Matrix
+
+| Condition | Required behavior |
+| --- | --- |
+| Mixed mode, unknown mode, invalid PINNED inputs | reject before FD ownership transfer |
+| Manual MANAGED verify, unbound/duplicate/late pin | no new host authority |
+| CHANGED/REVOKED/CERTIFICATE/INVALID or absent exact CAS | terminal KEX, no credential |
+| Post-callback cancellation/expiry/view/env drift | terminal, no pin/credential |
+| Stale, duplicate, cross-role or cross-mailbox ticket | no decision/proof |
+| Waiting owner loses role/view/callback liveness | wake/poll failure, ticket invalid |
+
+### 5. Good / Base / Bad Cases
+
+Good: actual offered key→exact KNOWN or reviewed NEW/CAS→signature/NEWKEYS→selected auth
+SUCCESS→shell. Base: PINNED stops and fixtures remain supported. Bad: select an arbitrary
+known_hosts key before KEX, auto-approve NEW, or enqueue approval behind its waiting owner.
+
+### 6. Tests Required
+
+Encrypted native positive/negative/callback-liveness and guard matrices; JVM explicit
+open/claim/reentry/cleanup plus mailbox decision/wait/reentry/liveness; strict JNI build
+and isolated Android fixture compile. Native QEMU and JVM are not Android JNI runtime.
+
+If a temporary dynamic Bionic runtime is gone, preserve the rebuilt dynamic test as
+not-run; do not fetch device libraries without current authorization. A separately linked
+NDK/Bionic static test may supply additional synthetic evidence only: record its own
+source/link adaptations, binary hash, counts and failed attempts. Never substitute that
+result for dynamic loader/Android JNI/device validation or modify the production archive
+to make the alternative test link. See the [static fallback evidence](../../../design/verification.md#20261019-managed-host).
+
+### 7. Wrong vs Correct
+
+Wrong: `session.open(..., null, null)` silently selects discovery, or UI calls session
+JNI to approve. Correct: explicit openManaged plus exact independent review mailbox;
+the existing candidate/CAS and transport verifier alone mint authority.
+
+## One session channel / PTY / shell (2026-10-19)
+
+The 2026-10-19 implementation contract is [session channel](../../../design/ssh-session-channel.md).
+Only final selected authentication SUCCESS permits beginShell. Preserve current proof,
+revocation, original deadlines, owner environment and thread-wide reentry checks.
+Bounded native channel parsing/flow control precedes JNI/Java synthetic validation,
+then existing terminal integration. Actual local/runtime evidence is recorded in
+[verification](../../../design/verification.md#20261019-ssh-shell). Do not infer that
+the product launcher exists.
+
+### 1. Scope / Trigger
+
+Use this contract when continuing authenticated sessions into one interactive PTY,
+or routing that session through the existing terminal renderer/owner.
+
+### 2. Signatures
+
+Six owner-only native APIs `begin_shell/shell_status/shell_write/shell_read/shell_resize/shell_eof`
+and corresponding Java `beginShell/shellStatus/writeShell/readShell/resizeShell/sendShellEof`
+use the exact frozen signatures/status tags0..6 in the linked design. JNI status is int[7];
+exit u32 is Java unsigned long. NativeBinding defaults fail closed, step's eight-int wire
+and initial-KEX complete remain unchanged. Shell增量为18 exports；后续显式MANAGED open后共19，见上节。
+
+```java
+void beginShell(int columns, int rows) throws VaultException;
+ShellStatus shellStatus() throws VaultException;
+int writeShell(byte[] bytes) throws VaultException;
+byte[] readShell(int maximum) throws VaultException;
+boolean resizeShell(int columns, int rows) throws VaultException;
+boolean sendShellEof() throws VaultException;
+```
+
+### 3. Contracts
+
+Only selected final SUCCESS2 can begin once. Current exact auth_proof remains mandatory;
+original role deadline is not renewed. Sequential open→PTY→shell confirms only after
+request ciphertext drain. One local channel0, window65536/maxpacket32768; peer IDs and
+windows are validated. read consumes bounded merged stdout/stderr and earns window
+credit; write returns accepted prefix/zero backpressure, never silently retries prefix.
+Transport input<=256KiB, encrypted output<=128KiB. Normal CLOSE and rejection drain
+before public terminal phase; process buffered packets before treating socket EOF as
+failure. Unknown exit status stays unknown; exit-signal never creates status0.
+
+Java retains saved selected-auth result and separate shell phase; owner and thread-wide
+reentry precede binding calls, pre/post live guards precede publication. Sticky accepted
+local EOF prevents a lying/regressing binding from reopening input. Native failure/Error
+keeps terminal uncertainty and cleanup responsibility; read arrays are wiped on failure.
+`shellOutputPublicationLive()` is a read-only cross-thread drop guard for already-read
+UI output, grants no native entry, and observes cancel/closed/view/role/original clock.
+
+SshTerminalSession owns cooperative pump, input<=65536, latest resize and one<=32768
+inflight output with acknowledgement. MainActivity factory executes on same scheduled
+terminalWorker; no live session transfer between threads. Factory receives a per-launch
+cancel token reserved before queueing, owns partial/extra resources only once invoked,
+and must close idempotently for retry. Controller closes session then factory; identity
+fences protect delayed release, and executor release waits outstanding output ack.
+Error paths retain owner retry before propagation. onDestroy schedules an owner barrier
+before shutdown; Stop fences cancel immediately and queues owner cleanup. No new
+foreground service, resolver, credential UI or external connector is implied.
+
+### 4. Validation & Error Matrix
+
+| Condition | Contract |
+| --- | --- |
+| KEX/service only, rejected/partial/change auth | no channel/provider, local phase or EACCES |
+| Wrong owner/environment or same-thread reentry | precise existing refusal, no alien mutation |
+| Malformed/early/wrong-channel/window overflow | terminal protocol error; no successful status |
+| No window/encrypted output capacity | accepted0/false; caller retains suffix/latest resize |
+| Cancel/view revoke/deadline/proof drift | terminal protected effect; no UI byte publication |
+| Peer CLOSE with buffered output | drain/read/ack before cleanup; optional exit remains typed |
+| Cleanup failure/Error or late ack | retain exact owner/resources until confirmed; no premature shutdown |
+
+### 5. Good / Base / Bad Cases
+
+Good: real encrypted synthetic auth→channel/PTY/shell→exact command/output→resize→u32
+exit/EOF/CLOSE, then retryable complete cleanup. Base: auth-only callers retain their
+old stops. Bad: allow PARTIAL, treat server text as lifecycle, move session to a reader
+thread, use infinite Handler queue as flow control, or clear a newer owner in old cleanup.
+
+### 6. Tests Required
+
+Required local tests cover native encrypted positive/negative/window/EOF/cleanup, JVM
+phase/liveness/reentry/read wiping, controller queue/ack/Error retries, Flutter typed
+generation/UTF8/SSH arrows and App/Root regression. Device JNI fixture execution and
+product launch acceptance are separate evidence, never inferred from compile/JVM.
+
+### 7. Wrong vs Correct
+
+Wrong: `if (output.contains("[session exited:")) session = false;` or resetting one
+global cancellation boolean inside a queued launch. Correct: parse typed host state
+with generation fencing, and reserve an exact cancellation token before queueing.
+
 ## Current scope
 
 The production pinned OpenSSH10.6p1 PIC archive (83 members, stock high-level
 callers excluded) now drives native KEX, fixed userauth service, one password
-request or direct-signed private-key request through12 session JNI exports.
+request or direct-signed private-key request, then one session channel / PTY / shell
+through19 session JNI exports (including explicit managed-host open).
 Java owns explicit phases and a thread-wide reentry guard. CSASv1 unencrypted
 keys and CSASv2 exact key/passphrase bundles use the same selected one-attempt
 receipt and current role/view/KEX proof. No Java session secret getter exists.
@@ -17,7 +546,7 @@ signature, and uses generated synthetic identities only. Host QEMU/Bionic and
 JVM evidence are recorded separately in design/verification.md. Real accounts
 and the production vault were not used; fixture packages were uninstalled.
 
-This remains an incomplete product client: channels/PTY/forwarding, launcher/UI,
+This remains an incomplete product client: forwarding, profile/connector launcher,
 KBI/MFA continuation, rekey/compression compatibility and real-account acceptance
 are open. Missing providers continue to fail closed. Encrypted PKCS8 is rejected;
 exact supported encryption/KDF limits follow below. Earlier dated/base contracts

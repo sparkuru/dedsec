@@ -35,15 +35,22 @@ final class SshVaultAdapter {
     void cancel(VaultOperation request) { vault.cancelOperation(request); }
 
     VaultOperation bundleRequest(SshBundleProposal proposal) throws VaultException {
-        proposal.requireOpen();
-        bundleGate.requireApproved(proposal);
-        return vault.beginSshBundle(proposal);
+        return bundleRequest(proposal, vault.newBundleContext(() -> { }));
+    }
+
+    VaultOperation bundleRequest(SshBundleProposal proposal, AppSecrets.BundleContext context) throws VaultException {
+        return vault.beginSshBundle(proposal, context, () -> {
+            proposal.requireOpen();
+            bundleGate.requireApproved(proposal);
+        });
     }
 
     void commitBundle(VaultOperation request, SshBundleProposal proposal, AppSecrets.EffectGuard guard)
             throws VaultException {
         proposal.requireOpen();
+        if (request != null && !request.consumed && request.bundleContext != null) vault.checkBundleContext(request.bundleContext);
         bundleGate.requireApproved(proposal);
+        if (request != null && !request.consumed && request.bundleContext != null) vault.checkBundleContext(request.bundleContext);
         vault.commitSshBundle(request, proposal, AppSecrets.boundGuard(guard, () -> {
             proposal.requireOpen();
             bundleGate.requireApproved(proposal);
@@ -64,6 +71,16 @@ final class SshVaultAdapter {
 
     VaultOperation fileRequest(String rootPath, String connectionId) throws VaultException {
         return vault.beginSshFiles(rootPath, connectionId);
+    }
+
+    AppSecrets.SshPublicReadContext fileContext(long deadline, AppSecrets.EffectGuard guard)
+            throws VaultException {
+        return vault.newSshPublicReadContext(deadline, guard);
+    }
+
+    VaultOperation fileRequest(String rootPath, String connectionId, AppSecrets.SshPublicReadContext context)
+            throws VaultException {
+        return vault.beginSshFiles(rootPath, connectionId, context);
     }
 
     void useFiles(VaultOperation request, String rootPath, String connectionId, FileReceiver receiver) throws VaultException {
@@ -94,13 +111,23 @@ final class SshVaultAdapter {
     }
 
     VaultOperation saveRequest(String entryId, String targetIdentity, String connectionId) throws VaultException {
-        hostKeyGate.requireVerified(connectionId, targetIdentity);
-        return vault.beginSshSave(entryId, targetIdentity, connectionId);
+        return saveRequest(entryId, targetIdentity, connectionId, vault.newSshEntryMutationContext());
+    }
+
+    AppSecrets.SshEntryMutationContext mutationContext(long deadline, AppSecrets.EffectGuard guard)
+            throws VaultException {
+        return vault.newSshEntryMutationContext(deadline, guard);
+    }
+
+    VaultOperation saveRequest(String entryId, String targetIdentity, String connectionId,
+            AppSecrets.SshEntryMutationContext context) throws VaultException {
+        return vault.beginSshSave(entryId, targetIdentity, connectionId, context,
+                () -> hostKeyGate.requireVerified(connectionId, targetIdentity));
     }
 
     void save(VaultOperation request, String entryId, String targetIdentity, String connectionId, String label,
             boolean keyPassphrase, byte[] credential, AppSecrets.EffectGuard guard) throws VaultException {
-        hostKeyGate.requireVerified(connectionId, targetIdentity);
+        // Core copies caller bytes before invoking the retained admission host gate.
         vault.saveSsh(request, entryId, targetIdentity, connectionId, label, keyPassphrase, credential, AppSecrets.boundGuard(guard, () -> {
             hostKeyGate.requireVerified(connectionId, targetIdentity);
         }));
@@ -109,14 +136,18 @@ final class SshVaultAdapter {
     VaultOperation deleteRequest(String entryId, String targetIdentity) throws VaultException {
         return vault.beginSshDelete(entryId, targetIdentity);
     }
+    VaultOperation deleteRequest(String entryId, String targetIdentity, AppSecrets.SshEntryMutationContext context)
+            throws VaultException { return vault.beginSshDelete(entryId, targetIdentity, context); }
     void delete(VaultOperation request, String entryId, String targetIdentity, AppSecrets.EffectGuard guard)
             throws VaultException { vault.deleteSsh(request, entryId, targetIdentity, guard); }
 
     VaultOperation trustRequest(SshTrustProposal proposal) throws VaultException {
-        proposal.requireOpen();
-        hostKeyGate.requireVerified(proposal.connectionId, proposal.targetIdentity);
-        trustGate.requireApproved(proposal);
-        return vault.beginTrustUpdate(proposal);
+        AppSecrets.SshTrustContext context = vault.newSshTrustContext(proposal);
+        return vault.beginTrustUpdate(proposal, context, () -> {
+            proposal.requireOpen();
+            hostKeyGate.requireVerified(proposal.connectionId, proposal.targetIdentity);
+            trustGate.requireApproved(proposal);
+        });
     }
     void updateTrust(VaultOperation request, SshTrustProposal proposal, AppSecrets.EffectGuard guard) throws VaultException {
         proposal.requireOpen();
@@ -136,10 +167,26 @@ final class SshVaultAdapter {
     VaultOperation trustRequest(SshRoleContext role, SshHostKeyAuthority.Evidence evidence,
             SshHostKeyAuthority.Proof hostKey, SshManagedKnownHostsProvider.SnapshotReceipt snapshot,
             SshTrustProposal proposal) throws VaultException {
+        return trustRequest(role, evidence, hostKey, snapshot, proposal,
+                trustContext(snapshot, proposal, () -> { }));
+    }
+
+    AppSecrets.SshTrustContext trustContext(SshManagedKnownHostsProvider.SnapshotReceipt snapshot,
+            SshTrustProposal proposal, AppSecrets.EffectGuard guard) throws VaultException {
+        return vault.newSshTrustContext(snapshot.epoch,
+                Math.min(snapshot.deadline, snapshot.role.deadline), proposal, guard);
+    }
+
+    VaultException uncertainTrustCommit(Throwable failure) { return vault.uncertainTrustCommit(failure); }
+
+    VaultOperation trustRequest(SshRoleContext role, SshHostKeyAuthority.Evidence evidence,
+            SshHostKeyAuthority.Proof hostKey, SshManagedKnownHostsProvider.SnapshotReceipt snapshot,
+            SshTrustProposal proposal, AppSecrets.SshTrustContext context) throws VaultException {
         requireTrustBinding(role, evidence, hostKey, snapshot, proposal);
         VaultOperation request = null;
         try {
-            request = vault.beginTrustUpdate(proposal);
+            request = vault.beginTrustUpdate(proposal, context,
+                    () -> requireTrustBinding(role, evidence, hostKey, snapshot, proposal));
             request.bindRole(role, hostKey);
             request.bindTrust(snapshot, role, hostKey, evidence, proposal);
             return request;

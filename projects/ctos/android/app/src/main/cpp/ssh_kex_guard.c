@@ -15,6 +15,7 @@ struct role {
     ctos_ssh_role_token bootstrap;
     pid_t owner;
     unsigned int hop, begun, approved, signed_key, complete;
+    unsigned int pending_host, host_bound;
     uint64_t deadline, cycle;
     unsigned char nonce[32], connection[32], host[32];
 };
@@ -46,17 +47,18 @@ static int reject(struct role *role) {
 static int matches(struct role *role, const struct sshkey *key) {
     unsigned char *hash = NULL;
     size_t length = 0;
-    int result = key != NULL && sshkey_fingerprint_raw(key, SSH_DIGEST_SHA256,
+    int result = role->host_bound && key != NULL && sshkey_fingerprint_raw(key, SSH_DIGEST_SHA256,
         &hash, &length) == 0 && length == 32 && timingsafe_bcmp(hash, role->host, 32) == 0;
     if (hash != NULL) { explicit_bzero(hash, length); free(hash); }
     return result;
 }
-int ctos_ssh_kex_bind_role(struct ssh *ssh, ctos_ssh_role_token bootstrap,
-    const unsigned char host[32]) {
+static int bind_role(struct ssh *ssh, ctos_ssh_role_token bootstrap,
+    const unsigned char host[32], int pending_host) {
     struct ctos_ssh_role_snapshot snapshot;
     uint64_t time = now();
     if (ctos_ssh_role_bootstrap_snapshot(bootstrap, &snapshot) != 0
-        || ssh == NULL || ssh->kex == NULL || ssh->kex->server || !nonzero(host)
+        || ssh == NULL || ssh->kex == NULL || ssh->kex->server
+        || (!pending_host && !nonzero(host))
         || time == 0 || snapshot.owner_pid != getpid() || snapshot.owner_uid != getuid()
         || lookup(ssh) != NULL)
         return SSH_ERR_INVALID_ARGUMENT;
@@ -73,10 +75,37 @@ int ctos_ssh_kex_bind_role(struct ssh *ssh, ctos_ssh_role_token bootstrap,
         roles[i].hop = snapshot.hop; roles[i].deadline = snapshot.deadline;
         memcpy(roles[i].nonce, snapshot.role_nonce, 32);
         memcpy(roles[i].connection, snapshot.connection_binding, 32);
-        memcpy(roles[i].host, host, 32);
+        roles[i].pending_host = pending_host;
+        roles[i].host_bound = !pending_host;
+        if (!pending_host) memcpy(roles[i].host, host, 32);
         return 0;
     }
     return SSH_ERR_ALLOC_FAIL;
+}
+int ctos_ssh_kex_bind_role(struct ssh *ssh, ctos_ssh_role_token bootstrap,
+    const unsigned char host[32]) {
+    return bind_role(ssh, bootstrap, host, 0);
+}
+int ctos_ssh_kex_bind_pending_host(struct ssh *ssh, ctos_ssh_role_token bootstrap) {
+    return bind_role(ssh, bootstrap, NULL, 1);
+}
+int ctos_ssh_kex_pin_offered_host(struct ssh *ssh, const struct sshkey *key) {
+    struct role *role = lookup(ssh);
+    unsigned char *hash = NULL;
+    size_t length = 0;
+    uint64_t time = now();
+    int result = SSH_ERR_SIGNATURE_INVALID;
+    if (role == NULL || !role->pending_host || role->host_bound || !role->begun
+        || role->cycle != 1 || role->approved || role->signed_key || role->complete
+        || time == 0 || time >= role->deadline || key == NULL) return result;
+    if (sshkey_fingerprint_raw(key, SSH_DIGEST_SHA256, &hash, &length) == 0
+        && length == 32 && nonzero(hash)) {
+        memcpy(role->host, hash, 32);
+        role->host_bound = 1;
+        result = 0;
+    }
+    if (hash != NULL) { explicit_bzero(hash, length); free(hash); }
+    return result;
 }
 void ctos_ssh_kex_unbind(struct ssh *ssh) {
     for (unsigned int i = 0; i < 8; i++)
@@ -108,7 +137,7 @@ int ctos_ssh_kex_signed(struct ssh *ssh, const struct sshkey *key) {
 int ctos_ssh_kex_complete(struct ssh *ssh) {
     if (ssh != NULL && ssh->kex != NULL && ssh->kex->server) return 0;
     struct role *role = lookup(ssh);
-    if (role == NULL || !role->begun || !role->approved || !role->signed_key ||
+    if (role == NULL || !role->host_bound || !role->begun || !role->approved || !role->signed_key ||
         sshbuf_len(ssh->kex->session_id) < 20 || sshbuf_len(ssh->kex->session_id) > 64)
         return reject(role);
     role->begun = 0; role->complete = 1;
@@ -118,10 +147,36 @@ uint64_t ctos_ssh_kex_ready(struct ssh *ssh, unsigned int hop,
     const unsigned char nonce[32], const unsigned char connection[32]) {
     struct role *role = lookup(ssh);
     uint64_t time = now();
-    if (role == NULL || time == 0 || time >= role->deadline || !role->complete ||
+    if (role == NULL || !role->host_bound || time == 0 || time >= role->deadline || !role->complete ||
         role->begun || !ssh->kex->done || hop != role->hop ||
         !nonzero(nonce) || !nonzero(connection) ||
         timingsafe_bcmp(role->nonce, nonce, 32) != 0 ||
         timingsafe_bcmp(role->connection, connection, 32) != 0) return 0;
     return role->cycle;
+}
+
+uint64_t ctos_ssh_kex_transport_ready(struct ssh *ssh, unsigned int hop,
+    const unsigned char nonce[32], const unsigned char connection[32]) {
+    struct ctos_ssh_role_snapshot snapshot;
+    uint64_t result = 0;
+    if (ssh == NULL || ssh->kex == NULL || ssh->kex->server
+        || !nonzero(nonce) || !nonzero(connection)) return 0;
+    memset(&snapshot, 0, sizeof(snapshot));
+    for (unsigned int i = 0; i < 8; i++) {
+        struct role *role = &roles[i];
+        if (role->ssh != ssh || role->owner != getpid()) continue;
+        if (ctos_ssh_role_transport_snapshot(role->bootstrap, &snapshot) != 0) break;
+        if (snapshot.owner_pid == getpid() && snapshot.owner_uid == getuid()
+            && snapshot.hop == role->hop && snapshot.deadline == role->deadline
+            && role->host_bound && role->approved && role->signed_key && role->complete
+            && !role->begun && ssh->kex->done && hop == role->hop
+            && timingsafe_bcmp(role->nonce, nonce, 32) == 0
+            && timingsafe_bcmp(role->connection, connection, 32) == 0
+            && timingsafe_bcmp(snapshot.role_nonce, nonce, 32) == 0
+            && timingsafe_bcmp(snapshot.connection_binding, connection, 32) == 0)
+            result = role->cycle;
+        break;
+    }
+    explicit_bzero(&snapshot, sizeof(snapshot));
+    return result;
 }

@@ -33,8 +33,33 @@ enum ctos_ssh_native_client_private_key_auth_result {
     CTOS_SSH_PRIVATE_KEY_AUTH_PARTIAL = 4
 };
 
+enum ctos_ssh_native_shell_phase {
+    CTOS_SSH_SHELL_DISABLED = 0,
+    CTOS_SSH_SHELL_OPENING = 1,
+    CTOS_SSH_SHELL_PTY_PENDING = 2,
+    CTOS_SSH_SHELL_SHELL_PENDING = 3,
+    CTOS_SSH_SHELL_RUNNING = 4,
+    CTOS_SSH_SHELL_CLOSED = 5,
+    CTOS_SSH_SHELL_REJECTED = 6
+};
+
+struct ctos_ssh_native_shell_status {
+    enum ctos_ssh_native_shell_phase phase;
+    int remote_eof;
+    int local_eof;
+    int exit_status_known;
+    uint32_t exit_status;
+    int exit_signal;
+    size_t buffered_bytes;
+};
+
 struct ctos_ssh_native_client;
 struct sshkey;
+
+enum ctos_ssh_native_host_key_mode {
+    CTOS_SSH_HOST_KEY_PINNED = 0,
+    CTOS_SSH_HOST_KEY_MANAGED = 1
+};
 
 struct ctos_ssh_native_client_config {
     ctos_ssh_role_token role;
@@ -50,8 +75,8 @@ struct ctos_ssh_native_client_config {
     void *callback_environment;
     uint64_t deadline;
     size_t step_budget;
-    /* The blob is parsed and owned by the native client before OpenSSH is
-     * attached. The caller may wipe it as soon as open returns. */
+    /* PINNED parses and owns this blob before OpenSSH is attached. The caller
+     * may wipe it as soon as open returns; MANAGED requires NULL/0/NULL. */
     const unsigned char *server_host_public_key_blob;
     size_t server_host_public_key_length;
     const unsigned char *expected_host_fingerprint;
@@ -63,6 +88,8 @@ struct ctos_ssh_native_client_config {
     /* Optional CSAS v1 metadata, borrowed only for open; never credential bytes. */
     const unsigned char *authentication_selection_wire;
     size_t authentication_selection_wire_length;
+    /* Explicit opt-in: MANAGED requires absent blob and fingerprint. */
+    enum ctos_ssh_native_host_key_mode host_key_mode;
 };
 
 struct ctos_ssh_native_client_step {
@@ -84,6 +111,10 @@ struct ctos_ssh_native_client_step {
     int packet_type;
 };
 
+/* Prepare a caller-owned stream/RDWR/nonblocking descriptor for handoff.
+ * Sets FD_CLOEXEC only; never closes, duplicates or adopts the descriptor. */
+int ctos_ssh_native_client_prepare_tcp_descriptor(int);
+
 /* A successful open owns the original descriptor, its attached duplicate,
  * parsed host key and managed-view borrow. On failure, the original
  * descriptor, pre-opened callback and view borrow remain caller-owned. */
@@ -96,7 +127,8 @@ int ctos_ssh_native_client_step(
     struct ctos_ssh_native_client *,
     struct ctos_ssh_native_client_step *);
 
-/* Verifies the exact managed host-key path and synchronously invokes evidence. */
+/* PINNED-only diagnostic verification through the exact managed trust path.
+ * MANAGED accepts actual transport callbacks only, never this manual entry. */
 int ctos_ssh_native_client_verify_host_key(
     struct ctos_ssh_native_client *, const void *, size_t);
 
@@ -134,6 +166,16 @@ int ctos_ssh_native_client_private_key_auth_result(
 int ctos_ssh_native_client_begin_userauth_service(struct ctos_ssh_native_client *);
 int ctos_ssh_native_client_userauth_service_ready(
     const struct ctos_ssh_native_client *);
+
+int ctos_ssh_native_client_begin_shell(struct ctos_ssh_native_client *, unsigned int, unsigned int);
+int ctos_ssh_native_client_shell_status(const struct ctos_ssh_native_client *,
+    struct ctos_ssh_native_shell_status *);
+int ctos_ssh_native_client_shell_write(struct ctos_ssh_native_client *,
+    const unsigned char *, size_t, size_t *);
+int ctos_ssh_native_client_shell_read(struct ctos_ssh_native_client *,
+    unsigned char *, size_t, size_t *);
+int ctos_ssh_native_client_shell_resize(struct ctos_ssh_native_client *, unsigned int, unsigned int);
+int ctos_ssh_native_client_shell_eof(struct ctos_ssh_native_client *);
 
 /*
  * Close is owned by the event-loop thread that opened the callback binding and

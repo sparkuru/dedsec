@@ -351,7 +351,7 @@ public final class SshManagedKnownHostsProviderTest {
         try (Prepared prepared = prepared(true, true, true)) {
             prepared.review();
             vault.attachSshValidator(null);
-            rejects("VAULT_SSH_VALIDATION_REQUIRED", prepared::commit);
+            rejects("VAULT_CHANGED", prepared::commit);
             assertArrayEquals(OLD_CONTENT, readKnownHosts());
         }
 
@@ -553,9 +553,12 @@ public final class SshManagedKnownHostsProviderTest {
 
     @Test public void exactOwnCasKeepsLoanButAdvancesEpochAndOldCancellationStillRevokes() throws Exception {
         long epoch = vault.session.epoch();
-        VaultOperation fileRequest = vault.beginSshFiles(ROOT, CONNECTION);
-        fileRequest.attachRevocation(rootView);
-        vault.session.attachRevocation(epoch, rootView);
+        AppSecrets.SshPublicReadContext origin = vault.newSshPublicReadContext(epoch,
+                clock.value + 120000, () -> { });
+        VaultOperation fileRequest = vault.beginSshFiles(ROOT, CONNECTION, origin);
+        try (AppSecrets.SshPublicReadPreparation prepared = vault.prepareSshPublicRead(fileRequest, ROOT, CONNECTION)) {
+            vault.attachSshPublicRead(prepared, rootView);
+        }
         try (Prepared prepared = prepared(true, true, true)) {
             prepared.review();
             assertEquals(SshTrustProposal.CasStatus.COMMITTED, prepared.commit().status);
@@ -563,8 +566,48 @@ public final class SshManagedKnownHostsProviderTest {
             assertTrue(rootView.active());
             role.requireActive(clock);
             rejects("VAULT_OPERATION", () -> vault.sshFiles(fileRequest, ROOT, CONNECTION, files -> fail("old operation")));
-            vault.cancelOperation(fileRequest);
+            origin.cancel();
             assertFalse(rootView.active());
+        }
+    }
+
+    @Test public void publicSnapshotRetainsOriginalRoleDeadlineAndNeverReplacesItsView() throws Exception {
+        vault.session.attachRevocation(vault.session.epoch(), rootView);
+        clock.value = role.deadline - 1;
+        try (SshManagedKnownHostsProvider.SnapshotReceipt receipt =
+                SshManagedKnownHostsProvider.snapshotFor(adapter(true, true), role, clock, ROOT, PATH,
+                        OBJECT_ID, OBJECT_IDENTITY)) {
+            assertEquals(role.deadline, receipt.deadline);
+            assertTrue(rootView.active());
+            assertTrue(vault.session.attachedRevocation(vault.session.epoch()) == rootView);
+            clock.value = role.deadline;
+            rejects("SSH_ROLE_EXPIRED", receipt::requireLive);
+        }
+        assertTrue(rootView.active());
+    }
+
+    @Test public void roleCloseViewRevokeAndOriginalExpiryDuringEitherValidationRejectSnapshot() throws Exception {
+        for (int stage = 1; stage <= 2; stage++) for (int kind = 0; kind < 3; kind++) {
+            clock.value = 1000;
+            PublicView view = new PublicView();
+            SshRoleContext exactRole = issueRole(0, "snapshot-" + stage + "-" + kind,
+                    8_100 + stage * 3 + kind, 20 + stage * 3 + kind, view);
+            java.util.concurrent.atomic.AtomicInteger validations = new java.util.concurrent.atomic.AtomicInteger();
+            final int at = stage, problem = kind;
+            vault.attachSshValidator(loan -> {
+                assertFalse(Thread.holdsLock(vault)); assertFalse(Thread.holdsLock(vault.session));
+                assertFalse(Thread.holdsLock(vault.publicationLock)); assertFalse(Thread.holdsLock(exactRole));
+                if (validations.incrementAndGet() == at) {
+                    if (problem == 0) exactRole.close();
+                    else if (problem == 1) view.revoke();
+                    else clock.value = exactRole.deadline;
+                }
+            });
+            rejects(kind == 1 ? "SSH_FILE_VIEW" : "SSH_ROLE_EXPIRED", () ->
+                    SshManagedKnownHostsProvider.snapshotFor(adapter(true, true), exactRole, clock,
+                            ROOT, PATH, OBJECT_ID, OBJECT_IDENTITY));
+            assertEquals(stage, validations.get());
+            exactRole.close();
         }
     }
 
@@ -595,9 +638,85 @@ public final class SshManagedKnownHostsProviderTest {
         try (Prepared prepared = prepared(true, true, true)) {
             prepared.review();
             store.afterCommit = vault::lock;
-            rejects("SSH_FILE_VIEW", prepared::commit);
+            rejects("VAULT_COMMIT_UNCERTAIN", prepared::commit);
             assertFalse(rootView.active());
             assertFalse(vault.session.unlocked());
+        }
+    }
+
+    @Test public void originalPreapprovalContextRejectsValidatorReregistration() throws Exception {
+        try (Prepared prepared = prepared(true, true, true)) {
+            prepared.review();
+            vault.attachSshValidator(loan -> { });
+            byte[] before = store.bytes.clone();
+            rejects("VAULT_CHANGED", prepared::commit);
+            assertArrayEquals(before, store.bytes);
+        }
+    }
+
+    @Test public void closeDuringDetachedTrustAdmissionReturnsBeforeValidatorAndCancels() throws Exception {
+        java.util.concurrent.CountDownLatch entered = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.atomic.AtomicBoolean armed = new java.util.concurrent.atomic.AtomicBoolean();
+        vault.attachSshValidator(loan -> {
+            if (!armed.get()) return;
+            assertFalse(Thread.holdsLock(vault)); assertFalse(Thread.holdsLock(vault.session));
+            entered.countDown();
+            try { if (!release.await(5, java.util.concurrent.TimeUnit.SECONDS)) throw new AssertionError("Fixture timeout"); }
+            catch (InterruptedException failure) { throw new AssertionError(failure); }
+        });
+        try (Prepared prepared = prepared(true, true, true)) {
+            prepared.review(); armed.set(true);
+            byte[] before = store.bytes.clone();
+            java.util.concurrent.atomic.AtomicReference<Throwable> outcome = new java.util.concurrent.atomic.AtomicReference<>();
+            Thread writer = new Thread(() -> { try { prepared.commit(); } catch (Throwable failure) { outcome.set(failure); } });
+            writer.start(); assertTrue(entered.await(5, java.util.concurrent.TimeUnit.SECONDS));
+            java.util.concurrent.CountDownLatch closed = new java.util.concurrent.CountDownLatch(1);
+            Thread closer = new Thread(() -> { prepared.provider.close(); closed.countDown(); });
+            closer.start();
+            try { assertTrue("Provider close waited for validator", closed.await(2, java.util.concurrent.TimeUnit.SECONDS)); }
+            finally { release.countDown(); writer.join(5000); closer.join(5000); }
+            assertFalse(writer.isAlive()); assertFalse(closer.isAlive());
+            assertTrue(outcome.get() instanceof VaultException); assertArrayEquals(before, store.bytes);
+        }
+    }
+
+    @Test public void deliveredRealCommitRejectedByManagedRoleCheckLocksAndReportsUncertain() throws Exception {
+        vault.session.attachRevocation(vault.session.epoch(), rootView);
+        try (Prepared prepared = prepared(true, true, true)) {
+            prepared.review();
+            SshManagedProvider.TrustCasWriter lateClose = new SshManagedProvider.TrustCasWriter() {
+                @Override public SshTrustProposal.CasResult write(SshHostKeyAuthority.Evidence evidence,
+                        SshTrustProposal proposal) throws VaultException { throw VaultException.invalid(); }
+                @Override public SshTrustProposal.CasResult write(SshHostKeyAuthority.Evidence evidence,
+                        SshHostKeyAuthority.Proof proof, SshTrustProposal proposal) throws VaultException {
+                    SshTrustProposal.CasResult result = prepared.provider.write(evidence, proof, proposal);
+                    role.close();
+                    return result;
+                }
+                @Override public VaultException invalidateCommittedResult() {
+                    return prepared.provider.invalidateCommittedResult();
+                }
+            };
+            SshManagedProvider managed = new SshManagedProvider(new SshCredentialBridge(vault, prepared.authority, clock),
+                    clock, prepared.provider, lateClose, null);
+            rejects("VAULT_COMMIT_UNCERTAIN", () -> managed.writeBack(prepared.evidence, prepared.proof, prepared.proposal));
+            assertFalse(vault.session.unlocked()); assertFalse(rootView.active());
+        }
+    }
+
+    @Test public void directRoleBoundCoreCannotContinueAfterFinalGuardClosesRole() throws Exception {
+        vault.session.attachRevocation(vault.session.epoch(), rootView);
+        try (Prepared prepared = prepared(true, true, true)) {
+            prepared.review();
+            VaultOperation request = prepared.adapter.trustRequest(role, prepared.evidence, prepared.proof,
+                    prepared.snapshot, prepared.proposal);
+            java.util.concurrent.atomic.AtomicBoolean persisted = new java.util.concurrent.atomic.AtomicBoolean();
+            store.afterCommit = () -> persisted.set(true);
+            rejects("VAULT_COMMIT_UNCERTAIN", () -> vault.updateTrust(request, prepared.proposal, () -> {
+                        if (persisted.get()) role.close();
+                    }));
+            assertTrue(persisted.get()); assertFalse(vault.session.unlocked()); assertFalse(rootView.active());
         }
     }
 

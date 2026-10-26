@@ -224,6 +224,7 @@ int ctos_ssh_hostfile_issue(const struct ctos_ssh_view *view,
     int parse_result;
     size_t path_length;
     size_t host_length;
+    char lookup_host[CTOS_SSH_ROLE_HOST_BYTES + sizeof("[]:65535")];
     struct hostfile_parse_state parse_state = {0};
 
     if (issue == NULL) {
@@ -232,6 +233,7 @@ int ctos_ssh_hostfile_issue(const struct ctos_ssh_view *view,
     }
     memset(issue, 0, sizeof(*issue));
     memset(&snapshot, 0, sizeof(snapshot));
+    errno = 0;
     if (view == NULL || role == 0 || known_hosts_path == NULL || host == NULL
         || host_key == NULL || valid_candidate_id(candidate_id) != 0
         || (callback == 0) != (environment == NULL)
@@ -244,11 +246,26 @@ int ctos_ssh_hostfile_issue(const struct ctos_ssh_view *view,
         || same_slice_text(view->connection, snapshot.connection_id) != 0
         || ctos_ssh_view_live(view) != 0
         || managed_known_hosts_root(view) != 0) {
-        if (errno == 0) errno = EINVAL;
+        error = errno == 0 ? EINVAL : errno;
         goto failed;
     }
     (void)path_length;
     (void)host_length;
+    /* Match upstream put_host_port without its fatal allocator path. Role and
+     * callback evidence retain the original host and separate port binding. */
+    int lookup_length = snapshot.port == 22U
+        ? snprintf(lookup_host, sizeof(lookup_host), "%s", host)
+        : snprintf(lookup_host, sizeof(lookup_host), "[%s]:%u", host, snapshot.port);
+    if (lookup_length <= 0 || (size_t)lookup_length >= sizeof(lookup_host)) {
+        error = EOVERFLOW;
+        goto failed;
+    }
+    /* Upstream host entry writers lowercase before hashing. Hashed lookup is
+     * case-sensitive, so canonicalize only this internal endpoint identifier. */
+    for (size_t index = 0; index < (size_t)lookup_length; index++) {
+        if (lookup_host[index] >= 'A' && lookup_host[index] <= 'Z')
+            lookup_host[index] = (char)(lookup_host[index] - 'A' + 'a');
+    }
     file = ctos_ssh_view_lookup(view, (const unsigned char *)known_hosts_path,
         strlen(known_hosts_path), CTOS_SSH_KNOWN_HOSTS);
     if (file == NULL || file->body.length > CTOS_SSH_CALLBACK_MAX_FILE_BYTES
@@ -284,7 +301,7 @@ int ctos_ssh_hostfile_issue(const struct ctos_ssh_view *view,
          * malformed hashed host token instead of silently treating it as a
          * non-match and allowing NEW. */
         parse_result = hostkeys_foreach_file(CTOS_SSH_HOSTFILE_SYNTHETIC_PATH,
-            input, remember_invalid_hostfile_line, &parse_state, host, NULL,
+            input, remember_invalid_hostfile_line, &parse_state, lookup_host, NULL,
             HKF_WANT_PARSE_KEY, 0);
         if (parse_result != 0) {
             error = EIO;
@@ -311,7 +328,7 @@ int ctos_ssh_hostfile_issue(const struct ctos_ssh_view *view,
         goto failed;
     }
     if (input != NULL) {
-        load_hostkeys_file(hostkeys, host, CTOS_SSH_HOSTFILE_SYNTHETIC_PATH,
+        load_hostkeys_file(hostkeys, lookup_host, CTOS_SSH_HOSTFILE_SYNTHETIC_PATH,
             input, 0);
         fclose(input);
         input = NULL;
@@ -369,7 +386,7 @@ int ctos_ssh_hostfile_issue(const struct ctos_ssh_view *view,
             goto failed;
         }
     }
-    if (ctos_hostfile_write_entry(replacement_stream, host, NULL, host_key, 0) != 1
+    if (ctos_hostfile_write_entry(replacement_stream, lookup_host, NULL, host_key, 0) != 1
         || copy_replacement(replacement_stream, replacement_body,
             replacement_capacity, &issue->replacement_body_length) != 0
         || digest_body(replacement_body, issue->replacement_body_length,

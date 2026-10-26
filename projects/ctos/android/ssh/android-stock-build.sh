@@ -7,7 +7,7 @@ readonly NDK_ROOT="$PROJECT_ROOT/.devhome/android-sdk/ndk/27.0.12077973"
 readonly NDK_BIN="$NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin"
 readonly OPENSSH_SHA=a9dc9565dffe8640f64d863cd29a32bc4a3dbdec0566a7fc44c5d6ee767d5f39
 readonly OPENSSL_SHA=603f5602e2eef00d77fbd429d34dcd5822bb301757a1bc9cdb24c670f1eb859a
-readonly BIONIC_PATCH=/app/.trellis/tasks/10-08-ssh-terminal-client/research/openssh-10.6p1-bionic-includes.patch
+readonly BIONIC_PATCH=/app/android/ssh/openssh-10.6p1-bionic-includes.patch
 readonly BIONIC_PATCH_SHA=ea81738f191e7d9fb70ce0943b45ea06b07c4057d3d0128a694331b3a32f8b89
 readonly UPSTREAM_INCLUDES_SHA=fbff8dd95e2e6f116a64c5fb4ab8ce4f7469136371d522aacce745f98a5c23ea
 readonly UPSTREAM_BSD_MISC_C_SHA=355ff9f880563af7e7d34473e2e8f4e90ffb859dd94b23dcc3952deba38fc2a8
@@ -139,7 +139,7 @@ main() {
 		require_command "$tool"
 	done
 	[[ -f /.dockerenv && -f /app/hako-env.sh && -f /app/hako ]] || die 'run through the project hako container'
-	[[ "$(realpath -e -- "${BASH_SOURCE[0]}")" == /app/.trellis/tasks/10-08-ssh-terminal-client/research/android-stock-build.sh ]] || die 'runner must come from the fixed /app project mount'
+	[[ "$(realpath -e -- "${BASH_SOURCE[0]}")" == /app/android/ssh/android-stock-build.sh ]] || die 'runner must come from the fixed /app project mount'
 	[[ "$(realpath -e -- "$BUILD_ROOT")" == "$BUILD_ROOT" && -d "$BUILD_ROOT" ]] || die 'project build root must already exist without symlinks'
 	assert_safe_directory "$input_dir"
 	verify_archive "$input_dir/openssh-10.6p1.tar.gz" "$OPENSSH_SHA"

@@ -168,6 +168,8 @@ final class SshRestoreReview implements AutoCloseable {
     synchronized SshRestoreReview bind(VaultManifest source, VaultManifest target, String providerId,
             String version, long revision, byte[] sourceDigest, byte[] targetDigest) throws VaultException {
         requireOpen();
+        requireReviewedMetadata(source);
+        requireReviewedMetadata(target);
         Map<String, Coverage> expected = new HashMap<>();
         expectedCoverage(expected, Side.SOURCE, source);
         if (target != null) expectedCoverage(expected, Side.TARGET, target);
@@ -214,6 +216,12 @@ final class SshRestoreReview implements AutoCloseable {
         if (closed) throw new VaultException("VAULT_EXPIRED", "Restore review expired");
     }
     @Override public synchronized void close() { closed = true; }
+
+    static void requireReviewedMetadata(VaultManifest manifest) throws VaultException {
+        // The current projection has no key-binding/account rows to review.
+        if (manifest != null && (!manifest.keyBindings.isEmpty() || !manifest.accounts.isEmpty()))
+            throw new VaultException("VAULT_SSH_REVIEW_REQUIRED", "SSH restore review is not available yet");
+    }
 
     private static void expectedCoverage(Map<String, Coverage> result, Side side, VaultManifest manifest) throws VaultException {
         for (VaultManifest.FileObject file : manifest.files) { Coverage object = Coverage.file(side, file); result.put(object.key(), object); }

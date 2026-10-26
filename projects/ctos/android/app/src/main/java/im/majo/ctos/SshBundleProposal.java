@@ -116,8 +116,9 @@ final class SshBundleProposal implements AutoCloseable {
     }
 
     final String binding;
+    final Object requestIdentity = new Object();
     private final List<Change> changes;
-    private boolean closed;
+    private volatile boolean closed;
 
     SshBundleProposal(List<Change> input) throws VaultException {
         if (input == null || input.isEmpty() || input.size() > VaultManifest.MAX_FILES) throw VaultException.invalid();
@@ -142,7 +143,7 @@ final class SshBundleProposal implements AutoCloseable {
         }
     }
 
-    synchronized void requireOpen() throws VaultException { if (closed) throw expired(); }
+    void requireOpen() throws VaultException { if (closed) throw expired(); }
 
     synchronized List<Summary> summary() throws VaultException {
         requireOpen();
@@ -175,7 +176,12 @@ final class SshBundleProposal implements AutoCloseable {
             edits.put(change.path, change);
         }
         List<VaultManifest.FileObject> files = new ArrayList<>();
+        List<VaultManifest.Entry> entries = new ArrayList<>();
         try {
+            for (VaultManifest.Entry entry : previous.entries) {
+                entries.add(new VaultManifest.Entry(entry.type, entry.id, entry.identity, entry.label,
+                        entry.algorithm, entry.digits, entry.period, entry.secret));
+            }
             for (VaultManifest.FileObject file : previous.files) if (!edits.containsKey(file.path)) {
                 files.add(new VaultManifest.FileObject(file.type, file.id, file.path, file.identity, file.content, file.references));
             }
@@ -184,16 +190,17 @@ final class SshBundleProposal implements AutoCloseable {
                         change.identity, change.content, change.references));
             }
             // Whole-library validation rejects dangling references and associated key-passphrase entries.
-            return new VaultManifest(previous.entries, files);
-        } catch (VaultException failure) {
+            return previous.withObjects(entries, files);
+        } catch (Throwable failure) {
+            for (VaultManifest.Entry entry : entries) VaultCodec.wipe(entry.secret);
             for (VaultManifest.FileObject file : files) VaultCodec.wipe(file.content);
             throw failure;
         }
     }
 
     @Override public synchronized void close() {
-        for (Change change : changes) change.close();
         closed = true;
+        for (Change change : changes) change.close();
     }
 
     private static void validateFile(VaultManifest.FileObject file) throws VaultException {

@@ -14,5 +14,5 @@ work through the Android host APIs.
 | [Type Safety](./type-safety.md) | Dart models and MethodChannel JSON boundaries |
 | [Quality](./quality-guidelines.md) | Flutter checks and representative tests |
 | [Connection Snapshots](./connection-snapshots.md) | Native payload, freshness, clone alias, and search contracts |
-| [Terminal Interaction](./terminal-interaction.md) | PTY input, IME, shortcuts, output selection, and device checks |
+| [Terminal Interaction](./terminal-interaction.md) | Production protected password SSH entry/review/cancellation, typed local/SSH events, per-session UTF8, remote arrows, PTY input/IME/shortcuts/selection and device checks |
 | [Workbench](./workbench.md) | Catalogue/forms, masked results, task/service lifecycle, and concise product copy |

@@ -22,6 +22,11 @@ final class VaultRequestPhase {
         exporting = true;
     }
 
+    synchronized void publish(AppSecrets.EffectGuard publication) throws VaultException {
+        requireActive();
+        publication.check();
+    }
+
     VaultException interrupted(VaultException failure) {
         if (committing) return new VaultException("VAULT_COMMIT_UNCERTAIN",
                 "A vault commit may have completed; the vault is locked. Reopen with the master password");

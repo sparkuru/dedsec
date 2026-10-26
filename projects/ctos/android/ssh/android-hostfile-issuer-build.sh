@@ -12,9 +12,9 @@ readonly OPENSSH_BUILD="$BASELINE/openssh-build"
 readonly OPENSSL_PREFIX="$BASELINE/openssl-prefix"
 readonly PROJECT_CPP="$PROJECT_ROOT/android/app/src/main/cpp"
 readonly PROJECT_TEST_CPP="$PROJECT_ROOT/android/app/src/test/cpp"
-readonly TASK_ROOT="$PROJECT_ROOT/.trellis/tasks/10-08-ssh-terminal-client"
-readonly STREAM_PATCH="$TASK_ROOT/research/openssh-10.6p1-hostfile-stream-writer.patch"
-readonly KEX_PATCH="$TASK_ROOT/research/openssh-10.6p1-kex-guard.patch"
+readonly BUILD_ROOT="$PROJECT_ROOT/android/ssh"
+readonly STREAM_PATCH="$BUILD_ROOT/openssh-10.6p1-hostfile-stream-writer.patch"
+readonly KEX_PATCH="$BUILD_ROOT/openssh-10.6p1-kex-guard.patch"
 readonly SSH_ARCHIVE_SHA=a9dc9565dffe8640f64d863cd29a32bc4a3dbdec0566a7fc44c5d6ee767d5f39
 readonly SSL_ARCHIVE_SHA=603f5602e2eef00d77fbd429d34dcd5822bb301757a1bc9cdb24c670f1eb859a
 readonly ABI_PATCH_SHA=ea81738f191e7d9fb70ce0943b45ea06b07c4057d3d0128a694331b3a32f8b89
@@ -132,7 +132,7 @@ main() {
     done
     [[ -f /.dockerenv && -f "$PROJECT_ROOT/hako-env.sh" ]] \
         || die 'run inside the project hako container'
-    [[ "$(realpath -e -- "${BASH_SOURCE[0]}")" == "$TASK_ROOT/research/android-hostfile-issuer-build.sh" ]] \
+    [[ "$(realpath -e -- "${BASH_SOURCE[0]}")" == "$BUILD_ROOT/android-hostfile-issuer-build.sh" ]] \
         || die 'runner must come from the fixed project mount'
     [[ "$(realpath -e -- "$baseline")" == "$baseline" && "$(realpath -e -- "$G1_ROOT")" == "$G1_ROOT" ]] \
         || die 'baseline path must be canonical and nonsymlink'
@@ -150,7 +150,7 @@ main() {
     fixed_hash "$BASELINE/inputs/openssh-10.6p1.tar.gz" "$SSH_ARCHIVE_SHA"
     fixed_hash "$BASELINE/inputs/openssl-3.5.9.tar.gz" "$SSL_ARCHIVE_SHA"
     fixed_hash "$BASELINE/inputs/openssh-10.6p1-bionic-includes.patch" "$ABI_PATCH_SHA"
-    fixed_hash "$TASK_ROOT/research/openssh-10.6p1-bionic-includes.patch" "$ABI_PATCH_SHA"
+    fixed_hash "$BUILD_ROOT/openssh-10.6p1-bionic-includes.patch" "$ABI_PATCH_SHA"
     fixed_hash "$STREAM_PATCH" "$STREAM_PATCH_SHA"
     fixed_hash "$KEX_PATCH" "$KEX_PATCH_SHA"
     fixed_hash "$OPENSSH_BUILD/ssh" "$BASELINE_SSH_SHA"

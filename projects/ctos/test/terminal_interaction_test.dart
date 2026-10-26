@@ -11,6 +11,128 @@ import 'package:xterm/xterm.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
+  testWidgets('queued input is discarded when its terminal generation ends', (
+    tester,
+  ) async {
+    final host = _TerminalHost(tester);
+    await host.mount();
+    await host.emitState(1, 'running', remote: true);
+    await tester.tap(find.text('终端').last);
+    await tester.pumpAndSettle();
+    final hold = Completer<void>();
+    host.holdNextWrite = hold;
+    await tester.tap(find.text('Ctrl-C'));
+    await tester.pump();
+    await tester.tap(find.text('↑'));
+    await tester.pump();
+    expect(host.writes, hasLength(1));
+    await host.emitState(1, 'closed', remote: true);
+    await host.emitState(2, 'running', remote: true, mode: 'SSH · next');
+    hold.complete();
+    await tester.pump();
+    expect(host.writes, hasLength(1));
+    await tester.tap(find.text('↓'));
+    await tester.pump();
+    expect(host.writes.last, {'generation': 2, 'text': '\x1b[B'});
+    await tester.tap(find.byTooltip('关闭会话'));
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets('SSH attachment uses typed lifecycle and remote input routing', (
+    tester,
+  ) async {
+    final host = _TerminalHost(tester);
+    await host.mount();
+    await host.emitState(1, 'running', remote: true, mode: 'SSH · synthetic');
+    await tester.tap(find.text('终端').last);
+    await tester.pumpAndSettle();
+    expect(find.text('SSH · synthetic'), findsOneWidget);
+    final renderer = tester.widget<TerminalView>(
+      find.byKey(const Key('terminal-output-view')),
+    );
+    expect(renderer.readOnly, isTrue);
+    await host.emitData(1, utf8.encode('[session exited: 0]\r\n'));
+    expect(find.text('SSH · synthetic'), findsOneWidget);
+    await host.emitData(1, [0xe4, 0xbd]);
+    await host.emitData(1, [0xa0]);
+    expect(terminalOutputSnapshot(renderer.terminal), contains('你'));
+    await tester.enterText(
+      find.byKey(const Key('terminal-command-input')),
+      'echo synthetic',
+    );
+    await tester.testTextInput.receiveAction(TextInputAction.send);
+    await tester.pump();
+    await tester.tap(find.text('↑'));
+    await tester.pump();
+    await tester.tap(find.text('↓'));
+    await tester.pump();
+    expect(host.writes.map((write) => write['text']), [
+      'echo synthetic',
+      '\r',
+      '\x1b[A',
+      '\x1b[B',
+    ]);
+    expect(host.writes.every((write) => write['generation'] == 1), isTrue);
+    renderer.terminal.resize(73, 21);
+    await tester.pump();
+    expect(
+      host.resizes,
+      contains(equals({'generation': 1, 'columns': 73, 'rows': 21})),
+    );
+    await host.emitState(1, 'closed', remote: true, exitStatus: 0);
+    expect(find.text('应用 Shell'), findsOneWidget);
+    await host.emitState(2, 'running', remote: true, mode: 'SSH · next');
+    await host.emitData(1, utf8.encode('STALE'));
+    await host.emitState(1, 'closed', remote: true);
+    expect(find.text('SSH · next'), findsOneWidget);
+    expect(terminalOutputSnapshot(renderer.terminal), isNot(contains('STALE')));
+    await tester.tap(find.byTooltip('关闭会话'));
+    await tester.pumpAndSettle();
+    expect(host.stops, [
+      {'generation': 2},
+    ]);
+    expect(find.text('应用 Shell'), findsOneWidget);
+    await host.emitState(2, 'running', remote: true);
+    expect(find.text('应用 Shell'), findsOneWidget);
+  });
+
+  testWidgets('late start result cannot resurrect an exited Root session', (
+    tester,
+  ) async {
+    final host = _TerminalHost(tester, root: true);
+    host.startResult = Completer<String>();
+    await host.mount();
+    await tester.tap(find.text('终端').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('terminal-root-entry')));
+    await tester.pump();
+    expect(host.starts.single['root'], isTrue);
+    await host.emitState(1, 'running', mode: 'root · PTY');
+    await host.emitState(1, 'closed', mode: 'root · PTY', exitStatus: 0);
+    host.startResult!.complete('root · PTY');
+    await tester.pumpAndSettle();
+    expect(find.text('应用 Shell'), findsOneWidget);
+    expect(find.byKey(const Key('terminal-command-input')), findsNothing);
+    await host.emitState(1, 'running', mode: 'root · PTY');
+    expect(find.byKey(const Key('terminal-command-input')), findsNothing);
+
+    // A valid Root session retains the local command history behavior.
+    await host.emitState(2, 'running', mode: 'root · PTY');
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('terminal-command-input')),
+      'id',
+    );
+    await tester.testTextInput.receiveAction(TextInputAction.send);
+    await tester.pump();
+    await tester.tap(find.text('↑'));
+    await tester.pump();
+    expect(host.writes.map((write) => write['text']), ['id', '\r', 'id']);
+    await tester.tap(find.byTooltip('关闭会话'));
+    await tester.pumpAndSettle();
+    expect(host.stops.single['generation'], 2);
+  });
+
   testWidgets('live input waits for IME commit and detects empty backspace', (
     tester,
   ) async {
@@ -408,6 +530,17 @@ void main() {
           return jsonEncode({});
         case 'terminalStart':
           starts++;
+          await messenger.handlePlatformMessage(
+            'ctos/terminal',
+            const StandardMethodCodec().encodeSuccessEnvelope({
+              'type': 'state',
+              'generation': starts,
+              'state': 'running',
+              'mode': 'app · PTY',
+              'remote': false,
+            }),
+            null,
+          );
           return 'app · PTY';
         case 'terminalWrite':
           writes.add((call.arguments as Map)['text'] as String);
@@ -431,7 +564,11 @@ void main() {
     Future<void> emitTerminal(String output) async {
       await messenger.handlePlatformMessage(
         'ctos/terminal',
-        const StandardMethodCodec().encodeSuccessEnvelope(utf8.encode(output)),
+        const StandardMethodCodec().encodeSuccessEnvelope({
+          'type': 'data',
+          'generation': starts,
+          'bytes': Uint8List.fromList(utf8.encode(output)),
+        }),
         null,
       );
       await tester.pump();
@@ -711,4 +848,103 @@ void main() {
     await tester.pumpAndSettle();
     expect(stops, 2);
   });
+}
+
+class _TerminalHost {
+  _TerminalHost(this.tester, {this.root = false});
+  final WidgetTester tester;
+  final bool root;
+  final messenger =
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+  final starts = <Map<dynamic, dynamic>>[];
+  final writes = <Map<dynamic, dynamic>>[];
+  final resizes = <Map<dynamic, dynamic>>[];
+  final stops = <Map<dynamic, dynamic>>[];
+  Completer<String>? startResult;
+  Completer<void>? holdNextWrite;
+
+  Future<void> mount() async {
+    tester.view.physicalSize = const Size(412, 915);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    messenger.setMockMethodCallHandler(
+      const MethodChannel('ctos/terminal'),
+      (_) async => null,
+    );
+    messenger.setMockMethodCallHandler(native, (call) async {
+      switch (call.method) {
+        case 'rootAuto':
+          return jsonEncode({'root': root, 'attempted': false});
+        case 'snapshot':
+          return jsonEncode({
+            'root': root,
+            'networks': [],
+            'kernel': {
+              'source': 'test',
+              'elapsed': 1000,
+              'interfaces': [],
+              'routes': '',
+            },
+          });
+        case 'deviceSnapshot':
+          return '{}';
+        case 'terminalStart':
+          starts.add(call.arguments as Map);
+          return startResult?.future ?? Future.value('app · PTY');
+        case 'terminalWrite':
+          writes.add(call.arguments as Map);
+          final hold = holdNextWrite;
+          holdNextWrite = null;
+          if (hold != null) await hold.future;
+          return null;
+        case 'terminalResize':
+          resizes.add(call.arguments as Map);
+          return null;
+        case 'terminalStop':
+          stops.add(call.arguments as Map);
+          return null;
+      }
+      return null;
+    });
+    addTearDown(() {
+      messenger.setMockMethodCallHandler(native, null);
+      messenger.setMockMethodCallHandler(
+        const MethodChannel('ctos/terminal'),
+        null,
+      );
+    });
+    await tester.pumpWidget(const CtosApp());
+    await tester.pump(const Duration(milliseconds: 100));
+  }
+
+  Future<void> emitState(
+    int generation,
+    String state, {
+    bool remote = false,
+    String mode = 'app · PTY',
+    int? exitStatus,
+  }) => emit({
+    'type': 'state',
+    'generation': generation,
+    'state': state,
+    'mode': mode,
+    'remote': remote,
+    if (exitStatus != null) 'exitStatus': exitStatus,
+  });
+
+  Future<void> emitData(int generation, List<int> bytes) => emit({
+    'type': 'data',
+    'generation': generation,
+    'bytes': Uint8List.fromList(bytes),
+  });
+
+  Future<void> emit(Map<String, Object> event) async {
+    await messenger.handlePlatformMessage(
+      'ctos/terminal',
+      const StandardMethodCodec().encodeSuccessEnvelope(event),
+      null,
+    );
+    await tester.pump();
+  }
 }

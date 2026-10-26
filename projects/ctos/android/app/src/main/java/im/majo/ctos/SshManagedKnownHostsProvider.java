@@ -290,6 +290,9 @@ final class SshManagedKnownHostsProvider implements
     private KnownHostsCandidate candidate;
     private SshTrustProposal activeProposal;
     private VaultOperation activeRequest;
+    private AppSecrets.SshTrustContext activeContext;
+    private boolean writing;
+    private volatile boolean confirmedCommit;
     private boolean closed;
 
     private SshManagedKnownHostsProvider(SshVaultAdapter adapter, SnapshotReceipt snapshot,
@@ -341,7 +344,7 @@ final class SshManagedKnownHostsProvider implements
         return true;
     }
 
-    synchronized void abortNativeHandoff() { failClosed(); }
+    void abortNativeHandoff() { failClosed(); }
 
     /**
      * Loans the exact managed file closure synchronously and retains only the
@@ -355,7 +358,14 @@ final class SshManagedKnownHostsProvider implements
         VaultManifest.path(rootPath);
         VaultManifest.path(path);
         role.requireActive(clock);
-        VaultOperation request = adapter.fileRequest(rootPath, role.connectionId);
+        AppSecrets.EffectGuard origin = new AppSecrets.SshRoleGuard() {
+            @Override public void check() throws VaultException { role.requireActive(clock); }
+            @Override public void withRole(AppSecrets.EffectGuard publication) throws VaultException {
+                role.publishBound(clock, publication);
+            }
+        };
+        AppSecrets.SshPublicReadContext context = adapter.fileContext(role.deadline, origin);
+        VaultOperation request = adapter.fileRequest(rootPath, role.connectionId, context);
         final SnapshotReceipt[] result = new SnapshotReceipt[1];
         try {
             adapter.useFileSnapshot(request, rootPath, role.connectionId, snapshot -> {
@@ -382,7 +392,9 @@ final class SshManagedKnownHostsProvider implements
                     VaultCodec.wipe(digest);
                 }
             });
+            role.requireActive(clock);
             if (result[0] == null) throw new VaultException("VAULT_OPERATION", "The managed snapshot is unavailable");
+            result[0].requireLive();
             return result[0];
         } catch (VaultException | RuntimeException | Error failure) {
             if (result[0] != null) result[0].close();
@@ -427,7 +439,20 @@ final class SshManagedKnownHostsProvider implements
                     evidence.role.targetIdentity, evidence.role.connectionId, evidence.role.host,
                     evidence.role.port, evidence.keyType, evidence.fingerprint,
                     candidate.binding, snapshot.baseDigest(), replacement);
+            AppSecrets.SshTrustContext context;
+            try {
+                context = adapter.trustContext(snapshot, proposal, () -> {
+                    synchronized (SshManagedKnownHostsProvider.this) {
+                        if (closed || activeProposal != proposal)
+                            throw new VaultException("VAULT_CANCELLED", "The managed trust request was closed");
+                    }
+                });
+            } catch (VaultException | RuntimeException | Error failure) {
+                proposal.close();
+                throw failure;
+            }
             activeProposal = proposal;
+            activeContext = context;
             candidate.close();
             candidate = null;
             return proposal;
@@ -447,48 +472,89 @@ final class SshManagedKnownHostsProvider implements
         throw new VaultException("SSH_HOST_KEY_CAS", "The role-bound managed trust writer is required");
     }
 
-    @Override public synchronized SshTrustProposal.CasResult write(
+    @Override public SshTrustProposal.CasResult write(
             SshHostKeyAuthority.Evidence evidence, SshHostKeyAuthority.Proof proof,
             SshTrustProposal proposal) throws VaultException {
-        if (closed || activeProposal == null || activeProposal != proposal || proof == null) {
-            failClosed();
-            throw new VaultException("SSH_HOST_KEY_CAS", "The exact managed trust writer is unavailable");
+        AppSecrets.SshTrustContext context;
+        synchronized (this) {
+            if (closed || writing || activeProposal != proposal || proposal == null || proof == null)
+                throw new VaultException("SSH_HOST_KEY_CAS", "The exact managed trust writer is unavailable");
+            writing = true;
+            context = activeContext;
         }
+        boolean persisted = false;
         try {
             snapshot.requireLive();
             proof.requireMatches(snapshot.role, evidence);
             snapshot.requireMatches(snapshot.role, evidence, proposal);
-            if (!proposal.matchesEvidence(evidence)) {
+            if (!proposal.matchesEvidence(evidence))
                 throw new VaultException("SSH_HOST_KEY_REVIEW", "The exact unknown host-key review is required");
-            }
-            VaultOperation request = adapter.trustRequest(snapshot.role, evidence, proof, snapshot, proposal);
-            activeRequest = request;
-            adapter.updateTrust(request, snapshot.role, evidence, proof, snapshot, proposal, () -> { });
+            // Metadata receipt is prepared before persistence, but is published only after continuation.
             SshTrustProposal.CasResult result = SshTrustProposal.CasResult.committed(evidence, proposal);
-            activeRequest = null;
-            activeProposal = null;
-            closed = true;
+            VaultOperation request = adapter.trustRequest(snapshot.role, evidence, proof, snapshot, proposal, context);
+            synchronized (this) {
+                if (closed || activeProposal != proposal)
+                    throw new VaultException("VAULT_CANCELLED", "The managed trust request was closed");
+                activeRequest = request;
+            }
+            adapter.updateTrust(request, snapshot.role, evidence, proof, snapshot, proposal, () -> { });
+            persisted = true;
+            confirmedCommit = true;
+            synchronized (this) {
+                if (closed || activeProposal != proposal)
+                    throw new VaultException("VAULT_CANCELLED", "The managed trust request was closed");
+                snapshot.requireLive();
+                if (!result.matches(evidence, proposal, SshTrustProposal.CasStatus.COMMITTED))
+                    throw new VaultException("SSH_HOST_KEY_CAS", "The trust receipt changed");
+                activeRequest = null;
+                activeContext = null;
+                activeProposal = null;
+                closed = true;
+            }
             snapshot.close();
             return result;
         } catch (VaultException | RuntimeException | Error failure) {
-            failClosed();
+            if (persisted) {
+                VaultException uncertain = adapter.uncertainTrustCommit(failure);
+                try { failClosed(); } catch (RuntimeException | Error cleanup) { uncertain.addSuppressed(cleanup); }
+                throw uncertain;
+            }
+            try { failClosed(); } catch (RuntimeException | Error cleanup) { failure.addSuppressed(cleanup); }
             throw failure;
         }
     }
 
-    private synchronized void failClosed() {
-        closed = true;
-        if (candidate != null) candidate.close();
-        candidate = null;
-        snapshot.close();
-        VaultOperation request = activeRequest;
-        activeRequest = null;
-        if (request != null) adapter.cancel(request);
-        if (activeProposal != null) activeProposal.close();
-        activeProposal = null;
+    @Override public VaultException invalidateCommittedResult() {
+        return confirmedCommit ? adapter.uncertainTrustCommit(null) : null;
     }
 
-    @Override public synchronized void close() { failClosed(); }
+    private void failClosed() {
+        KnownHostsCandidate retiredCandidate;
+        AppSecrets.SshTrustContext retiredContext;
+        VaultOperation retiredRequest;
+        SshTrustProposal retiredProposal;
+        synchronized (this) {
+            closed = true;
+            retiredCandidate = candidate; candidate = null;
+            retiredContext = activeContext; activeContext = null;
+            retiredRequest = activeRequest; activeRequest = null;
+            retiredProposal = activeProposal; activeProposal = null;
+        }
+        try {
+            if (retiredContext != null) retiredContext.cancel();
+        } finally {
+            try { if (retiredRequest != null) adapter.cancel(retiredRequest); }
+            finally {
+                try { if (retiredCandidate != null) retiredCandidate.close(); }
+                finally {
+                    try { if (retiredProposal != null) retiredProposal.close(); }
+                    finally { snapshot.close(); }
+                }
+            }
+        }
+    }
+
+    @Override public void close() { failClosed(); }
 
     private static String hex(byte[] bytes) {
         StringBuilder result = new StringBuilder(bytes.length * 2);

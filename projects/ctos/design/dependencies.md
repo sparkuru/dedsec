@@ -1,5 +1,82 @@
 # Dependency provenance
 
+2026-10-26归档收尾：9份固定SSH构建/测试runner与6份patch迁入`android/ssh/`，Gradle
+和runner不再依赖活动任务目录。补丁字节、固定source/archive SHA、baseline/no-symlink/
+forbidden检查及脚本权限保留；没有新增依赖或产品运行代码变化。原研究记录保留历史
+调用路径，当前执行入口以稳定目录为准；Markdown文件链接同步指向当前实际文件。
+
+2026-10-25：[密码连接](ssh-password-connect.md)复用固定OpenSSH/crypto、Android公开
+Os/PFD和现有Flutter组件，无新增运行依赖。独立互操作测试使用已有缓存的
+linuxserver/openssh-server镜像`d42d0d9d40e02c441870792bd3f679b446715cee38f81354366a33c9b0d84573`
+（OpenSSH_10.3p1/OpenSSL3.5.7），仅作临时测试服务，不打包进产品；与同库合成peer和
+Android测试分别记录。[本轮证据](verification.md#20261025-password-connect)。
+
+2026-10-25 用户更正：[SSH采用唯一正式模型](ssh-manifest.md)，去除双格式业务分支。
+不增加依赖或修改native协议/crypto来源，四份既有cached wheel与source SHA/ZIP本轮重核；
+[本轮构建与检查](verification.md#20261025-ssh-mainline)。下方为历史记录。
+
+2026-10-25：[v2清单基础](ssh-manifest.md)复用Java集合/现有codec和认证envelope，
+没有新增依赖、parser补丁、JNI或native/Flutter源码变化。四份既有cached wheel及原source
+SHA/ZIP完整性本轮重核，临时offline init显式no-index；构建与工件记录见
+[验证](verification.md#20261025-manifest-v2)。历史ARM/Android运行证据不作为本轮重验。
+
+2026-10-24：[全部证书事实与签名政策](ssh-certificate-facts.md)已实现CSCF168、三份公开摘要/unsigned数值/实际record来源及现代CA签名政策，保留trust/time/principal/revocation未验证。ARM22239与旧材料矩阵、定向145/全量638 JVM、normal100全重跑/fixture111及三APK审计通过；[实测](verification.md#20261024-certificate-facts)。持久graph/账号、完整信任/reviewer/provider/恢复/connector与父AC仍开放；本地未提交，无设备/真实库账号。
+
+2026-10-23：[全部私钥材料与凭据归属](ssh-private-material-ownership.md)已实现全PRIVATE自签/验签、v1口令唯一owner/phrase审计和password namespace/deferred target。ARM19976/独立pair13812/material7784、定向120/全量613 JVM、normal98全重跑/fixture111及三APK审计通过；[实测](verification.md#20261023-private-material)。仍不提供持久关系图/真实密码账号/完整信任/provider/恢复/connector准入，父AC开放；本地未提交，无设备/真实库账号。
+
+2026-10-23：[显式密钥配对证明](ssh-key-association.md)已实现精确ID/所选口令、证书plain subject及固定domain实签验签，拒绝仅公开字段相等的伪配对。ARM13814/独立材料7784/fresh认证1748333、定向80/全量586 JVM、normal96全重跑/fixture111与三APK审计通过；[验证](verification.md#20261023-key-association)。报告只覆盖明确所选pairs；全库关联authority/覆盖、凭据目标、完整信任/reviewer/provider/恢复/connector与父AC仍开放。本地未提交，无设备/真实库账号。
+
+## 2026-10-23 — CONFIG 显式资源引用
+
+沿用OpenSSH10.6p1/OpenSSL3.5.9/NDK27与83成员archive，无新第三方依赖。namespaced readconf同lexer新增显式资源hook，补丁SHA256为`7afd7a9a4ed9c17096b1bb4a3cd20d41ec9ed2d5720df5c552da93384d60fd5e`，runner一致、固定G1/上游源树未改、原LICENCE继续复制。新增两JNI后config15/session19/material1。既有四wheel重新SHA/ZIP核验并临时显式no-index复用，依赖声明不改。[证据](verification.md#20261023-config-resources)。
+
+## 2026-10-23 — CONFIG 静态引用与本地效果审计
+
+沿用固定OpenSSH10.6p1/OpenSSL3.5.9/NDK27与83成员archive，无新第三方版本或生产依赖。项目自有AUDIT模式复用同一readconf lexer/Match grammar/Include递归，有限政策helper留在namespaced parser TU。parser补丁SHA256更新为`72f09e8a4cb7766c80e1ebb3123b34a61ac6e5d361bcaa611b36156a2a75f17b`，runner固定值一致；原G1/上游源树hash保持、构建复制原LICENCE。新增reserveAudit/audit两JNI后config13/session19/material1。四既有wheel重新SHA/ZIP检查，临时显式no-index/find-links继续复用，依赖声明未改。[证据](verification.md#20261023-config-audit)。
+
+## 2026-10-23 — 实际清单受管配置检查
+
+沿用固定OpenSSH10.6p1/OpenSSL3.5.9/NDK27、原readconf补丁与83成员production archive，无新第三方依赖。项目新增CSDI两阶段owner、usage与全CONFIG inspector；configJNI由8增至11，session19/material1保持。临时Gradle init复用已核验四既有wheel，明确no-index/find-links，生产依赖声明未改。[实际验证](verification.md#20261023-detached-managed)。
+
+## 2026-10-23 独立 native 配置输入
+
+沿用固定OpenSSH10.6p1/OpenSSL3.5.9/NDK27及原readconf补丁/83成员archive，无新生产依赖或JNI。新增项目自有文件集合/liveness适配与CONFIG独占输入。构建源站失败后，只在忽略build目录复制既有四wheel，以临时Gradle init显式no-index/find-links验证；依赖版本/声明未改。[证据与hash](verification.md#20261023-detached-config)。
+
+## 2026-10-19 实际清单材料检查
+
+继续使用固定OpenSSH10.6p1/OpenSSL3.5.9/NDK27，无版本变更或新第三方依赖。项目新增
+ssh_key_policy共享原认证策略、ssh_material_inspect/JNI与Java离线owner；复用固定
+sshkey/hostkeys_foreach_file，不另建known_hosts parser，不改原83成员archive或G1源树。
+无目标hostfile遍历的hash盐/digest检查由窄framing补查完成，避免fake host/HMAC。
+新增一个material JNI，原八config/十九session JNI保持；原声明parser补丁不改。
+SK在固定config中禁用，不能以测试期望推断运行支持。构建器固定原输入hash/树校验和
+LICENCE，static compat/TLS只用于独立测试。[本轮证据](verification.md#20261019-manifest-inspection)。
+
+## 2026-10-19 声明catalog
+
+沿用固定OpenSSH10.6p1/OpenSSL3.5.9/NDK27，没有新依赖。独立readconf补丁新增同一词法
+入口后的catalog分支、静态Include模式和展开前动态token延后；原G1不改。补丁SHA256
+`fc52b0d65d9bbd6e5b659a16b3a25b0d269bb59ecaa241009c15c7968d26ba07`
+与构建器固定值一致。83成员production archive保持，config JNI增为八个，session JNI仍19。
+最终输入与工件对应见[验证](verification.md#20261019-config-catalog)。
+
+## 2026-10-19 配置JNI/Java边界
+
+沿用同一固定OpenSSH/OpenSSL/NDK，无新增第三方依赖；增加项目自有opaque handle/wire/JNI
+及Java facade。原83成员archive闭包、parser patch、session/KEX源不改，六个config JNI独立
+于原19session JNI。生产runner临时路径会影响工件hash；本轮冻结编译输入后打包，normal/
+fixture生产库字节一致，静态回归使用同一最终archive输入。[证据](verification.md#20261019-config-jni)。
+
+## 2026-10-19 受管配置求值器（本地实施）
+
+继续使用固定OpenSSH10.6p1/OpenSSL3.5.9/NDK27，没有新第三方版本。新增
+[独立readconf补丁](../android/ssh/openssh-10.6p1-config-evaluator.patch)
+及[构建器](../android/ssh/android-config-evaluator-build.sh)，
+只在临时目录复制/patch已校验的parser，原G1源码及83成员production archive不改；
+readconf.o/config_eval.o独立链接到既有生产库，不引入stock ssh/sshconnect或第二套crypto。
+窄复制misc helper在适配器保留原版权/许可，构建输出附固定源码LICENCE与输入hash。
+具体合同和验证状态分别见[求值器](ssh-config-evaluator.md)与[验证](verification.md)。
+
 ## 2026-10-19 Android/JNI authentication integration
 
 继续复用 pinned OpenSSH10.6p1/OpenSSL3.5.9、NDK27；没有新依赖、上游补丁或archive成员。
@@ -32,7 +109,7 @@ production closure；未添加上游对象、源码补丁或生产依赖。QEMU/
 ## 2026-10-17 production OpenSSH banner patch / local ARM runtime
 
 在既有固定 OpenSSH 10.6p1 基线上新增项目补丁
-[`openssh-10.6p1-banner-atomic.patch`](../.trellis/tasks/10-08-ssh-terminal-client/research/openssh-10.6p1-banner-atomic.patch)，
+[`openssh-10.6p1-banner-atomic.patch`](../android/ssh/openssh-10.6p1-banner-atomic.patch)，
 SHA256 `ba61f35303233ebd2bf1c39d167774667766b3461721657f8af0483e51258a18`。
 它仅让 `_ssh_read_banner` 在输入不足完整行时清空未发布的 version buffer，保留 input
 供下次重试。生产 builder 校验固定 hash、在 scratch 中应用、编译 PIC `ssh_api.o` 替换

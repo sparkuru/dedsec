@@ -4,7 +4,10 @@
 #include <jni.h>
 
 #include <limits.h>
+#include <errno.h>
+#include <pwd.h>
 #include <stdint.h>
+#include <string.h>
 #include <sys/types.h>
 #include <unistd.h>
 
@@ -193,8 +196,50 @@ done:
 JNIEXPORT void JNICALL Java_im_majo_ctos_SshNativeRoleBootstrap_00024Native_release(
     JNIEnv *env, jclass type, jlong token, jint owner_uid) {
     (void)type;
-    if (token <= 0 || !current_uid_matches(owner_uid)
-        || ctos_ssh_role_bootstrap_close((ctos_ssh_role_token)token) != 0) {
+    if (token <= 0 || !current_uid_matches(owner_uid)) {
         fail(env);
+        return;
     }
+    /* A naturally expired unpinned token may already have been reaped. */
+    if (ctos_ssh_role_bootstrap_close((ctos_ssh_role_token)token) != 0 && errno != ENOENT)
+        fail(env);
+}
+
+JNIEXPORT jbyteArray JNICALL Java_im_majo_ctos_SshNativeRoleBootstrap_00024Native_systemIdentity(
+    JNIEnv *env, jclass type) {
+    (void)type;
+    struct passwd account = {0}, *found = NULL;
+    char scratch[16384] = {0};
+    char host[256] = {0};
+    unsigned char wire[514] = {0};
+    jbyteArray result = NULL;
+    size_t user_length, host_length, length;
+    if (getpwuid_r(getuid(), &account, scratch, sizeof(scratch), &found) != 0
+        || found == NULL || found->pw_name == NULL
+        || gethostname(host, sizeof(host)) != 0) goto done;
+    user_length = strnlen(found->pw_name, 256);
+    host_length = strnlen(host, sizeof(host));
+    if (user_length == 0 || user_length > 255 || host_length == 0 || host_length > 255)
+        goto done;
+    wire[0] = (unsigned char)(user_length >> 8);
+    wire[1] = (unsigned char)user_length;
+    memcpy(wire + 2, found->pw_name, user_length);
+    wire[user_length + 2] = (unsigned char)(host_length >> 8);
+    wire[user_length + 3] = (unsigned char)host_length;
+    memcpy(wire + user_length + 4, host, host_length);
+    length = user_length + host_length + 4;
+    result = (*env)->NewByteArray(env, (jsize)length);
+    if (result != NULL)
+        (*env)->SetByteArrayRegion(env, result, 0, (jsize)length, (jbyte *)wire);
+done:
+    wipe(&account, sizeof(account));
+    wipe(scratch, sizeof(scratch));
+    wipe(host, sizeof(host));
+    wipe(wire, sizeof(wire));
+    if (result == NULL || (*env)->ExceptionCheck(env)) {
+        if (result != NULL) (*env)->DeleteLocalRef(env, result);
+        fail(env);
+        return NULL;
+    }
+    return result;
 }

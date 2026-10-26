@@ -24,6 +24,7 @@ struct callback_slot {
     uid_t owner_uid;
     pthread_t event_thread;
     uint64_t deadline;
+    const void *transport_owner;
     struct ctos_ssh_callback_target target;
 };
 
@@ -414,8 +415,10 @@ static int begin_callback(ctos_ssh_callback_token callback, void *environment,
     }
     if (role_status(callback, slot) != 0) {
         int error = errno;
-        slot->cancelled = 1;
-        slot->failed = 1;
+        if (error != ETIMEDOUT || slot->transport_owner == NULL) {
+            slot->cancelled = 1;
+            slot->failed = 1;
+        }
         pthread_mutex_unlock(&callbacks_lock);
         errno = error;
         return -1;
@@ -437,12 +440,16 @@ static int finish_callback(struct callback_slot *slot, int callback_result) {
     if (result == 0 && (slot->cancelled || slot->closing || slot->failed)) result = ECANCELED;
     if (result == 0 && role_status(slot->callback, slot) != 0) {
         result = errno;
-        slot->cancelled = 1;
-        slot->failed = 1;
+        if (result != ETIMEDOUT || slot->transport_owner == NULL) {
+            slot->cancelled = 1;
+            slot->failed = 1;
+        }
     }
     if (result != 0) {
-        slot->cancelled = 1;
-        slot->failed = 1;
+        if (result != ETIMEDOUT || slot->transport_owner == NULL) {
+            slot->cancelled = 1;
+            slot->failed = 1;
+        }
         if (result < 1 || result > 4095) result = EIO;
         errno = result;
     }
@@ -606,6 +613,15 @@ int ctos_ssh_callback_close(ctos_ssh_callback_token callback, void *environment)
     }
     slot->closing = 1;
     slot->cancelled = 1;
+    if (slot->transport_owner != NULL) {
+        if (ctos_ssh_role_transport_release(slot->role) != 0 && errno != ENOENT) {
+            slot->closing = 0;
+            slot->failed = 1;
+            pthread_mutex_unlock(&callbacks_lock);
+            return -1;
+        }
+        slot->transport_owner = NULL;
+    }
     target = slot->target;
     pthread_mutex_unlock(&callbacks_lock);
 
@@ -635,6 +651,65 @@ int ctos_ssh_callback_check_live(ctos_ssh_callback_token callback, void *environ
 
     if (begin_callback(callback, environment, &slot, &target) != 0) return -1;
     return finish_callback(slot, 0);
+}
+
+int ctos_ssh_callback_promote_transport(ctos_ssh_callback_token callback,
+    void *environment, const void *transport_owner) {
+    struct callback_slot *slot;
+    int error;
+    if (transport_owner == NULL) { errno = EINVAL; return -1; }
+    if (pthread_mutex_lock(&callbacks_lock) != 0) { errno = EBUSY; return -1; }
+    slot = lookup_locked(callback);
+    if (slot == NULL) { error = ENOENT; goto failed; }
+    if (!pthread_equal(slot->event_thread, pthread_self())
+        || slot->target.validate_environment(slot->target.context, environment) != 0) {
+        error = EPERM; goto failed;
+    }
+    if (slot->in_callback || slot->transport_owner != NULL) { error = EALREADY; goto failed; }
+    if (slot->cancelled || slot->closing || slot->failed) { error = ECANCELED; goto failed; }
+    if (role_status(callback, slot) != 0 || ctos_ssh_role_transport_retain(slot->role) != 0) {
+        error = errno; goto failed;
+    }
+    slot->transport_owner = transport_owner;
+    pthread_mutex_unlock(&callbacks_lock);
+    return 0;
+failed:
+    pthread_mutex_unlock(&callbacks_lock);
+    errno = error;
+    return -1;
+}
+
+int ctos_ssh_callback_check_transport(ctos_ssh_callback_token callback,
+    void *environment, const void *transport_owner) {
+    struct callback_slot *slot;
+    struct ctos_ssh_role_snapshot snapshot = {0};
+    int error;
+    if (transport_owner == NULL) { errno = EINVAL; return -1; }
+    if (pthread_mutex_lock(&callbacks_lock) != 0) { errno = EBUSY; return -1; }
+    slot = lookup_locked(callback);
+    if (slot == NULL) { error = ENOENT; goto failed; }
+    if (!pthread_equal(slot->event_thread, pthread_self())
+        || slot->target.validate_environment(slot->target.context, environment) != 0) {
+        error = EPERM; goto failed;
+    }
+    if (slot->in_callback) { error = EALREADY; goto failed; }
+    if (slot->cancelled || slot->closing || slot->failed
+        || slot->transport_owner != transport_owner) { error = ECANCELED; goto failed; }
+    if (ctos_ssh_role_transport_snapshot(slot->role, &snapshot) != 0) {
+        error = errno; goto failed;
+    }
+    if (snapshot.token != slot->role || snapshot.owner_pid != getpid()
+        || snapshot.owner_uid != getuid() || snapshot.deadline != slot->deadline) {
+        error = ECANCELED; goto failed;
+    }
+    wipe_snapshot(&snapshot);
+    pthread_mutex_unlock(&callbacks_lock);
+    return 0;
+failed:
+    wipe_snapshot(&snapshot);
+    pthread_mutex_unlock(&callbacks_lock);
+    errno = error;
+    return -1;
 }
 
 int ctos_ssh_callback_host_key(ctos_ssh_callback_token callback, void *environment,

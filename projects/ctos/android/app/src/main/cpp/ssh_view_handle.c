@@ -295,3 +295,21 @@ int ctos_ssh_view_borrow_release(struct ctos_ssh_view_borrow *borrow) {
     pthread_mutex_unlock(&handles_lock);
     return result;
 }
+
+int ctos_ssh_view_borrow_bound(const struct ctos_ssh_view_borrow *borrow) {
+    struct ctos_ssh_view_handle *handle;
+    if (borrow == NULL || borrow->released) { errno = EACCES; return -1; }
+    if (borrow->owner == NULL) {
+        if (borrow->owned_view == NULL || !borrow->owned_view->valid) {
+            errno = EACCES; return -1;
+        }
+        return 0;
+    }
+    if (lock_handles() != 0) return -1;
+    handle = borrow->owner;
+    if (handle != current || handle->view == NULL || !handle->view->valid || handle->revoked) {
+        pthread_mutex_unlock(&handles_lock); errno = EACCES; return -1;
+    }
+    pthread_mutex_unlock(&handles_lock);
+    return 0;
+}

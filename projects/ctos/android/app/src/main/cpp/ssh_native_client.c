@@ -2,6 +2,7 @@
 
 #include "ssh_native_client.h"
 #include "ssh_hostfile_issuer.h"
+#include "ssh_key_policy.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -56,6 +57,8 @@ enum userauth_phase {
 struct ctos_ssh_native_client {
     struct ssh *ssh;
     struct sshkey *server_host_public_key;
+    enum ctos_ssh_native_host_key_mode host_key_mode;
+    int in_transport_step;
     ctos_ssh_role_token role;
     ctos_ssh_callback_token callback;
     void *callback_environment;
@@ -93,6 +96,17 @@ struct ctos_ssh_native_client {
     enum userauth_phase auth_phase;
     int auth_result;
     unsigned int auth_banners;
+    int established;
+    struct ssh *established_ssh;
+    struct sshkey *established_host_key;
+    struct ctos_ssh_role_snapshot established_role;
+    uint64_t established_cycle;
+    unsigned char established_session_digest[32];
+    struct ctos_ssh_native_shell_status shell;
+    unsigned int shell_columns, shell_rows;
+    uint32_t remote_channel, remote_window, remote_maxpacket, local_window, window_credit;
+    int shell_request_drained, remote_close, local_close, shell_rejected_pending, shell_transport_eof;
+    unsigned char shell_buffer[65536];
 };
 
 static int now_millis(uint64_t *result) {
@@ -451,14 +465,14 @@ static int view_is_current(const struct ctos_ssh_native_client_config *config,
     return 0;
 }
 
-static int validate_descriptor(int fd) {
+static int validate_descriptor_state(int fd, int require_close_on_exec) {
     int descriptor_flags;
     int flags;
     int socket_type;
     socklen_t socket_type_length = sizeof(socket_type);
 
     if (fd < 0 || (descriptor_flags = fcntl(fd, F_GETFD)) < 0
-        || (descriptor_flags & FD_CLOEXEC) == 0
+        || (require_close_on_exec && (descriptor_flags & FD_CLOEXEC) == 0)
         || (flags = fcntl(fd, F_GETFL)) < 0
         || (flags & O_ACCMODE) != O_RDWR || (flags & O_NONBLOCK) == 0
         || getsockopt(fd, SOL_SOCKET, SO_TYPE, &socket_type,
@@ -467,6 +481,19 @@ static int validate_descriptor(int fd) {
         return -1;
     }
     return 0;
+}
+
+static int validate_descriptor(int fd) {
+    return validate_descriptor_state(fd, 1);
+}
+
+int ctos_ssh_native_client_prepare_tcp_descriptor(int fd) {
+    int flags;
+    /* The caller still owns this descriptor throughout, including every failure. */
+    if (validate_descriptor_state(fd, 0) != 0) return -1;
+    if ((flags = fcntl(fd, F_GETFD)) < 0
+        || fcntl(fd, F_SETFD, flags | FD_CLOEXEC) != 0) return -1;
+    return validate_descriptor(fd);
 }
 
 static int fingerprint_matches(struct ctos_ssh_native_client *client,
@@ -542,11 +569,38 @@ static int abort_handed_off_candidate(struct ctos_ssh_native_client *client) {
     return 0;
 }
 
+static int offered_host_is_live(struct ctos_ssh_native_client *client) {
+    struct ctos_ssh_role_snapshot snapshot = {0};
+    uint64_t current;
+    int result = -1;
+    if (ctos_ssh_callback_check_live(client->callback, client->callback_environment) != 0
+        || view_borrow_is_live(client->managed_view_borrow) != 0
+        || ctos_ssh_role_bootstrap_snapshot(client->role, &snapshot) != 0) goto out;
+    if (!client->in_transport_step || client->closed || client->failed || client->completed
+        || client->completion_calls != 0 || client->server_host_public_key != NULL
+        || client->ssh == NULL || client->ssh->kex == NULL || client->ssh->kex->done
+        || snapshot.token != client->role || snapshot.owner_pid != getpid()
+        || snapshot.owner_uid != getuid() || snapshot.deadline != client->deadline
+        || strcmp(snapshot.host, client->host) != 0) {
+        errno = EACCES;
+        goto out;
+    }
+    if (now_millis(&current) != 0) goto out;
+    if (current >= client->deadline) { errno = ETIMEDOUT; goto out; }
+    result = 0;
+out:
+    wipe_bytes(&snapshot, sizeof(snapshot));
+    return result;
+}
+
 static int verify_host_key(struct sshkey *host_key, struct ssh *ssh) {
     struct ctos_ssh_native_client *client;
     struct ctos_ssh_hostfile_issue issue;
     struct ctos_ssh_host_result result;
     unsigned char *replacement = NULL;
+    unsigned char *offered_fingerprint = NULL;
+    size_t offered_fingerprint_length = 0;
+    struct sshkey *offered_key = NULL;
     FILE *stream = NULL;
     const size_t replacement_capacity = CTOS_SSH_CALLBACK_MAX_FILE_BYTES + 1U;
     int return_code = -1;
@@ -559,9 +613,20 @@ static int verify_host_key(struct sshkey *host_key, struct ssh *ssh) {
     if (client == NULL || client->closed || client->failed || client->completed
         || client->managed_view == NULL
         || view_borrow_is_live(client->managed_view_borrow) != 0 || host_key == NULL
-        || fingerprint_matches(client, host_key) != 0) {
+        || (client->host_key_mode == CTOS_SSH_HOST_KEY_PINNED
+            && fingerprint_matches(client, host_key) != 0)) {
         errno = EACCES;
         goto out;
+    }
+    if (client->host_key_mode == CTOS_SSH_HOST_KEY_MANAGED) {
+        if (offered_host_is_live(client) != 0) goto out;
+        if (sshkey_from_private(host_key, &offered_key) != 0 || offered_key == NULL
+            || sshkey_fingerprint_raw(offered_key, SSH_DIGEST_SHA256,
+                &offered_fingerprint, &offered_fingerprint_length) != 0
+            || offered_fingerprint_length != 32U || !nonzero32(offered_fingerprint)) {
+            errno = EACCES;
+            goto out;
+        }
     }
     replacement = malloc(replacement_capacity);
     if (replacement == NULL) {
@@ -602,6 +667,16 @@ static int verify_host_key(struct sshkey *host_key, struct ssh *ssh) {
         &result);
     if (callback_result != 0
         || host_result_matches_issue(client, &issue, &result) != 0) goto out;
+    if (client->host_key_mode == CTOS_SSH_HOST_KEY_MANAGED) {
+        if (offered_host_is_live(client) != 0
+            || ctos_ssh_kex_pin_offered_host(client->ssh, offered_key) != 0) {
+            if (errno == 0) errno = EACCES;
+            goto out;
+        }
+        client->server_host_public_key = offered_key;
+        offered_key = NULL;
+        memcpy(client->expected_host_fingerprint, offered_fingerprint, 32U);
+    }
     return_code = 0;
 out:
     if (stream != NULL) {
@@ -619,6 +694,9 @@ out:
     if (return_code != 0 && client != NULL) client->failed = 1;
     wipe_bytes(&result, sizeof(result));
     wipe_bytes(&issue, sizeof(issue));
+    sshkey_free(offered_key);
+    wipe_bytes(offered_fingerprint, offered_fingerprint_length);
+    free(offered_fingerprint);
     if (replacement != NULL) {
         wipe_bytes(replacement, replacement_capacity);
         free(replacement);
@@ -983,17 +1061,6 @@ int ctos_ssh_native_client_password_auth_result(const struct ctos_ssh_native_cli
     return 0;
 }
 
-static int software_identity(const struct sshkey *key) {
-    if (key == NULL || sshkey_is_cert(key) || sshkey_is_sk(key)
-        || (key->flags & SSHKEY_FLAG_EXT) != 0
-        || (key->type != KEY_ED25519 && key->type != KEY_ECDSA && key->type != KEY_RSA)) {
-        errno = ENOTSUP;
-        return -1;
-    }
-    if (sshkey_check_rsa_length(key, 0) != 0) { errno = EACCES; return -1; }
-    return 0;
-}
-
 static int advertised_algorithm(const char *list, const char *algorithm) {
     size_t length = strlen(algorithm);
     const char *end;
@@ -1006,126 +1073,6 @@ static int advertised_algorithm(const char *list, const char *algorithm) {
         list = *end == '\0' ? end : end + 1;
     }
     return 0;
-}
-
-static int next_key_line(struct selection_cursor *cursor, struct ctos_ssh_slice *line) {
-    const unsigned char *end = memchr(cursor->position, '\n', cursor->remaining);
-    size_t used = end == NULL ? cursor->remaining : (size_t)(end - cursor->position) + 1U;
-
-    if (used == 0) return -1;
-    line->data = cursor->position;
-    line->length = end == NULL ? used : used - 1U;
-    if (line->length != 0 && line->data[line->length - 1U] == '\r') line->length--;
-    cursor->position += used;
-    cursor->remaining -= used;
-    return 0;
-}
-
-static int key_line_equals(struct ctos_ssh_slice line, const char *text) {
-    return line.length == strlen(text) && memcmp(line.data, text, line.length) == 0;
-}
-
-static int legacy_pem_policy(const unsigned char *bytes, size_t length) {
-    struct selection_cursor cursor = {bytes, length};
-    struct ctos_ssh_slice line;
-    const char *end;
-    const char *aes128 = "DEK-Info: AES-128-CBC,";
-    const char *aes256 = "DEK-Info: AES-256-CBC,";
-    size_t prefix_length = strlen(aes128);
-    int body = 0;
-
-    if (next_key_line(&cursor, &line) != 0) return -1;
-    if (key_line_equals(line, "-----BEGIN RSA PRIVATE KEY-----")) end = "-----END RSA PRIVATE KEY-----";
-    else if (key_line_equals(line, "-----BEGIN EC PRIVATE KEY-----")) end = "-----END EC PRIVATE KEY-----";
-    else return -1;
-    if (next_key_line(&cursor, &line) != 0 || !key_line_equals(line, "Proc-Type: 4,ENCRYPTED")
-        || next_key_line(&cursor, &line) != 0 || line.length != prefix_length + 32U
-        || (memcmp(line.data, aes128, prefix_length) != 0
-            && memcmp(line.data, aes256, prefix_length) != 0)) return -1;
-    for (size_t index = prefix_length; index < line.length; index++) {
-        unsigned char ch = line.data[index];
-        if (!((ch >= '0' && ch <= '9') || (ch >= 'A' && ch <= 'F') || (ch >= 'a' && ch <= 'f'))) return -1;
-    }
-    if (next_key_line(&cursor, &line) != 0 || line.length != 0) return -1;
-    while (next_key_line(&cursor, &line) == 0) {
-        if (key_line_equals(line, end)) {
-            for (size_t index = 0; index < cursor.remaining; index++)
-                if (cursor.position[index] != '\r' && cursor.position[index] != '\n') return -1;
-            return body ? 0 : -1;
-        }
-        if (line.length == 0) return -1;
-        for (size_t index = 0; index < line.length; index++) {
-            unsigned char ch = line.data[index];
-            if (!((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z')
-                || (ch >= '0' && ch <= '9') || ch == '+' || ch == '/' || ch == '=')) return -1;
-        }
-        body = 1;
-    }
-    return -1;
-}
-
-static int encrypted_key_policy(const unsigned char *bytes, size_t length) {
-    static const char begin[] = "-----BEGIN OPENSSH PRIVATE KEY-----";
-    static const char end[] = "-----END OPENSSH PRIVATE KEY-----";
-    static const unsigned char magic[] = "openssh-key-v1";
-    struct sshbuf *decoded = NULL;
-    struct selection_cursor cursor, options;
-    struct ctos_ssh_slice cipher, kdf, kdf_options, salt;
-    const unsigned char *ending;
-    char *encoded = NULL;
-    size_t offset, count = 0;
-    uint32_t keys, rounds;
-    int result = -1, error = ENOTSUP;
-
-    if (length < sizeof(begin) - 1U || memcmp(bytes, begin, sizeof(begin) - 1U) != 0) {
-        /* Legacy encrypted PEM uses a fixed derivation, unlike arbitrary
-         * encrypted PKCS8 PBKDF parameters. Only its exact RSA/EC labels pass. */
-        if (legacy_pem_policy(bytes, length) == 0) return 0;
-        errno = ENOTSUP;
-        return -1;
-    }
-    offset = sizeof(begin) - 1U;
-    if (offset < length && bytes[offset] == '\r') offset++;
-    if (offset >= length || bytes[offset++] != '\n') { errno = EINVAL; return -1; }
-    ending = memmem(bytes + offset, length - offset, end, sizeof(end) - 1U);
-    if (ending == NULL) { errno = EINVAL; return -1; }
-    for (size_t index = (size_t)(ending - bytes) + sizeof(end) - 1U; index < length; index++) {
-        if (bytes[index] != '\r' && bytes[index] != '\n') { errno = EINVAL; return -1; }
-    }
-    encoded = calloc(1, (size_t)(ending - bytes) - offset + 1U);
-    decoded = sshbuf_new();
-    if (encoded == NULL || decoded == NULL) { error = ENOMEM; goto out; }
-    for (size_t index = offset; index < (size_t)(ending - bytes); index++) {
-        unsigned char ch = bytes[index];
-        if (ch == '\r' || ch == '\n') continue;
-        if (!((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z')
-            || (ch >= '0' && ch <= '9') || ch == '+' || ch == '/' || ch == '=')) {
-            error = EINVAL;
-            goto out;
-        }
-        encoded[count++] = (char)ch;
-    }
-    if (sshbuf_b64tod(decoded, encoded) != 0 || sshbuf_len(decoded) < sizeof(magic)
-        || memcmp(sshbuf_ptr(decoded), magic, sizeof(magic)) != 0) { error = EINVAL; goto out; }
-    cursor = (struct selection_cursor){sshbuf_ptr(decoded) + sizeof(magic), sshbuf_len(decoded) - sizeof(magic)};
-    if (selection_field(&cursor, &cipher) != 0 || selection_field(&cursor, &kdf) != 0
-        || selection_field(&cursor, &kdf_options) != 0 || selection_u32(&cursor, &keys) != 0) {
-        error = EINVAL;
-        goto out;
-    }
-    if (keys != 1U || cipher.length != 10U || memcmp(cipher.data, "aes256-ctr", 10U) != 0
-        || kdf.length != 6U || memcmp(kdf.data, "bcrypt", 6U) != 0) goto out;
-    options = (struct selection_cursor){kdf_options.data, kdf_options.length};
-    if (selection_field(&options, &salt) != 0 || selection_u32(&options, &rounds) != 0
-        || options.remaining != 0) { error = EINVAL; goto out; }
-    if (salt.length == 0 || salt.length > 64U || rounds == 0 || rounds > 64U) goto out;
-    result = 0;
-out:
-    wipe_bytes(encoded, count);
-    free(encoded);
-    sshbuf_free(decoded);
-    if (result != 0) errno = error;
-    return result;
 }
 
 static int key_bundle(const unsigned char *bytes, size_t length,
@@ -1142,7 +1089,7 @@ static int key_bundle(const unsigned char *bytes, size_t length,
         errno = EINVAL;
         return -1;
     }
-    return encrypted_key_policy(key->data, key->length);
+    return ctos_ssh_key_encrypted_policy(key->data, key->length);
 }
 
 int ctos_ssh_native_client_begin_private_key_auth(struct ctos_ssh_native_client *client) {
@@ -1179,7 +1126,7 @@ int ctos_ssh_native_client_begin_private_key_auth(struct ctos_ssh_native_client 
             : status == SSH_ERR_KEY_TYPE_UNKNOWN || status == SSH_ERR_FEATURE_UNSUPPORTED ? ENOTSUP : EINVAL;
         goto out;
     }
-    if (software_identity(expected) != 0) goto out;
+    if (ctos_ssh_key_software_identity(expected) != 0) goto out;
     if (expected->type == KEY_RSA) {
         if (advertised_algorithm(client->ssh->kex->server_sig_algs, "rsa-sha2-512"))
             algorithm = "rsa-sha2-512";
@@ -1220,7 +1167,7 @@ int ctos_ssh_native_client_begin_private_key_auth(struct ctos_ssh_native_client 
             : status == SSH_ERR_FEATURE_UNSUPPORTED || status == SSH_ERR_KEY_TYPE_UNKNOWN ? ENOTSUP : EINVAL);
         goto out;
     }
-    if (software_identity(private_key) != 0) {
+    if (ctos_ssh_key_software_identity(private_key) != 0) {
         terminal_error(client, errno);
         goto out;
     }
@@ -1340,6 +1287,384 @@ static int accept_userauth_service(struct ctos_ssh_native_client *client) {
     return 0;
 }
 
+#define SHELL_PACKET_MAX 32768U
+#define SHELL_OUTPUT_MAX (128U * 1024U)
+#define SHELL_INPUT_MAX (256U * 1024U)
+
+static int established_proof(const struct ctos_ssh_native_client *client) {
+    struct ctos_ssh_role_snapshot snapshot = {0};
+    unsigned char digest[32] = {0};
+    int result = -1;
+    int error;
+
+    if (ctos_ssh_callback_check_transport(client->callback,
+            client->callback_environment, client) != 0) return -1;
+    if (ctos_ssh_view_borrow_bound(client->managed_view_borrow) != 0) return -1;
+    if (!client->established || client->ssh == NULL || client->ssh != client->established_ssh
+        || client->server_host_public_key == NULL
+        || client->server_host_public_key != client->established_host_key
+        || client->role != client->established_role.token
+        || client->deadline != client->established_role.deadline
+        || client->auth_phase != AUTH_FINISHED
+        || client->auth_result != CTOS_SSH_PASSWORD_AUTH_SUCCESS
+        || !client->completed || client->completion_calls != 1U
+        || client->completion_cycle != client->established_cycle
+        || client->established_cycle == 0 || client->ssh->kex == NULL
+        || !client->ssh->kex->done || client->ssh->kex->session_id == NULL
+        || ssh_packet_is_rekeying(client->ssh)
+        || memcmp(client->completion_session_digest, client->established_session_digest, 32U) != 0
+        || strcmp(client->host, client->established_role.host) != 0) {
+        errno = EACCES; return -1;
+    }
+    if (ctos_ssh_role_transport_snapshot(client->role, &snapshot) != 0) goto out;
+    if (memcmp(&snapshot, &client->established_role, sizeof(snapshot)) != 0
+        || ctos_ssh_kex_transport_ready(client->ssh, snapshot.hop, snapshot.role_nonce,
+                snapshot.connection_binding) != client->established_cycle) {
+        errno = EACCES; goto out;
+    }
+    if (ssh_digest_buffer(SSH_DIGEST_SHA256, client->ssh->kex->session_id,
+            digest, sizeof(digest)) != 0) { errno = EIO; goto out; }
+    if (memcmp(digest, client->established_session_digest, sizeof(digest)) != 0) {
+        errno = EACCES; goto out;
+    }
+    result = 0;
+out:
+    error = errno;
+    wipe_bytes(&snapshot, sizeof(snapshot));
+    wipe_bytes(digest, sizeof(digest));
+    errno = error;
+    return result;
+}
+
+static int shell_proof(const struct ctos_ssh_native_client *client) {
+    if (client == NULL) { errno = EINVAL; return -1; }
+    if (client->closed) { errno = ENOENT; return -1; }
+    if (client->failed) { errno = EALREADY; return -1; }
+    return client->established ? established_proof(client)
+        : auth_proof(client, client->authentication_selection_kind);
+}
+
+static int shell_live(struct ctos_ssh_native_client *client) {
+    if (shell_proof(client) == 0) return 0;
+    if (client == NULL || client->closed || client->failed || errno == EPERM) return -1;
+    return terminal_error(client, errno);
+}
+
+static int established_live(struct ctos_ssh_native_client *client, int cancelled) {
+    if (shell_live(client) != 0) return -1;
+    if (cancelled) return terminal_error(client, ECANCELED);
+    return 0;
+}
+
+static int shell_room(struct ctos_ssh_native_client *client, size_t reserve) {
+    size_t length;
+    (void)ssh_output_ptr(client->ssh, &length);
+    return reserve <= SHELL_OUTPUT_MAX && length <= SHELL_OUTPUT_MAX - reserve;
+}
+
+static int shell_send(struct ctos_ssh_native_client *client) {
+    size_t length;
+    if (sshpkt_send(client->ssh) != 0) return terminal_error(client, EIO);
+    (void)ssh_output_ptr(client->ssh, &length);
+    if (length > SHELL_OUTPUT_MAX || ssh_packet_is_rekeying(client->ssh))
+        return terminal_error(client, EPROTO);
+    return 0;
+}
+
+static int shell_message(struct ctos_ssh_native_client *client, int type) {
+    if (sshpkt_start(client->ssh, type) != 0
+        || sshpkt_put_u32(client->ssh, client->remote_channel) != 0)
+        return terminal_error(client, EIO);
+    return 0;
+}
+
+static int shell_close_message(struct ctos_ssh_native_client *client) {
+    if (client->local_close) return 0;
+    if (!shell_room(client, 256U)) return 0;
+    if (shell_message(client, SSH2_MSG_CHANNEL_CLOSE) != 0 || shell_send(client) != 0)
+        return -1;
+    client->local_close = 1;
+    return 0;
+}
+
+static int shell_request(struct ctos_ssh_native_client *client, int pty) {
+    if (shell_message(client, SSH2_MSG_CHANNEL_REQUEST) != 0
+        || sshpkt_put_cstring(client->ssh, pty ? "pty-req" : "shell") != 0
+        || sshpkt_put_u8(client->ssh, 1) != 0) return terminal_error(client, EIO);
+    if (pty && (sshpkt_put_cstring(client->ssh, "xterm-256color") != 0
+        || sshpkt_put_u32(client->ssh, client->shell_columns) != 0
+        || sshpkt_put_u32(client->ssh, client->shell_rows) != 0
+        || sshpkt_put_u32(client->ssh, 0) != 0 || sshpkt_put_u32(client->ssh, 0) != 0
+        || sshpkt_put_string(client->ssh, "", 1) != 0)) return terminal_error(client, EIO);
+    client->shell_request_drained = 0;
+    client->shell.phase = pty ? CTOS_SSH_SHELL_PTY_PENDING : CTOS_SSH_SHELL_SHELL_PENDING;
+    return shell_send(client);
+}
+
+int ctos_ssh_native_client_begin_shell(struct ctos_ssh_native_client *client,
+    unsigned int columns, unsigned int rows) {
+    struct ctos_ssh_role_snapshot snapshot = {0};
+    if (client == NULL || columns == 0 || columns > 4096U || rows == 0 || rows > 4096U) {
+        errno = EINVAL; return -1;
+    }
+    if (shell_live(client) != 0) return -1;
+    if (client->shell.phase != CTOS_SSH_SHELL_DISABLED) { errno = EALREADY; return -1; }
+    if (client->auth_phase != AUTH_FINISHED || client->auth_result != CTOS_SSH_PASSWORD_AUTH_SUCCESS) {
+        errno = EACCES; return -1;
+    }
+    if (auth_output_is_clear(client) != 0) return -1;
+    if (ctos_ssh_role_bootstrap_snapshot(client->role, &snapshot) != 0)
+        return terminal_error(client, errno);
+    if (ctos_ssh_callback_promote_transport(client->callback,
+            client->callback_environment, client) != 0) {
+        int error = errno;
+        wipe_bytes(&snapshot, sizeof(snapshot));
+        return terminal_error(client, error);
+    }
+    client->established_role = snapshot;
+    wipe_bytes(&snapshot, sizeof(snapshot));
+    client->established_ssh = client->ssh;
+    client->established_host_key = client->server_host_public_key;
+    client->established_cycle = client->completion_cycle;
+    memcpy(client->established_session_digest, client->completion_session_digest, 32U);
+    client->established = 1;
+    if (sshpkt_start(client->ssh, SSH2_MSG_CHANNEL_OPEN) != 0
+        || sshpkt_put_cstring(client->ssh, "session") != 0
+        || sshpkt_put_u32(client->ssh, 0) != 0
+        || sshpkt_put_u32(client->ssh, 65536U) != 0
+        || sshpkt_put_u32(client->ssh, SHELL_PACKET_MAX) != 0
+        || shell_send(client) != 0) return terminal_error(client, EIO);
+    client->shell.phase = CTOS_SSH_SHELL_OPENING;
+    client->shell_columns = columns;
+    client->shell_rows = rows;
+    client->local_window = 65536U;
+    return shell_live(client);
+}
+
+int ctos_ssh_native_client_shell_status(const struct ctos_ssh_native_client *client,
+    struct ctos_ssh_native_shell_status *status) {
+    if (status != NULL) memset(status, 0, sizeof(*status));
+    if (status == NULL) { errno = EINVAL; return -1; }
+    if (shell_proof(client) != 0) return -1;
+    *status = client->shell;
+    return 0;
+}
+
+int ctos_ssh_native_client_shell_write(struct ctos_ssh_native_client *client,
+    const unsigned char *bytes, size_t length, size_t *accepted) {
+    size_t count;
+    if (accepted != NULL) *accepted = 0;
+    if (bytes == NULL || accepted == NULL || length == 0 || length > SHELL_PACKET_MAX) {
+        errno = EINVAL; return -1;
+    }
+    if (shell_live(client) != 0) return -1;
+    if (client->shell.phase != CTOS_SSH_SHELL_RUNNING || client->shell.local_eof
+        || client->remote_close) { errno = EACCES; return -1; }
+    count = length < client->remote_window ? length : client->remote_window;
+    if (count > client->remote_maxpacket) count = client->remote_maxpacket;
+    if (count == 0 || !shell_room(client, count + 256U)) return 0;
+    if (shell_message(client, SSH2_MSG_CHANNEL_DATA) != 0
+        || sshpkt_put_string(client->ssh, bytes, count) != 0 || shell_send(client) != 0)
+        return terminal_error(client, EIO);
+    if (shell_live(client) != 0) return -1;
+    client->remote_window -= (uint32_t)count;
+    *accepted = count;
+    return 0;
+}
+
+int ctos_ssh_native_client_shell_read(struct ctos_ssh_native_client *client,
+    unsigned char *bytes, size_t capacity, size_t *length) {
+    unsigned char scratch[SHELL_PACKET_MAX];
+    size_t count;
+    if (length != NULL) *length = 0;
+    if (bytes != NULL) wipe_bytes(bytes, capacity > SHELL_PACKET_MAX ? SHELL_PACKET_MAX : capacity);
+    if (bytes == NULL || length == NULL || capacity == 0 || capacity > SHELL_PACKET_MAX) {
+        errno = EINVAL; return -1;
+    }
+    if (shell_live(client) != 0) return -1;
+    if (client->shell.phase == CTOS_SSH_SHELL_DISABLED) { errno = EACCES; return -1; }
+    count = capacity < client->shell.buffered_bytes ? capacity : client->shell.buffered_bytes;
+    memcpy(scratch, client->shell_buffer, count);
+    if (shell_live(client) != 0) { wipe_bytes(scratch, sizeof(scratch)); return -1; }
+    memmove(client->shell_buffer, client->shell_buffer + count, client->shell.buffered_bytes - count);
+    client->shell.buffered_bytes -= count;
+    wipe_bytes(client->shell_buffer + client->shell.buffered_bytes, count);
+    if (!client->remote_close) client->window_credit += (uint32_t)count;
+    memcpy(bytes, scratch, count);
+    *length = count;
+    wipe_bytes(scratch, sizeof(scratch));
+    return 0;
+}
+
+int ctos_ssh_native_client_shell_resize(struct ctos_ssh_native_client *client,
+    unsigned int columns, unsigned int rows) {
+    if (columns == 0 || columns > 4096U || rows == 0 || rows > 4096U) { errno = EINVAL; return -1; }
+    if (shell_live(client) != 0) return -1;
+    if (client->shell.phase != CTOS_SSH_SHELL_RUNNING || client->remote_close) { errno = EACCES; return -1; }
+    if (!shell_room(client, 512U)) return 0;
+    if (shell_message(client, SSH2_MSG_CHANNEL_REQUEST) != 0
+        || sshpkt_put_cstring(client->ssh, "window-change") != 0
+        || sshpkt_put_u8(client->ssh, 0) != 0 || sshpkt_put_u32(client->ssh, columns) != 0
+        || sshpkt_put_u32(client->ssh, rows) != 0 || sshpkt_put_u32(client->ssh, 0) != 0
+        || sshpkt_put_u32(client->ssh, 0) != 0 || shell_send(client) != 0)
+        return terminal_error(client, EIO);
+    if (shell_live(client) != 0) return -1;
+    return 1;
+}
+
+int ctos_ssh_native_client_shell_eof(struct ctos_ssh_native_client *client) {
+    if (shell_live(client) != 0) return -1;
+    if (client->shell.phase != CTOS_SSH_SHELL_RUNNING || client->shell.local_eof
+        || client->remote_close) { errno = EACCES; return -1; }
+    if (!shell_room(client, 256U)) return 0;
+    if (shell_message(client, SSH2_MSG_CHANNEL_EOF) != 0 || shell_send(client) != 0) return -1;
+    client->shell.local_eof = 1;
+    if (shell_live(client) != 0) return -1;
+    return 1;
+}
+
+static int shell_text_equals(const unsigned char *bytes, size_t length, const char *text) {
+    return strlen(text) == length && memcmp(bytes, text, length) == 0;
+}
+
+static int shell_discard_rest(struct ssh *ssh) {
+    int remaining = ssh_packet_remaining(ssh);
+    if (remaining < 0 || remaining > (int)SHELL_PACKET_MAX
+        || sshpkt_get(ssh, NULL, (size_t)remaining) != 0 || sshpkt_get_end(ssh) != 0) return -1;
+    return 0;
+}
+
+static int shell_packet(struct ctos_ssh_native_client *client, int type) {
+    struct ssh *ssh = client->ssh;
+    const unsigned char *text;
+    size_t length;
+    uint32_t recipient, value, maximum;
+    u_char flag;
+    if (type == SSH2_MSG_IGNORE || type == SSH2_MSG_DEBUG) {
+        if (type == SSH2_MSG_DEBUG && sshpkt_get_u8(ssh, &flag) != 0) goto bad;
+        if (packet_bounded_text(ssh, 8192U, &text, &length) != 0) goto bad;
+        if (type == SSH2_MSG_DEBUG && packet_bounded_text(ssh, 128U, &text, &length) != 0) goto bad;
+        if (sshpkt_get_end(ssh) != 0) goto bad;
+        return 0;
+    }
+    if (type == SSH2_MSG_GLOBAL_REQUEST) {
+        if (packet_bounded_text(ssh, 128U, &text, &length) != 0
+            || sshpkt_get_u8(ssh, &flag) != 0 || flag > 1 || shell_discard_rest(ssh) != 0) goto bad;
+        if (flag && (sshpkt_start(ssh, SSH2_MSG_REQUEST_FAILURE) != 0 || shell_send(client) != 0)) return -1;
+        return 0;
+    }
+    if (type == SSH2_MSG_CHANNEL_OPEN) {
+        if (packet_bounded_text(ssh, 128U, &text, &length) != 0
+            || sshpkt_get_u32(ssh, &recipient) != 0 || sshpkt_get_u32(ssh, &value) != 0
+            || sshpkt_get_u32(ssh, &maximum) != 0 || shell_discard_rest(ssh) != 0) goto bad;
+        if (sshpkt_start(ssh, SSH2_MSG_CHANNEL_OPEN_FAILURE) != 0
+            || sshpkt_put_u32(ssh, recipient) != 0 || sshpkt_put_u32(ssh, 1) != 0
+            || sshpkt_put_cstring(ssh, "") != 0 || sshpkt_put_cstring(ssh, "") != 0
+            || shell_send(client) != 0) return -1;
+        return 0;
+    }
+    if (sshpkt_get_u32(ssh, &recipient) != 0 || recipient != 0) goto bad;
+    if (type == SSH2_MSG_CHANNEL_OPEN_CONFIRMATION || type == SSH2_MSG_CHANNEL_OPEN_FAILURE) {
+        if (client->shell.phase != CTOS_SSH_SHELL_OPENING || !client->shell_request_drained) goto bad;
+        if (type == SSH2_MSG_CHANNEL_OPEN_FAILURE) {
+            if (sshpkt_get_u32(ssh, &value) != 0
+                || packet_bounded_text(ssh, 8192U, &text, &length) != 0
+                || packet_bounded_text(ssh, 128U, &text, &length) != 0 || sshpkt_get_end(ssh) != 0) goto bad;
+            client->shell.phase = CTOS_SSH_SHELL_REJECTED;
+            return 0;
+        }
+        if (sshpkt_get_u32(ssh, &client->remote_channel) != 0
+            || sshpkt_get_u32(ssh, &client->remote_window) != 0
+            || sshpkt_get_u32(ssh, &client->remote_maxpacket) != 0
+            || client->remote_maxpacket == 0 || sshpkt_get_end(ssh) != 0) goto bad;
+        return shell_request(client, 1);
+    }
+    if (client->shell.phase == CTOS_SSH_SHELL_OPENING
+        || client->shell.phase == CTOS_SSH_SHELL_REJECTED || client->remote_close) goto bad;
+    if (client->shell_rejected_pending && type != SSH2_MSG_CHANNEL_CLOSE) goto bad;
+    if (type == SSH2_MSG_CHANNEL_SUCCESS || type == SSH2_MSG_CHANNEL_FAILURE) {
+        if ((client->shell.phase != CTOS_SSH_SHELL_PTY_PENDING
+                && client->shell.phase != CTOS_SSH_SHELL_SHELL_PENDING)
+            || !client->shell_request_drained || sshpkt_get_end(ssh) != 0) goto bad;
+        if (type == SSH2_MSG_CHANNEL_FAILURE) {
+            client->shell_rejected_pending = 1;
+            return shell_close_message(client);
+        }
+        if (client->shell.phase == CTOS_SSH_SHELL_PTY_PENDING) return shell_request(client, 0);
+        client->shell.phase = CTOS_SSH_SHELL_RUNNING;
+        return 0;
+    }
+    if (type == SSH2_MSG_CHANNEL_CLOSE) {
+        if (sshpkt_get_end(ssh) != 0) goto bad;
+        client->remote_close = 1;
+        return shell_close_message(client);
+    }
+    if (type == SSH2_MSG_CHANNEL_WINDOW_ADJUST) {
+        if (sshpkt_get_u32(ssh, &value) != 0 || value == 0
+            || value > UINT32_MAX - client->remote_window || sshpkt_get_end(ssh) != 0) goto bad;
+        client->remote_window += value;
+        return 0;
+    }
+    if (client->shell.phase != CTOS_SSH_SHELL_RUNNING) goto bad;
+    if (type == SSH2_MSG_CHANNEL_DATA || type == SSH2_MSG_CHANNEL_EXTENDED_DATA) {
+        if (client->shell.remote_eof) goto bad;
+        if (type == SSH2_MSG_CHANNEL_EXTENDED_DATA && (sshpkt_get_u32(ssh, &value) != 0 || value != 1)) goto bad;
+        if (packet_bounded_text(ssh, SHELL_PACKET_MAX, &text, &length) != 0
+            || length > client->local_window || length > sizeof(client->shell_buffer) - client->shell.buffered_bytes
+            || sshpkt_get_end(ssh) != 0) goto bad;
+        memcpy(client->shell_buffer + client->shell.buffered_bytes, text, length);
+        client->shell.buffered_bytes += length;
+        client->local_window -= (uint32_t)length;
+        return 0;
+    }
+    if (type == SSH2_MSG_CHANNEL_EOF) {
+        if (client->shell.remote_eof || sshpkt_get_end(ssh) != 0) goto bad;
+        client->shell.remote_eof = 1;
+        return 0;
+    }
+    if (type == SSH2_MSG_CHANNEL_REQUEST) {
+        if (packet_bounded_text(ssh, 128U, &text, &length) != 0
+            || sshpkt_get_u8(ssh, &flag) != 0 || flag > 1) goto bad;
+        if (shell_text_equals(text, length, "exit-status")) {
+            if (flag || client->shell.exit_status_known || client->shell.exit_signal
+                || sshpkt_get_u32(ssh, &value) != 0 || sshpkt_get_end(ssh) != 0) goto bad;
+            client->shell.exit_status = value;
+            client->shell.exit_status_known = 1;
+        } else if (shell_text_equals(text, length, "exit-signal")) {
+            if (flag || client->shell.exit_status_known || client->shell.exit_signal
+                || packet_bounded_text(ssh, 128U, &text, &length) != 0
+                || sshpkt_get_u8(ssh, &flag) != 0 || flag > 1
+                || packet_bounded_text(ssh, 8192U, &text, &length) != 0
+                || packet_bounded_text(ssh, 128U, &text, &length) != 0 || sshpkt_get_end(ssh) != 0) goto bad;
+            client->shell.exit_signal = 1;
+        } else {
+            if (shell_discard_rest(ssh) != 0) goto bad;
+            if (flag && (shell_message(client, SSH2_MSG_CHANNEL_FAILURE) != 0 || shell_send(client) != 0)) return -1;
+        }
+        return 0;
+    }
+bad:
+    return terminal_error(client, EPROTO);
+}
+
+static int shell_output(struct ctos_ssh_native_client *client) {
+    size_t length;
+    (void)ssh_output_ptr(client->ssh, &length);
+    if (length > SHELL_OUTPUT_MAX) return terminal_error(client, EPROTO);
+    if (client->remote_close || client->shell_rejected_pending
+        || client->shell.phase == CTOS_SSH_SHELL_REJECTED) {
+        if (client->shell.phase != CTOS_SSH_SHELL_REJECTED || client->remote_maxpacket != 0)
+            return shell_close_message(client);
+    } else if (client->window_credit != 0 && shell_room(client, 256U)) {
+        uint32_t credit = client->window_credit;
+        if (shell_message(client, SSH2_MSG_CHANNEL_WINDOW_ADJUST) != 0
+            || sshpkt_put_u32(client->ssh, credit) != 0 || shell_send(client) != 0) return -1;
+        client->local_window += credit;
+        client->window_credit = 0;
+    }
+    return 0;
+}
+
 int ctos_ssh_native_client_open(
     const struct ctos_ssh_native_client_config *config,
     struct ctos_ssh_native_client **client_out) {
@@ -1363,12 +1688,18 @@ int ctos_ssh_native_client_open(
     if (config == NULL || config->role == 0 || config->socket_fd < 0
         || config->owns_socket != 1 || config->callback == 0
         || config->callback_environment == NULL
-        || config->server_host_public_key_blob == NULL
-        || config->server_host_public_key_length == 0
-        || config->server_host_public_key_length
-            > CTOS_SSH_NATIVE_CLIENT_MAX_HOST_KEY_BLOB_BYTES
-        || config->expected_host_fingerprint == NULL
-        || !nonzero32(config->expected_host_fingerprint)
+        || (config->host_key_mode != CTOS_SSH_HOST_KEY_PINNED
+            && config->host_key_mode != CTOS_SSH_HOST_KEY_MANAGED)
+        || (config->host_key_mode == CTOS_SSH_HOST_KEY_MANAGED
+            && (config->server_host_public_key_blob != NULL
+                || config->server_host_public_key_length != 0
+                || config->expected_host_fingerprint != NULL))
+        || (config->host_key_mode == CTOS_SSH_HOST_KEY_PINNED
+            && (config->server_host_public_key_blob == NULL
+                || config->server_host_public_key_length == 0
+                || config->server_host_public_key_length > CTOS_SSH_NATIVE_CLIENT_MAX_HOST_KEY_BLOB_BYTES
+                || config->expected_host_fingerprint == NULL
+                || !nonzero32(config->expected_host_fingerprint)))
         || config->known_hosts_path == NULL
         || config->host == NULL || config->candidate_id == NULL
         || config->step_budget == 0
@@ -1407,18 +1738,21 @@ int ctos_ssh_native_client_open(
     client->caller_socket_fd = -1;
     client->deadline = config->deadline;
     client->step_budget = config->step_budget;
-    memcpy(client->expected_host_fingerprint, config->expected_host_fingerprint,
-        sizeof(client->expected_host_fingerprint));
+    client->host_key_mode = config->host_key_mode;
     if (copy_authentication_selection(client, config, &snapshot) != 0) goto failed;
-    if (sshkey_from_blob(config->server_host_public_key_blob,
-            config->server_host_public_key_length,
-            &client->server_host_public_key) != 0
-        || client->server_host_public_key == NULL) {
-        errno = EINVAL;
-        goto failed;
+    if (config->host_key_mode == CTOS_SSH_HOST_KEY_PINNED) {
+        memcpy(client->expected_host_fingerprint, config->expected_host_fingerprint,
+            sizeof(client->expected_host_fingerprint));
+        if (sshkey_from_blob(config->server_host_public_key_blob,
+                config->server_host_public_key_length,
+                &client->server_host_public_key) != 0
+            || client->server_host_public_key == NULL) {
+            errno = EINVAL;
+            goto failed;
+        }
+        if (fingerprint_matches(client, client->server_host_public_key) != 0)
+            goto failed;
     }
-    if (fingerprint_matches(client, client->server_host_public_key) != 0)
-        goto failed;
     if (copy_config_text(client->known_hosts_path,
             sizeof(client->known_hosts_path), config->known_hosts_path, 512U) != 0
         || copy_config_text(client->host, sizeof(client->host), config->host,
@@ -1430,7 +1764,9 @@ int ctos_ssh_native_client_open(
     memcpy(params.proposal, proposals, sizeof(proposals));
     if (ssh_init(&client->ssh, 0, &params) != 0 || client->ssh == NULL)
         goto failed;
-    if (ssh_add_hostkey(client->ssh, client->server_host_public_key) != 0
+    if (config->host_key_mode == CTOS_SSH_HOST_KEY_MANAGED) {
+        if (ctos_ssh_kex_bind_pending_host(client->ssh, client->role) != 0) goto failed;
+    } else if (ssh_add_hostkey(client->ssh, client->server_host_public_key) != 0
         || ctos_ssh_kex_bind_role(client->ssh, client->role,
             client->expected_host_fingerprint) != 0) goto failed;
     if (ssh_set_verify_host_key_callback(client->ssh, verify_host_key) != 0)
@@ -1497,6 +1833,7 @@ int ctos_ssh_native_client_step(
     int view_error;
     int cancelled = 0;
     int invalid_pipe = 0;
+    int packet_result;
     int result = -1;
 
     memset(input, 0, sizeof(input));
@@ -1515,14 +1852,18 @@ int ctos_ssh_native_client_step(
         errno = ENOENT;
         goto out;
     }
-    if (client->failed || client->auth_phase == AUTH_FINISHED
+    if (client->failed || (client->auth_phase == AUTH_FINISHED
+            && client->shell.phase == CTOS_SSH_SHELL_DISABLED)
+        || client->shell.phase == CTOS_SSH_SHELL_CLOSED
         || (client->service_phase == USERAUTH_SERVICE_READY
             && client->auth_phase == AUTH_DISABLED)
         || (client->completed && client->service_phase == USERAUTH_SERVICE_DISABLED)) {
         errno = EALREADY;
         goto out;
     }
-    if (client->auth_phase != AUTH_DISABLED) {
+    if (client->established) {
+        if (established_live(client, cancelled) != 0) goto out;
+    } else if (client->auth_phase != AUTH_DISABLED) {
         if (auth_is_live(client, cancelled) != 0) goto out;
     } else if (client->service_phase != USERAUTH_SERVICE_DISABLED) {
         if (service_is_live(client, cancelled) != 0) goto out;
@@ -1541,7 +1882,23 @@ int ctos_ssh_native_client_step(
             goto out;
         }
     }
+    if (client->shell.phase != CTOS_SSH_SHELL_DISABLED) {
+        (void)ssh_output_ptr(client->ssh, &output_length);
+        if (client->shell.phase == CTOS_SSH_SHELL_REJECTED && output_length == 0) {
+            errno = EALREADY; goto out;
+        }
+        if (shell_output(client) != 0) goto out;
+        if (!shell_room(client, 1024U)) goto transport_write;
+        if (sshbuf_len(ssh_packet_get_input(client->ssh)) > SHELL_INPUT_MAX) {
+            result = terminal_error(client, EPROTO); goto out;
+        }
+    }
     read_length = client->step_budget;
+    if (client->shell.phase != CTOS_SSH_SHELL_DISABLED) {
+        size_t pending = sshbuf_len(ssh_packet_get_input(client->ssh));
+        if (read_length > SHELL_INPUT_MAX - pending) read_length = SHELL_INPUT_MAX - pending;
+    }
+    if (client->shell_transport_eof || read_length == 0) goto parse_packet;
     if (read_length > sizeof(input)) read_length = sizeof(input);
     read_result = recv(client->socket_fd, input, read_length, MSG_DONTWAIT);
     if (read_result > 0) {
@@ -1552,25 +1909,41 @@ int ctos_ssh_native_client_step(
         }
         step->input_appended = (size_t)read_result;
     } else if (read_result == 0) {
-        result = terminal_error(client, EPIPE);
-        goto out;
+        if (client->shell.phase != CTOS_SSH_SHELL_DISABLED) client->shell_transport_eof = 1;
+        else { result = terminal_error(client, EPIPE); goto out; }
     } else if (errno == EAGAIN || errno == EWOULDBLOCK) {
         step->read_would_block = 1;
     } else if (errno != EINTR) {
         result = terminal_error(client, errno == ECONNRESET ? ECONNRESET : EIO);
         goto out;
     }
-    if (ssh_packet_next(client->ssh, &packet_type) != 0) {
+parse_packet:
+    client->in_transport_step = 1;
+    packet_result = ssh_packet_next(client->ssh, &packet_type);
+    client->in_transport_step = 0;
+    if (packet_result != 0) {
         result = terminal_error(client, EIO);
         goto out;
     }
     step->packet_type = packet_type;
+    if (client->shell.phase != CTOS_SSH_SHELL_DISABLED && packet_type == SSH_MSG_NONE) {
+        if (client->shell_transport_eof && !client->remote_close) {
+            result = terminal_error(client, EPIPE); goto out;
+        }
+        if (read_length == 0 && !client->shell_transport_eof) {
+            result = terminal_error(client, EPROTO); goto out;
+        }
+    }
     if (packet_type == SSH2_MSG_EXT_INFO
         && kex_input_ext_info(packet_type, 0, client->ssh) != 0) {
         result = terminal_error(client, EPROTO);
         goto out;
     }
-    if (client->auth_phase != AUTH_DISABLED
+    if (client->shell.phase != CTOS_SSH_SHELL_DISABLED
+        && packet_type != SSH_MSG_NONE) {
+        result = shell_packet(client, packet_type);
+        if (result != 0) goto out;
+    } else if (client->auth_phase != AUTH_DISABLED
         && packet_type != SSH_MSG_NONE && packet_type != SSH2_MSG_EXT_INFO) {
         result = auth_packet(client, packet_type);
         if (result != 0 || client->auth_phase == AUTH_FINISHED) goto out;
@@ -1582,10 +1955,14 @@ int ctos_ssh_native_client_step(
         result = terminal_error(client, EPROTO);
         goto out;
     }
+transport_write:
+    if (client->shell.phase != CTOS_SSH_SHELL_DISABLED
+        && (established_live(client, cancelled) != 0 || shell_output(client) != 0)) goto out;
     output = ssh_output_ptr(client->ssh, &output_length);
     if (output == NULL || output_length == 0) {
         goto completion;
     }
+    if (client->shell.phase != CTOS_SSH_SHELL_DISABLED && established_live(client, cancelled) != 0) goto out;
     write_length = output_length < client->step_budget
         ? output_length : client->step_budget;
     write_result = send(client->socket_fd, output, write_length, MSG_NOSIGNAL);
@@ -1611,6 +1988,13 @@ completion:
     /* Inbound NEWKEYS may precede our queued NEWKEYS/EXT_INFO drain. Keep
      * bounded transport steps available until that output reaches the socket. */
     (void)ssh_output_ptr(client->ssh, &output_length);
+    if (client->shell.phase != CTOS_SSH_SHELL_DISABLED && output_length == 0) {
+        client->shell_request_drained = 1;
+        if (client->shell_rejected_pending && client->local_close)
+            client->shell.phase = CTOS_SSH_SHELL_REJECTED;
+        else if (client->remote_close && client->local_close)
+            client->shell.phase = CTOS_SSH_SHELL_CLOSED;
+    }
     if (client->service_phase == USERAUTH_SERVICE_REQUEST_PENDING && output_length == 0)
         client->service_phase = USERAUTH_SERVICE_AWAIT_ACCEPT;
     if (client->auth_phase == AUTH_REQUEST_PENDING && output_length == 0)
@@ -1620,6 +2004,7 @@ completion:
         result = terminal_error(client, EIO);
         goto out;
     }
+    if (client->shell.phase != CTOS_SSH_SHELL_DISABLED && established_live(client, cancelled) != 0) goto out;
     result = 0;
 out:
     wipe_bytes(input, sizeof(input));
@@ -1632,6 +2017,10 @@ int ctos_ssh_native_client_verify_host_key(
     struct sshkey *host_key = NULL;
     int result;
 
+    if (client != NULL && client->host_key_mode == CTOS_SSH_HOST_KEY_MANAGED) {
+        errno = EACCES;
+        return -1;
+    }
     if (client == NULL || host_key_blob == NULL || host_key_blob_length == 0
         || host_key_blob_length > CTOS_SSH_NATIVE_CLIENT_MAX_HOST_KEY_BLOB_BYTES
         || sshkey_from_blob(host_key_blob, host_key_blob_length, &host_key) != 0
@@ -1724,8 +2113,15 @@ int ctos_ssh_native_client_close(struct ctos_ssh_native_client *client) {
         && close(client->caller_socket_fd) != 0) return -1;
     client->caller_socket_fd = -1;
     client->socket_fd = -1;
+    wipe_bytes(client->shell_buffer, sizeof(client->shell_buffer));
+    memset(&client->shell, 0, sizeof(client->shell));
     clear_authentication_selection(client);
     wipe_bytes(client->completion_session_digest, sizeof(client->completion_session_digest));
+    wipe_bytes(client->established_session_digest, sizeof(client->established_session_digest));
+    wipe_bytes(&client->established_role, sizeof(client->established_role));
+    client->established = 0;
+    client->established_ssh = NULL;
+    client->established_host_key = NULL;
     client->auth_phase = AUTH_DISABLED;
     client->auth_result = CTOS_SSH_PASSWORD_AUTH_NOT_STARTED;
     client->auth_banners = 0;

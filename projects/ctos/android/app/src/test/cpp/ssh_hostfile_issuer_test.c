@@ -132,17 +132,22 @@ static void destroy_view(struct ctos_ssh_view *view) {
     free(view);
 }
 
-static size_t formatted_key(const struct sshkey *key, unsigned char *output,
-    size_t capacity) {
+static size_t formatted_endpoint_key(const struct sshkey *key, const char *endpoint,
+    unsigned char *output, size_t capacity) {
     FILE *stream = fmemopen(output, capacity, "w+");
     long length;
     assert(stream != NULL);
-    assert(ctos_hostfile_write_entry(stream, "example.invalid", NULL, key, 0) == 1);
+    assert(ctos_hostfile_write_entry(stream, endpoint, NULL, key, 0) == 1);
     assert(fflush(stream) == 0);
     length = ftell(stream);
     assert(length > 0 && (unsigned long)length < capacity);
     assert(fclose(stream) == 0);
     return (size_t)length;
+}
+
+static size_t formatted_key(const struct sshkey *key, unsigned char *output,
+    size_t capacity) {
+    return formatted_endpoint_key(key, "example.invalid", output, capacity);
 }
 
 struct handoff_fixture {
@@ -223,7 +228,8 @@ static int release(void *context, void *environment) {
     return 0;
 }
 
-static ctos_ssh_role_token open_role(uint64_t deadline) {
+static ctos_ssh_role_token open_endpoint_role(uint64_t deadline, const char *host,
+    unsigned int port) {
     unsigned char nonce[32] = {3};
     unsigned char binding[32] = {4};
     struct ctos_ssh_role_request request = {
@@ -231,11 +237,11 @@ static ctos_ssh_role_token open_role(uint64_t deadline) {
         .owner_pid = getpid(),
         .owner_uid = getuid(),
         .hop = 0,
-        .port = 22,
+        .port = port,
         .deadline = deadline,
         .connection_id = "issuer-test",
         .target_identity = "target:user@example.invalid:22",
-        .host = "example.invalid",
+        .host = host,
         .public_view_id = "view-issuer",
         .role_nonce = nonce,
         .connection_binding = binding
@@ -243,6 +249,10 @@ static ctos_ssh_role_token open_role(uint64_t deadline) {
     ctos_ssh_role_token role = 0;
     assert(ctos_ssh_role_bootstrap_open(&request, &role) == 0);
     return role;
+}
+
+static ctos_ssh_role_token open_role(uint64_t deadline) {
+    return open_endpoint_role(deadline, "example.invalid", 22U);
 }
 
 static struct sshkey *make_host_certificate(struct sshkey **ca_out) {
@@ -297,6 +307,107 @@ static void issue_no_handoff(ctos_ssh_role_token role, uint64_t deadline,
         sizeof(issue.base_digest)) == 0);
     destroy_view(view);
     cases++;
+}
+
+static size_t issue_endpoint_case(const char *host, unsigned int port,
+    const unsigned char *body, size_t body_length, const struct sshkey *key,
+    int expected, unsigned char *replacement, size_t capacity) {
+    uint64_t deadline = deadline_after(5000U);
+    ctos_ssh_role_token role = open_endpoint_role(deadline, host, port);
+    struct ctos_ssh_view *view = load_view(body, body_length, deadline);
+    struct ctos_ssh_hostfile_issue issue;
+    FILE *stream = expected == CTOS_SSH_CALLBACK_HOST_NEW
+        ? fmemopen(replacement, capacity, "w+") : NULL;
+    assert(expected != CTOS_SSH_CALLBACK_HOST_NEW || stream != NULL);
+    assert(ctos_ssh_hostfile_issue(view, role, "ssh/known_hosts", host, key,
+        "candidate-issuer", stream, replacement, capacity, 0, NULL, &issue) == 0);
+    assert(issue.classification == expected && issue.handed_off == 0);
+    struct ctos_ssh_role_snapshot snapshot;
+    assert(ctos_ssh_role_bootstrap_snapshot(role, &snapshot) == 0);
+    assert(strcmp(snapshot.host, host) == 0 && snapshot.port == port);
+    size_t length = issue.replacement_body_length;
+    if (expected == CTOS_SSH_CALLBACK_HOST_NEW) {
+        char endpoint[300];
+        int prefix = port == 22U ? snprintf(endpoint, sizeof(endpoint), "%s ", host)
+            : snprintf(endpoint, sizeof(endpoint), "[%s]:%u ", host, port);
+        assert(prefix > 0 && (size_t)prefix < sizeof(endpoint));
+        for (int index = 0; index < prefix; index++) {
+            if (endpoint[index] >= 'A' && endpoint[index] <= 'Z')
+                endpoint[index] = (char)(endpoint[index] - 'A' + 'a');
+        }
+        assert(length > body_length + (size_t)prefix);
+        assert(body_length == 0 || memcmp(replacement, body, body_length) == 0);
+        assert(memcmp(replacement + body_length, endpoint, (size_t)prefix) == 0);
+    } else assert(length == 0);
+    if (stream != NULL) assert(fclose(stream) == 0);
+    destroy_view(view);
+    assert(ctos_ssh_role_bootstrap_close(role) == 0);
+    cases++;
+    return length;
+}
+
+static void test_endpoint_isolation(const struct sshkey *known, const struct sshkey *changed) {
+    const char *hosts[] = {"example.invalid", "2001:db8::1"};
+    unsigned char raw[4096], qualified[4096];
+    unsigned char replacement[CTOS_SSH_CALLBACK_MAX_FILE_BYTES + 1U];
+    for (size_t index = 0; index < sizeof(hosts) / sizeof(hosts[0]); index++) {
+        char endpoint[300];
+        snprintf(endpoint, sizeof(endpoint), "[%s]:2222", hosts[index]);
+        size_t raw_length = formatted_endpoint_key(known, hosts[index], raw, sizeof(raw));
+        size_t qualified_length = formatted_endpoint_key(known, endpoint, qualified, sizeof(qualified));
+        issue_endpoint_case(hosts[index], 22U, raw, raw_length, known,
+            CTOS_SSH_CALLBACK_HOST_KNOWN, replacement, sizeof(replacement));
+        issue_endpoint_case(hosts[index], 2222U, qualified, qualified_length, known,
+            CTOS_SSH_CALLBACK_HOST_KNOWN, replacement, sizeof(replacement));
+        issue_endpoint_case(hosts[index], 2222U, qualified, qualified_length, changed,
+            CTOS_SSH_CALLBACK_HOST_CHANGED, replacement, sizeof(replacement));
+        size_t length = issue_endpoint_case(hosts[index], 2223U, qualified, qualified_length, changed,
+            CTOS_SSH_CALLBACK_HOST_NEW, replacement, sizeof(replacement));
+        issue_endpoint_case(hosts[index], 2223U, replacement, length, changed,
+            CTOS_SSH_CALLBACK_HOST_KNOWN, NULL, 0);
+        issue_endpoint_case(hosts[index], 2222U, replacement, length, known,
+            CTOS_SSH_CALLBACK_HOST_KNOWN, NULL, 0);
+        issue_endpoint_case(hosts[index], 2222U, raw, raw_length, known,
+            CTOS_SSH_CALLBACK_HOST_NEW, replacement, sizeof(replacement));
+        issue_endpoint_case(hosts[index], 22U, qualified, qualified_length, known,
+            CTOS_SSH_CALLBACK_HOST_NEW, replacement, sizeof(replacement));
+    }
+}
+
+static void test_hashed_endpoint_isolation(const struct sshkey *known, const struct sshkey *changed) {
+    const char *host = "example.invalid";
+    const char *endpoints[] = {"[example.invalid]:2222", "example.invalid"};
+    unsigned char plain[4096], line[4096];
+    unsigned char replacement[CTOS_SSH_CALLBACK_MAX_FILE_BYTES + 1U];
+    size_t plain_length = formatted_key(known, plain, sizeof(plain));
+    unsigned char *key_text = memchr(plain, ' ', plain_length);
+    assert(key_text != NULL);
+    size_t key_length = plain_length - (size_t)(key_text - plain);
+    for (size_t index = 0; index < sizeof(endpoints) / sizeof(endpoints[0]); index++) {
+        char *hashed = host_hash(endpoints[index], NULL, 0);
+        assert(hashed != NULL && strncmp(hashed, "|1|", 3U) == 0);
+        size_t hashed_length = strlen(hashed);
+        assert(hashed_length + key_length <= sizeof(line));
+        /* Preserve the hash's case-sensitive base64 bytes; plain host writers lowercase. */
+        memcpy(line, hashed, hashed_length);
+        memcpy(line + hashed_length, key_text, key_length);
+        free(hashed);
+        unsigned int matching_port = index == 0 ? 2222U : 22U;
+        unsigned int other_port = index == 0 ? 2223U : 2222U;
+        issue_endpoint_case(host, matching_port, line, hashed_length + key_length, known,
+            CTOS_SSH_CALLBACK_HOST_KNOWN, replacement, sizeof(replacement));
+        issue_endpoint_case(host, other_port, line, hashed_length + key_length, known,
+            CTOS_SSH_CALLBACK_HOST_NEW, replacement, sizeof(replacement));
+        if (index == 0) {
+            /* Raw role authority keeps its spelling; standard known_hosts tokens do not. */
+            issue_endpoint_case("EXAMPLE.invalid", 2222U, line, hashed_length + key_length, known,
+                CTOS_SSH_CALLBACK_HOST_KNOWN, replacement, sizeof(replacement));
+            issue_endpoint_case("EXAMPLE.invalid", 2222U, line, hashed_length + key_length, changed,
+                CTOS_SSH_CALLBACK_HOST_CHANGED, replacement, sizeof(replacement));
+            issue_endpoint_case("EXAMPLE.invalid", 2223U, line, hashed_length + key_length, known,
+                CTOS_SSH_CALLBACK_HOST_NEW, replacement, sizeof(replacement));
+        }
+    }
 }
 
 int main(void) {
@@ -366,6 +477,10 @@ int main(void) {
     cases++;
 
     struct ctos_ssh_view *bad_view = load_view(key_line, key_line_length, deadline);
+    errno = EIO;
+    assert(ctos_ssh_hostfile_issue(bad_view, role, "ssh/known_hosts", NULL, known,
+        "candidate-issuer", NULL, NULL, 0, 0, NULL, &issue) != 0 && errno == EINVAL);
+    cases++;
     errno = 0;
     assert(ctos_ssh_hostfile_issue(bad_view, role, "/etc/passwd", "example.invalid", known,
         "candidate-issuer", NULL, NULL, 0, 0, NULL, &issue) != 0 && errno == EACCES);
@@ -406,6 +521,8 @@ int main(void) {
     cases++;
     assert(ctos_ssh_callback_close(callback, fixture.environment) == 0);
     assert(ctos_ssh_role_bootstrap_close(role) == 0);
+    test_endpoint_isolation(known, changed);
+    test_hashed_endpoint_isolation(known, changed);
     sshkey_free(known);
     sshkey_free(changed);
     sshkey_free(certificate);

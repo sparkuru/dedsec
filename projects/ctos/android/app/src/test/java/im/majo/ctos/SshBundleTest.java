@@ -240,10 +240,14 @@ public final class SshBundleTest {
             VaultOperation operation = approved().bundleRequest(deletion);
             vault.attachSshValidator(null);
             rejects("VAULT_SSH_VALIDATION_REQUIRED", () -> approved().commitBundle(operation, deletion, () -> { }));
+            boolean[] rejectEmpty = {false};
             vault.attachSshValidator(manifest -> {
-                if (manifest.files.isEmpty()) throw new VaultException("VAULT_CONTENT", "fixture rejects empty graph");
+                if (rejectEmpty[0] && manifest.files.isEmpty()) throw new VaultException("VAULT_CONTENT", "fixture rejects empty graph");
             });
-            rejects("VAULT_CONTENT", () -> approved().commitBundle(operation, deletion, () -> { }));
+            rejects("VAULT_CHANGED", () -> approved().commitBundle(operation, deletion, () -> { }));
+            VaultOperation fresh = approved().bundleRequest(deletion);
+            rejectEmpty[0] = true;
+            rejects("VAULT_CONTENT", () -> approved().commitBundle(fresh, deletion, () -> { }));
         }
     }
 

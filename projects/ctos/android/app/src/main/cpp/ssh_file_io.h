@@ -16,13 +16,21 @@ struct ctos_ssh_reader {
     int fd, locked, live, failed;
 };
 struct ctos_ssh_io {
-    const struct ctos_ssh_view *view;
+    const struct ctos_ssh_file *files;
+    unsigned int count;
+    int (*source_live)(const void *);
+    const void *source;
     int (*close_stream)(FILE *);
     struct ctos_ssh_reader readers[CTOS_SSH_IO_STREAMS];
     unsigned int opens, held_bytes, read_bytes;
+    unsigned int max_opens, max_read_bytes;
     int active, error;
 };
 int ctos_ssh_io_init(struct ctos_ssh_io *, const struct ctos_ssh_view *, int (*)(FILE *));
+/* Internal borrowed collection. The owner keeps records and callback context
+ * alive until destroy; every lookup checks the original source lifetime. */
+int ctos_ssh_io_init_source(struct ctos_ssh_io *, const struct ctos_ssh_file *,
+    unsigned int, int (*)(const void *), const void *, int (*)(FILE *));
 int ctos_ssh_io_resolve(const char *, int, char [513]);
 FILE *ctos_ssh_io_open(struct ctos_ssh_io *, const char *, unsigned int);
 int ctos_ssh_io_owns(const struct ctos_ssh_io *, FILE *);

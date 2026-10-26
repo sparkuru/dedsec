@@ -27,10 +27,15 @@ Preview: `{previewId,candidates:[{candidateId,identity,label,algorithm,digits,pe
 `invalidCodes` is an integer0..16, not a raw-URI list. The `ctos/secrets`
 EventChannel emits `{epoch:int,unlocked:bool,foreground:bool}` only.
 
-Native `TotpPreviews` owns candidate bytes and `TOTP_SAVE` capabilities.
-`AppSecrets.totpPublication(operation)` verifies the worker snapshot and gives
-a content revision; `publishTotp(epoch,revision,deadline,owner,publish)` guards
-the final result/clipboard effect without core/store/preview locks or I/O.
+Native `TotpPreviews` owns candidate bytes and `TOTP_SAVE` capabilities. Production uses
+original `TotpMutationOrigin` plus exact opaque ticket publication; scalar
+`totpPublication(operation)`/`publishTotp(...)` remains compatibility-only. Capture cleanup
+does not revoke a successfully handed-off preview; commit retains the original deadline
+and supplies a new effect guard. See [mutation contract](../../../design/totp-mutation-lifecycle.md).
+TOTP_CODE/TOTP_LIST use original `TotpReadContext` before Bridge queueing, detached
+source/loan/generation and opaque operation-bound state; `publishTotpRead(operation,effect)`
+requires that successful once-used read, current revision/registration/window and once reservation.
+See [typed-read contract](../../../design/totp-read-lifecycle.md) and App Secrets scenario.
 
 ## 3. Contracts
 
@@ -55,6 +60,13 @@ the final result/clipboard effect without core/store/preview locks or I/O.
   guards and outside I/O in the tiny publication lock. Worker validates disk
   snapshots; main checks only lightweight owner/session/revision. Copy rejects
   a crossed wall-clock window. Clipboard helper never reads/listens/clears.
+- Read origin checks only metadata and does not acquire core. Its phase-only
+  guard orders phase→publicationLock→session; actual code disclosure follows after
+  phase release under inherited pub/session with final window/metadata rechecks.
+  Pure TOTP has no SSH provider dependency; mixed reads keep the original immutable
+  registration. All cleanup and copied:true Result are outside locks. List Result
+  is bounded transport-only/nonreentrant under pub/session; arbitrary callback
+  reentry and Binder/session blocking remain explicit inherited limits.
 - Own nonexported scanner/reader use FLAG_SECURE and carry only opaque request
   IDs to the parent. Image URI/transient grant belongs to the short-lived reader
   Activity, no persistent grant or parent raw URI/seed extras. Original image

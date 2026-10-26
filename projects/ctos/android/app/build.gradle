@@ -179,11 +179,15 @@ def sshProductionRoot = layout.buildDirectory.dir('generated/sshProduction')
 def sshProductionArchive = layout.buildDirectory.file(
     'generated/sshProduction/arm64-v8a/libctos_ssh_production.a')
 def sshProductionRunner = rootProject.file(
-    '../.trellis/tasks/10-08-ssh-terminal-client/research/android-production-openssh-build.sh')
+    'ssh/android-production-openssh-build.sh')
 def sshProductionAbiPatch = rootProject.file(
-    '../.trellis/tasks/10-08-ssh-terminal-client/research/openssh-10.6p1-bionic-includes.patch')
+    'ssh/openssh-10.6p1-bionic-includes.patch')
 def sshProductionBannerPatch = rootProject.file(
-    '../.trellis/tasks/10-08-ssh-terminal-client/research/openssh-10.6p1-banner-atomic.patch')
+    'ssh/openssh-10.6p1-banner-atomic.patch')
+def sshProductionStreamPatch = rootProject.file(
+    'ssh/openssh-10.6p1-hostfile-stream-writer.patch')
+def sshProductionKexPatch = rootProject.file(
+    'ssh/openssh-10.6p1-kex-guard.patch')
 def sshProductionBaseline = rootProject.file(
     '../build/ssh-native-g1/stock-run.lOHF9Oai')
 def sshProductionBaselineFile = { String relative ->
@@ -196,9 +200,11 @@ def sshProductionSources = files(
     'src/main/cpp/ssh_hostfile_issuer.c', 'src/main/cpp/ssh_hostfile_issuer.h',
     'src/main/cpp/ssh_view_handle.c', 'src/main/cpp/ssh_view_handle.h',
     'src/main/cpp/ssh_kex_guard.c', 'src/main/cpp/ssh_kex_guard.h',
-    'src/main/cpp/ssh_native_client.c', 'src/main/cpp/ssh_native_client.h')
+    'src/main/cpp/ssh_native_client.c', 'src/main/cpp/ssh_native_client.h',
+    'src/main/cpp/ssh_key_policy.c', 'src/main/cpp/ssh_key_policy.h')
 tasks.register('compileSshProductionObjects', Exec) {
     inputs.files(sshProductionRunner, sshProductionAbiPatch, sshProductionBannerPatch,
+        sshProductionStreamPatch, sshProductionKexPatch,
         sshProductionSources,
         sshProductionBaselineFile('inputs/openssh-10.6p1.tar.gz'),
         sshProductionBaselineFile('inputs/openssl-3.5.9.tar.gz'),
@@ -222,8 +228,234 @@ tasks.register('compileSshProductionObjects', Exec) {
     }
 }
 
+// Independent parser objects preserve the production libssh archive closure.
+def sshConfigRoot = layout.buildDirectory.dir('generated/sshConfigEval')
+def sshConfigRunner = rootProject.file('ssh/android-config-evaluator-build.sh')
+def sshConfigPatch = rootProject.file('ssh/openssh-10.6p1-config-evaluator.patch')
+def sshConfigSources = files('src/main/cpp/ssh_config_eval.c', 'src/main/cpp/ssh_config_eval.h',
+    'src/main/cpp/ssh_config_eval_hooks.h')
+def sshConfigIoSources = files('src/main/cpp/ssh_file_io.c', 'src/main/cpp/ssh_file_io.h',
+    'src/main/cpp/ssh_file_view.c', 'src/main/cpp/ssh_file_view.h',
+    'src/main/cpp/ssh_view_handle.c', 'src/main/cpp/ssh_view_handle.h')
+tasks.register('compileSshConfigEvaluator', Exec) {
+    inputs.files(sshConfigRunner, sshConfigPatch, sshConfigSources)
+    outputs.dir(sshConfigRoot)
+    outputs.upToDateWhen { false }
+    outputs.cacheIf { false }
+    workingDir rootProject.file('..')
+    doFirst {
+        project.delete(sshConfigRoot.get().asFile)
+        commandLine 'bash', sshConfigRunner.absolutePath, '--output', sshConfigRoot.get().asFile.absolutePath
+    }
+}
+['Host', 'StaticHost'].each { variant ->
+    tasks.register("testSshConfigEvaluator${variant}", Exec) {
+        dependsOn 'compileSshProductionObjects'
+        inputs.files(sshConfigRunner, sshConfigPatch, sshConfigSources, 'src/test/cpp/ssh_config_eval_test.c')
+        def output = layout.buildDirectory.dir("verification/sshConfigEvaluator${variant}")
+        outputs.dir(output)
+        outputs.upToDateWhen { false }
+        outputs.cacheIf { false }
+        workingDir rootProject.file('..')
+        doFirst {
+            project.delete(output.get().asFile)
+            commandLine 'bash', sshConfigRunner.absolutePath, '--output', output.get().asFile.absolutePath,
+                variant == 'StaticHost' ? '--static-test' : '--test'
+        }
+    }
+}
+def sshConfigHandleSources = files('src/main/cpp/ssh_config_handle.c', 'src/main/cpp/ssh_config_handle.h',
+    'src/main/cpp/ssh_config_jni.c')
+['Host', 'StaticHost'].each { variant ->
+    tasks.register("testSshConfigHandle${variant}", Exec) {
+        dependsOn 'compileSshProductionObjects'
+        inputs.files(sshConfigRunner, sshConfigPatch, sshConfigSources, sshConfigHandleSources,
+            'src/test/cpp/ssh_config_handle_test.c')
+        def output = layout.buildDirectory.dir("verification/sshConfigHandle${variant}")
+        outputs.dir(output)
+        outputs.upToDateWhen { false }
+        outputs.cacheIf { false }
+        workingDir rootProject.file('..')
+        doFirst {
+            project.delete(output.get().asFile)
+            commandLine 'bash', sshConfigRunner.absolutePath, '--output', output.get().asFile.absolutePath,
+                variant == 'StaticHost' ? '--static-handle-test' : '--handle-test'
+        }
+    }
+}
+
+['Host', 'StaticHost'].each { variant ->
+    tasks.register("testSshConfigCatalog${variant}", Exec) {
+        dependsOn 'compileSshProductionObjects'
+        inputs.files(sshConfigRunner, sshConfigPatch, sshConfigSources, sshConfigHandleSources,
+            'src/test/cpp/ssh_config_catalog_test.c')
+        def output = layout.buildDirectory.dir("verification/sshConfigCatalog${variant}")
+        outputs.dir(output)
+        outputs.upToDateWhen { false }
+        outputs.cacheIf { false }
+        workingDir rootProject.file('..')
+        doFirst {
+            project.delete(output.get().asFile)
+            commandLine 'bash', sshConfigRunner.absolutePath, '--output', output.get().asFile.absolutePath,
+                variant == 'StaticHost' ? '--static-catalog-test' : '--catalog-test'
+        }
+    }
+}
+
+['Host', 'StaticHost'].each { variant ->
+    tasks.register("testSshConfigDetached${variant}", Exec) {
+        dependsOn 'compileSshProductionObjects'
+        inputs.files(sshConfigRunner, sshConfigPatch, sshConfigSources, sshConfigIoSources,
+            'src/test/cpp/ssh_config_detached_test.c')
+        def output = layout.buildDirectory.dir("verification/sshConfigDetached${variant}")
+        outputs.dir(output)
+        outputs.upToDateWhen { false }
+        outputs.cacheIf { false }
+        workingDir rootProject.file('..')
+        doFirst {
+            project.delete(output.get().asFile)
+            commandLine 'bash', sshConfigRunner.absolutePath, '--output', output.get().asFile.absolutePath,
+                variant == 'StaticHost' ? '--static-detached-test' : '--detached-test'
+        }
+    }
+}
+
+['Host', 'StaticHost'].each { variant ->
+    tasks.register("testSshConfigManagedDetached${variant}", Exec) {
+        dependsOn 'compileSshProductionObjects'
+        inputs.files(sshConfigRunner, sshConfigPatch, sshConfigSources, sshConfigIoSources,
+            sshConfigHandleSources, 'src/test/cpp/ssh_config_managed_detached_test.c',
+            'src/test/cpp/ssh_config_detached_test.c')
+        def output = layout.buildDirectory.dir("verification/sshConfigManagedDetached${variant}")
+        outputs.dir(output)
+        outputs.upToDateWhen { false }
+        outputs.cacheIf { false }
+        workingDir rootProject.file('..')
+        doFirst {
+            project.delete(output.get().asFile)
+            commandLine 'bash', sshConfigRunner.absolutePath, '--output', output.get().asFile.absolutePath,
+                variant == 'StaticHost' ? '--static-managed-detached-test' : '--managed-detached-test'
+        }
+    }
+}
+
+['Host', 'StaticHost'].each { variant ->
+    tasks.register("testSshConfigAudit${variant}", Exec) {
+        dependsOn 'compileSshProductionObjects'
+        inputs.files(sshConfigRunner, sshConfigPatch, sshConfigSources, sshConfigIoSources,
+            sshConfigHandleSources, 'src/test/cpp/ssh_config_audit_test.c',
+            'src/test/cpp/ssh_config_detached_test.c')
+        def output = layout.buildDirectory.dir("verification/sshConfigAudit${variant}")
+        outputs.dir(output)
+        outputs.upToDateWhen { false }
+        outputs.cacheIf { false }
+        workingDir rootProject.file('..')
+        doFirst {
+            project.delete(output.get().asFile)
+            commandLine 'bash', sshConfigRunner.absolutePath, '--output', output.get().asFile.absolutePath,
+                variant == 'StaticHost' ? '--static-audit-test' : '--audit-test'
+        }
+    }
+}
+
+['Host', 'StaticHost'].each { variant ->
+    tasks.register("testSshConfigResource${variant}", Exec) {
+        dependsOn 'compileSshProductionObjects'
+        inputs.files(sshConfigRunner, sshConfigPatch, sshConfigSources, sshConfigIoSources,
+            sshConfigHandleSources, 'src/test/cpp/ssh_config_resource_test.c',
+            'src/test/cpp/ssh_config_detached_test.c')
+        def output = layout.buildDirectory.dir("verification/sshConfigResource${variant}")
+        outputs.dir(output)
+        outputs.upToDateWhen { false }
+        outputs.cacheIf { false }
+        workingDir rootProject.file('..')
+        doFirst {
+            project.delete(output.get().asFile)
+            commandLine 'bash', sshConfigRunner.absolutePath, '--output', output.get().asFile.absolutePath,
+                variant == 'StaticHost' ? '--static-resource-test' : '--resource-test'
+        }
+    }
+}
+
+def sshMaterialRunner = rootProject.file('ssh/android-material-inspector-build.sh')
+def sshMaterialSources = files('src/main/cpp/ssh_material_inspect.c', 'src/main/cpp/ssh_material_inspect.h',
+    'src/main/cpp/ssh_material_jni.c', 'src/main/cpp/ssh_key_policy.c', 'src/main/cpp/ssh_key_policy.h')
+['Host', 'StaticHost'].each { variant ->
+    tasks.register("testSshMaterialInspector${variant}", Exec) {
+        dependsOn 'compileSshProductionObjects'
+        inputs.files(sshMaterialRunner, sshMaterialSources, 'src/test/cpp/ssh_material_inspect_test.c')
+        def output = layout.buildDirectory.dir("verification/sshMaterialInspector${variant}")
+        outputs.dir(output)
+        outputs.upToDateWhen { false }
+        outputs.cacheIf { false }
+        workingDir rootProject.file('..')
+        doFirst {
+            project.delete(output.get().asFile)
+            commandLine 'bash', sshMaterialRunner.absolutePath, '--output', output.get().asFile.absolutePath,
+                variant == 'StaticHost' ? '--static-test' : '--test'
+        }
+    }
+}
+
+['Host', 'StaticHost'].each { variant ->
+    tasks.register("testSshKeyAssociation${variant}", Exec) {
+        dependsOn 'compileSshProductionObjects'
+        inputs.files(sshMaterialRunner, sshMaterialSources, 'src/test/cpp/ssh_key_association_test.c',
+            'src/test/cpp/ssh_material_inspect_test.c')
+        def output = layout.buildDirectory.dir("verification/sshKeyAssociation${variant}")
+        outputs.dir(output)
+        outputs.upToDateWhen { false }
+        outputs.cacheIf { false }
+        workingDir rootProject.file('..')
+        doFirst {
+            project.delete(output.get().asFile)
+            commandLine 'bash', sshMaterialRunner.absolutePath, '--output', output.get().asFile.absolutePath,
+                variant == 'StaticHost' ? '--static-pair-test' : '--pair-test'
+        }
+    }
+}
+
+['Host', 'StaticHost'].each { variant ->
+    tasks.register("testSshPrivateMaterial${variant}", Exec) {
+        dependsOn 'compileSshProductionObjects'
+        inputs.files(sshMaterialRunner, sshMaterialSources, 'src/test/cpp/ssh_private_material_test.c',
+            'src/test/cpp/ssh_key_association_test.c', 'src/test/cpp/ssh_material_inspect_test.c')
+        def output = layout.buildDirectory.dir("verification/sshPrivateMaterial${variant}")
+        outputs.dir(output)
+        outputs.upToDateWhen { false }
+        outputs.cacheIf { false }
+        workingDir rootProject.file('..')
+        doFirst {
+            project.delete(output.get().asFile)
+            commandLine 'bash', sshMaterialRunner.absolutePath, '--output', output.get().asFile.absolutePath,
+                variant == 'StaticHost' ? '--static-private-test' : '--private-test'
+        }
+    }
+}
+
+['Host', 'StaticHost'].each { variant ->
+    tasks.register("testSshCertificateFacts${variant}", Exec) {
+        dependsOn 'compileSshProductionObjects'
+        inputs.files(sshMaterialRunner, sshMaterialSources, 'src/test/cpp/ssh_certificate_facts_test.c',
+            'src/test/cpp/ssh_private_material_test.c', 'src/test/cpp/ssh_key_association_test.c',
+            'src/test/cpp/ssh_material_inspect_test.c')
+        def output = layout.buildDirectory.dir("verification/sshCertificateFacts${variant}")
+        outputs.dir(output)
+        outputs.upToDateWhen { false }
+        outputs.cacheIf { false }
+        workingDir rootProject.file('..')
+        doFirst {
+            project.delete(output.get().asFile)
+            commandLine 'bash', sshMaterialRunner.absolutePath, '--output', output.get().asFile.absolutePath,
+                variant == 'StaticHost' ? '--static-certificate-test' : '--certificate-test'
+        }
+    }
+}
+
 def sshFilesOutput = layout.buildDirectory.file('generated/jniLibs/arm64-v8a/libctos_ssh_files.so')
 tasks.register('compileSshFiles', Exec) {
+    inputs.files(sshConfigSources, sshConfigRoot, sshConfigHandleSources, sshMaterialSources)
+    dependsOn 'compileSshConfigEvaluator'
     inputs.files('src/main/cpp/ssh_file_view.c', 'src/main/cpp/ssh_file_view.h', 'src/main/cpp/ssh_file_jni.c',
         'src/main/cpp/ssh_view_handle.c', 'src/main/cpp/ssh_view_handle.h',
         'src/main/cpp/ssh_file_io.c', 'src/main/cpp/ssh_file_io.h',
@@ -256,8 +488,12 @@ tasks.register('compileSshFiles', Exec) {
             'src/main/cpp/ssh_role_bootstrap.c', 'src/main/cpp/ssh_role_jni.c',
             'src/main/cpp/ssh_callback_adapter.c', 'src/main/cpp/ssh_callback_jni.c',
             'src/main/cpp/ssh_session_jni.c',
+            'src/main/cpp/ssh_config_handle.c', 'src/main/cpp/ssh_config_jni.c',
             'src/main/cpp/ssh_hostfile_issuer.c', 'src/main/cpp/ssh_kex_guard.c',
-            'src/main/cpp/ssh_native_client.c',
+            'src/main/cpp/ssh_native_client.c', 'src/main/cpp/ssh_key_policy.c',
+            'src/main/cpp/ssh_material_inspect.c', 'src/main/cpp/ssh_material_jni.c',
+            new File(sshConfigRoot.get().asFile, 'readconf.o').absolutePath,
+            new File(sshConfigRoot.get().asFile, 'config_eval.o').absolutePath,
             '-Wl,--start-group', productionArchive.absolutePath,
             sshProductionBaselineFile('openssh-build/openbsd-compat/libopenbsd-compat.a').absolutePath,
             sshProductionBaselineFile('openssl-prefix/lib/libcrypto.a').absolutePath,
@@ -398,6 +634,7 @@ tasks.register('testSshNativeClientHost') {
                 'src/main/cpp/ssh_role_bootstrap.c',
                 'src/main/cpp/ssh_callback_adapter.c', 'src/main/cpp/ssh_hostfile_issuer.c',
                 'src/main/cpp/ssh_kex_guard.c', 'src/main/cpp/ssh_native_client.c',
+                'src/main/cpp/ssh_key_policy.c',
                 'src/test/cpp/ssh_native_client_test.c',
                 '-Wl,--start-group', productionArchive.absolutePath,
                 sshProductionBaselineFile('openssh-build/openbsd-compat/libopenbsd-compat.a').absolutePath,
@@ -434,11 +671,11 @@ if (sshControlProbeOption == 'true') {
         inputs.files('src/main/cpp/ssh_kex_guard.c', 'src/main/cpp/ssh_kex_guard.h',
             'src/main/cpp/ssh_role_bootstrap.c', 'src/main/cpp/ssh_role_bootstrap.h', 'src/test/cpp/ssh_kex_test.c',
             'src/main/cpp/ssh_native_launcher.c', 'src/main/cpp/ssh_native_launcher.h',
-            '../../.trellis/tasks/10-08-ssh-terminal-client/research/android-kex-build.sh',
-            '../../.trellis/tasks/10-08-ssh-terminal-client/research/openssh-10.6p1-kex-guard.patch')
+            '../ssh/android-kex-build.sh',
+            '../ssh/openssh-10.6p1-kex-guard.patch')
         outputs.dir(layout.buildDirectory.dir('generated/sshKexProbeJniLibs'))
         outputs.dir(layout.buildDirectory.dir('generated/sshKexProbeAssets'))
-        commandLine 'bash', '/app/.trellis/tasks/10-08-ssh-terminal-client/research/android-kex-build.sh', '--build'
+        commandLine 'bash', '/app/android/ssh/android-kex-build.sh', '--build'
     }
     def sshControlProbe = layout.buildDirectory.file('generated/sshControlProbeJniLibs/arm64-v8a/libctos_ssh_control_probe.so')
     tasks.register('compileSshControlProbe', Exec) {
@@ -475,8 +712,8 @@ if (sshMemoryProbeOption == 'true') {
 
 // Policy outputs belong only to this opt-in independent fixture.
 if (sshPolicyProbeOption == 'true') {
-    def policyRunner = rootProject.file('../.trellis/tasks/10-08-ssh-terminal-client/research/android-policy-build.sh')
-    def policyPatch = rootProject.file('../.trellis/tasks/10-08-ssh-terminal-client/research/openssh-10.6p1-config-policy.patch')
+    def policyRunner = rootProject.file('ssh/android-policy-build.sh')
+    def policyPatch = rootProject.file('ssh/openssh-10.6p1-config-policy.patch')
     tasks.register('compileSshPolicyProbe', Exec) {
         inputs.files('src/main/cpp/ssh_config_policy.c', 'src/main/cpp/ssh_config_policy.h', 'src/main/cpp/ssh_config_policy_probe.c',
             'src/main/cpp/ssh_file_view.c', 'src/main/cpp/ssh_file_view.h', 'src/main/cpp/ssh_file_io.c', 'src/main/cpp/ssh_file_io.h')
@@ -498,8 +735,8 @@ if (sshPolicyProbeOption == 'true') {
 // The three upstream research executables and notices belong only to this
 // opt-in fixture; normal builds cannot discover their stale generated output.
 if (sshUpstreamProbeOption == 'true') {
-    def upstreamRunner = rootProject.file('../.trellis/tasks/10-08-ssh-terminal-client/research/android-upstream-build.sh')
-    def upstreamPatch = rootProject.file('../.trellis/tasks/10-08-ssh-terminal-client/research/openssh-10.6p1-bionic-includes.patch')
+    def upstreamRunner = rootProject.file('ssh/android-upstream-build.sh')
+    def upstreamPatch = rootProject.file('ssh/openssh-10.6p1-bionic-includes.patch')
     def upstreamLibraries = layout.buildDirectory.dir('generated/sshUpstreamProbeJniLibs/arm64-v8a')
     def upstreamNotices = layout.buildDirectory.dir('generated/sshUpstreamProbeAssets/licenses/ssh-upstream')
     def baselineInput = { String relative, boolean directory ->

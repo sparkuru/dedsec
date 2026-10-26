@@ -13,6 +13,7 @@
 
 struct role_slot {
     int live;
+    unsigned int transports;
     struct ctos_ssh_role_snapshot snapshot;
 };
 
@@ -122,8 +123,7 @@ static struct role_slot *lookup_locked(ctos_ssh_role_token token) {
 static int expire_locked(struct role_slot *slot, uint64_t now) {
     if (slot == NULL || !slot->live) { errno = ENOENT; return -1; }
     if (now >= slot->snapshot.deadline) {
-        wipe(&slot->snapshot, sizeof(slot->snapshot));
-        slot->live = 0;
+        if (slot->transports == 0U) wipe(slot, sizeof(*slot));
         errno = ETIMEDOUT;
         return -1;
     }
@@ -132,9 +132,9 @@ static int expire_locked(struct role_slot *slot, uint64_t now) {
 
 static void reclaim_expired_locked(uint64_t now) {
     for (size_t i = 0; i < CTOS_SSH_ROLE_MAX; i++) {
-        if (roles[i].live && now >= roles[i].snapshot.deadline) {
-            wipe(&roles[i].snapshot, sizeof(roles[i].snapshot));
-            roles[i].live = 0;
+        if (roles[i].live && roles[i].transports == 0U
+            && now >= roles[i].snapshot.deadline) {
+            wipe(&roles[i], sizeof(roles[i]));
         }
     }
 }
@@ -194,7 +194,7 @@ int ctos_ssh_role_bootstrap_open(const struct ctos_ssh_role_request *request,
         errno = EAGAIN;
         return -1;
     }
-    memset(&slot->snapshot, 0, sizeof(slot->snapshot));
+    memset(slot, 0, sizeof(*slot));
     slot->snapshot.token = ++next_token;
     slot->snapshot.program = request->program;
     slot->snapshot.owner_pid = request->owner_pid;
@@ -257,12 +257,69 @@ int ctos_ssh_role_bootstrap_close(ctos_ssh_role_token token) {
     if (token == 0 || pthread_mutex_lock(&roles_lock) != 0) { errno = EINVAL; return -1; }
     struct role_slot *slot = lookup_locked(token);
     if (slot == NULL) {
+        int error = ENOENT;
+        for (size_t index = 0; index < CTOS_SSH_ROLE_MAX; index++) {
+            if (roles[index].live && roles[index].snapshot.token == token) {
+                error = EACCES;
+                break;
+            }
+        }
         pthread_mutex_unlock(&roles_lock);
-        errno = ENOENT;
+        errno = error;
         return -1;
     }
-    wipe(&slot->snapshot, sizeof(slot->snapshot));
-    slot->live = 0;
+    wipe(slot, sizeof(*slot));
+    pthread_mutex_unlock(&roles_lock);
+    return 0;
+}
+
+int ctos_ssh_role_transport_retain(ctos_ssh_role_token token) {
+    uint64_t now;
+    struct role_slot *slot;
+    int error;
+
+    if (token == 0 || pthread_mutex_lock(&roles_lock) != 0) { errno = EINVAL; return -1; }
+    slot = lookup_locked(token);
+    if (now_millis(&now) != 0 || expire_locked(slot, now) != 0) {
+        error = errno;
+        pthread_mutex_unlock(&roles_lock);
+        errno = error;
+        return -1;
+    }
+    if (slot->transports == UINT_MAX) {
+        pthread_mutex_unlock(&roles_lock); errno = EOVERFLOW; return -1;
+    }
+    slot->transports++;
+    pthread_mutex_unlock(&roles_lock);
+    return 0;
+}
+
+int ctos_ssh_role_transport_snapshot(ctos_ssh_role_token token,
+    struct ctos_ssh_role_snapshot *snapshot) {
+    struct role_slot *slot;
+    if (snapshot == NULL) { errno = EINVAL; return -1; }
+    memset(snapshot, 0, sizeof(*snapshot));
+    if (token == 0 || pthread_mutex_lock(&roles_lock) != 0) { errno = EINVAL; return -1; }
+    slot = lookup_locked(token);
+    if (slot == NULL || slot->transports == 0U) {
+        pthread_mutex_unlock(&roles_lock); errno = ECANCELED; return -1;
+    }
+    *snapshot = slot->snapshot;
+    pthread_mutex_unlock(&roles_lock);
+    return 0;
+}
+
+int ctos_ssh_role_transport_release(ctos_ssh_role_token token) {
+    struct role_slot *slot;
+    if (token == 0 || pthread_mutex_lock(&roles_lock) != 0) { errno = EINVAL; return -1; }
+    slot = lookup_locked(token);
+    if (slot == NULL) {
+        pthread_mutex_unlock(&roles_lock); errno = ENOENT; return -1;
+    }
+    if (slot->transports == 0U) {
+        pthread_mutex_unlock(&roles_lock); errno = EALREADY; return -1;
+    }
+    slot->transports--;
     pthread_mutex_unlock(&roles_lock);
     return 0;
 }

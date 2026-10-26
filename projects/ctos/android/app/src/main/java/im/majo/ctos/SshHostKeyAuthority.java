@@ -65,6 +65,7 @@ final class SshHostKeyAuthority {
     }
 
     static final class Review {
+        private final SshRoleContext role;
         final String roleBinding;
         final int hop;
         final String connectionId;
@@ -79,6 +80,7 @@ final class SshHostKeyAuthority {
         final String binding;
 
         private Review(Evidence evidence) {
+            role = evidence.role;
             roleBinding = evidence.role.binding();
             hop = evidence.role.hop;
             connectionId = evidence.role.connectionId;
@@ -98,6 +100,7 @@ final class SshHostKeyAuthority {
 
         byte[] baseDigest() { return baseDigest.clone(); }
         byte[] replacementDigest() { return replacementDigest.clone(); }
+        boolean belongsTo(SshRoleContext candidate) { return role == candidate; }
     }
 
     static final class Proof {

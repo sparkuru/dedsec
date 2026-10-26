@@ -19,7 +19,19 @@ final class VaultOperation {
     final long epoch;
     final long deadline;
     final byte[] snapshotBinding;
-    boolean consumed;
+    final AppSecrets.BundleContext bundleContext;
+    private AppSecrets.TotpReadState totpReadState;
+    private AppSecrets.SshPublicReadState sshPublicReadState;
+    private AppSecrets.SshSecretReadState sshSecretReadState;
+    private AppSecrets.SshEntryMutationState sshEntryMutationState;
+    private AppSecrets.TotpMutationState totpMutationState;
+    synchronized void attachTotpMutation(AppSecrets.TotpMutationState state) throws VaultException {
+        if (totpMutationState != null) throw new VaultException("VAULT_OPERATION", "Operation already bound");
+        totpMutationState = java.util.Objects.requireNonNull(state);
+    }
+    synchronized AppSecrets.TotpMutationState totpMutationState() { return totpMutationState; }
+    private AppSecrets.SshTrustState sshTrustState;
+    volatile boolean consumed;
     volatile boolean cancelled;
     private VaultSession.Revocation revocation;
     private String roleBinding;
@@ -50,6 +62,12 @@ final class VaultOperation {
 
     VaultOperation(Consumer consumer, Purpose purpose, String resource, String target,
             String connectionId, VaultEnvelope envelope, long epoch, long deadline) {
+        this(consumer, purpose, resource, target, connectionId, envelope, epoch, deadline, null);
+    }
+
+    VaultOperation(Consumer consumer, Purpose purpose, String resource, String target,
+            String connectionId, VaultEnvelope envelope, long epoch, long deadline,
+            AppSecrets.BundleContext bundleContext) {
         this.consumer = consumer;
         this.purpose = purpose;
         this.resource = resource;
@@ -60,6 +78,7 @@ final class VaultOperation {
         snapshotBinding = envelope.binding();
         this.epoch = epoch;
         this.deadline = deadline;
+        this.bundleContext = bundleContext;
     }
 
     synchronized void attachRevocation(VaultSession.Revocation owned) throws VaultException {
@@ -67,6 +86,41 @@ final class VaultOperation {
         if (revocation != null) throw new VaultException("BUSY", "The operation already owns a file view");
         revocation = java.util.Objects.requireNonNull(owned);
     }
+
+    void attachTotpRead(AppSecrets.TotpReadState state) {
+        if (totpReadState != null) throw new IllegalStateException("Read state already attached");
+        totpReadState = java.util.Objects.requireNonNull(state);
+    }
+
+    AppSecrets.TotpReadState totpReadState() { return totpReadState; }
+
+    void attachSshPublicRead(AppSecrets.SshPublicReadState state) {
+        if (sshPublicReadState != null) throw new IllegalStateException("Read state already attached");
+        sshPublicReadState = java.util.Objects.requireNonNull(state);
+    }
+
+    AppSecrets.SshPublicReadState sshPublicReadState() { return sshPublicReadState; }
+
+    void attachSshSecretRead(AppSecrets.SshSecretReadState state) {
+        if (sshSecretReadState != null) throw new IllegalStateException("Read state already attached");
+        sshSecretReadState = java.util.Objects.requireNonNull(state);
+    }
+
+    AppSecrets.SshSecretReadState sshSecretReadState() { return sshSecretReadState; }
+
+    void attachSshEntryMutation(AppSecrets.SshEntryMutationState state) {
+        if (sshEntryMutationState != null) throw new IllegalStateException("Mutation state already attached");
+        sshEntryMutationState = java.util.Objects.requireNonNull(state);
+    }
+
+    AppSecrets.SshEntryMutationState sshEntryMutationState() { return sshEntryMutationState; }
+
+    void attachSshTrust(AppSecrets.SshTrustState state) {
+        if (sshTrustState != null) throw new IllegalStateException("Trust state already attached");
+        sshTrustState = java.util.Objects.requireNonNull(state);
+    }
+
+    AppSecrets.SshTrustState sshTrustState() { return sshTrustState; }
 
     synchronized void bindRole(SshRoleContext role, SshHostKeyAuthority.Proof hostKey) throws VaultException {
         if (consumer != Consumer.SSH || role == null || hostKey == null || consumed || cancelled

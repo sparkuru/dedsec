@@ -26,7 +26,8 @@
 #define PEER_LIFETIME_MS 30000U
 
 enum peer_mode { MODE_SUCCESS, MODE_REJECTED, MODE_PARTIAL, MODE_CHANGE, MODE_HOLD,
-    MODE_MALFORMED_SUCCESS, MODE_WRONG_PASSPHRASE };
+    MODE_MALFORMED_SUCCESS, MODE_WRONG_PASSPHRASE, MODE_SHELL, MODE_PTY_REJECT,
+    MODE_SHELL_HOLD, MODE_OPEN_REJECT, MODE_SHELL_REJECT };
 
 struct peer_slot {
     uint64_t token;
@@ -45,6 +46,17 @@ struct peer_slot {
     int password_count;
     int reply_count;
     int exact_fields;
+    int authenticated;
+    int channel_phase;
+    int channel_open_count;
+    int pty_count;
+    int shell_count;
+    int input_count;
+    int resize_count;
+    int eof_count;
+    int close_count;
+    unsigned char command[256];
+    size_t command_length;
 };
 
 static pthread_mutex_t peers_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -155,7 +167,7 @@ Java_im_majo_ctos_SshAuthFixturePeer_openNative(JNIEnv *env, jclass ignored,
     jlong token = 0;
 
     (void)ignored;
-    if (mode < MODE_SUCCESS || mode > MODE_WRONG_PASSPHRASE
+    if (mode < MODE_SUCCESS || mode > MODE_SHELL_REJECT
         || identity_kind < 0 || identity_kind > 5 || now == 0
         || (encrypted != JNI_FALSE && identity_kind == 0)
         || (mode == MODE_WRONG_PASSPHRASE && encrypted == JNI_FALSE)
@@ -317,6 +329,8 @@ static int password_reply(struct peer_slot *peer) {
         return -1;
     if (sshpkt_send(peer->server) != 0) return -1;
     peer->reply_count++;
+    peer->authenticated = type == SSH2_MSG_USERAUTH_SUCCESS
+        && peer->mode != MODE_MALFORMED_SUCCESS;
     return 0;
 }
 
@@ -385,6 +399,133 @@ done:
     return result;
 }
 
+static int channel_reply(struct peer_slot *peer, int type) {
+    return sshpkt_start(peer->server, type) != 0
+        || sshpkt_put_u32(peer->server, 0) != 0
+        || sshpkt_send(peer->server) != 0 ? -1 : 0;
+}
+
+/* This peer validates fixed commands; it never executes a shell or arbitrary input. */
+static int shell_packet(struct peer_slot *peer, int type) {
+    struct ssh *ssh = peer->server;
+    const unsigned char *text;
+    size_t length;
+    uint32_t channel, window, maximum, columns, rows, pixels;
+    u_char reply;
+
+    if (!peer->authenticated || peer->mode < MODE_SHELL) return -1;
+    if (type == SSH2_MSG_CHANNEL_OPEN) {
+        if (peer->channel_phase != 0 || !exact_string(ssh, "session")
+            || sshpkt_get_u32(ssh, &channel) != 0 || channel != 0
+            || sshpkt_get_u32(ssh, &window) != 0 || window != 65536U
+            || sshpkt_get_u32(ssh, &maximum) != 0 || maximum != 32768U
+            || sshpkt_get_end(ssh) != 0) return -1;
+        peer->channel_open_count++;
+        if (peer->mode == MODE_OPEN_REJECT) {
+            peer->channel_phase = 6;
+            return sshpkt_start(ssh, SSH2_MSG_CHANNEL_OPEN_FAILURE) != 0
+                || sshpkt_put_u32(ssh, 0) != 0 || sshpkt_put_u32(ssh, 1) != 0
+                || sshpkt_put_cstring(ssh, "synthetic rejection") != 0
+                || sshpkt_put_cstring(ssh, "") != 0 || sshpkt_send(ssh) != 0 ? -1 : 0;
+        }
+        peer->channel_phase = 1;
+        return sshpkt_start(ssh, SSH2_MSG_CHANNEL_OPEN_CONFIRMATION) != 0
+            || sshpkt_put_u32(ssh, 0) != 0 || sshpkt_put_u32(ssh, 7) != 0
+            || sshpkt_put_u32(ssh, 16) != 0 || sshpkt_put_u32(ssh, 8) != 0
+            || sshpkt_send(ssh) != 0 ? -1 : 0;
+    }
+    if (sshpkt_get_u32(ssh, &channel) != 0 || channel != 7) return -1;
+    if (type == SSH2_MSG_CHANNEL_REQUEST) {
+        if (sshpkt_get_string_direct(ssh, &text, &length) != 0 || length > 128U
+            || sshpkt_get_u8(ssh, &reply) != 0) return -1;
+        if (length == 7U && memcmp(text, "pty-req", 7) == 0) {
+            if (peer->channel_phase != 1 || reply != 1
+                || !exact_string(ssh, "xterm-256color")
+                || sshpkt_get_u32(ssh, &columns) != 0 || columns != 80
+                || sshpkt_get_u32(ssh, &rows) != 0 || rows != 24
+                || sshpkt_get_u32(ssh, &pixels) != 0 || pixels != 0
+                || sshpkt_get_u32(ssh, &pixels) != 0 || pixels != 0
+                || sshpkt_get_string_direct(ssh, &text, &length) != 0
+                || length != 1 || text[0] != 0 || sshpkt_get_end(ssh) != 0) return -1;
+            peer->pty_count++;
+            peer->channel_phase = peer->mode == MODE_PTY_REJECT ? 6 : 2;
+            if (peer->mode == MODE_SHELL_HOLD) return 0;
+            return channel_reply(peer, peer->mode == MODE_PTY_REJECT
+                ? SSH2_MSG_CHANNEL_FAILURE : SSH2_MSG_CHANNEL_SUCCESS);
+        }
+        if (length == 5U && memcmp(text, "shell", 5) == 0) {
+            if (peer->channel_phase != 2 || reply != 1 || sshpkt_get_end(ssh) != 0) return -1;
+            peer->shell_count++;
+            peer->channel_phase = peer->mode == MODE_SHELL_REJECT ? 6 : 3;
+            return channel_reply(peer, peer->mode == MODE_SHELL_REJECT
+                ? SSH2_MSG_CHANNEL_FAILURE : SSH2_MSG_CHANNEL_SUCCESS);
+        }
+        if (length == 13U && memcmp(text, "window-change", 13) == 0) {
+            if (peer->channel_phase != 3 || reply != 0
+                || sshpkt_get_u32(ssh, &columns) != 0 || columns != 132
+                || sshpkt_get_u32(ssh, &rows) != 0 || rows != 43
+                || sshpkt_get_u32(ssh, &pixels) != 0 || pixels != 0
+                || sshpkt_get_u32(ssh, &pixels) != 0 || pixels != 0
+                || sshpkt_get_end(ssh) != 0) return -1;
+            peer->resize_count++;
+            return 0;
+        }
+        return -1;
+    }
+    if (type == SSH2_MSG_CHANNEL_DATA) {
+        if (peer->channel_phase != 3 || peer->eof_count != 0
+            || sshpkt_get_string_direct(ssh, &text, &length) != 0
+            || length == 0 || length > 8U
+            || length > sizeof(peer->command) - peer->command_length
+            || sshpkt_get_end(ssh) != 0) return -1;
+        memcpy(peer->command + peer->command_length, text, length);
+        peer->command_length += length;
+        peer->input_count += (int)length;
+        if (sshpkt_start(ssh, SSH2_MSG_CHANNEL_WINDOW_ADJUST) != 0
+            || sshpkt_put_u32(ssh, 0) != 0 || sshpkt_put_u32(ssh, (uint32_t)length) != 0
+            || sshpkt_send(ssh) != 0) return -1;
+        if (peer->command[peer->command_length - 1U] != '\r') return 0;
+        if (peer->command_length == sizeof("printf ctos-shell\r") - 1U
+            && memcmp(peer->command, "printf ctos-shell\r", peer->command_length) == 0) {
+            peer->command_length = 0;
+            return sshpkt_start(ssh, SSH2_MSG_CHANNEL_DATA) != 0
+                || sshpkt_put_u32(ssh, 0) != 0
+                || sshpkt_put_cstring(ssh, "ctos-shell \xe4\xbd\xa0\xe5\xa5\xbd\r\n") != 0
+                || sshpkt_send(ssh) != 0
+                || sshpkt_start(ssh, SSH2_MSG_CHANNEL_EXTENDED_DATA) != 0
+                || sshpkt_put_u32(ssh, 0) != 0 || sshpkt_put_u32(ssh, 1) != 0
+                || sshpkt_put_cstring(ssh, "[session exited: 99]\r\n") != 0
+                || sshpkt_send(ssh) != 0 ? -1 : 0;
+        }
+        if (peer->command_length != sizeof("exit\r") - 1U
+            || memcmp(peer->command, "exit\r", peer->command_length) != 0
+            || peer->resize_count != 1) return -1;
+        peer->command_length = 0;
+        peer->channel_phase = 4;
+        return sshpkt_start(ssh, SSH2_MSG_CHANNEL_REQUEST) != 0
+            || sshpkt_put_u32(ssh, 0) != 0 || sshpkt_put_cstring(ssh, "exit-status") != 0
+            || sshpkt_put_u8(ssh, 0) != 0 || sshpkt_put_u32(ssh, 23) != 0
+            || sshpkt_send(ssh) != 0 || channel_reply(peer, SSH2_MSG_CHANNEL_EOF) != 0
+            || channel_reply(peer, SSH2_MSG_CHANNEL_CLOSE) != 0 ? -1 : 0;
+    }
+    if (type == SSH2_MSG_CHANNEL_WINDOW_ADJUST) {
+        return sshpkt_get_u32(ssh, &window) != 0 || window == 0
+            || sshpkt_get_end(ssh) != 0 ? -1 : 0;
+    }
+    if (type == SSH2_MSG_CHANNEL_EOF) {
+        if (peer->eof_count != 0 || sshpkt_get_end(ssh) != 0) return -1;
+        peer->eof_count++;
+        return 0;
+    }
+    if (type == SSH2_MSG_CHANNEL_CLOSE) {
+        if ((peer->channel_phase != 4 && peer->channel_phase != 6)
+            || peer->close_count != 0 || sshpkt_get_end(ssh) != 0) return -1;
+        peer->close_count++;
+        return peer->channel_phase == 6 ? channel_reply(peer, SSH2_MSG_CHANNEL_CLOSE) : 0;
+    }
+    return -1;
+}
+
 static int pump(struct peer_slot *peer) {
     unsigned char input[PEER_BUDGET];
     const unsigned char *output;
@@ -405,6 +546,8 @@ static int pump(struct peer_slot *peer) {
         if (accept_service(peer) != 0) goto done;
     } else if (type == SSH2_MSG_USERAUTH_REQUEST) {
         if ((peer->identity == NULL ? accept_password(peer) : accept_private_key(peer)) != 0) goto done;
+    } else if (type >= SSH2_MSG_CHANNEL_OPEN && type <= SSH2_MSG_CHANNEL_FAILURE) {
+        if (shell_packet(peer, type) != 0) goto done;
     } else if (type != SSH_MSG_NONE) goto done;
     output = ssh_output_ptr(peer->server, &length);
     if (output != NULL && length != 0) {
@@ -470,4 +613,26 @@ Java_im_majo_ctos_SshAuthFixturePeer_closeNative(JNIEnv *env, jclass ignored, jl
     if (peer == NULL) return;
     clear_peer(peer);
     pthread_mutex_unlock(&peers_lock);
+}
+
+JNIEXPORT jintArray JNICALL
+Java_im_majo_ctos_SshAuthFixturePeer_shellSummaryNative(JNIEnv *env, jclass ignored, jlong handle) {
+    struct peer_slot *peer = lock_peer(env, handle, 1);
+    jintArray result = NULL;
+
+    (void)ignored;
+    if (peer == NULL) return NULL;
+    jint values[8] = {peer->channel_open_count, peer->pty_count, peer->shell_count,
+        peer->input_count, peer->resize_count, peer->eof_count, peer->close_count,
+        peer->exact_fields};
+    result = (*env)->NewIntArray(env, 8);
+    if (result != NULL && !(*env)->ExceptionCheck(env))
+        (*env)->SetIntArrayRegion(env, result, 0, 8, values);
+    if ((*env)->ExceptionCheck(env)) {
+        if (result != NULL) (*env)->DeleteLocalRef(env, result);
+        result = NULL;
+    }
+    pthread_mutex_unlock(&peers_lock);
+    if (result == NULL) fail(env);
+    return result;
 }

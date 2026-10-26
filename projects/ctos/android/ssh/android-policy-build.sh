@@ -5,7 +5,7 @@ readonly BASELINE=/app/build/ssh-native-g1/stock-run.lOHF9Oai
 readonly BASELINE_TREE_SHA=e3b0c5215b8050db328bd8773cc4ba00212eb9f8b21d924ed0ab207501ef0ed6
 readonly SOURCE_ROOT=/app/android/app/src/main/cpp
 readonly POLICY_SOURCES=(ssh_config_policy.c ssh_config_policy.h ssh_config_policy_probe.c ssh_file_view.c ssh_file_view.h ssh_file_io.c ssh_file_io.h)
-readonly PATCH=/app/.trellis/tasks/10-08-ssh-terminal-client/research/openssh-10.6p1-config-policy.patch
+readonly PATCH=/app/android/ssh/openssh-10.6p1-config-policy.patch
 readonly OUTPUT_ROOT=/app/build/ssh-native-policy
 readonly GENERATED_ROOT=/app/build/app/generated
 readonly NDK_BIN=/app/.devhome/android-sdk/ndk/27.0.12077973/toolchains/llvm/prebuilt/linux-x86_64/bin
@@ -82,7 +82,7 @@ main() {
 		command -v "$tool" >/dev/null 2>&1 || die "missing required command: $tool"
 	done
 	[[ -f /.dockerenv && -f /app/hako-env.sh ]] || die 'run only inside project hako'
-	[[ "$(realpath -e -- "${BASH_SOURCE[0]}")" == /app/.trellis/tasks/10-08-ssh-terminal-client/research/android-policy-build.sh ]] || die 'unexpected runner mount'
+	[[ "$(realpath -e -- "${BASH_SOURCE[0]}")" == /app/android/ssh/android-policy-build.sh ]] || die 'unexpected runner mount'
 	[[ "$(realpath -e -- "$BASELINE")" == "$BASELINE" ]] || die 'unexpected baseline mount'
 	for tool in "${POLICY_SOURCES[@]}"; do regular "$SOURCE_ROOT/$tool"; done
 	regular "$PATCH"

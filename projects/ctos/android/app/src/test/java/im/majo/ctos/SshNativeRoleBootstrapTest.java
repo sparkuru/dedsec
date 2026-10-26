@@ -26,6 +26,27 @@ public final class SshNativeRoleBootstrapTest {
         @Override public boolean active() { return active; }
     }
 
+    @Test public void systemIdentityWireRequiresTwoBoundedStrictUtf8Fields() throws Exception {
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        DataOutputStream output = new DataOutputStream(bytes);
+        for (String value : new String[] {"用户", "android-host"}) {
+            byte[] text = value.getBytes(StandardCharsets.UTF_8);
+            output.writeShort(text.length);
+            output.write(text);
+        }
+        byte[] valid = bytes.toByteArray();
+        assertArrayEquals(new String[] {"用户", "android-host"},
+                SshNativeRoleBootstrap.decodeSystemIdentity(valid));
+        for (byte[] invalid : new byte[][] {null, new byte[0],
+                new byte[] {0, 1, (byte) 0xff, 0, 1, 'x'},
+                new byte[] {0, 1, 0, 0, 1, 'x'},
+                new byte[] {0, 0, 0, 1, 'x'},
+                Arrays.copyOf(valid, valid.length - 1), Arrays.copyOf(valid, valid.length + 1)}) {
+            try { SshNativeRoleBootstrap.decodeSystemIdentity(invalid); fail("invalid OS identity"); }
+            catch (VaultException expected) { assertEquals("SSH_ROLE_REQUIRED", expected.code); }
+        }
+    }
+
     @Test public void decodesAndIssuesOnlyWithExplicitNativeOwnership() throws Exception {
         Clock clock = new Clock();
         byte[] wire = record(7, 42, 1001, 1, 3, 22, 30_000,
@@ -80,6 +101,93 @@ public final class SshNativeRoleBootstrapTest {
     @Test public void productionOwnershipFactoryIsExplicitAndDoesNotLoadNativeForHostTests() {
         assertNotNull(SshNativeRoleBootstrap.productionOwnership());
         assertNotNull(SshNativeRoleBootstrap.productionRelease());
+    }
+
+    @Test public void unissuedOwnerSurvivesIssueFailureAndRetriesNativeCleanup() throws Exception {
+        for (int mode = 0; mode < 3; mode++) {
+            Clock clock = new Clock();
+            View view = new View();
+            byte[] wire = record(25, 42, 1001, 1, 0, 22, 30_000,
+                    "connection_25", "target:user@example.invalid:22", "example.invalid", "view_25",
+                    4, 5);
+            byte[] nativeWire = wire.clone();
+            SshRoleRegistry registry = new SshRoleRegistry(clock);
+            boolean[] failRelease = {true};
+            int[] releases = {0};
+            final boolean owned = mode != 2;
+            SshRoleContext.Bootstrap bootstrap = SshNativeRoleBootstrap.decode(wire, clock).bootstrap;
+            SshNativeRoleBootstrap.Unissued pending = SshNativeRoleBootstrap.prepare(
+                    bootstrap, request -> nativeWire, decoded -> owned, (token, uid) -> {
+                        assertEquals(25, token);
+                        assertEquals(42, uid);
+                        releases[0]++;
+                        if (failRelease[0]) throw new IOException("unconfirmed native close");
+                    });
+            try {
+                pending.open();
+                if (mode == 0) clock.now = bootstrap.deadline;
+                if (mode == 1) view.active = false;
+                try { pending.issue(registry, view, clock); fail("issue must reject stale ownership: " + mode); }
+                catch (VaultException expected) { assertEquals("SSH_ROLE_REQUIRED", expected.code); }
+                assertEquals(0, registry.size());
+                try { pending.closeUnissued(); fail("cleanup failure must remain visible"); }
+                catch (VaultException expected) { assertEquals("SSH_ROLE_REQUIRED", expected.code); }
+                assertArrayEquals(wire, nativeWire);
+                failRelease[0] = false;
+                pending.closeUnissued();
+                pending.closeUnissued();
+                assertEquals(2, releases[0]);
+                assertArrayEquals(new byte[nativeWire.length], nativeWire);
+            } finally { registry.close(); }
+        }
+    }
+
+    @Test public void unissuedCleanupCannotCloseTransferredRoleOrRunOnForeignThread() throws Exception {
+        Clock clock = new Clock();
+        byte[] wire = record(26, 42, 1001, 1, 0, 22, 30_000,
+                "connection_26", "target:user@example.invalid:22", "example.invalid", "view_26", 4, 5);
+        SshRoleRegistry registry = new SshRoleRegistry(clock);
+        int[] releases = {0};
+        SshNativeRoleBootstrap.Unissued pending = SshNativeRoleBootstrap.prepare(
+                SshNativeRoleBootstrap.decode(wire, clock).bootstrap, bootstrap -> wire.clone(),
+                decoded -> true, (token, uid) -> releases[0]++);
+        pending.open();
+        java.util.concurrent.atomic.AtomicReference<Throwable> observed =
+                new java.util.concurrent.atomic.AtomicReference<>();
+        Thread foreign = new Thread(() -> {
+            try { pending.closeUnissued(); }
+            catch (Throwable failure) { observed.set(failure); }
+        });
+        foreign.start(); foreign.join();
+        assertTrue(observed.get() instanceof VaultException);
+        assertEquals(0, releases[0]);
+        SshNativeRoleBootstrap.Issued issued = pending.issue(registry, new View(), clock);
+        try {
+            try { pending.closeUnissued(); fail("issued role belongs to its new owner"); }
+            catch (VaultException expected) { assertEquals("SSH_ROLE_REQUIRED", expected.code); }
+            assertEquals(0, releases[0]);
+            assertTrue(issued.role.active());
+        } finally {
+            SshNativeRoleBootstrap.release(issued, registry, (token, uid) -> releases[0]++);
+            registry.close();
+        }
+        assertEquals(1, releases[0]);
+    }
+
+    @Test public void failedNativeOpenHasNoUnissuedRoleToRelease() throws Exception {
+        Clock clock = new Clock();
+        byte[] wire = record(27, 42, 1001, 1, 0, 22, 30_000,
+                "connection_27", "target:user@example.invalid:22", "example.invalid", "view_27", 4, 5);
+        int[] releases = {0};
+        SshNativeRoleBootstrap.Unissued pending = SshNativeRoleBootstrap.prepare(
+                SshNativeRoleBootstrap.decode(wire, clock).bootstrap,
+                bootstrap -> { throw new IOException("native open failed"); }, decoded -> true,
+                (token, uid) -> releases[0]++);
+        try { pending.open(); fail("open failure must be visible"); }
+        catch (VaultException expected) { assertEquals("SSH_ROLE_REQUIRED", expected.code); }
+        pending.closeUnissued();
+        pending.closeUnissued();
+        assertEquals(0, releases[0]);
     }
 
     @Test public void successfulReleaseClosesNativeBeforeJavaRole() throws Exception {

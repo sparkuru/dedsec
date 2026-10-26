@@ -8,11 +8,22 @@
 #include <sys/syscall.h>
 #include <unistd.h>
 
+int ctos_ssh_io_init_source(struct ctos_ssh_io *io, const struct ctos_ssh_file *files,
+    unsigned int count, int (*source_live)(const void *), const void *source, int (*close_stream)(FILE *)) {
+    if (io == NULL || close_stream == NULL || files == NULL ||
+        count > CTOS_SSH_VIEW_FILES || source_live == NULL) { errno = EINVAL; return -1; }
+    if (source_live(source) != 0) return -1;
+    memset(io, 0, sizeof(*io)); io->files = files; io->count = count;
+    io->source_live = source_live; io->source = source;
+    io->max_opens = CTOS_SSH_IO_OPENS; io->max_read_bytes = CTOS_SSH_IO_READ_BYTES;
+    io->close_stream = close_stream; io->active = 1;
+    return 0;
+}
+static int view_live(const void *view) { return ctos_ssh_view_live(view); }
 int ctos_ssh_io_init(struct ctos_ssh_io *io, const struct ctos_ssh_view *view, int (*close_stream)(FILE *)) {
     if (io == NULL || close_stream == NULL) { errno = EINVAL; return -1; }
     if (ctos_ssh_view_live(view) != 0) return -1;
-    memset(io, 0, sizeof(*io)); io->view = view; io->close_stream = close_stream; io->active = 1;
-    return 0;
+    return ctos_ssh_io_init_source(io, view->files, view->count, view_live, view, close_stream);
 }
 
 int ctos_ssh_io_resolve(const char *name, int pattern, char relative[513]) {
@@ -30,7 +41,7 @@ int ctos_ssh_io_resolve(const char *name, int pattern, char relative[513]) {
 
 static int ready(struct ctos_ssh_io *io) {
     if (io == NULL || !io->active || io->error != 0) { errno = EACCES; return -1; }
-    if (ctos_ssh_view_live(io->view) != 0) { io->error = errno; return -1; }
+    if (io->source_live(io->source) != 0) { io->error = errno; return -1; }
     return 0;
 }
 
@@ -64,14 +75,24 @@ static int release_reader(struct ctos_ssh_io *io, struct ctos_ssh_reader *r) {
 
 FILE *ctos_ssh_io_open(struct ctos_ssh_io *io, const char *name, unsigned int type) {
     if (ready(io) != 0) return NULL;
-    if (++io->opens > CTOS_SSH_IO_OPENS) { io->error = E2BIG; errno = E2BIG; return NULL; }
+    if (io->opens >= io->max_opens) { io->error = E2BIG; errno = E2BIG; return NULL; }
+    io->opens++;
     char relative[513];
     if (ctos_ssh_io_resolve(name, 0, relative) != 0) { io->error = errno; return NULL; }
-    const struct ctos_ssh_file *file = ctos_ssh_view_lookup(io->view,
-        (const unsigned char *)relative, strlen(relative), type);
-    if (file == NULL) { io->error = errno; return NULL; }
+    if (type < CTOS_SSH_CONFIG || type > CTOS_SSH_KNOWN_HOSTS) { io->error = EINVAL; errno = EINVAL; return NULL; }
+    const struct ctos_ssh_file *file = NULL;
+    size_t path_length = strlen(relative);
+    for (unsigned int i = 0; i < io->count; i++) {
+        const struct ctos_ssh_file *f = &io->files[i];
+        if (f->path.length == path_length && memcmp(f->path.data, relative, path_length) == 0) {
+            if (f->type == type && type != CTOS_SSH_PRIVATE_KEY) file = f;
+            else { io->error = EACCES; errno = EACCES; return NULL; }
+            break;
+        }
+    }
+    if (file == NULL) { io->error = ENOENT; errno = ENOENT; return NULL; }
     size_t length = file->body.length;
-    if (length > CTOS_SSH_VIEW_TOTAL_BYTES - io->held_bytes || length > CTOS_SSH_IO_READ_BYTES - io->read_bytes) {
+    if (length > CTOS_SSH_VIEW_TOTAL_BYTES - io->held_bytes || length > io->max_read_bytes - io->read_bytes) {
         io->error = E2BIG; errno = E2BIG; return NULL;
     }
     struct ctos_ssh_reader *reader = NULL;
@@ -90,6 +111,7 @@ FILE *ctos_ssh_io_open(struct ctos_ssh_io *io, const char *name, unsigned int ty
     }
     reader->stream = fdopen(reader->fd, "r");
     if (reader->stream == NULL || setvbuf(reader->stream, NULL, _IONBF, 0) != 0) goto failed;
+    if (ready(io) != 0) goto failed;
     return reader->stream;
 failed: {
         int failure = errno == 0 ? EIO : errno;
@@ -144,8 +166,8 @@ int ctos_ssh_io_stat(struct ctos_ssh_io *io, const char *name, struct stat *out)
     size_t length = strlen(relative);
     memset(out, 0, sizeof(*out)); out->st_uid = getuid(); out->st_gid = getgid();
     if (length == 0) { out->st_mode = S_IFDIR | 0700; return 0; }
-    for (unsigned int i = 0; i < io->view->count; i++) {
-        const struct ctos_ssh_file *file = &io->view->files[i];
+    for (unsigned int i = 0; i < io->count; i++) {
+        const struct ctos_ssh_file *file = &io->files[i];
         if (file->path.length == length && memcmp(file->path.data, relative, length) == 0) {
             out->st_mode = S_IFREG | 0600; out->st_size = file->declared_bytes; return 0;
         }
@@ -174,12 +196,12 @@ int ctos_ssh_io_child(struct ctos_ssh_io *io, const char *name, unsigned int ord
     char relative[513]; if (directory_name(name, relative) != 0) return -1;
     size_t length = strlen(relative); unsigned int found = 0;
     /* Reverse enumeration exercises the real upstream glob's lexical sort. */
-    for (unsigned int i = io->view->count; i-- != 0;) {
-        struct ctos_ssh_slice child = child_of(io->view->files[i].path, relative, length);
+    for (unsigned int i = io->count; i-- != 0;) {
+        struct ctos_ssh_slice child = child_of(io->files[i].path, relative, length);
         if (child.length == 0) continue;
         int duplicate = 0;
-        for (unsigned int j = io->view->count; j-- > i + 1;) {
-            struct ctos_ssh_slice previous = child_of(io->view->files[j].path, relative, length);
+        for (unsigned int j = io->count; j-- > i + 1;) {
+            struct ctos_ssh_slice previous = child_of(io->files[j].path, relative, length);
             if (child.length == previous.length && memcmp(child.data, previous.data, child.length) == 0) { duplicate = 1; break; }
         }
         if (duplicate) continue;

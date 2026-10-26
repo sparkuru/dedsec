@@ -168,6 +168,7 @@ final class SshNativeCallbackAdapter implements AutoCloseable {
     private boolean roleReleased;
     private boolean nativeSessionOpening;
     private boolean nativeSessionOwned;
+    private NativeSessionClaim establishedClaim;
     private String failureCode;
     private boolean authenticationSetupLocked;
     private boolean selectedNativeClaimIssued;
@@ -696,8 +697,14 @@ final class SshNativeCallbackAdapter implements AutoCloseable {
             }
             final Invocation capturedInvocation = invocation;
             final AppSecrets.EffectGuard effectGuard = frozen == null ? null
-                    : () -> requireSelectedInvocation(capturedInvocation, frozen, proof, signedKex,
-                            nativeSelectedCall);
+                    : new AppSecrets.EffectGuard() {
+                        @Override public void check() throws VaultException {
+                            requireSelectedInvocation(capturedInvocation, frozen, proof, signedKex, nativeSelectedCall);
+                        }
+                        @Override public void publish(AppSecrets.EffectGuard publication) throws VaultException {
+                            synchronized (stateLock) { check(); publication.check(); }
+                        }
+                    };
             if (effectGuard != null) {
                 effectGuard.check();
                 synchronized (stateLock) {
@@ -968,6 +975,37 @@ final class SshNativeCallbackAdapter implements AutoCloseable {
             if (cancelled) throw new VaultException("SSH_CALLBACK_CANCELLED", "The SSH callback binding is cancelled");
             role.requireActive(clock);
         }
+    }
+
+    /** Called only after the owning native client accepted fresh SUCCESS-to-shell promotion. */
+    void retainEstablishedSession(NativeSessionClaim claim) throws VaultException {
+        synchronized (stateLock) {
+            if (Thread.currentThread() != eventLoopThread || claim == null || claim.owner != this
+                    || !claim.owned || !nativeSessionOwned || nativeSessionOpening || inCallback
+                    || establishedClaim != null || authenticationSelection == null)
+                throw new VaultException("SSH_CALLBACK_SESSION", "The SSH session does not own this callback");
+            requireEstablishedState(claim);
+            role.retainEstablishedTransport();
+            establishedClaim = claim;
+        }
+    }
+
+    /** Revocation-only metadata check; it grants no native entry or renewed secret/file rights. */
+    void requireEstablishedSessionBound(NativeSessionClaim claim) throws VaultException {
+        synchronized (stateLock) {
+            if (establishedClaim != claim)
+                throw new VaultException("SSH_CALLBACK_SESSION", "The SSH session was not established");
+            requireEstablishedState(claim);
+        }
+    }
+
+    private void requireEstablishedState(NativeSessionClaim claim) throws VaultException {
+        if (closed) throw new VaultException("SSH_CALLBACK_CLOSED", "The SSH callback binding is closed");
+        if (closing) throw new VaultException("SSH_CALLBACK_CLOSING", "The SSH callback binding is closing");
+        if (cancelled) throw new VaultException("SSH_CALLBACK_CANCELLED", "The SSH callback binding is cancelled");
+        if (claim == null || claim.owner != this || !claim.owned || !nativeSessionOwned)
+            throw new VaultException("SSH_CALLBACK_SESSION", "The SSH session does not own this callback");
+        role.requireBound();
     }
 
     private static SshHostKeyAuthority.Classification classification(int value) throws VaultException {

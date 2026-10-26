@@ -37,6 +37,8 @@ int ctos_ssh_view_handle_borrow(ctos_ssh_view_token,
 const struct ctos_ssh_view *ctos_ssh_view_borrow_view(
     const struct ctos_ssh_view_borrow *);
 int ctos_ssh_view_borrow_live(const struct ctos_ssh_view_borrow *);
+/* Established transport revocation only; grants no file lookup/read authority. */
+int ctos_ssh_view_borrow_bound(const struct ctos_ssh_view_borrow *);
 int ctos_ssh_view_borrow_release(struct ctos_ssh_view_borrow *);
 
 /* Host/native tests may wrap an explicitly caller-owned view. This borrow

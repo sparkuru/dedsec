@@ -146,7 +146,7 @@ int main(void) {
     CHECK(child >= 0);
     if (child == 0) {
         errno = 0;
-        int close_ok = ctos_ssh_role_bootstrap_close(second) != 0 && errno == ENOENT;
+        int close_ok = ctos_ssh_role_bootstrap_close(second) != 0 && errno == EACCES;
         int scope_ok = child_scope(second, nonce, binding) == 0;
         _exit(close_ok && scope_ok ? 0 : 1);
     }
@@ -155,13 +155,24 @@ int main(void) {
     CHECK(ctos_ssh_role_bootstrap_active(second) != 0);
 
     struct ctos_ssh_role_request expiring = request(2, "expiring_connection", "view_2",
-        nonce, binding, now_millis() + 1);
+        nonce, binding, now_millis() + 20);
     /* The first role was closed, so this binding can be reused for a new hop. */
     CHECK(ctos_ssh_role_bootstrap_open(&expiring, &replacement) == 0);
-    struct timespec pause = {.tv_nsec = 5000000};
+    CHECK(ctos_ssh_role_transport_retain(replacement) == 0);
+    struct timespec pause = {.tv_nsec = 25000000};
     CHECK(nanosleep(&pause, NULL) == 0);
     errno = 0;
     CHECK(ctos_ssh_role_bootstrap_active(replacement) == 0 && errno == ETIMEDOUT);
+    CHECK(ctos_ssh_role_transport_snapshot(replacement, &snapshot) == 0
+        && snapshot.token == replacement && snapshot.deadline == expiring.deadline);
+    wire_length = 123;
+    CHECK(ctos_ssh_role_bootstrap_encode(replacement, wire, sizeof(wire), &wire_length) != 0
+        && errno == ETIMEDOUT && wire_length == 0);
+    CHECK(ctos_ssh_role_transport_retain(replacement) != 0 && errno == ETIMEDOUT);
+    CHECK(ctos_ssh_role_transport_release(replacement) == 0);
+    CHECK(ctos_ssh_role_transport_snapshot(replacement, &snapshot) != 0 && errno == ECANCELED);
+    CHECK(ctos_ssh_role_bootstrap_active(replacement) == 0 && errno == ETIMEDOUT);
+    CHECK(ctos_ssh_role_bootstrap_close(replacement) != 0 && errno == ENOENT);
     CHECK(ctos_ssh_role_bootstrap_close(second) == 0);
 
     char capacity_connections[CTOS_SSH_ROLE_MAX][32];

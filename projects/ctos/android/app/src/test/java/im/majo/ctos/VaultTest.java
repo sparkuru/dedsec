@@ -594,15 +594,19 @@ public final class VaultTest {
         VaultOperation cancelled = ssh.fileRequest("config", "metadata3");
         ssh.cancel(cancelled);
         rejects("VAULT_CANCELLED", () -> ssh.useFileSnapshot(cancelled, "config", "metadata3", snapshot -> fail()));
+        java.util.concurrent.atomic.AtomicBoolean lockRead = new java.util.concurrent.atomic.AtomicBoolean();
+        vault.attachSshValidator(manifest -> { if (lockRead.get()) vault.session.lock(); });
         VaultOperation locked = ssh.fileRequest("config", "metadata3");
-        vault.attachSshValidator(manifest -> vault.session.lock());
+        lockRead.set(true);
         rejects("VAULT_CHANGED", () -> ssh.useFileSnapshot(locked, "config", "metadata3", snapshot -> fail()));
     }
 
     @Test public void lockDuringManifestValidationRejectsPreparedConsumerEffects() throws Exception {
         vault.unlock(PASSWORD, () -> { });
+        java.util.concurrent.atomic.AtomicBoolean lockOnRead = new java.util.concurrent.atomic.AtomicBoolean();
+        vault.attachSshValidator(manifest -> { if (lockOnRead.get()) vault.session.lock(); });
         VaultOperation totp = new TotpVaultAdapter(vault).request("totp1");
-        vault.attachSshValidator(manifest -> vault.session.lock());
+        lockOnRead.set(true);
         rejects("VAULT_CHANGED", () -> vault.totpCode(totp, "totp1", 59));
         vault.attachSshValidator(manifest -> { });
         vault.unlock(PASSWORD, () -> { });
@@ -620,15 +624,19 @@ public final class VaultTest {
         ssh.cancel(request);
         rejects("VAULT_CANCELLED", () -> ssh.useFiles(request, "config", "evaluate1", files -> fail()));
         assertTrue(vault.session.unlocked());
+        AtomicReference<VaultOperation> cancelling = new AtomicReference<>();
+        vault.attachSshValidator(manifest -> { if (cancelling.get() != null) ssh.cancel(cancelling.get()); });
         VaultOperation prepared = ssh.fileRequest("config", "evaluate2");
-        vault.attachSshValidator(manifest -> ssh.cancel(prepared));
+        cancelling.set(prepared);
         rejects("VAULT_CANCELLED", () -> ssh.useFiles(prepared, "config", "evaluate2", files -> fail()));
         vault.attachSshValidator(manifest -> { });
         TotpVaultAdapter totp = new TotpVaultAdapter(vault);
         assertEquals(6, totp.currentCode(totp.request("totp1"), "totp1").length());
+        AtomicReference<VaultOperation> cancellingSave = new AtomicReference<>();
+        vault.attachSshValidator(manifest -> { if (cancellingSave.get() != null) totp.cancel(cancellingSave.get()); });
         VaultOperation save = totp.saveRequest("totp2");
+        cancellingSave.set(save);
         byte[] before = store.bytes.clone();
-        vault.attachSshValidator(manifest -> totp.cancel(save));
         rejects("VAULT_CANCELLED", () -> totp.save(save, "totp2", "Test:account", "Test", new byte[20], () -> { }));
         assertArrayEquals(before, store.bytes);
     }

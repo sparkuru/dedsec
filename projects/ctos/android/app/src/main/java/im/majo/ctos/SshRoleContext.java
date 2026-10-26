@@ -15,7 +15,7 @@ final class SshRoleContext implements AutoCloseable {
 
     interface Clock { long now(); }
 
-    /** A public view reference exposes liveness, never a descriptor or body. */
+    /** A public view exposes liveness only. Revocation must synchronize on this exact object. */
     interface PublicView { boolean active(); }
 
     /** Fixed metadata supplied by the native launcher after it owns the child. */
@@ -63,6 +63,7 @@ final class SshRoleContext implements AutoCloseable {
     private final String binding;
     private final PublicView publicView;
     private boolean active = true;
+    private boolean establishedTransport;
 
     private SshRoleContext(Bootstrap request, PublicView publicView, String binding) {
         program = request.program;
@@ -113,6 +114,20 @@ final class SshRoleContext implements AutoCloseable {
             throw new VaultException("SSH_ROLE_EXPIRED", "The SSH role has expired");
     }
 
+    /** Same-session shell continuation only; authentication checks still use the original deadline. */
+    synchronized void retainEstablishedTransport() throws VaultException {
+        requireBound();
+        establishedTransport = true;
+    }
+
+    /** Only bounded metadata/publication or trusted copy; no core/native calls or waits. */
+    void publishBound(Clock clock, AppSecrets.EffectGuard publication) throws VaultException {
+        synchronized (this) { synchronized (publicView) {
+            requireActive(clock);
+            publication.check();
+        } }
+    }
+
     /** The native session must use the exact view that issued this role. */
     synchronized boolean ownsPublicView(PublicView candidate) {
         return publicView == candidate;
@@ -125,6 +140,7 @@ final class SshRoleContext implements AutoCloseable {
      */
     synchronized boolean reclaimable(Clock clock) {
         if (!active || !publicView.active()) return true;
+        if (establishedTransport) return false;
         if (clock == null) return false;
         long now = clock.now();
         return now > 0 && now >= deadline;
@@ -134,7 +150,7 @@ final class SshRoleContext implements AutoCloseable {
     byte[] roleNonce() { return roleNonce.clone(); }
     byte[] connectionBinding() { return connectionBinding.clone(); }
 
-    @Override public synchronized void close() { active = false; }
+    @Override public synchronized void close() { active = false; establishedTransport = false; }
 
     private static String binding(Bootstrap request) throws VaultException {
         String text = request.program.name() + '\0' + request.ownerPid + '\0' + request.hop + '\0'

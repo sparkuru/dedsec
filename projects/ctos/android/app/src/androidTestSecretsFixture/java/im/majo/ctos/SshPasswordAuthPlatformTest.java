@@ -34,6 +34,12 @@ public final class SshPasswordAuthPlatformTest {
             "im.majo.ctos.SshPasswordAuthPlatformTest#syntheticEncryptedPrivateKeyAuthenticationChain";
     private static final String NEW_METHOD =
             "im.majo.ctos.SshPasswordAuthPlatformTest#syntheticNewHostAuthenticationChain";
+    private static final String SHELL_METHOD =
+            "im.majo.ctos.SshPasswordAuthPlatformTest#syntheticShellChannelChain";
+    private static final String TERMINAL_METHOD =
+            "im.majo.ctos.SshPasswordAuthPlatformTest#syntheticTerminalControllerChain";
+    private static final String MANAGED_METHOD =
+            "im.majo.ctos.SshPasswordAuthPlatformTest#syntheticManagedHostChain";
     private static final String PASSPHRASE_ID = "fixture-passphrase";
     private static final String KEY_PATH = "keys/fixture";
     private static final String KEY_IDENTITY = "synthetic-fixture-identity";
@@ -179,6 +185,10 @@ public final class SshPasswordAuthPlatformTest {
         SshHostKeyAuthority.Review approvedReview;
         long initialEpoch;
         int hostApprovals;
+        SshHostKeyReviewMailbox mailbox;
+        java.util.concurrent.FutureTask<Boolean> reviewResponse;
+        int reviewAnswer = 1; // approve=1, reject=0, cancel=2; synthetic fixture only
+        int reviewRequests;
         byte[] identityPublic;
         byte[] identityPrivate;
 
@@ -195,9 +205,14 @@ public final class SshPasswordAuthPlatformTest {
         }
 
         static Fixture open(int mode, int identityKind, boolean encrypted, boolean newHost) throws Exception {
+            return open(mode, identityKind, encrypted, newHost, false);
+        }
+
+        static Fixture open(int mode, int identityKind, boolean encrypted, boolean newHost,
+                boolean managedHost) throws Exception {
             Fixture result = new Fixture();
             try {
-                result.initialize(mode, identityKind, encrypted, newHost);
+                result.initialize(mode, identityKind, encrypted, newHost, managedHost);
                 return result;
             } catch (Exception | Error failure) {
                 try { result.close(); }
@@ -206,7 +221,8 @@ public final class SshPasswordAuthPlatformTest {
             }
         }
 
-        private void initialize(int mode, int identityKind, boolean encrypted, boolean newHost) throws Exception {
+        private void initialize(int mode, int identityKind, boolean encrypted, boolean newHost,
+                boolean managedHost) throws Exception {
             this.newHost = newHost;
             this.identityKind = identityKind;
             this.encryptedIdentity = encrypted;
@@ -235,6 +251,19 @@ public final class SshPasswordAuthPlatformTest {
             long deadline = Math.min(request.deadline, SystemClock.elapsedRealtime() + 20_000L);
             issued = issueRole(registry, view, clock, deadline);
             initialEpoch = vault.session.epoch();
+            if (managedHost && newHost) {
+                mailbox = new SshHostKeyReviewMailbox(issued.role, clock,
+                        () -> callback.requireAuthenticationSelectionLive(), ticket -> {
+                            reviewRequests++;
+                            assertEquals(HOST, ticket.host); assertEquals(22, ticket.port);
+                            assertEquals(CONNECTION, ticket.connectionId); assertEquals(TARGET, ticket.targetIdentity);
+                            reviewResponse = new java.util.concurrent.FutureTask<>(() -> {
+                                if (reviewAnswer == 2) { mailbox.cancel(); return true; }
+                                return mailbox.resolve(ticket, reviewAnswer == 1);
+                            });
+                            new Thread(reviewResponse, "synthetic-host-review-ui").start();
+                        });
+            }
             SshHostKeyAuthority authority = new SshHostKeyAuthority(review -> {
                 if (!newHost) throw VaultException.invalid();
                 assertEquals(issued.role.binding(), review.roleBinding);
@@ -247,6 +276,7 @@ public final class SshPasswordAuthPlatformTest {
                 byte[] known = knownBody(keyBlob);
                 try { assertArrayEquals(VaultCodec.digest(known), review.replacementDigest()); }
                 finally { VaultCodec.wipe(known); }
+                if (mailbox != null) mailbox.requireApproved(review);
                 approvedReview = review; hostApprovals++;
             });
             if (newHost) {
@@ -284,8 +314,11 @@ public final class SshPasswordAuthPlatformTest {
             byte[] wire = selection.encode(issued.token, clock);
             try { expectedReceipt = VaultCodec.digest(wire); }
             finally { VaultCodec.wipe(wire); }
-            session = SshNativeSession.open(callback, view, sockets.clientFd, keyBlob, fingerprint,
-                    "auth-fixture-candidate", STEP_BUDGET);
+            session = managedHost
+                    ? SshNativeSession.openManaged(callback, view, sockets.clientFd,
+                            "auth-fixture-candidate", STEP_BUDGET)
+                    : SshNativeSession.open(callback, view, sockets.clientFd, keyBlob, fingerprint,
+                            "auth-fixture-candidate", STEP_BUDGET);
             sockets.transferred = true;
             assertReceipt();
         }
@@ -342,6 +375,10 @@ public final class SshPasswordAuthPlatformTest {
             assertEquals(newHost ? initialEpoch + 1 : initialEpoch, vault.session.epoch());
             assertEquals(newHost ? 1 : 0, store.commits);
             assertEquals(newHost ? 1 : 0, hostApprovals);
+            if (mailbox != null) {
+                assertEquals(1, reviewRequests);
+                assertTrue(reviewResponse.get(2, java.util.concurrent.TimeUnit.SECONDS));
+            }
             assertTrue(view.active());
             assertNotNull(callback.kexProof());
             assertEquals(0, legacyCalls);
@@ -388,6 +425,10 @@ public final class SshPasswordAuthPlatformTest {
 
         @Override public void close() throws Exception {
             Cleanup cleanup = new Cleanup();
+            cleanup.run(() -> { if (mailbox != null) mailbox.close(); });
+            cleanup.run(() -> {
+                if (reviewResponse != null) reviewResponse.get(2, java.util.concurrent.TimeUnit.SECONDS);
+            });
             cleanup.run(() -> { if (session != null) session.close(); });
             cleanup.run(() -> {
                 if (session != null) {
@@ -700,6 +741,257 @@ public final class SshPasswordAuthPlatformTest {
                     assertEquals(reads, fixture.store.reads);
                 }
             }
+        } finally { SshMemoryPlatformTest.guard(); }
+    }
+
+    private static void authenticateShell(Fixture fixture) throws Exception {
+        fixture.ready();
+        if (fixture.identityKind == 0) {
+            fixture.session.beginPasswordAuth();
+            assertEquals(SshNativeSession.PasswordAuthResult.SUCCESS, fixture.finishPassword());
+        } else {
+            fixture.session.beginPrivateKeyAuth();
+            assertEquals(SshNativeSession.PrivateKeyAuthResult.SUCCESS, fixture.finishPrivateKey());
+        }
+    }
+
+    private static void shellUntil(Fixture fixture, SshNativeSession.ShellPhase expected) throws Exception {
+        for (int turn = 0; turn < TURN_LIMIT; turn++) {
+            if (fixture.session.shellStatus().phase == expected) return;
+            fixture.peer.step();
+            fixture.session.step();
+        }
+        fail("Synthetic channel phase must settle within the bounded pump");
+    }
+
+    private static void writeShell(Fixture fixture, String text) throws Exception {
+        byte[] bytes = text.getBytes(StandardCharsets.UTF_8);
+        try {
+            int offset = 0;
+            for (int turn = 0; turn < TURN_LIMIT && offset < bytes.length; turn++) {
+                byte[] remaining = java.util.Arrays.copyOfRange(bytes, offset, bytes.length);
+                try { offset += fixture.session.writeShell(remaining); }
+                finally { VaultCodec.wipe(remaining); }
+                fixture.session.step();
+                fixture.peer.step();
+            }
+            assertEquals("No stdin bytes lost under window/maxpacket backpressure", bytes.length, offset);
+        } finally { VaultCodec.wipe(bytes); }
+    }
+
+    private static void shellRoundTrip(int identityKind, boolean newHost) throws Exception {
+        shellRoundTrip(identityKind, newHost, false);
+    }
+
+    private static void shellRoundTrip(int identityKind, boolean newHost, boolean managedHost) throws Exception {
+        try (Fixture fixture = Fixture.open(SshAuthFixturePeer.SHELL, identityKind,
+                identityKind != 0, newHost, managedHost)) {
+            if (managedHost) expectCode("SSH_SESSION_PHASE", () -> fixture.session.verifyHostKey(fixture.keyBlob));
+            authenticateShell(fixture);
+            fixture.session.beginShell(80, 24);
+            shellUntil(fixture, SshNativeSession.ShellPhase.RUNNING);
+            writeShell(fixture, "printf ctos-shell\r");
+            java.io.ByteArrayOutputStream output = new java.io.ByteArrayOutputStream();
+            byte[] expected = "ctos-shell 你好\r\n[session exited: 99]\r\n".getBytes(StandardCharsets.UTF_8);
+            for (int turn = 0; turn < TURN_LIMIT && output.size() < expected.length; turn++) {
+                fixture.peer.step();
+                fixture.session.step();
+                byte[] chunk = fixture.session.readShell(3);
+                try { output.write(chunk); }
+                finally { VaultCodec.wipe(chunk); }
+            }
+            assertArrayEquals(expected, output.toByteArray());
+            assertEquals(SshNativeSession.ShellPhase.RUNNING, fixture.session.shellStatus().phase);
+            boolean resized = false;
+            for (int turn = 0; turn < TURN_LIMIT && !resized; turn++) {
+                resized = fixture.session.resizeShell(132, 43);
+                fixture.session.step();
+                fixture.peer.step();
+            }
+            assertTrue("Resize must be accepted", resized);
+            writeShell(fixture, "exit\r");
+            shellUntil(fixture, SshNativeSession.ShellPhase.CLOSED);
+            // Deliver the final client CLOSE to the peer without re-entering a stopped client.
+            for (int turn = 0; turn < 8; turn++) fixture.peer.step();
+            SshNativeSession.ShellStatus status = fixture.session.shellStatus();
+            assertTrue(status.remoteEof);
+            assertTrue(status.exitStatusKnown);
+            assertEquals(23L, status.exitStatus);
+            assertFalse(status.exitSignal);
+            assertArrayEquals(new int[]{1, 1, 1, 23, 1, 0, 1, 1}, fixture.peer.shellSummary());
+            expectCode("SSH_SESSION_PHASE", fixture.session::step);
+        }
+    }
+
+    @Test public void syntheticManagedHostChain() throws Exception {
+        Bundle arguments = InstrumentationRegistry.getArguments();
+        String optIn = arguments.getString("allowSshAuthFixture");
+        assertTrue("Strict managed host fixture opt-in", optIn == null || "true".equals(optIn));
+        Assume.assumeTrue("Scoped managed host execution required", "true".equals(optIn));
+        assertEquals(MANAGED_METHOD, arguments.getString("class"));
+        Context target = SshMemoryPlatformTest.guard();
+        SshAuthFixturePeer.load(target);
+        try {
+            for (boolean newHost : new boolean[]{false, true}) {
+                shellRoundTrip(0, newHost, true);
+                shellRoundTrip(1, newHost, true);
+            }
+            for (int answer : new int[]{0, 2}) {
+                try (Fixture fixture = Fixture.open(SshAuthFixturePeer.SHELL, 0, false, true, true)) {
+                    fixture.reviewAnswer = answer;
+                    boolean denied = false;
+                    for (int turn = 0; turn < TURN_LIMIT && !denied; turn++) {
+                        fixture.peer.step();
+                        try { fixture.session.step(); }
+                        catch (VaultException expected) { denied = true; }
+                    }
+                    assertTrue("Rejected/cancelled exact review must terminate KEX", denied);
+                    assertEquals(1, fixture.reviewRequests);
+                    assertTrue(fixture.reviewResponse.get(2, java.util.concurrent.TimeUnit.SECONDS));
+                    assertEquals(0, fixture.hostApprovals);
+                    assertEquals(0, fixture.store.commits);
+                    assertEquals(fixture.initialEpoch, fixture.vault.session.epoch());
+                    assertEquals(0, fixture.peer.summary()[1]);
+                    assertEquals(0, fixture.legacyCalls);
+                }
+            }
+        } finally { SshMemoryPlatformTest.guard(); }
+    }
+
+    @Test public void syntheticShellChannelChain() throws Exception {
+        Bundle arguments = InstrumentationRegistry.getArguments();
+        String optIn = arguments.getString("allowSshAuthFixture");
+        assertTrue("Strict shell fixture opt-in", optIn == null || "true".equals(optIn));
+        Assume.assumeTrue("Scoped shell fixture execution required", "true".equals(optIn));
+        assertEquals(SHELL_METHOD, arguments.getString("class"));
+        Context target = SshMemoryPlatformTest.guard();
+        SshAuthFixturePeer.load(target);
+        try {
+            shellRoundTrip(0, false);
+            shellRoundTrip(1, true);
+            for (int mode : new int[]{SshAuthFixturePeer.OPEN_REJECT, SshAuthFixturePeer.PTY_REJECT,
+                    SshAuthFixturePeer.SHELL_REJECT}) {
+                try (Fixture fixture = Fixture.open(mode)) {
+                    authenticateShell(fixture);
+                    fixture.session.beginShell(80, 24);
+                    shellUntil(fixture, SshNativeSession.ShellPhase.REJECTED);
+                }
+            }
+            try (Fixture fixture = Fixture.open(SshAuthFixturePeer.SHELL_HOLD)) {
+                authenticateShell(fixture);
+                fixture.session.beginShell(80, 24);
+                for (int turn = 0; turn < 64; turn++) {
+                    fixture.peer.step();
+                    fixture.session.step();
+                }
+                int reads = fixture.store.reads;
+                fixture.session.cancel();
+                expectCode("SSH_SESSION_CANCELLED", fixture.session::step);
+                assertEquals(reads, fixture.store.reads);
+            }
+            try (Fixture fixture = Fixture.open(SshAuthFixturePeer.SHELL)) {
+                authenticateShell(fixture);
+                fixture.session.beginShell(80, 24);
+                shellUntil(fixture, SshNativeSession.ShellPhase.RUNNING);
+                fixture.vault.cancelOperation(fixture.publicRequest);
+                assertFalse(fixture.view.active());
+                expectCode("SSH_FILE_VIEW", () -> fixture.session.readShell(16));
+            }
+        } finally { SshMemoryPlatformTest.guard(); }
+    }
+
+    private static void controllerRoundTrip(boolean cancel) throws Exception {
+        java.util.concurrent.ScheduledExecutorService owner =
+                java.util.concurrent.Executors.newSingleThreadScheduledExecutor();
+        java.util.concurrent.CountDownLatch released = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.atomic.AtomicReference<Throwable> failure = new java.util.concurrent.atomic.AtomicReference<>();
+        java.util.concurrent.atomic.AtomicReference<SshTerminalSession> controller = new java.util.concurrent.atomic.AtomicReference<>();
+        java.util.concurrent.atomic.AtomicReference<java.util.concurrent.ScheduledFuture<?>> peerPump = new java.util.concurrent.atomic.AtomicReference<>();
+        java.io.ByteArrayOutputStream output = new java.io.ByteArrayOutputStream();
+        byte[] expected = "ctos-shell 你好\r\n[session exited: 99]\r\n".getBytes(StandardCharsets.UTF_8);
+        owner.execute(() -> {
+            Fixture fixture = null;
+            try {
+                fixture = Fixture.open(cancel ? SshAuthFixturePeer.SHELL_HOLD : SshAuthFixturePeer.SHELL);
+                authenticateShell(fixture);
+                final Fixture owned = fixture;
+                SshTerminalSession terminal = new SshTerminalSession(fixture.session, () -> {
+                    java.util.concurrent.ScheduledFuture<?> pump = peerPump.get();
+                    if (pump != null) pump.cancel(false);
+                    owned.close(); // Checks actual native/session/role/view and extra fixture cleanup.
+                }, owner, new SshTerminalSession.Sink() {
+                    @Override public void data(byte[] bytes, Runnable consumed) {
+                        try {
+                            output.write(bytes, 0, bytes.length);
+                            if (output.size() == expected.length)
+                                controller.get().write("exit\r".getBytes(StandardCharsets.UTF_8));
+                        } catch (Throwable error) {
+                            failure.compareAndSet(null, error);
+                            controller.get().requestCancel();
+                        } finally { consumed.run(); }
+                    }
+                    @Override public void state(String state, Long status, String reason) {
+                        try {
+                            if ("running".equals(state)) {
+                                assertFalse("Pending cancellation scenario must not claim running", cancel);
+                                controller.get().write("printf ctos-shell\r".getBytes(StandardCharsets.UTF_8));
+                                controller.get().resize(132, 43);
+                            } else if ("closed".equals(state) && !cancel) {
+                                assertEquals(Long.valueOf(23), status);
+                                assertArrayEquals(expected, output.toByteArray());
+                            } else if ("failed".equals(state)) {
+                                fail("Synthetic controller failure: " + reason);
+                            }
+                        } catch (Throwable error) {
+                            failure.compareAndSet(null, error);
+                            controller.get().requestCancel();
+                        }
+                    }
+                }, released::countDown);
+                controller.set(terminal);
+                peerPump.set(owner.scheduleWithFixedDelay(() -> {
+                    try { owned.peer.step(); }
+                    catch (Throwable error) {
+                        failure.compareAndSet(null, error);
+                        terminal.stop();
+                    }
+                }, 0, 1, java.util.concurrent.TimeUnit.MILLISECONDS));
+                terminal.start(80, 24);
+                if (cancel) owner.schedule(terminal::stop, 50, java.util.concurrent.TimeUnit.MILLISECONDS);
+            } catch (Throwable error) {
+                failure.compareAndSet(null, error);
+                if (fixture != null) {
+                    try { fixture.close(); }
+                    catch (Throwable cleanup) { error.addSuppressed(cleanup); }
+                }
+                released.countDown();
+            }
+        });
+        try {
+            assertTrue("Actual owner controller must release all resources", released.await(30, java.util.concurrent.TimeUnit.SECONDS));
+            if (failure.get() != null) throw new AssertionError("Synthetic controller chain failed", failure.get());
+            assertTrue(controller.get().closed());
+        } finally {
+            if (controller.get() != null && !controller.get().closed()) {
+                controller.get().requestCancel();
+                owner.execute(controller.get()::stop);
+                released.await(10, java.util.concurrent.TimeUnit.SECONDS);
+            }
+            if (controller.get() == null || controller.get().closed()) owner.shutdown();
+        }
+        assertTrue("Confirmed released owner executor must terminate", owner.awaitTermination(10, java.util.concurrent.TimeUnit.SECONDS));
+    }
+
+    @Test public void syntheticTerminalControllerChain() throws Exception {
+        Bundle arguments = InstrumentationRegistry.getArguments();
+        String optIn = arguments.getString("allowSshAuthFixture");
+        assertTrue("Strict terminal fixture opt-in", optIn == null || "true".equals(optIn));
+        Assume.assumeTrue("Scoped terminal fixture execution required", "true".equals(optIn));
+        assertEquals(TERMINAL_METHOD, arguments.getString("class"));
+        SshAuthFixturePeer.load(SshMemoryPlatformTest.guard());
+        try {
+            controllerRoundTrip(false);
+            controllerRoundTrip(true);
         } finally { SshMemoryPlatformTest.guard(); }
     }
 

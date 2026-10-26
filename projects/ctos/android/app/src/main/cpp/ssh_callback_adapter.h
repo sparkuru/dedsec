@@ -139,6 +139,11 @@ int ctos_ssh_callback_open(const struct ctos_ssh_callback_target *target,
 int ctos_ssh_callback_cancel(ctos_ssh_callback_token callback);
 int ctos_ssh_callback_close(ctos_ssh_callback_token callback, void *environment);
 
+/* Internal same-client continuation, issued only after its fresh real auth
+ * proof. This never permits a host/file/credential callback after expiry. */
+int ctos_ssh_callback_promote_transport(ctos_ssh_callback_token, void *, const void *);
+int ctos_ssh_callback_check_transport(ctos_ssh_callback_token, void *, const void *);
+
 /* Checks owner/environment and live role/cancellation/deadline without calling
  * a host, KEX or credential provider. This grants no secret authority. */
 int ctos_ssh_callback_check_live(ctos_ssh_callback_token callback, void *environment);

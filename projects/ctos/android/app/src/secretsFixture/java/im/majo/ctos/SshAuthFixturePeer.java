@@ -14,6 +14,11 @@ final class SshAuthFixturePeer implements AutoCloseable {
     static final int HOLD = 4;
     static final int MALFORMED_SUCCESS = 5;
     static final int WRONG_PASSPHRASE = 6;
+    static final int SHELL = 7;
+    static final int PTY_REJECT = 8;
+    static final int SHELL_HOLD = 9;
+    static final int OPEN_REJECT = 10;
+    static final int SHELL_REJECT = 11;
     private static boolean loaded;
     private final Thread owner = Thread.currentThread();
     private long handle;
@@ -72,6 +77,13 @@ final class SshAuthFixturePeer implements AutoCloseable {
         return result;
     }
 
+    int[] shellSummary() throws IOException {
+        requireOpen();
+        int[] result = shellSummaryNative(handle);
+        if (result == null || result.length != 8) throw new IOException("Synthetic SSH shell summary unavailable");
+        return result;
+    }
+
     private void requireOpen() throws IOException {
         if (Thread.currentThread() != owner || handle <= 0) {
             throw new IOException("Synthetic SSH peer owner required");
@@ -90,5 +102,6 @@ final class SshAuthFixturePeer implements AutoCloseable {
     private static native byte[][] identityMaterialNative(long handle) throws IOException;
     private static native void stepNative(long handle) throws IOException;
     private static native int[] summaryNative(long handle) throws IOException;
+    private static native int[] shellSummaryNative(long handle) throws IOException;
     private static native void closeNative(long handle) throws IOException;
 }

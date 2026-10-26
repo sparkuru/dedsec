@@ -1,26 +1,25 @@
 package im.majo.ctos;
 
 import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
-import java.nio.ByteBuffer;
-import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
 /** Flat, bounded typed format; links, device paths and URI grants have no representation. */
 final class VaultManifest implements AutoCloseable {
+    private static final int WIRE_TAG = 2;
     static final int MAX_ENTRIES = 1024;
     static final int MAX_FILES = 128;
+    static final int MAX_KEY_BINDINGS = 128;
+    static final int MAX_ACCOUNTS = 1024;
     static final int MAX_FILE_BYTES = 1024 * 1024;
     static final int MAX_TOTAL_FILE_BYTES = 8 * 1024 * 1024;
     enum EntryType { TOTP, SSH_PASSWORD, SSH_KEY_PASSPHRASE }
@@ -63,18 +62,32 @@ final class VaultManifest implements AutoCloseable {
             this.id = id;
             this.path = path;
             this.identity = identity;
-            this.content = content.clone();
             this.references = VaultCollections.copyList(references);
+            this.content = content.clone();
         }
     }
 
     final List<Entry> entries;
     final List<FileObject> files;
+    final List<VaultSshMetadata.KeyBinding> keyBindings;
+    final List<VaultSshMetadata.Account> accounts;
 
     VaultManifest(List<Entry> entries, List<FileObject> files) throws VaultException {
-        this.entries = VaultCollections.copyList(entries);
-        this.files = VaultCollections.copyList(files);
+        this(entries, files, VaultCollections.list(), VaultCollections.list());
+    }
+
+    VaultManifest(List<Entry> entries, List<FileObject> files,
+            List<VaultSshMetadata.KeyBinding> keyBindings, List<VaultSshMetadata.Account> accounts)
+            throws VaultException {
+        this.entries = boundedList(entries, MAX_ENTRIES);
+        this.files = boundedList(files, MAX_FILES);
+        this.keyBindings = boundedList(keyBindings, MAX_KEY_BINDINGS);
+        this.accounts = boundedList(accounts, MAX_ACCOUNTS);
         validate();
+    }
+
+    VaultManifest withObjects(List<Entry> entries, List<FileObject> files) throws VaultException {
+        return new VaultManifest(entries, files, keyBindings, accounts);
     }
 
     static VaultManifest empty() throws VaultException { return new VaultManifest(VaultCollections.list(), VaultCollections.list()); }
@@ -84,11 +97,15 @@ final class VaultManifest implements AutoCloseable {
         List<FileObject> files = new ArrayList<>();
         boolean successful = false;
         try (DataInputStream in = new DataInputStream(new ByteArrayInputStream(bytes))) {
-            if (bytes.length > VaultEnvelope.MAX_PLAINTEXT || in.readInt() != 1) throw VaultException.invalid();
+            if (bytes.length > VaultEnvelope.MAX_PLAINTEXT) throw VaultException.invalid();
+            int wireTag = in.readInt();
+            boolean legacyTotp = wireTag == 1;
+            if (!legacyTotp && wireTag != WIRE_TAG) throw VaultException.invalid();
             int count = count(in, MAX_ENTRIES);
             for (int i = 0; i < count; i++) {
                 int type = in.readUnsignedByte();
-                if (type >= EntryType.values().length) throw VaultException.invalid();
+                if (type >= EntryType.values().length
+                        || legacyTotp && type != EntryType.TOTP.ordinal()) throw VaultException.invalid();
                 String id = VaultCodec.readText(in, 128);
                 String identity = VaultCodec.readText(in, 512);
                 String label = VaultCodec.readText(in, 512);
@@ -96,11 +113,17 @@ final class VaultManifest implements AutoCloseable {
                 int digits = in.readInt();
                 int period = in.readInt();
                 byte[] secret = VaultCodec.readBytes(in, 8192);
-                try { entries.add(new Entry(EntryType.values()[type], id, identity, label, algorithm,
-                        digits, period, secret)); }
+                try {
+                    Entry entry = new Entry(EntryType.values()[type], id, identity, label, algorithm,
+                            digits, period, secret);
+                    try { entries.add(entry); }
+                    catch (Throwable failure) { VaultCodec.wipe(entry.secret); throw failure; }
+                }
                 finally { VaultCodec.wipe(secret); }
             }
             count = count(in, MAX_FILES);
+            // Only the previously delivered empty/pure-TOTP format is an accepted old input.
+            if (legacyTotp && count != 0) throw VaultException.invalid();
             int total = 0;
             for (int i = 0; i < count; i++) {
                 int type = in.readUnsignedByte();
@@ -118,11 +141,45 @@ final class VaultManifest implements AutoCloseable {
                     int refCount = count(in, MAX_FILES);
                     List<String> refs = new ArrayList<>();
                     for (int j = 0; j < refCount; j++) refs.add(VaultCodec.readText(in, 512));
-                    files.add(new FileObject(FileType.values()[type], id, path, identity, content, refs));
+                    FileObject file = new FileObject(FileType.values()[type], id, path, identity, content, refs);
+                    try { files.add(file); }
+                    catch (Throwable failure) { VaultCodec.wipe(file.content); throw failure; }
                 } finally { VaultCodec.wipe(content); }
             }
+            List<VaultSshMetadata.KeyBinding> keyBindings = new ArrayList<>();
+            List<VaultSshMetadata.Account> accounts = new ArrayList<>();
+            if (!legacyTotp) {
+                count = count(in, MAX_KEY_BINDINGS);
+                for (int i = 0; i < count; i++) {
+                    String id = VaultCodec.readText(in, 128);
+                    String privateFileId = VaultCodec.readText(in, 128);
+                    String publicFileId = optionalId(in);
+                    String passphraseEntryId = optionalId(in);
+                    int certificateCount = count(in, MAX_FILES);
+                    List<String> certificateFileIds = new ArrayList<>();
+                    for (int j = 0; j < certificateCount; j++) {
+                        certificateFileIds.add(VaultCodec.readText(in, 128));
+                    }
+                    keyBindings.add(new VaultSshMetadata.KeyBinding(id, privateFileId, publicFileId,
+                            certificateFileIds, passphraseEntryId));
+                }
+                count = count(in, MAX_ACCOUNTS);
+                for (int i = 0; i < count; i++) {
+                    String id = VaultCodec.readText(in, 128);
+                    String targetIdentity = VaultCodec.readText(in, 512);
+                    String host = VaultCodec.readText(in, 253);
+                    int port = in.readInt();
+                    String username = VaultCodec.readText(in, 255);
+                    int authKind = in.readUnsignedByte();
+                    if (authKind != 1 && authKind != 2) throw VaultException.invalid();
+                    String credentialId = VaultCodec.readText(in, 128);
+                    accounts.add(new VaultSshMetadata.Account(id, targetIdentity, host, port, username,
+                            authKind == 1 ? VaultSshMetadata.AuthKind.PASSWORD : VaultSshMetadata.AuthKind.KEY,
+                            credentialId));
+                }
+            }
             if (in.available() != 0) throw VaultException.invalid();
-            VaultManifest result = new VaultManifest(entries, files);
+            VaultManifest result = new VaultManifest(entries, files, keyBindings, accounts);
             successful = true;
             return result;
         } catch (IOException error) { throw VaultException.invalid(); }
@@ -138,7 +195,7 @@ final class VaultManifest implements AutoCloseable {
         validate();
         try (VaultCodec.SecretBuffer buffer = new VaultCodec.SecretBuffer()) {
             DataOutputStream out = new DataOutputStream(buffer);
-            out.writeInt(1);
+            out.writeInt(WIRE_TAG);
             out.writeInt(entries.size());
             for (Entry entry : entries) {
                 out.writeByte(entry.type.ordinal());
@@ -160,6 +217,25 @@ final class VaultManifest implements AutoCloseable {
                 VaultCodec.writeBytes(out, file.content);
                 out.writeInt(file.references.size());
                 for (String ref : file.references) VaultCodec.writeText(out, ref);
+            }
+            out.writeInt(keyBindings.size());
+            for (VaultSshMetadata.KeyBinding binding : keyBindings) {
+                VaultCodec.writeText(out, binding.id);
+                VaultCodec.writeText(out, binding.privateFileId);
+                VaultCodec.writeText(out, binding.publicFileId == null ? "" : binding.publicFileId);
+                VaultCodec.writeText(out, binding.passphraseEntryId == null ? "" : binding.passphraseEntryId);
+                out.writeInt(binding.certificateFileIds.size());
+                for (String certificateId : binding.certificateFileIds) VaultCodec.writeText(out, certificateId);
+            }
+            out.writeInt(accounts.size());
+            for (VaultSshMetadata.Account account : accounts) {
+                VaultCodec.writeText(out, account.id);
+                VaultCodec.writeText(out, account.targetIdentity);
+                VaultCodec.writeText(out, account.host);
+                out.writeInt(account.port);
+                VaultCodec.writeText(out, account.username);
+                out.writeByte(account.authKind == VaultSshMetadata.AuthKind.PASSWORD ? 1 : 2);
+                VaultCodec.writeText(out, account.credentialId);
             }
             byte[] bytes = buffer.toByteArray();
             if (bytes.length > VaultEnvelope.MAX_PLAINTEXT) {
@@ -217,6 +293,7 @@ final class VaultManifest implements AutoCloseable {
                 if (!found) throw VaultException.invalid();
             }
         }
+        VaultSshMetadata.validate(entries, files, keyBindings, accounts, ids);
     }
 
 
@@ -242,8 +319,19 @@ final class VaultManifest implements AutoCloseable {
         for (String part : parts) if (part.isEmpty() || part.equals(".") || part.equals("..")) throw VaultException.invalid();
     }
 
-    private static void identifier(String id) throws VaultException {
-        if (!id.matches("[A-Za-z0-9_-]{1,128}")) throw VaultException.invalid();
+    static void identifier(String id) throws VaultException {
+        if (id == null || !id.matches("[A-Za-z0-9_-]{1,128}")) throw VaultException.invalid();
+    }
+
+    static <T> List<T> boundedList(List<T> values, int maximum) throws VaultException {
+        if (values == null || values.size() > maximum) throw VaultException.invalid();
+        for (T value : values) if (value == null) throw VaultException.invalid();
+        return VaultCollections.copyList(values);
+    }
+
+    private static String optionalId(DataInputStream in) throws IOException, VaultException {
+        String value = VaultCodec.readText(in, 128);
+        return value.isEmpty() ? null : value;
     }
 
     private static int utf8(String value) { return value.getBytes(StandardCharsets.UTF_8).length; }

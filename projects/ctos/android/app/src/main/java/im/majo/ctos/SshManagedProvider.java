@@ -18,6 +18,9 @@ final class SshManagedProvider {
 
     /** Performs the one exact known_hosts CAS selected by the approved proposal. */
     interface TrustCasWriter {
+        /** Concrete writers report uncertainty only for their own confirmed durable write. */
+        default VaultException invalidateCommittedResult() { return null; }
+
         SshTrustProposal.CasResult write(SshHostKeyAuthority.Evidence evidence,
                 SshTrustProposal proposal) throws VaultException;
 
@@ -111,6 +114,7 @@ final class SshManagedProvider {
         if (proposal == null) {
             throw new VaultException("SSH_HOST_KEY_CAS", "The exact host-key write-back is unavailable");
         }
+        boolean receivedCommitted = false;
         try {
             if (evidence == null || evidence.classification != SshHostKeyAuthority.Classification.NEW) {
                 throw new VaultException("SSH_HOST_KEY_CAS",
@@ -126,12 +130,22 @@ final class SshManagedProvider {
                 throw new VaultException("SSH_HOST_KEY_CAS", "The exact host-key write-back is unavailable");
             }
             SshTrustProposal.CasResult result = casWriter.write(evidence, proof, proposal);
+            receivedCommitted = result != null && result.status == SshTrustProposal.CasStatus.COMMITTED;
             evidence.role.requireActive(clock);
             if (result == null || !result.matches(evidence, proposal,
                     SshTrustProposal.CasStatus.COMMITTED)) {
                 throw new VaultException("SSH_HOST_KEY_CAS", "The exact host-key write-back failed");
             }
             return result;
+        } catch (VaultException | RuntimeException | Error failure) {
+            if (receivedCommitted) {
+                VaultException uncertain = casWriter.invalidateCommittedResult();
+                if (uncertain != null) {
+                    uncertain.addSuppressed(failure);
+                    throw uncertain;
+                }
+            }
+            throw failure;
         } finally {
             // The receipt is validated while the proposal is open; only then
             // may the body be wiped.  This also closes it on every rejection.
@@ -175,7 +189,11 @@ final class SshManagedProvider {
         }
         hostKey.requireMatches(role);
         kex.requireMatches(role, hostKey);
-        return releaseBytes(credentialBridge.openSelection(role, hostKey, selection), kex, kind,
+        if (credentialBridge.hasTransientPassword()) {
+            if (kind != SshCredentialBridge.Kind.PASSWORD) throw SshAuthenticationSelection.invalid();
+            return credentialBridge.transientPasswordBytes(role, hostKey, kex, selection, effectGuard);
+        }
+        return releaseBytes(credentialBridge.openSelection(role, hostKey, selection, kex, effectGuard), kex, kind,
                 selection, effectGuard);
     }
 

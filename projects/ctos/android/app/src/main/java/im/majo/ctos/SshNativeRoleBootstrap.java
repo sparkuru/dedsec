@@ -5,6 +5,8 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.BufferUnderflowException;
 import java.nio.charset.StandardCharsets;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.CodingErrorAction;
 
 /**
  * Decoder for the native role-bootstrap record.  The record contains only
@@ -30,6 +32,8 @@ final class SshNativeRoleBootstrap {
         static native boolean owns(long token, int ownerUid, byte[] wire) throws IOException;
 
         static native void release(long token, int ownerUid) throws IOException;
+
+        static native byte[] systemIdentity() throws IOException;
     }
 
     static final class Decoded {
@@ -69,6 +73,106 @@ final class SshNativeRoleBootstrap {
         void release(long token, int ownerUid) throws IOException;
     }
 
+    interface NativeOpen {
+        byte[] open(SshRoleContext.Bootstrap bootstrap) throws IOException;
+    }
+
+    /** Retained before native creation; transfers ownership only after successful Java issue. */
+    static final class Unissued {
+        private final Thread owner = Thread.currentThread();
+        private final SshRoleContext.Bootstrap bootstrap;
+        private final NativeOpen nativeOpen;
+        private final NativeOwnership ownership;
+        private final NativeRelease release;
+        private byte[] wire;
+        private boolean attempted;
+        private boolean issued;
+        private boolean closed;
+
+        private Unissued(SshRoleContext.Bootstrap bootstrap, NativeOpen nativeOpen,
+                NativeOwnership ownership, NativeRelease release) {
+            this.bootstrap = bootstrap;
+            this.nativeOpen = nativeOpen;
+            this.ownership = ownership;
+            this.release = release;
+        }
+
+        void open() throws VaultException {
+            requireOwner();
+            if (attempted || issued || closed) throw invalid();
+            attempted = true;
+            try {
+                // Capture the exact returned owner record before any decoding or publication.
+                wire = nativeOpen.open(bootstrap);
+                cleanupToken();
+            } catch (IOException | LinkageError | RuntimeException failure) {
+                throw unavailable();
+            }
+        }
+
+        Issued issue(SshRoleRegistry registry, SshRoleContext.PublicView publicView,
+                SshRoleContext.Clock clock) throws VaultException {
+            requireOwner();
+            if (!attempted || issued || closed || wire == null) throw invalid();
+            Issued result = SshNativeRoleBootstrap.issue(wire, registry, publicView, clock, ownership);
+            issued = true;
+            VaultCodec.wipe(wire);
+            wire = null;
+            return result;
+        }
+
+        /** Expiry/revocation cannot discard cleanup ownership. A failed release remains retryable. */
+        void closeUnissued() throws VaultException {
+            requireOwner();
+            if (issued) throw invalid();
+            if (closed) return;
+            if (wire != null) {
+                long token = cleanupToken();
+                int uid = wireInt(20);
+                try { release.release(token, uid); }
+                catch (IOException | LinkageError | RuntimeException failure) { throw unavailable(); }
+            }
+            closed = true;
+            VaultCodec.wipe(wire);
+            wire = null;
+        }
+
+        private long cleanupToken() throws VaultException {
+            // Only Native.open can populate production wire. This bounded header read grants
+            // cleanup alone and deliberately does not require a fresh clock or live file view.
+            if (wire == null || wire.length < 24 || wire.length > MAX_WIRE
+                    || wireInt(0) != MAGIC || wire[4] != VERSION
+                    || (wire[5] != 1 && wire[5] != 2) || wire[6] != 0 || wire[7] != 0
+                    || wireInt(16) <= 0 || wireInt(20) < 0) throw invalid();
+            long token = 0;
+            for (int index = 8; index < 16; index++) token = (token << 8) | (wire[index] & 0xffL);
+            if (token <= 0) throw invalid();
+            return token;
+        }
+
+        private int wireInt(int offset) {
+            return ((wire[offset] & 0xff) << 24) | ((wire[offset + 1] & 0xff) << 16)
+                    | ((wire[offset + 2] & 0xff) << 8) | (wire[offset + 3] & 0xff);
+        }
+
+        private void requireOwner() throws VaultException {
+            if (Thread.currentThread() != owner) throw invalid();
+        }
+    }
+
+    static Unissued prepare(SshRoleContext.Bootstrap bootstrap) throws VaultException {
+        return prepare(bootstrap, SshNativeRoleBootstrap::openNativeWire,
+                productionOwnership(), productionRelease());
+    }
+
+    /** Explicit native-provider seam for host JVM lifecycle tests. */
+    static Unissued prepare(SshRoleContext.Bootstrap bootstrap, NativeOpen nativeOpen,
+            NativeOwnership ownership, NativeRelease release) throws VaultException {
+        if (!validBootstrap(bootstrap) || nativeOpen == null || ownership == null || release == null)
+            throw invalid();
+        return new Unissued(bootstrap, nativeOpen, ownership, release);
+    }
+
     /** Keeps the native identity attached to the Java role for its lifetime. */
     static final class Issued {
         final long token;
@@ -85,6 +189,42 @@ final class SshNativeRoleBootstrap {
     }
 
     private SshNativeRoleBootstrap() { }
+
+    /** Actual OS identity used only to validate the pinned config evaluator tuple. */
+    static String[] systemIdentity() throws VaultException {
+        byte[] wire = null;
+        try {
+            wire = Native.systemIdentity();
+            return decodeSystemIdentity(wire);
+        } catch (IOException | LinkageError | RuntimeException failure) {
+            throw unavailable();
+        } finally { VaultCodec.wipe(wire); }
+    }
+
+    static String[] decodeSystemIdentity(byte[] wire) throws VaultException {
+        if (wire == null || wire.length < 6 || wire.length > 514) throw invalid();
+        ByteBuffer input = ByteBuffer.wrap(wire).order(ByteOrder.BIG_ENDIAN);
+        String[] result = new String[2];
+        try {
+            for (int index = 0; index < result.length; index++) {
+                int length = Short.toUnsignedInt(input.getShort());
+                if (length == 0 || length > 255 || length > input.remaining()) throw invalid();
+                ByteBuffer text = input.slice();
+                text.limit(length);
+                result[index] = StandardCharsets.UTF_8.newDecoder()
+                        .onMalformedInput(CodingErrorAction.REPORT)
+                        .onUnmappableCharacter(CodingErrorAction.REPORT).decode(text).toString();
+                input.position(input.position() + length);
+                for (int ch = 0; ch < result[index].length(); ch++) {
+                    if (Character.isISOControl(result[index].charAt(ch))) throw invalid();
+                }
+            }
+            if (input.hasRemaining()) throw invalid();
+            return result;
+        } catch (BufferUnderflowException | CharacterCodingException failure) {
+            throw invalid();
+        }
+    }
 
     static Decoded decode(byte[] wire, SshRoleContext.Clock clock) throws VaultException {
         if (wire == null || wire.length == 0 || wire.length > MAX_WIRE || clock == null)
@@ -161,20 +301,27 @@ final class SshNativeRoleBootstrap {
      */
     static byte[] open(SshRoleContext.Bootstrap bootstrap) throws VaultException {
         if (!validBootstrap(bootstrap)) throw invalid();
-        byte[] nonce = bootstrap.roleNonce.clone();
-        byte[] binding = bootstrap.connectionBinding.clone();
         byte[] wire = null;
         try {
-            int program = bootstrap.program == SshRoleContext.Program.CLIENT ? 1 : 2;
-            wire = Native.open(program, bootstrap.hop, bootstrap.port, bootstrap.deadline,
-                    bootstrap.connectionId, bootstrap.targetIdentity, bootstrap.host,
-                    bootstrap.publicViewId, nonce, binding);
+            wire = openNativeWire(bootstrap);
             if (wire == null || wire.length == 0 || wire.length > MAX_WIRE) throw invalid();
             return wire.clone();
         } catch (IOException | LinkageError | RuntimeException failure) {
             throw unavailable();
         } finally {
             VaultCodec.wipe(wire);
+        }
+    }
+
+    private static byte[] openNativeWire(SshRoleContext.Bootstrap bootstrap) throws IOException {
+        byte[] nonce = bootstrap.roleNonce.clone();
+        byte[] binding = bootstrap.connectionBinding.clone();
+        try {
+            int program = bootstrap.program == SshRoleContext.Program.CLIENT ? 1 : 2;
+            return Native.open(program, bootstrap.hop, bootstrap.port, bootstrap.deadline,
+                    bootstrap.connectionId, bootstrap.targetIdentity, bootstrap.host,
+                    bootstrap.publicViewId, nonce, binding);
+        } finally {
             VaultCodec.wipe(nonce);
             VaultCodec.wipe(binding);
         }

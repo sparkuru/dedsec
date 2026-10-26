@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 readonly BASELINE=/app/build/ssh-native-g1/stock-run.lOHF9Oai
 readonly BASELINE_TREE_SHA=e3b0c5215b8050db328bd8773cc4ba00212eb9f8b21d924ed0ab207501ef0ed6
-readonly RESEARCH=/app/.trellis/tasks/10-08-ssh-terminal-client/research
+readonly BUILD_ROOT=/app/android/ssh
 readonly SOURCE_ROOT=/app/android/app/src/main/cpp
 readonly NDK_BIN=/app/.devhome/android-sdk/ndk/27.0.12077973/toolchains/llvm/prebuilt/linux-x86_64/bin
 readonly OUTPUT_ROOT=/app/build/ssh-native-kex
@@ -73,8 +73,8 @@ main() {
 		command -v "$tool" >/dev/null 2>&1 || die "missing required command: $tool"
 	done
 	[[ -f /.dockerenv && -f /app/hako-env.sh ]] || die 'run only inside project hako'
-	[[ "$(realpath -e -- "${BASH_SOURCE[0]}")" == "$RESEARCH/android-kex-build.sh" ]] || die 'unexpected runner mount'
-	regular "$RESEARCH/openssh-10.6p1-kex-guard.patch"
+	[[ "$(realpath -e -- "${BASH_SOURCE[0]}")" == "$BUILD_ROOT/android-kex-build.sh" ]] || die 'unexpected runner mount'
+	regular "$BUILD_ROOT/openssh-10.6p1-kex-guard.patch"
 	for tool in ssh_kex_guard.c ssh_kex_guard.h ssh_role_bootstrap.c ssh_role_bootstrap.h \
 		ssh_native_launcher.c ssh_native_launcher.h; do regular "$SOURCE_ROOT/$tool"; done
 	regular /app/android/app/src/test/cpp/ssh_kex_test.c
@@ -97,7 +97,7 @@ main() {
 		"$SOURCE_ROOT/ssh_role_bootstrap.c" "$SOURCE_ROOT/ssh_role_bootstrap.h" \
 		"$SOURCE_ROOT/ssh_native_launcher.c" "$SOURCE_ROOT/ssh_native_launcher.h" \
 		/app/android/app/src/test/cpp/ssh_kex_test.c "$run_dir/"
-	cp -- "$RESEARCH/openssh-10.6p1-kex-guard.patch" "$run_dir/kex-guard.patch"
+	cp -- "$BUILD_ROOT/openssh-10.6p1-kex-guard.patch" "$run_dir/kex-guard.patch"
 	(cd -- "$run_dir" && patch --batch --fuzz=0 -p1 <kex-guard.patch) >"$run_dir/evidence/patch.log" 2>&1
 	sha256sum -- "$run_dir/"*.c "$run_dir/"*.h "$run_dir/kex-guard.patch" >"$run_dir/evidence/kex-inputs.sha256"
 	cat >"$run_dir/Kex.mk" <<'MAKEFILE'

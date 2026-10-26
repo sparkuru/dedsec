@@ -1,5 +1,2058 @@
 # Verification
 
+<a id="20261026-formal-install"></a>
+## 2026-10-26 正式APK覆盖安装与交付收尾
+
+用户明确要求“安装、然后说明功能；最后归档并提交”。已在指定
+`192.168.9.14:5555`（AIO-3568J、RUNNING_UNLOCKED）使用`adb install -r`覆盖安装，
+未清库或卸载正式应用。安装返回Success，开发板实际APK SHA256为
+`6fa5c1bee28af584023f91a20ab0252abc02e53867bb13f1fb571468286417e8`，与已验收产物一致；
+正常启动MainActivity后进程/前台Activity已核对。[功能与入口](ssh-terminal.md)。
+记录：`/tmp/ctos-ssh-install-20261026.naqyw6a9`。
+
+归档前发现正式Gradle/runner引用活动task/research目录。已将9份runner和6份patch迁到
+稳定`android/ssh/`，更新Gradle全部13处引用及stream/KEX显式输入，原patch字节、固定
+source/archive SHA、no-symlink/forbidden/output检查和权限保留。9份bash语法/ShellCheck
+通过；7份shfmt通过，另2份仅保留逐字相同的既有格式差异。独立只读审查无finding。
+实际归档前`compileSshFiles`链（production/config/JNI）通过，7任务/16s。
+产品C/Java/Dart与已实测代码保持，未因路径迁移重复执行无变化的全部测试。
+
+本次归档只关闭前台密码SSH交付；原完整SSH父任务及未完AC继续保留，不把子任务数量
+当作全部需求验收。提交使用ctOS显式路径，归档/日志禁用脚本自动commit，以免纳入
+共享Git索引中的其他项目改动。归档后的实际构建结果另记于本节收尾记录。
+
+<a id="20261026-password-android"></a>
+## 2026-10-26 前台密码SSH：真实Android bridge与Flutter界面通过
+
+用户明确回复“允许”，授权在`192.168.9.14:5555`临时安装隔离测试包、使用合成账号验收
+并清理。本轮实际设备为AIO-3568J、Android11/API30、arm64-v8a、RUNNING_UNLOCKED。
+证据：`/tmp/ctos-ssh-device-20261026.crqhdkf1`。沿[正式连接合同](ssh-password-connect.md)，
+不覆盖安装正式应用、不使用用户真实秘密库或账号，不提交/归档/发布。
+
+| 检查 | 实际结果 |
+| --- | --- |
+| 实际MainActivity/shared VaultStore/JNI/TCP | `SshPasswordConnectPlatformTest#actualBridgeNewThenKnownPasswordShellAndProtectionRelease`，OK(1 test)，5.924s |
+| 实际Flutter表单/审批/终端输入与渲染输出 | `SshPasswordUiPlatformTest#actualFlutterPasswordFormTrustAndShell`，最终OK(1 test)，12.802s |
+| 测试构建/lint | 最终84任务、16执行/68保留、15s；lint0错误/4条既有警告 |
+| 原有代码保留 | 314份既有代码/runner逐文件SHA一致；仅新增一个Android UI测试文件 |
+| 独立SSH服务 | 新建内部网络OpenSSH_10.3p1，仅回环relay+ADB reverse；原始日志5次合成账号密码登录及shell/connection close |
+| 正式已安装APK | 前后SHA256均为`3bc762d9e6463ab9612393b9382923f4a29f613ceec3dbe4d9159aae0078f252` |
+| 最终实际测试APK | `46fc5720e4028d4c78848b7f2c14c52c758ee9cd95b15a7cc19d5fd5002d7930`，与开发板实际安装文件一致 |
+
+bridge测试通过真实dispatcher与shared owner创建加密库，实际首次NEW完整指纹确认/CAS
+保存、一次密码SUCCESS/RUNNING/PTY标记、解除表单保护后命令收发、Stop后的KNOWN重连
+及最近端点回读。此测试只替换事件sink作观察，不替换实际网络/认证/存储。
+
+UI测试完全操作真实Flutter可访问控件，无MethodChannel调用、反射、事件替换或剪贴板：
+终端入口→创建主口令库→受保护SSH表单→输入端点和当次密码→同时核对实际完整端点/
+算法/SHA256指纹→信任并保存→终端→发送分段printf标记→真实“选择输出”快照中读取
+完整标记→AppBar返回→关闭会话。完整标记不在命令回显中，不能由回显伪造成功。
+实际敏感表单FLAG_SECURE、密码字段遮蔽及成功交接后的窗口保护释放也通过断言。
+最终PID31434阶段日志完整经过marker_assert、close_own_session和pass；两个runner均有
+方法status0与OK(1 test)，final code -1属正常结束，未用adb exit0替代测试结果。
+
+UI初始三次失败均保留：第一次是UiAutomation直接参数处理导致stat格式引号保留，
+严格600:2000权限本身正确；第二次在实际输出阶段失败，第三次细分阶段确认是硬件
+Back注入返回false。最终使用真实AppBar Back动作，保持完整输出/页面退出断言；只读
+Flutter selection按其实际ACTION_SET_TEXT能力识别，不把isEditable标志直接当可写。
+产品代码未因此改动，失败不改写为通过；最终测试来源/安装APK/原始日志均独立绑定。
+
+实际最终测试APK经过ZIP/AXML/DEX、同既有signer的签名与内容摘要独立审查，minSDK28、
+target=`im.majo.ctos.secretsfixture`；class_defs含两份实际连接测试而无生产类替身、无native
+替身。原产品APK及fixture main继续保持前轮已验证bytes。独立Trellis raw审查通过，无遗留finding。
+
+验收后两fixture包卸载Success，包路径/进程均为空；本轮请求JSON、UI XML和专用ADB
+reverse均删除。临时容器及镜像匿名卷、内部network、回环relay、随机密码文件均清理，
+无密码进入文本证据。正式APK构建产物仍为`6fa5c1bee28af584023f91a20ab0252abc02e53867bb13f1fb571468286417e8`，
+本轮没有覆盖安装它。当前前台密码路径验收完成；其他Android/真实账号/后台行为不在
+本轮结论中，父SSH客户端完整功能任务继续进行中。此前独立C引擎70秒证据仍单独记录，
+本轮12.802秒Android UI测试不冒充实机70秒运行。
+
+<a id="20261025-password-connect"></a>
+## 2026-10-25 前台密码SSH连接（本地门禁完成，设备待验收）
+
+[合同](ssh-password-connect.md)/[规范](../.trellis/spec/backend/ssh-password-connect.md)。
+证据目录：`/tmp/ctos-ssh-password-connect-20261025.fez9zf8o`。正式表单、真实AppSecretsOwner/
+VaultStore/整库子集validator、MANAGED实际主机键/审批/CAS、临时selected密码、公开API
+TCP/FD接管和现有PTY终端接线已实现；可选私钥/证书、跳板/转发、rekey、后台服务及
+完整复杂资料恢复不在本增量完成声明中。父task继续进行中。
+
+已实际运行：Flutter analyze无问题，全量242项、定向15项通过；最终Java718项/42份XML，
+0失败/0错误/0跳过。最终ARM/QEMU静态Bionic完整client矩阵1,756,509 checks及issuer33例
+通过；包括实际FD类型/标志/所有权、DNS/IPv6主机名记录、默认/非默认端口、hash与大小写
+隔离，以及拒绝条件与错误码保留。合成peer到期测试实际使用3秒预算，独立服务端另测70秒。
+
+正式构建92项全部重跑1m56s通过；fixture111项（42执行/69保留）38s通过。
+最后仅native issuer错误码修正后，正式92项（21执行/71保留）17s、fixture111项
+（20执行/91保留）12s通过；Java源未变，718项报告在该次为UP-TO-DATE，不冒充再次执行。
+lint最终0错误，正式/fixture分别3/4条既有警告。最终三APK实际ZIP/AXML/DEX/签名/隔离target/
+normal无测试peer与测试类/同生产SSH库/22ALLOC/JNI15+20+1+1+1+1+4/archive83核对通过。
+normal SHA256为`6fa5c1bee28af584023f91a20ab0252abc02e53867bb13f1fb571468286417e8`。
+
+失败与修正保留原始日志：界面前台恢复/小屏可见性与测试fixture已修复；UTF8 decoder正常
+UNDERFLOW被误判异常的产品问题、Unissued测试期限错位及shell取消错误映射已修复。
+独立OpenSSH服务端首次TCP测试在KEX失败；定位到hostfile查询/新行未纳入实际端口，
+已修正并补齐跨端口/hash/大小写验证。首次正式lint的5项较新API误用已按API28公开接口与
+固定Linux ABI修正，保留最低SDK；实际PFD dup不继承CLOEXEC，经自身JNI在detach前恢复。
+issuer旧根配置拒绝测试还发现cleanup覆盖EACCES，已修复并保留严格原断言及旧errno回归。
+失败日志保留，未弱化输入/权限/签名检查。
+
+独立服务端使用已有OpenSSH_10.3p1镜像、内部Docker网络及仅回环监听relay，无用户资料
+挂载。客户端只接受实际预配置公钥的MANAGED KNOWN，不将此测试说成NEW/CAS实测。
+已完成真实签名KEX、一次密码SUCCESS、PTY非回显标记、resize/stty及70秒后新命令、
+exit7/EOF/CLOSE；最终相同源码/archive的70秒复验也已通过，日志为`interop-verified-runtime.log`。
+该证据是C引擎独立互通，
+不是Android Os/JNI/Java编排或Flutter实际点击验收。
+
+45份实现/测试/runner与269份未改代码逐项哈希核对，438份before保留；四份既有cached
+wheel及source SHA/ZIP复核通过。独立Trellis检查覆盖源码/测试及原始XML/log/实际APK签名与
+内容摘要/AXML/DEX/ELF/archive以及最终互通日志，独立审查通过，无遗留finding。
+测试容器、镜像自动匿名卷、内部网络、回环relay、随机测试密码及已诊断issuer崩溃的
+临时core均清理，公开key/无秘密日志与清理记录保留。新Android平台fixture已经编译，尚未设备运行；
+未使用真实库/账号，未安装、提交、归档或发布。后续设备验收须遵守当前授权范围。
+
+<a id="20261025-ssh-mainline"></a>
+## 2026-10-25 用户更正：SSH唯一正式主线
+
+[合同](ssh-manifest.md)/[规范](../.trellis/spec/backend/ssh-manifest.md)。根据用户明确更正，
+移除双格式业务API/默认旧writer，唯一最新模型用于所有构造/create/重新编码；只有内部
+wire标记用于输入识别。窄旧empty/纯TOTP输入立即适配同一模型，旧SSH输入拒绝。
+不改envelope/crypto/native/Flutter或依赖，不操作设备/真实库账号/安装/提交/归档/发布。
+
+恢复按实际关系/账号审阅缺口判断，空库/纯TOTP不因tag拒绝。原raw来源绑定保留；loan
+用独立authenticated原文派生expected，换口令/恢复用独占当前编码、精确readback和wipe。
+恢复重新编码从原authenticated plaintext独立派生，保留preview manifest不成为新正文来源。
+
+证据`/tmp/ctos-ssh-mainline-20261025.73vkexd5`。核验前轮source9/protected303/artifacts571，
+434before基线；本轮protected307。首生产Java编译41tasks（7执行/34UP-TO-DATE）17s通过；
+主会话审查将import新正文来源由保留model改为独立authenticated原文派生，补齐model/raw
+分别变异回归；首定向177项/9reports全0。独立审查另补仅binding/仅PASSWORD-account/
+两者的OR内容门矩阵。最终定向177项/9reports全0，46tasks（8执行/38UP-TO-DATE）1m27s。
+最终全量691项/39reports，失败/错误/跳过0；normal92tasks全部执行3m23s。
+fixture111tasks（33执行/78UP-TO-DATE）39s，复用final production native（显式排除三编译
+task），未变化的instrumentation DEX/test package使用缓存。lint两包0errors、3/4项既有
+warnings。所有旧输入验证均为合成fixture，不代表访问过用户真实库。
+
+三APK ZIP完整、同一单signer/签名验证通过、实际AXML包名与测试target隔离、normal无
+auth peer、两产品包含正式metadata类且无任何JVM测试类；两产品SSH库bytes一致，
+generated/packaged不同role ELF的22个ALLOC节逐项相同；JNI15/19/1/1/1/1、archive83。
+
+- normal：`0c5bac0b16c0b59f221f8817a231df5aa17db26b769a187dd2e7626eeacbdb44`
+- fixture：`f7ddbb23177855a4ec789d17486cad3d26d0e416d8cf5f810e118546bf6abf75`
+- test：`95ad1b51d56a4701e56f3b7701cde26e898c19854929cbe4c123cb47874b087b`
+
+packaged SSH `7bed3d9ff9299bc4059f438cd7e48135d311a1aa5b48204e3560ce69703a4d7f`；
+generated SSH `9f243821e23cf02bcef455ed588a702580eec91f6e50418747f0c838cc051447`。
+signer仍`8d36c8be418174cb4cda0b897ff3e32b2da6f84032819726e8e5671872df52ef`。
+最终source5/protected307已核对；首编译记录在import来源修正前，最终定向/全量重编译
+与source-final为最终代码依据。独立raw XML/log/实际ZIP/AXML/DEX/签名与contentdigest/
+ELF/dynsym/archive/hash复核PASS，无遗留finding；before434及final5/protected307均吻合。
+
+本轮无ARM/native测试、Flutter测试或Android JNI/platform runtime，实际SSH连接尚未
+运行。下一阶段优先验收最小密码连接的账号/Request、主机键确认、路径准入/connector/
+可操作入口；本轮测试不作为实际SSH可用性验收。
+
+下方为历史验证，旧双格式政策已被最新用户决定取代；当时合同/源码见对应/tmp快照。
+
+<a id="20261025-manifest-v2"></a>
+## 2026-10-25 显式 key-binding/account 清单 v2
+
+[合同](ssh-manifest.md) · [规范](../.trellis/spec/backend/ssh-manifest.md)。继续原
+SSH task，本地未提交，无设备/真实库账号/安装/commit/archive/push/dist。
+证据：`/tmp/ctos-ssh-manifest-v2-20261025.stybeq0l`。
+
+新增显式 plaintext v2 的不可变 KeyBinding/Account、严格结构校验与完整有序编码；
+envelope CTOSVLT1/version1、KDF/AAD/generation和12MiB上限不变，默认create/empty仍v1。
+v1字段/字节与原有宽松文本语义保留，新metadata严格UTF8，opaque target及host原值不规范化。
+全局ID、精确类型引用、私钥/所选phrase唯一owner、account目标唯一均校验；声明不提供
+数学/远端账号/信任/完整coverage。四处生产candidate改用withObjects，loans/export/rekey
+保留版本/metadata及实际字节；引用破坏拒绝完整candidate，不删关联或降级。
+
+恢复保持source-first：每侧成功authenticate/decode后、交该侧validator前拒绝v2；
+empty/pureTOTP也拒绝，bind防御旧coverage。较早source-v1错误保留优先级，不保证目标v2
+被发现；没有reviewer/新preview/store效果，旧v1恢复继续保留。
+
+首生产Java编译41tasks（7执行/34UP-TO-DATE）17s通过。首定向199项有2失败，均为新
+fixture错误地禁止既有v1 restore在commit guard内重读；产品代码无需修复。夹具改为仅两次
+旧v1 restore显式核对exact旧target并计数，四类mutation仍默认禁止commit内read及
+quickMaterial读取。另补selection原错误码/message和Unicode字节回归。
+最终定向200项/9reports，失败/错误/跳过均0，46tasks（8执行/38UP-TO-DATE）53s。
+
+最终门禁：fresh全量679项/39reports，失败/错误/跳过0；normal92tasks全部重跑1m53s。
+fixture111tasks（33执行/78UP-TO-DATE）20s，显式排除三生产native编译task，复用final
+native；未变化的instrumentation测试APK沿用缓存，其SHA与上轮相同。normal/fixture
+lint均0errors，分别3/4项既有warnings。没有新增仪器测试或Android运行证明。
+
+三APK ZIP完整、v2签名/同一单signer、真实AXML包名与instrumentation target隔离、
+normal无auth peer、两产品包含v2模型classes且无JVM测试classes；两包SSH库逐字节相同。
+packaged与generated两个role ELF的22个ALLOC节逐项相同；JNI15/19/1/1/1/1、archive83。
+APK SHA256：
+
+- normal：`35f375105a2165e21cedbc7d9796dc3fd53bfc7534efd50e385db500c8a027bb`
+- fixture：`a42b561980ea4c369d414db18023afc5d8cccc9fde76ebca82941cba513830cf`
+- test：`95ad1b51d56a4701e56f3b7701cde26e898c19854929cbe4c123cb47874b087b`
+- packaged SSH：`476598b82070589e039453f2a104b636518e39b1607b312f20a9d48d34d40130`
+- generated SSH：`94f22a8b17d624839ef68de52f3f74dc1f04319899ce5c2679c420340ed6d49e`
+
+signer仍为`8d36c8be418174cb4cda0b897ff3e32b2da6f84032819726e8e5671872df52ef`。
+独立raw XML/log/ZIP/v2/AXML/ELF及source/protected hashes复核PASS，无遗留finding；
+另独立验签实际v2 signedData与chunked content digest、解析AXML/ELF dynsym/archive，
+核对全部before427/first-source7/final9/protected303与当前源及snapshot一致。
+
+独立Trellis源码/测试审查通过：7生产文件、schema25+生命周期16项新测试及夹具修正。
+主会话已核对427baseline/9source/303protected、四份cached wheel与原source SHA/ZIP，
+临时offline init显式no-index复用。无新增依赖或native/Flutter源码改动；normal按现有构建
+重新编译native，但本轮不执行ARM/native测试、Flutter测试或Android JNI/平台fixture
+runtime，不把历史实测当本轮重验。
+
+持久schema基础已实现，后续仍须v2整库关系coverage/数学/实际账号消费、CA authority/
+time/principal/revocation、graph-aware reviewer、真实Request动态资源及完整provider/
+恢复/connector，父AC保持开放。
+
+<a id="20261024-certificate-facts"></a>
+## 2026-10-24 全部证书事实与嵌入签名政策
+
+[合同](ssh-certificate-facts.md)/[规范](../.trellis/spec/backend/ssh-certificate-facts.md)已实现
+实际清单全部CERTIFICATE的数值/公开事实及明确software/CA signature政策。新CSCF168只给
+独立whole cert/plain subject/canonical embedded CA三摘要、USER/HOST、u64原bit pattern、
+principals数量、critical/extensions原wire section长度及真实record物理行。不复制其他正文/
+凭据，不读取current vault或wall clock，不构造host/user/purpose/approved CA。
+
+pinned parser嵌入验签成功后才施加新操作的现代签名政策；RSA SHA1新UNSUPPORTED与旧
+CSMI仍PARSED已有真实对照。过期/未来/反向时间、空/重复/尾随NUL归一化/nonUTF8 principals
+仍按事实保留，不声称raw规范性或适用性。Report恒factsOnly=true/admissionComplete=false，
+trust/timeValidity/principalApplicability/revocation全部false；生产证书拒绝门及provider/
+恢复/connector/v1未改。三个公开摘要不互相替代或要求互不相等。
+
+证据：`/tmp/ctos-ssh-certificate-facts-20261024.izvxli13`。
+
+| 检查 | 实际结果 |
+| --- | --- |
+| 接管 |前轮source10/protected295/artifacts635重算通过；本轮421baseline，source10/protected299 |
+| 首生产compile |41tasks10执行31UP-TO-DATE18s，通过 |
+| 首strict八材料模式 |13tasks9执行4UP-TO-DATE18s，通过 |
+| 首实际ARM证书 |22239checks/baseline19977/signs59/verifies127/effects0/cleanup pass/exit0；新增操作没有sign/private parse/KDF |
+| 定向JVM |145tests/5reports，全失败/错误/跳过0；新增25测试 |
+| 最终普通构建 |100tasks全部重跑1m47s；JVM/lint/Release及八strict模式通过 |
+| fresh全量JVM |638tests/37reports，失败/错误/跳过0 |
+| 最终实际ARM |证书22239含baseline19977，独立private19980/pair13814/material7784，全部exit0/effects0/cleanup pass |
+| 最终native输入 |八模式10/10/9/9/8/8/7/7项source/archive inputs与最终源码、冻结archive、二进制相符 |
+| 隔离fixture |111tasks37执行74UP-TO-DATE20s；final native三compile排除，主/testJava、两DEX及测试包重编译 |
+| lint |normal0errors3warnings，fixture0errors4warnings |
+| APK/native审计 |三v2/同一单signer/隔离fixture与target/normal无peer/同生产SSH bytes/22ALLOC节匹配生成库 |
+| JNI/固定源 |config15/session19/material1/pair1/private1/newCertificate1，archive83；parser patch7afd7a9a…、G1及生产依赖保持 |
+| 源码/范围 |source10/protected299全部匹配；无关v1/AppSecrets/认证/config/Flutter/Python及生产证书拒绝代码未改 |
+| Android |新JNI/平台fixture仅编译，未安装/未Android运行；本轮未重跑auth/PTY/config/Flutter，不外推旧证据 |
+
+真实C矩阵包含五subject×五CA组合（同key subject/CA摘要可相同）、RSA SHA2/SHA1边界、
+USER/HOST、0/high-bit/MAX u64、空/未来/过期/反向时间、principal0/256/257及raw编码边界、
+重复/未知critical/extensions、坏signature/CA/nestedCA/类型/record/suffix/size/line/NUL、
+系统verify错误、每个可观察deadline和输出归零/FD/effects/caller保护。全部首轮门禁通过。
+旧基线CHECK计数随随机生成PEM截断长度及外层复用CHECK略变，不代表改断言；记录真实
+最终输出，不拿首轮archive替代全重跑生成的最终archive。首末源码未变，最终四静态矩阵
+对应最终archive，native-first与native-final分别保留。
+
+新public platform fixture由本地ssh-keygen生成：仅公开证书嵌入测试，Ed HOST/serialMAX/
+2020过期区间/一principal；精确opt-in和SshMemory guard保留。其Base64/原始字段与固定
+公开文件逐字节核对，通过DEX编译不表示JNI执行。没有设备/真实库账号/连接/安装。
+
+所有副本cleanup slots先建立，同一<=60s BOOTTIME/atomiccancel/oneattempt/owner/ThreadLocal
+贯穿preflight/copy/parse/hash/cleanup/输出/最终交付；无prefix报告。单parse/embeddedverify
+不可抢占，postparse政策不阻止其先行成本；pinned parser把部分深层错误归一化为格式错误，
+wrapper不声称能恢复其OOM分类。JNI有界public heap擦除不是全堆锁页证明。
+
+完整持久关系图/账号模型、CA authority/时间/主体/撤销与reviewer、真实Request动态资源/
+逐字段消费、完整provider/恢复/connector及父AC仍开放。本地未提交，无commit/archive/
+push/dist。临时offline init显式no-index/find-links复用四既有wheels，cache source+wheel
+SHA及ZIP本轮重核通过；无生产依赖变化。
+
+```sh
+./hako bash -lc 'cd android && ./gradlew --init-script /app/build/ctos-detached-offline.init.gradle :app:testReleaseUnitTest :app:lintRelease :app:assembleRelease :app:testSshCertificateFactsHost :app:testSshCertificateFactsStaticHost :app:testSshPrivateMaterialHost :app:testSshPrivateMaterialStaticHost :app:testSshKeyAssociationHost :app:testSshKeyAssociationStaticHost :app:testSshMaterialInspectorHost :app:testSshMaterialInspectorStaticHost --rerun-tasks --offline --console=plain'
+./hako bash -lc 'cd android && ./gradlew --init-script /app/build/ctos-detached-offline.init.gradle -PctosSecretsUiFixture=true -PctosSshAuthFixture=true :app:assembleSecretsFixtureRelease :app:assembleSecretsFixtureReleaseAndroidTest :app:lintSecretsFixtureRelease -x :app:compileSshProductionObjects -x :app:compileSshConfigEvaluator -x :app:compileSshFiles --offline --console=plain'
+```
+
+| 工件 | SHA256 |
+| --- | --- |
+| 普通 APK | `21401db29f5056389f96eb63ce86615f4c407fc008ebfd70a6f05bca8993d343` |
+| Fixture APK | `40fee028fa526514768445a7ab56a6814e8b65cedadb04e70d192c154a66e9d5` |
+| 测试 APK | `95ad1b51d56a4701e56f3b7701cde26e898c19854929cbe4c123cb47874b087b` |
+| 共同包内SSH库 | `208cf211879acb495f3eea812519881c54c23184fd24787a4d3516be0b5c4500` |
+| 生成SSH库 | `3f30ad96b9cb86b4b12ee08b5179f6c9344d282a871eb9b0b9ddc11b941a668b` |
+
+
+<a id="20261023-private-material"></a>
+## 2026-10-23 全部私钥材料与v1凭据归属审计
+
+[合同](ssh-private-material-ownership.md)/[规范](../.trellis/spec/backend/ssh-private-material.md)
+已实现每个实际PRIVATE_KEY的固定domain自签/验签，以及所有非TOTP凭据的v1元数据归属扫描。
+不需要外部public/cert peer；对parsed private自己的plain public subject做真实验证，错误
+Ed25519 seed不能由公开字段相同绕过。CSKP60独立新magic/type2，旧CSMI/CSKA不升级。
+
+重复private identity无phrase时仍逐一检查；有phrase时private owner与phrase都须唯一。
+归属歧义不挑首项、不按秘密相等消歧、不复制歧义private/phrase或JNI尝试；有唯一private
+但重复phrase保留唯一private locator、选中phrase为空。PASSWORD只做typed target: namespace，
+suffix保持opaque，正文不复制；passwordTargetsChecked恒false。TOTP及其他文件正文不复制。
+Report恒admissionComplete/keyAssociationsChecked/trustChecked=false，归属解析和材料成功
+分开量化，不作为完整语义validator、全库graph、证书信任、恢复或connector准入。
+
+证据：`/tmp/ctos-ssh-identity-next-20261023.j_o6gwfz`。
+
+| 检查 | 实际结果 |
+| --- | --- |
+| 接管与保留 |前轮source9/protected292/artifacts575重算通过；初391文件snapshot补22个此前已验证且仍匹配的源码，形成413baseline；本轮protected295 |
+| 首次生产compile |41tasks10执行31UP-TO-DATE17s，通过 |
+| 首strict全部材料模式 |11tasks7执行4UP-TO-DATE15s；private/pair/material动态与静态均编译通过 |
+| 首实际ARM private |19976checks/含复用baseline13815，signs59/verifies74/effects0/cleanup pass |
+| 定向JVM |120tests/4reports，失败/错误/跳过0；新增27方法 |
+| 最终普通构建 |98tasks全部重跑1m46s，JVM/lint/Release/六strict材料模式通过 |
+| fresh全量JVM |613tests/36reports，失败/错误/跳过0 |
+| 最终实际ARM |private19976/含baseline13815、独立pair13812、独立material7784；全部exit0/effects0/cleanup pass |
+| 最终输入 |六native模式input manifest的9/9/8/8/7/7项全部匹配最终源码/archive，最终archive与native快照保留 |
+| 隔离fixture |111tasks37执行74UP-TO-DATE19s；final native三compile任务排除，main/testJava、两DEX及测试包重编译 |
+| lint |normal0errors3warnings，fixture0errors4warnings |
+| APK审计 |三v2/同一单signer/独立fixture/test及目标；normal无peer；普通/fixture生产SSH库全字节相同，22ALLOC节匹配生成库 |
+| 导出/固定依赖 |config15/session19/material1/pair1/private1 JNI，archive83，parser patch7afd7a9a…d60fd5e与v1/policy不变 |
+| 最终源码 |source10/protected295全部匹配；无关AppSecrets/VaultManifest/认证/config/Flutter及Python源码保留 |
+| 本轮运行范围 |未Android执行新JNI/平台fixture，未重跑认证/PTY/config/Flutter或设备；不将前轮通过冒充本轮实测 |
+
+原矩阵按随机生成PEM序列化长度遍历截断，因此CHECK计数可随运行略变；复用入口外层CHECK
+也影响累计基线。首轮独立material7780/pair13814，最终7784/13812，不代表删测试或放宽
+断言；源码hash、全部真实断言及exit0可复核。首末private均19976，首末全部门禁一次通过。
+production archive因最终全重跑重新生成，与首轮inputs hash不同；两轮证据分开，最终
+runtime采用最终archive重新构建的三静态binary，不把首轮inputs称作当前字节相同。
+
+所有所选副本在cleanup slots建立后复制，同一原<=60s BOOTTIME/atomic cancel/owner/
+ThreadLocal/final wipe fence贯穿；每个private最多一次，累计private<=8MiB。传统加密PEM
+在新strict模式解密前UNSUPPORTED，clear额外phrase同样不忽略；原材料/auth格式行为不改。
+新self-proof复用shared signing helper、RSA所有组成字段16384bit/no multiprime政策。
+单parser/KDF/crypto不可抢占；RSA检查不消除PEM parser内部先行成本。有限heap scratch
+擦除不表示parser/OpenSSL全堆锁页。allPrivateMaterialsVerified仅量化strict子集/签名关系，
+不声称任意DER规范性或所有格式完整消费。
+
+v1 plaintext/所有mutation、provider注册/恢复/connector及生产证书拒绝门均未变。持久
+关联authority/覆盖、密码实际target/account/username、完整CA/时间/主体/撤销/reviewer、
+动态资源及真实Request逐字段消费、完整客户端父AC仍开放。本地未提交，无设备/真实库
+账号/安装/commit/archive/push/dist。附带证书事实研究仅为后续源码依据，未实现或运行。
+
+```sh
+./hako bash -lc 'cd android && ./gradlew --init-script /app/build/ctos-detached-offline.init.gradle :app:testReleaseUnitTest :app:lintRelease :app:assembleRelease :app:testSshPrivateMaterialHost :app:testSshPrivateMaterialStaticHost :app:testSshKeyAssociationHost :app:testSshKeyAssociationStaticHost :app:testSshMaterialInspectorHost :app:testSshMaterialInspectorStaticHost --rerun-tasks --offline --console=plain'
+./hako bash -lc 'cd android && ./gradlew --init-script /app/build/ctos-detached-offline.init.gradle -PctosSecretsUiFixture=true -PctosSshAuthFixture=true :app:assembleSecretsFixtureRelease :app:assembleSecretsFixtureReleaseAndroidTest :app:lintSecretsFixtureRelease -x :app:compileSshProductionObjects -x :app:compileSshConfigEvaluator -x :app:compileSshFiles --offline --console=plain'
+```
+
+相同临时offline init显式no-index/find-links；四既有wheel及cache source SHA和ZIP完整性本轮
+重核通过，生产依赖配置不改。新平台方法精确opt-in，编译/DEX存在不作为Android运行证据。
+
+| 工件 | SHA256 |
+| --- | --- |
+| 普通 APK | `0899625b7d1afbe14412ca35e43965a857896f1654505a900896664443dd7784` |
+| Fixture APK | `4fd9c2b9d97a13f1062935ec9327a2470d419304b4bad3fe2540ce4e60179624` |
+| 测试 APK | `7425ab8afb767a70b4aec23133b9d75e8421d735b08d505d7cd4c9e7b0545a2a` |
+| 共同包内SSH库 | `d29a9e42f9f5c263015523e183669a1e545d67187c9137ef39115fa63e54af1b` |
+| 生成SSH库 | `51f8aa2e870214cf55c916e193e05b7bc94239ad3842febfe90959962f53b789` |
+
+
+<a id="20261023-key-association"></a>
+## 2026-10-23 显式私钥与公钥/证书 subject 配对证明
+
+[合同](ssh-key-association.md)与[规范](../.trellis/spec/backend/ssh-key-association.md)已实现
+精确所选三ID tuple、实际supplied loan的独占所选副本、固定domain的真实签名/验证及
+CSKAv1。公有字段相同但秘密种子不同的Ed25519材料实际返回MISMATCH/SIGNER。
+证书demote后以plain subject计算摘要/验签；过期host证书的subject可MATCH，不表示信任。
+显式口令按entry ID选取，同identity的其他条目不自动复制/重试；省略保持NEEDS。
+新pair拒绝传统加密PEM及明文键额外口令，新增RSA所有组成字段16384bit和multiprime限制，
+旧CSMI/auth/shared key policy保持。报告恒explicitPairsOnly=true/admissionComplete=false，
+trustChecked/credentialTargetsChecked=false，不注册provider/reviewer或开放恢复/connector。
+
+证据：`/tmp/ctos-ssh-key-association-20261023.1p6pj89y`。
+
+| 检查 | 实际结果 |
+| --- | --- |
+| 接管before |405文件baseline，前resource记录保留为history；未修改无关源码 |
+| 首次native/Java compile |41tasks10执行31UP-TO-DATE，18s，通过 |
+| 定向JVM |80tests/4reports，失败/错误/跳过0；新增22方法 |
+| 最终普通构建 |96tasks全部重跑，1m42s；strict动态/静态pair及原material编译、JVM/lint/Release通过 |
+| fresh全量JVM |586tests/35reports，失败/错误/跳过0 |
+| 最终实际ARM pair |13814checks（复用基线7773；因pair日志观察器不同，不冒充原7784计数）、32signs/52verifies/effects0/cleanup pass |
+| 独立旧material ARM |7784checks/effects0/safe_logs4/streams34/cleanup pass |
+| 原CONFIG缓存二进制实际重跑 |Resource4439/Audit13290/managed3683/direct1261/eval3736/catalog71923/handle5201，exit0/effects0；未将缓存执行写成新编译 |
+| 隔离fixture |111tasks37执行74UP-TO-DATE，21s；复用最终native，main/testJava/两DEX/测试包重编译 |
+| lint |normal0errors3warnings，fixture0errors4warnings |
+| APK审计 |三v2、同一单signer、独立fixture/test target、normal无peer；普通/fixture SSH库全字节相同；22ALLOC节匹配生成库 |
+| 导出/固定依赖 |config15/session19/material1/newPair1 JNI，archive83；parser patch7afd7a9a…d60fd5e保持 |
+| 最终源码 |source9/protected292全部匹配，final-source副本及四native inputs manifest可复核 |
+| Fresh认证/PTY ARM |当前源码/最终archive重编译；沙箱外AF_UNIX合成1748333checks/exit0；沙箱内getsockopt EPERM不算产品失败或通过 |
+| Android运行 |未安装/未执行新JNI或平台fixture；ARM QEMU不是Android VM/锁页/真实端点证据 |
+
+首次/第二次ARM因新实际失败签名触发固定OpenSSL日志`EVP_DigestVerify failed`，旧观察器
+拒绝该尚未列入的格式并abort。核对pinned ed25519-openssl.c后，pair-only观察器加入这个
+无参数常量；不放宽原material观察器。原matrix独立7784与最终pair均通过。额外认证
+回归的沙箱内执行被getsockopt EPERM拦截；源码和测试未因此放宽，沙箱外合成复跑结果
+已通过1748333项（native-auth-fresh-final-unsandboxed.log/exit0）；旧缓存第一次也在限额恢复
+处abort，不采用其构建证据。首次APK审计inline脚本语法错误后修正重跑通过，无产物变更。
+
+新API只证明明确所选pairs。整库关联authority/coverage、全格式完整消费、口令全局唯一
+归属、密码实际目标/用户名、CA/时间/主体/撤销与reviewer、动态/cwd/key-loader/default/
+final Request、完整provider/恢复/connector/父AC继续开放。单次KDF/crypto/证书内嵌验签
+不可抢占；PEM parser内部RSA_blinding_on等成本先于新RSA检查，不能声称被其消除。
+JNI采用有界heap scratch并擦除，不声称parser/OpenSSL所有堆全量锁页。
+本地未提交，无设备/真实库账号/安装/commit/archive/push/dist。
+
+```sh
+./hako bash -lc 'cd android && ./gradlew --init-script /app/build/ctos-detached-offline.init.gradle :app:testReleaseUnitTest :app:lintRelease :app:assembleRelease :app:testSshKeyAssociationHost :app:testSshKeyAssociationStaticHost :app:testSshMaterialInspectorHost :app:testSshMaterialInspectorStaticHost --rerun-tasks --offline --console=plain'
+./hako bash -lc 'cd android && ./gradlew --init-script /app/build/ctos-detached-offline.init.gradle -PctosSecretsUiFixture=true -PctosSshAuthFixture=true :app:assembleSecretsFixtureRelease :app:assembleSecretsFixtureReleaseAndroidTest :app:lintSecretsFixtureRelease -x :app:compileSshProductionObjects -x :app:compileSshConfigEvaluator -x :app:compileSshFiles --offline --console=plain'
+```
+
+显式offline init与前轮同一四个cached wheels/no-index/find-links，仅构建环境引用，生产
+依赖配置未改。完整原始XML/log、APK ZIP/signature/manifest/nm与最终hash在证据目录。
+
+| 工件 | SHA256 |
+| --- | --- |
+| 普通 APK | `8919c45b814d92f70dec52ba00a0835b538c3aa7971c1e7372293cbd223678a3` |
+| Fixture APK | `a6e294a217f261de2cc3994586479885d2a64edf2d02e531ec71c067ab570525` |
+| 测试 APK | `17157b32d09bc5d692d2f1d43054c821caf03c97406b0a5637b00459cbb586aa` |
+| 共同包内 SSH 库 | `771438db49ad9899b629c967d4440c6ba1388002ad83aee9924f8be21262cb23` |
+| 生成 SSH 库 | `2c6c490023c7f5d9e7052f8f70b9c8bc74dd1759d233b3fd5d9de5c73e10143d` |
+
+
+<a id="20261023-config-resources"></a>
+## 2026-10-23 CONFIG 显式资源类型与直接引用
+
+范围：[资源合同](ssh-config-resources.md)、[执行规范](../.trellis/spec/backend/ssh-config-resources.md)。
+新增独立RESOURCE_AUDIT，五类显式Identity/Certificate/UserKnown/GlobalKnown/Revoked声明
+通过同一lexer分类，仅按原metadata绑定静态literal base/type与真实parent直接references。
+原EFFECTIVE/CATALOG/AUDIT与CSDI/CSEQ/CSES/CSCD/CSCAv1保持；新CSCR嵌套exact CSCA。
+新mode共用原owner/原期限/取消/CONFIG-only独占输入/整job预算/cleanup与最终wipe fence。
+
+静态资源引用不是完整准入：relative保留CWD，percent或${保留context，missing exact I/Cert
+base保留KEY_RESOLUTION；Global全字面（$可表示、%不可表示），Certificate none不是禁用。
+Identity可PRIVATE/PUBLIC/CERT但不证明签名能力，Revoked只PUBLIC_KEY文本子集，不代表KRL/
+多key列表；不探.pub/-cert、不推断数学关联。默认文件与最终effective消费仍后续。新字段
+只证明已STATIC-bound行，恒declarationsOnly=true/admissionComplete=false，不注册生产
+validator/reviewer、不开放恢复/connector，父AC继续in_progress。本地未提交，无设备/真实库账号。
+
+前轮source15/protected307核对，保存399文件before；daemon中断发生在研究后、实现前，恢复
+时重新核对代码基线一致后继续。最终source15/protected311与当前一致，无额外代码变化。
+本轮native6+parser补丁+新C测试、Java2+两JVM测试+一平台fixture、Gradle/runner，共15源。
+独立checker源码及原始证据审查无具体遗留finding；本轮各首轮门禁均通过，无隐藏失败轮。
+
+| 检查 | 实际结果 |
+| --- | --- |
+| 首Java生产编译 | 38tasks，7执行/31UP-TO-DATE，10s，排除native三任务，通过 |
+| 首native/JNI strict | 7tasks，3执行/4UP-TO-DATE，15s，通过 |
+| 新旧native全矩阵构建 | 15tasks，11执行/4UP-TO-DATE，25s，strict+Resource dynamic/static+六组旧static通过；dynamic只编译 |
+| 真实ARM RESOURCE | **4439checks（含direct基线1262），effects0/capabilities0/exit0**；normal最终生成的AArch64 test binary另实跑一致 |
+| 真实ARM旧矩阵 | AUDIT**13290**、managed**3683**（均含基线）、direct**1261**、eval**3736**、catalog**71923**、handle**5201**，effects0/exit0，detached类capabilities0 |
+| host文件/IO | **426cases/1634wipe_checks，通过**，同源重新编译执行 |
+| 定向JVM/lint | **151tests/9reports，0failures/errors/skips**；56tasks，18执行/38UP-TO-DATE，26s |
+| 最终normal全重跑 | **94/94tasks执行，1m52s**，完整JVM/lint/Release+新Resource dynamic/static |
+| 最终fresh完整JVM | **564tests/34reports，0failures/errors/skips**，新增27个JVM方法 |
+| fixture主包/test/lint | **111tasks，37执行/74UP-TO-DATE，21s**，复用最终normal native（3compile任务排除）；主/testJava、两DEX、testpackage重编译 |
+| lint | normal/fixture **0errors，3/4既有warnings** |
+| 三APK审计 | v2/同一单signer/隔离ID/精确fixture target；normal无peer、生产SSH库同字节；22ALLOC节对应生成库、configJNI15/session19/material1/archive83，无生产wrapper/seed |
+
+真实parser矩阵覆盖23资源行/all states、五kind allowed/wrong types、none差异、Global与
+其他kind的美元/percent路径、静态C1与非法path拒绝、缺基名不认证suffix、nested父原ordinal/
+line/arg、重复Include去重且不跳IO、嵌套CSCA等于旧AUDIT、Known32/33/Revoked arg256、
+1024/1025 rows、有限policy/Match集成、旧mode不升级与owner/cancel/getter失效/cleanup重试。
+仅metadata查找，不读非CONFIG正文。新JVM12codec/facade+15inspector方法覆盖strict closed
+states/locator九位/三层quota与wipe、max107328、所有typed集合/真实parent而非root-sibling-
+identity、deferred/旧flags/all-orphan-zero、wholebytes/combined4096rows、原work预算、reserve
+取消空窗/暂停getter/Error/cleanup重试/最终fence。平台fixture只编译合成metadata，不冒充
+材料有效或实际JNI运行。
+
+parser补丁SHA256：`7afd7a9a4ed9c17096b1bb4a3cd20d41ec9ed2d5720df5c552da93384d60fd5e`，
+runner固定值一致；原固定OpenSSH10.6p1/OpenSSL3.5.9/NDK27、G1/上游源树与83成员archive
+合同保持，无新第三方依赖。四既有缓存wheel重新SHA/ZIP核验，临时no-index/find-links init
+继续复用，生产依赖声明未改。测试与生产源码/补丁输入逐项关联，不把独立test object的临时
+__FILE__路径差异冒充原object全hash相等；host ARM不是APK Android执行。
+独立核对config_eval.o字节全等；readconf.o只差8字符临时目录，归一该目录后对象全等
+（normalized SHA256 `d3c16e26d5d8699fda6a7a53eb44aa22c10b502bccd65639f6c79584d3a182db`），
+不声称原readconf.o同hash。
+
+最终SHA256（均未安装）：
+
+- normal：`afe1a021409a6517ba4304c318f3a06baacdde80bd991e7f49e59f22ecf6b580`
+- fixture：`fe7fcd1940f73e81cd50ac3a9fb496dcfdb8002a4b6e0d413d6cd29890dc836b`
+- test：`bdfc94e2e443e04ed1e93e7ed0e1be2e8a2d054d02249f9a50a75f97857bc55a`
+- packaged SSH库：`5e390ecf3f8dfafa02747529e303a43024752c2977255f4aa5c2b4ad24a88075`
+- generated未strip库：`d97bd27cc4ca28fa3bed38ac34baaa85f3ba50df77804f867a06300d33d33256`
+
+共同单signer证书SHA256：`8d36c8be418174cb4cda0b897ff3e32b2da6f84032819726e8e5671872df52ef`。
+证据：`/tmp/ctos-ssh-config-resource-20261023.gmfy0g24`含399before、首/末源码与hash、
+strict/native/runtime/原始XML/lint/build log、三APK/签名/manifest/nm/archive/ALLOC审计、
+source15/protected311/artifacts hashes与独立报告。临时证据消失不得冒充仍可复核。
+
+实际JNI VM异常/Android锁页与新平台fixture未执行；宿主8192KiB锁页限额和8MiB仅格式/
+故障清理、6MiB真实锁页的区分保持，无unlocked fallback或xmalloc OOM恢复承诺。
+未运行Flutter/认证/PTY/设备/真实库账号，无安装/commit/archive/push/dist。后续仍需精确
+私公钥/证书数学关系、凭据实际目标/口令唯一绑定、完整信任/reviewer、动态/cwd/key-loader/
+默认与最终Request强制点，全部义务/入口完成后才注册生产provider、恢复和最终connector。
+
+<a id="20261023-config-audit"></a>
+## 2026-10-23 CONFIG 静态引用与本地效果审计
+
+范围：[审计合同](ssh-config-audit.md)、[执行规范](../.trellis/spec/backend/ssh-config-audit.md)。
+新增独立AUDIT模式，从实际独占VaultManifest loan逐CONFIG扫描全部分支的有限本地效果/
+信任绕过政策，记录实际静态Include父/行/子并检查该真实parent的直接references。原
+EFFECTIVE/CATALOG与CSEQ/CSES/CSCD合同保持，AUDIT用CSCA嵌套exact CSCD及实际边。
+原inspect不升级；新inspectAudit复用原owner/CONFIG-only副本/原期限/取消/累计预算/清理。
+报告恒declarationsOnly=true/admissionComplete=false，两新字段只证明本次有限政策及已观察
+静态边直接引用；动态Include仍deferred，不证明其他typed引用/配置值/身份/凭据/信任语义。
+生产validator/reviewer、恢复/最终计划connector与父AC仍开放，本地未提交，无设备/真实库账号。
+
+前轮source15/protected303核对一致，保存393文件baseline。最终source15/protected307与当前
+源码一致，无额外代码变化。新增native6文件+parser补丁+专项C测试、Java2文件+两JVM测试+
+一平台fixture，以及Gradle/runner，共15源文件。独立checker复核源码与实际证据，无具体遗留问题。
+
+| 检查 | 实际结果 |
+| --- | --- |
+| 首轮Java生产编译 | 38tasks，7执行/31UP-TO-DATE，10s，通过，排除native三构建任务 |
+| 首轮native严格编译 | 5tasks/7s失败：新helper在WHITESPACE宏定义前使用，见下文 |
+| 修宏后native/JNI strict | 7tasks，3执行/4UP-TO-DATE，14s，通过 |
+| 定向JVM/lint | **124tests/7reports，0failures/errors/skips**；53tasks，15执行/38UP-TO-DATE，16s，native三任务排除；不混称最终native运行 |
+| 最终新旧native构建 | **14tasks，10执行/4UP-TO-DATE，21s**，strict+新AUDIT dynamic/static与五组旧static通过，dynamic只编译 |
+| 真实ARM新AUDIT | **13290checks，含direct基线1262，effects0/capabilities0/exit0**；normal最终生成的binary另实跑一次一致 |
+| 真实ARM旧矩阵 | managed-detached**3683**含基线、direct**1261**、eval**3736**、catalog**71923**、handle**5201**，均effects0/exit0，detached类capabilities0 |
+| host文件/IO | **426cases/1634wipe_checks，通过**，同源重新编译执行 |
+| 最终normal全重跑 | **94/94tasks执行，1m39s**，完整JVM/lint/Release+新AUDIT dynamic/static |
+| 最终fresh全量JVM | **537tests/32reports，0failures/errors/skips**，新增23个JVM方法 |
+| fixture主包/test/lint | **111tasks，37执行/74UP-TO-DATE，21s**；复用最终normal native（三compile任务排除），主Java/testJava/DEX/测试包重编译 |
+| lint | normal/fixture **0errors，3/4既有warnings** |
+| APK审计 | 三v2/同一单signer/隔离ID/精确fixture target；normal无peer；相同生产SSH库、22ALLOC节对应生成库、configJNI13/session19/material1/archive83，无生产wrapper/测试seed |
+
+首strict失败为新policy helper引用后方才定义的WHITESPACE宏；改为在原callsite按原规则
+正规化raw remainder后传入helper，保留raw command的exact-none语义。首轮源码/失败log
+保留。定向JVM本轮首次即124通过，无JVM失败被隐藏。
+
+正式审查还发现AUDIT复用Match的early-all时遗漏caller的剩余ac检查：`Match all "" exec foo`
+可提前结束而留下参数。现在仅syntax-only分支在提交pending政策错误前检查完整消费，helper
+也防御检查，语法错误优先INPUT；旧matcher/all规则不变。真实矩阵覆盖该例、host余参、
+先exec后all空lookahead及尾部junk，另保留原允许的`Match all ""`/`Match final all ""`。
+纯multistate坏值/标量arity改为INPUT，合法enabled按family拒绝；AddKeys等复杂非禁用形态
+直接EXTERNAL拒绝，不宣称完整复杂值语法。quoted/commented raw-none与provider argv-none
+区别、Strict true/ask、ControlPersist大小写、编译禁用优先和CNAME有限政策均有实际断言。
+
+ARM矩阵验证所有分支与first-value之后的禁止指令、Match属性位置及安全criteria值、实际
+parent/line/child原ordinal、DFS/glob/重复triple、静态/动态混合Include、1023边/1024opens
+真实边界、mode guards、原usage/预算、getter后取消/过期擦除、busy/owner与cleanup重试。
+原catalog仍接受文档中的非法Port/Match/本地命令声明例，AUDIT不把非政策值当完整有效配置。
+独立测试与production的config_eval.o字节一致；readconf.o含不同8字符临时__FILE__目录，
+规范化该路径后对象全等，不声称原object同hash。ARM最终binary为AArch64，同源/补丁输入
+逐项对应；这些host测试不等同已打包APK的Android运行。
+JVM覆盖CSCA82732/1024edge严格codec、outer/nested畸形/UTF8/重复/配额预检、真实parent而非
+root/sibling/identity的直接引用、typed来源、all/orphan/noCONFIG、旧inspect flags、whole-CSCA
+只计一次、累计rows/bytes与原work预算、暂停getter取消/Throwable/清理重试及最终fence。
+
+最终补丁SHA256：`72f09e8a4cb7766c80e1ebb3123b34a61ac6e5d361bcaa611b36156a2a75f17b`，
+runner固定值一致；固定OpenSSH10.6p1源树/原G1输入hash保持，未修改上游缓存源树或生产依赖。
+仍使用前轮四个既有wheel（本轮重新SHA/ZIP核验）及临时no-index/find-links Gradle init。
+
+最终工件SHA256（均未安装）：
+
+- normal：`54d64b0896aa2257d0f49b4ab468adac765387534b37e2701f89e25cae4f2701`
+- fixture：`cc2d7aad7048ad47e8e37990b45e41377ed60dd7b7d5fd8c1c64e3d64d4eaffa`
+- test：`2c637750d4f9af8335e5edefcc48c460552e05ae87ea87e55a9d1d6aeb8cdd64`
+- packaged SSH库：`e09350a1b31f04862e351b4096e1c06ecce8cc34bb1087e85c99ddeaa8384e7c`
+- generated未strip库：`52535a0657e23b1d026d53cc409164cb7cbbf94a431154978a1f1a7079ae4fd5`
+
+共同单signer证书SHA256：`8d36c8be418174cb4cda0b897ff3e32b2da6f84032819726e8e5671872df52ef`。
+证据：`/tmp/ctos-ssh-config-audit-20261023.uvozbgq0`，含393文件before、first/second/third/
+final源码、失败与最终log、ARM二进制/inputs/runtime、原始XML/lint、三APK/签名/manifest/
+nm/archive/ALLOC审计、source15/protected307/artifacts hashes与独立报告。
+
+平台fixture仅编译，实际JNI pending-exception/Android锁页未运行，C getter失效seam不替代
+VM实测。宿主8192KiB锁页限额及8MiB仅格式/故障清理与6MiB真实锁页的区分保持；无未锁页
+fallback，也不宣称恢复了上游xmalloc系统OOM。无Flutter/认证/PTY运行、设备/真实库账号/
+安装/commit/archive/push/dist。非Include typed引用、动态真实Request义务、密钥/证书数学
+关联、凭据目标/信任/reviewer及完整生产准入仍后续；父task保持in_progress。
+
+<a id="20261023-detached-managed"></a>
+## 2026-10-23 实际清单受管配置检查
+
+范围：[受管合同](ssh-detached-config-managed.md)、[执行规范](../.trellis/spec/backend/ssh-detached-config-managed.md)。
+复用原SSH任务，仅本地未提交。Java/JNI现在可检查实际独占VaultManifest loan的全部CONFIG，
+包括orphan；原ordinal、声明状态与原取消/期限保留。报告恒declarationsOnly=true、
+admissionComplete=false。Include引用边/全分支政策、身份/凭据/证书/信任完整语义provider、
+生产恢复、最终连接计划/connector与父AC仍开放；本轮无注册、不操作设备或真实库账号。
+
+native reserve先发resource-free token，Java保留facade后load到已由slot/eval拥有的
+DONTDUMP/锁页单份CSDI映射，原地adopt路径/CONFIG正文，非CONFIG不带正文。JNI-copy
+失败保留pending exception和cleanup owner；close/destroy失败可通过已保留inspector重试。
+全job累计1024opens/64MiBreads/16384lines，逐root传剩余额度，native在超额操作前拒绝；
+复制放大预检64MiB、累计结果1MiB/4096rows，decoder分配前检查剩余结果预算。原live
+接口/错误码/默认预算保持；原有CSEQ/CSES/CSCD wire不变，新增CSDI与三项JNI。
+
+接管核对前轮source7/protected272，保存383文件baseline。本轮source-final15与protected303
+当前一致，无额外代码变化；before/首轮/最终快照和失败日志保留。独立checker复核源码、
+测试与原始结果；当前无遗留具体finding。
+
+| 检查 | 实际结果 |
+| --- | --- |
+| 首轮native/JNI严格构建 | 7tasks，3执行/4UP-TO-DATE，16s，通过 |
+| 最终strict与六组native构建 | 13tasks，9执行/4UP-TO-DATE，20s，通过；dynamic只编译 |
+| 新真实ARM staged矩阵 | **3683checks（含直接输入基线1262），effects0/capabilities0，exit0**；normal全重跑生成的最终binary再次实跑一致 |
+| 原真实ARM矩阵 | 独立输入**1261**、求值**3736**、目录**71923**、handle**5201**，effects0/exit0 |
+| host文件/IO矩阵 | **426cases/1634wipe_checks，通过**，最终IO源码重新编译执行 |
+| 首轮定向JVM | 96tests/5reports，1failure；新fixture关联错误，见下文 |
+| 最终定向JVM/lint | **101tests/5reports，0failures/errors/skips**；56tasks，19执行/37UP-TO-DATE，26s |
+| 最终normal全重跑 | **94/94tasks执行，1m58s**，完整JVM/lint/Release与新dynamic/static native |
+| 最终fresh完整JVM | **514tests/30reports，0failures/errors/skips**；新增31个JVM测试方法 |
+| fixture主包/test/lint | **111tasks，37执行/74UP-TO-DATE，22s**，三项production native编译排除，复用最终normal native；fixture主Java与instrumentation Java/DEX/测试包重编译 |
+| lint | normal/fixture **0errors，3/4既有warnings** |
+| 三APK审计 | v2/同一单signer、隔离包名/精确fixture target；normal无peer；同一生产SSH库，22ALLOC节对应生成库，configJNI11/session19/material1/archive83，无测试wrapper |
+
+首轮JVM失败为新测试passphrase entry缺少匹配PRIVATE identity；修正测试关联，未放宽
+VaultManifest结构校验。自查与独立复核纠正Java多加的`ssh/`前缀限制，改用既有相对路径
+政策与严格UTF8/ISO检查；补边界回归。新增结果预算在解码前执行、zero-CONFIG最终期限、
+取消Error传播和清理Error重试测试。Native补齐absent request/nonzero length拒绝及回归。
+独立审查还发现新平台fixture的`Include child`不匹配`ssh/child`；改为`.ssh/child`，保留
+原Include锚点与原ordinal断言后重新编译。该fixture未安装/运行，不据编译推定JNI实测。
+
+新native矩阵实测reservation/load/usage/close/destroy、单份受保护存储指针、部分复制abort、
+取消attachment与busy重入、CSDI边界/模式、64槽、原Request、静态glob/动态deferred和实际
+剩余预算执行。JNI GetArrayRegion异常顺序为源码复核/编译和C abort seam验证，未在真实VM
+执行。JVM包含实际caller loan与仅CONFIG深复制、全部/孤立/零CONFIG roots、原始来源、
+累计预算精确/超额、reserve空窗与暂停load/run取消、重入/Throwable及失败owner保留重试。
+
+最终工件SHA256（均未安装）：
+
+- normal：`6d57ef36d1720904b2230a00bde42ea47820d8bb9e04af2d93275bbe8a66de94`
+- fixture：`b6dc530b150515049807ba9ed0ca4819d4cefa51618fae6585c8c9d972e72b6f`
+- test：`4fdd949749f5f45af38e7a97ba619625ede19bebe31eb0f3bc6e3de98da53f2b`
+- packaged SSH库：`426368dfc55a9a2b777045d05e69293b1cd50c9d926b89a653635517ca0c5acf`
+- generated未strip库：`da0655eafcd047fa18529115b206c186be8f721637235e32531e19446d53edad`
+
+共同单signer证书SHA256：`8d36c8be418174cb4cda0b897ff3e32b2da6f84032819726e8e5671872df52ef`。
+依旧使用前轮已核验四个既有缓存wheel与临时no-index/find-links Gradle init，生产依赖声明
+未改。本轮没有新依赖源站重试；--offline本身不代替Chaquopy pip显式离线选项。
+
+证据：`/tmp/ctos-ssh-detached-managed-20261023.oeRy2d9W`，含383文件before、首轮失败与最终
+源码、native二进制/输入hash/runtime、原始JVM XML/lint/构建log、三APK/签名/manifest/nm/
+archive/ALLOC审计、source15/protected303/artifacts hashes与独立报告。临时证据消失后不得
+冒充可复核。宿主8192KiB锁页限制与先前6MiB实测/8MiB格式故障清理的区分继续有效；
+本轮不声称Android锁页、JNI运行、Flutter或认证/PTY runtime，也无commit/archive/push/dist。
+
+<a id="20261023-detached-config"></a>
+## 2026-10-23 独立 native 配置输入
+
+范围：[独立输入合同](ssh-detached-config.md)。复用原SSH任务，仅本地未提交；无设备、
+真实库/账号、安装、Android/JNI实机、commit/archive/push/dist。新接口为C-only基础，
+Java/JNI整库编排、Include引用边/全分支政策、身份/凭据/证书/信任及完整provider、
+恢复/最终计划/connector与父AC继续开放。
+
+实现文件为四个native IO/evaluator文件、新专项C测试、Gradle与现有runner，共7个。
+独立输入拥有类型/路径/CONFIG正文副本，非CONFIG仅metadata；无虚构vault tuple或live
+view。原BOOTTIME期限、owner/cancel与失败构造CLOSING清理owner保留。自查补回旧的
+Request/port先于borrow校验、missing-private ENOENT/existing-private EACCES顺序，并加断言。
+
+接管时保存379文件baseline，旧TOTP mutation的/tmp证据已失，不声称重验旧hash。
+最终source7/protected272均核验一致；独立checker复核增量源码、测试与实际证据无遗留问题。
+
+| 检查 | 实际结果 |
+| --- | --- |
+| 首轮strict及旧配置构建 | 10tasks，6执行/4UP-TO-DATE，19s，通过 |
+| 专项首次dynamic/static构建 | 7tasks，3执行/4UP-TO-DATE，15s，通过；首次runtime失败见下文 |
+| 错误码修正后strict与配置矩阵构建 | 12tasks，8执行/4UP-TO-DATE，18s，通过 |
+| 最终专项ARM静态执行 | **1261checks，effects0，capabilities0，wiped_sources53，exit0** |
+| 旧真实ARM求值/目录/handle | **3736 / 71923 / 5201checks，均effects0/exit0**；首轮和最终源码各实跑 |
+| host文件/IO | **426cases，1634wipe_checks，通过**；最终IO源码重新编译执行 |
+| 最终normal全部重跑 | **94/94tasks执行，1m43s**，含新专项dynamic/static编译及完整JVM/lint/Release |
+| 最终fresh JVM | **483tests/28reports，0failures/errors/skips** |
+| normal lint | **0Error/Fatal，3既有warnings** |
+| fixture主包/test/lint | **111tasks，33执行/78UP-TO-DATE，17s**；复用最终native输入，0errors/4warnings |
+| APK审计 | 三v2/同一单signer/隔离包名与精确fixture target；normal无peer，生产库字节一致 |
+
+最终新测试覆盖独立输入及caller擦除/free、非默认与孤立root、原始ordinal、static/glob/
+deferred Include、实际Request/完整Options、type/path/count/body边界、精确now==deadline、
+cancel/错线程/PID/UID、parser重入/EBUSY、reader失败及构造/close清理重试。live capability
+helper均由独立计数拒绝探针覆盖且调用0次；不把这解释为整库引用语义或准入证明。
+
+### 失败轮与环境边界
+
+1. 专项首次runtime在测试madvise wrapper失败：把libc的MADV_DONTNEED当成受管区域。
+   修正为仅追踪DONTDUMP映射，其他libc advice/unlock/unmap直接转发；受管擦除/故障断言
+   保留，最终还检查所有追踪映射已释放。首次源码/二进制/log/core保留。
+2. 第二runtime在最大正文用例返回ENOMEM。宿主soft/hard RLIMIT_MEMLOCK均8192KiB；
+   独立qemu-strace确认mmap8405760与DONTDUMP成功、mlock8405760返回errno12并unmap。
+   最终9MiB须在锁页前E2BIG，exact8MiB以故障注入证明已通过格式校验并清理，实际
+   成功锁页/解析为6MiB输入加1MiB reader。没有模拟锁页成功；不宣称8MiB实际锁页通过。
+3. 最初normal92/92tasks、483JVM、lint/Release通过，随后做上述两处errno修正。
+   最终重跑的第一次及PIP环境变量重试分别在Chaquopy依赖阶段因源站TLS/超时失败
+   （6tasks/1m17s和9tasks/1m23s），不据此计最终应用通过。插件未采纳PIP环境变量。
+   从既有pip缓存原样复制四个wheel到被忽略的build目录，验证ZIP和SHA后，用临时
+   Gradle init显式pip `--no-index --find-links`；最终94task日志确认四包均从本地处理。
+   版本为cryptography42.0.8/cffi1.17.1/pycparser3.0/chaquopy-libffi3.3，不改生产依赖声明。
+4. fixture显式排除三native编译task，复用normal最终生成库；前后生成库hash一致。
+   fixture peer编译与lint analysis/report执行，未变的main/test Java编译、DEX和test打包复用；
+   这不是instrumentation运行。AGP strip后库与生成库全文件hash不同，22个ALLOC节
+   的类型/flags/地址/长度/内容逐一相同；normal/fixture包内库全字节相同。
+
+normal warnings为QueryPermissionsNeeded、AndroidGradlePluginVersion、DataExtractionRules；
+fixture为QueryPermissionsNeeded、两处UnsafeDynamicallyLoadedCode和DataExtractionRules。
+Shell `bash -n`、ShellCheck、shfmt及diff检查通过。
+原始源树/patch由固定runner校验，仍OpenSSH10.6p1/OpenSSL3.5.9/NDK27；archive83、
+configJNI8/sessionJNI19/materialJNI1，生产无test wrapper/seed，专项test二进制不进APK。
+
+### 工件与可复核入口
+
+| 工件 | SHA-256 |
+| --- | --- |
+| normal-final.apk | `1059397d833d91582c7ba99bc800f8a408b8dcbf208ca2d154aebb57a5e50432` |
+| fixture-final.apk | `3536ff7a56ef04c5307fd5f32de38407f2dfaf36dcaa153e0fa7e8d3d393e984` |
+| fixture-test.apk | `3c431f96129672930e9731dcf85a2d400726a8361be6e360d1ccf730e4e7404c` |
+| 共同包内libctos_ssh_files.so | `fd2ae50d1bb1562067683bd1b60bd6a6a6d63dbbf5743b187ca479261aee8b40` |
+| 未strip生成库 | `00fb79b566ebc2242f4629ac79937a60ddf1469db83b86fd531fa46b91e38244` |
+
+证据：`/tmp/ctos-ssh-detached-config-20261023.mUF8aSF0`。含before/first/second/final源与
+二进制、increment-source.diff、source-final/protected-final SHA、全部失败/最终日志、
+full-final-jvm原始XML、lint XML、APK、签名/manifest/symbols/archive审计。临时目录可能
+被清理；该历史记录不保证未来仍可重验。signer SHA256为
+`8d36c8be418174cb4cda0b897ff3e32b2da6f84032819726e8e5671872df52ef`。
+
+最终本地命令使用 `./hako bash -lc`，Gradle均带 `--offline --console=plain`：
+
+- native：`:app:testSshConfigDetachedStaticHost :app:testSshConfigDetachedHost`
+  及原EvaluatorStaticHost/CatalogStaticHost/HandleStaticHost；后者各执行独立qemu-aarch64。
+- 完整normal：`--init-script /app/build/ctos-detached-offline.init.gradle`
+  加上述两新专项及`:app:testReleaseUnitTest :app:lintRelease :app:assembleRelease --rerun-tasks`。
+- fixture：同init，`-PctosSecretsUiFixture=true -PctosSshAuthFixture=true`，
+  assembleSecretsFixtureRelease/assembleSecretsFixtureReleaseAndroidTest/lintSecretsFixtureRelease，
+  排除compileSshProductionObjects/compileSshConfigEvaluator/compileSshFiles。
+
+init、wheel来源/hash在证据offline.init.gradle和cached-wheels.json；原声明parser补丁未改。
+无Flutter改动/运行、认证PTY全矩阵或Android实机运行；新配置源尚无Java入口，完整语义
+provider和SSH恢复门继续关闭。单次同步libc/parser调用不保证可抢占，整个任务未完成。
+
+<a id="20261023-totp-mutation"></a>
+## 2026-10-23 TOTP 写入与原预览票据交接
+
+范围：[TOTP mutation合同](totp-mutation-lifecycle.md)。继续原SSH task，仅本地未提交；
+无设备/真实库账号/安装/Android运行/commit/archive/push/dist。生产SSH语义provider、
+恢复/最终连接计划/connector与父AC未完成。
+
+- 上轮trust8source/266protected/732artifacts核验一致；本轮保存615文件before基线。
+- 五个生产Java与两个测试文件：原origin、独立一次context、source/candidate/loan独占、
+  锁外校验与唯一effect claim；预览跨Request交接保留原期限，capture清理不撤销票据。
+- 独立审查修复64能力回收、摘除与发布的取消可见性、BUSY第二执行者误清理、迟到
+  prepare/旧epoch/其他core/旧revision替换、pin安全发布和Bridge传输异常清理。
+- 首轮编译失败17s：新测试局部变量重名，未运行测试。第二轮194/11reports有1失败：
+  旧取消测试在admission后替换validator，先触发新注册fence；改为admission前注册同一
+  callback，签发后只设置其取消目标，保留CANCELLED断言。第三轮195/11reports全通过。
+- 最终定向196/11reports/47s，新增类14方法；全量483/28reports，失败/错误/跳过均0。
+  mixed四操作×三暂停阶段×六失效共72场景；包含worker seed独占、loan/Throwable、
+  原期限、精确owner、并发BUSY、17child上限和发布不读Store。
+- normal全量重跑92/92任务、1m39s，lint0errors/3warnings；fixture114任务26s，
+  lint0errors/4warnings。instrumentation Java与lint analysis执行，lint report为UP-TO-DATE；
+  测试APK hash沿用相同产物，不宣称真实instrumentation运行。
+- 两次独立native构建的lib hash不同，保留artifact-initial；用fixture同一native输入
+  fixed正常包77任务9s再打包后，两包生产库一致，见下表。普通包无auth peer类/lib；
+  fixture含peer，test无native库。三APK v2签名通过，签名证书SHA256为
+  `8d36c8be418174cb4cda0b897ff3e32b2da6f84032819726e8e5671872df52ef`。
+  包名为im.majo.ctos、im.majo.ctos.secretsfixture、im.majo.ctos.secretsfixture.test，
+  instrumentation仅target fixture。
+- source-final7/protected-final268经独立复核一致；source review无未解决问题。
+
+| 工件 | SHA-256 |
+|---|---|
+| normal-final.apk | `2c1741874dd750e1d8e00c22d21760ba747fc1dbd7a651fcf71b5112b17f3898` |
+| fixture-final.apk | `234a4882e6fdb0ad0d623cadf315528434c315391f59e1f4b75dcaed9b0e6e80` |
+| fixture-test.apk | `3c431f96129672930e9731dcf85a2d400726a8361be6e360d1ccf730e4e7404c` |
+| 共同libctos_ssh_files.so | `14fc64749df192e13fa8c8e1b65eee04d739b38f4dfa5e184ce7b810c9f6c8f8` |
+
+证据：`/tmp/ctos-totp-mutation-20261022.envakycq`，保留每轮原始日志/XML、最终源码与
+基线diff。Bridge生产源码已审阅并编译，未运行真实Android相机/图片/Activity流程；
+原Store guard RuntimeException/Error failWrite限制保持，不承诺任意Throwable耐久回滚。
+旧sessionManifest/beginMutation/validateBusiness已无调用；这不代表其他管理密码/
+导出加密路径、完整语义provider与恢复全部迁移完成。
+
+
+<a id="20261022-ssh-trust-cas"></a>
+## 2026-10-22 SSH trust CAS 原审批与精确 view 延续
+
+范围：[trust CAS 合同](ssh-trust-cas-lifecycle.md)。沿用原task，本地未提交；无设备、
+真实库账号、Android/native运行、安装、commit/archive/push/dist。完整语义provider、
+恢复/最终计划/connector及父任务验收仍未完成。
+
+- 上一轮4source/269protected/684artifacts重新核验一致；本轮613文件before基线。
+- 六个生产Java与两个测试文件：原审批context、锁外独立source/candidate/loan、provider
+  取消与原view延续、提交后uncertain。新class10方法、既有provider新增4方法。
+- 首轮定向199/10reports有4失败：3个新测试误用第二个context，1个既有测试错误码需
+  反映原validator注册变化；修正fixture/预期后保留安全断言。另按源码审查补齐最终
+  session→role→view fence、proposal创建失败cleanup、uncertain suppressed诊断。
+- 最终定向202/10reports零失败/错误/跳过，54s；实际全量469/27reports零失败/错误/
+  跳过。normal92任务全部重跑，1m40s；lint0errors/3warnings，Release构建成功。
+- fixture114任务（36执行/78UP-TO-DATE），54s；lint0errors/4warnings。instrumentation
+  Java重编译，未变化的测试DEX/package与lint报告渲染UP-TO-DATE，未运行instrumentation。
+- 独立native重建初normal库与fixture不同，保留normal-first.apk；固定已编译输入重打包
+  normal77任务（18执行/59UP-TO-DATE），20s，最终生产SSH库字节一致。
+- 独立checker对最终源码/原始XML/log/ZIP/signature/hash复核通过，无遗留finding。
+- 三APK均v2验签、同一signer；normal=`im.majo.ctos`、fixture=`im.majo.ctos.secretsfixture`、
+  test=`im.majo.ctos.secretsfixture.test`且target仅fixture。normal无auth peer库/class，
+  fixture包含peer，test无SSH native库。最终源码8/protected266哈希一致。
+
+命令均通过`./hako bash -lc`在离线容器执行：定向`:app:testReleaseUnitTest --tests …`；
+全量`:app:testReleaseUnitTest :app:lintRelease :app:assembleRelease --offline --rerun-tasks`。
+fixture使用`-PctosSecretsUiFixture=true -PctosSshAuthFixture=true`及fixture assemble/test/lint；
+固定输入normal排除compileSshProductionObjects/compileSshConfigEvaluator/compileSshFiles。
+APK检查使用apksigner verify、aapt badging/xmltree及ZIP/DEX检查。
+
+| 最终工件 | SHA-256 |
+| --- | --- |
+| normal | `b6f6e80f5dc939dc941f857fbb13a93852b41d38e4382e789fc73fc610c439e9` |
+| fixture | `d573c78cd228356169532eb02b129ad2fc404db0f191177ac817df5f43c8f421` |
+| fixture test | `3c431f96129672930e9731dcf85a2d400726a8361be6e360d1ccf730e4e7404c` |
+| 共同production SSH库 | `51303ed8b5414df8a5760f1d185b2ef2c11e29ed34109b06e4cd1be6a676de51` |
+
+原始证据：`/tmp/ctos-ssh-trust-cas-20261022.3koy1mha`，含baseline/before、源码快照与
+增量diff、focused-first/final XML、full-jvm、日志及SHA清单。临时目录未来可能清理。
+
+测试验证真实合成加密清单、暂停validator下取消/lock/期限/前台/注册/原始存储变化、
+修改loan与Throwable清理、错误proposal/BUSY非消费、候选全数组独占、唯一effect claim、
+wrapper保留、原role/view own-CAS及落盘后失效锁库。未运行Android AtomicFile；其既有
+RuntimeException/Error的failWrite限制没有扩大。最终core延续是校验授权完成点；后续
+回执检查交付存活性，不追溯重新校验已完成提交。后续typed读取仍有独立授权边界。
+
+
+<a id="20261022-ssh-entry-mutation"></a>
+## 2026-10-22 — Detached SSH credential save/delete lifecycle
+
+Implemented the [entry mutation contract](ssh-entry-mutation-lifecycle.md), scoped to SSH_SAVE/
+SSH_DELETE and adapter admission. Original metadata context precedes host approval and retains
+owner/epoch/deadline/registration/cancellation; exact save id/target/connection or delete id/target
+remain bound. Save admission does not approve future label/type/secret bytes supplied only at effect.
+Actual source authentication, independent source/candidate validator loans, fully owned candidate
+construction and encrypt/readback run outside core. First/last SSH candidates always validate.
+Accepted effects consume once; wrong bindings and valid BUSY do not consume. Caller input is
+cloned before slow host checks; candidate and borrowed loans never own caller/source arrays.
+
+Final core still serializes the storage transaction. Wrapper capture and raw ciphertext equality
+precede Store.commit; its guards check only original context/host/metadata, never reopen AtomicFile.
+Only the original effect.beforeCommit claims the write, exactly once; context guard merely checks/
+publishes admission. Success retains envelope id/generation/salt and wrapper, clears old operations/
+preview and uses unlockIfEpoch. Confirmed post-persistence lock cannot resurrect a session.
+VAULT_COMMIT_UNCERTAIN retains locking/invalidation; an already claimed commit is not safe to retry.
+TOTP mutation, trust CAS/own-NEW-CAS, bundle/read paths and VaultStore implementation were not migrated.
+
+Evidence:`/tmp/ctos-ssh-mutation-20261022.3u9ri93v`. Previous secret8source/264protected/707artifacts
+were rehashed successfully;611files captured before work. Final4source and269protected Android/
+Dart/test hashes match, with before/first-source/final-source and increment-only diff retained.
+
+| Local check | Actual result |
+| --- | --- |
+| Focused JVM | **152tests/8reports,0failures/errors/skips**;46tasks,11executed/35up-to-date,45s |
+| Fresh full JVM/lint/Release | **455tests/26reports,0failures/errors/skips**;92tasks,all executed,3m6s |
+| Normal lint | 0Error/Fatal,3existing warnings: QueryPermissionsNeeded, AndroidGradlePluginVersion, DataExtractionRules |
+| Isolated fixture main/test/lint | **114tasks,36executed/78up-to-date,30s**,pass;0Error/Fatal,4warnings |
+| Fixed-input normal packaging | 77tasks,18executed/59up-to-date,19s,pass |
+| APK audit | Three v2 signatures/same signer,isolated IDs/fixture target;normal excludes peer;production SSH library identical |
+
+New SshEntryMutationValidationTest has11executed methods: paused admission/source/candidate
+invalidation, source/loan mutation and checked/runtime/Error cleanup, candidate ownership both
+close orders, first/last SSH, unchanged files/TOTP/wrapper/envelope identity, pre-host original
+budget, input mutation during host check, wrong/BUSY/reentry/replay, final read/wrapper/preclaim
+seams, exactly one effect claim, post-persistence lock, IO/uncertain and issuance-hook failure.
+Existing typed/public/known_hosts own-CAS/bundle/TOTP/preview regressions passed. No failed run
+or test weakening was required. Independent review aligned input-clone wipe before releasing
+the mutation slot; outer cleanup remains idempotent for capture/argument failures.
+
+MemoryStore forbids transaction read/quickMaterial reentry and models early rollback/uncertain
+outcomes. It does not prove Android AtomicFile durability. Inherited VaultStore catches IO and
+VaultException for failWrite, not RuntimeException/Error from a post-startWrite guard; that
+unchanged limitation must not be confused with this increment's owned-array Throwable cleanup.
+No native/Flutter runtime, Android/device/real vault/account, commit/archive/push/dist or complete
+SSH semantic/restore claim. Task remains in_progress/parent implementation_complete=false;
+next independent increment is trust CAS with exact approval and original public-view continuation.
+
+| Final APK, not installed | SHA256 |
+| --- | --- |
+| Normal | `77340ea74c1eb72474ae3d1b218111e8d53c4e2da27e621d4d54f89745b5054b` |
+| Fixture | `7fcc885cc7c17a4b7032a0b2884c384950b140e00d53dfde5c9bde7b1b7570a6` |
+| Fixture test | `3c431f96129672930e9731dcf85a2d400726a8361be6e360d1ccf730e4e7404c` |
+
+Production library:`2c274c3318f7ded14016ff56f377de75c6ee8be51c12ba610916006fb1a6b8ff`.
+Signer:`8d36c8be418174cb4cda0b897ff3e32b2da6f84032819726e8e5671872df52ef`.
+IDs:im.majo.ctos / im.majo.ctos.secretsfixture / im.majo.ctos.secretsfixture.test;
+instrumentation targets only fixture. Initial normal4e656b89… retained: independently rebuilt
+native library differed, then normal reused already-built fixture production input via the
+existing three native-task exclusions. Fresh full JVM/lint/build remain separate evidence.
+Fixture instrumentation Java recompiled; unchanged test DEX/packaging and lint report rendering
+were up-to-date. No instrumentation method ran. The source, raw reports, logs, ZIP/DEX/library,
+signature/manifest and input-hash audits are recorded in the evidence directory.
+
+Final independent review approved this scope with no outstanding finding. Documentation audit:
+14changed Markdown files/398local links/no missing targets,14rows per context manifest;
+source4/protected269 hashes and `git diff --check` pass.
+
+<a id="20261022-ssh-secret-read"></a>
+## 2026-10-22 — Original-context typed SSH secret reads and guarded managed copy
+
+Implemented the [secret-read contract](ssh-secret-read-lifecycle.md) in the existing SSH
+client task. Credential/private-key/private-key-bundle admission and accepted effects now
+capture actual source under short locks, then authenticate/decode/validate independent canonical
+loans and prepare bytes outside core. Original epoch/deadline/registration/cancellation and
+exact typed resources remain bound through one-shot effects. Selected production admission now
+receives its original host/KEX/selection/callback guard before validation; role budgets never renew.
+
+Final trusted bounded managed copy retains original publish fences and orders callback state,
+request, publication, session, operation, role and actual public view. No core/native/reentrant
+receiver work is allowed there. Worker-owned buffers are wiped outside final fences. Completed
+copies cannot be retracted; later adapter/JNI/native validity checks remain required. Provider
+owned-clone cleanup on late rejection is source-audited; tests observe rejection and borrowed
+buffer wiping, not retained provider clone bytes. No production semantic hook/restore opening.
+
+Supporting fixes align role-bound public snapshot's inner role fence, preserve immediate public
+native-lease cancellation after bind, and serialize all five operation capacity-check/insert
+sites. Bundle registration uses publication before session. Ordinary mutations/trust CAS and
+remaining semantic/restore/connector work are not claimed migrated.
+
+Evidence: `/tmp/ctos-ssh-secret-read-20261022.umpy0yd0`. Previous public-read7source/56protected/
+186artifact hashes were rechecked;609 project files saved before this increment. Final8changed
+Java/test hashes and264 protected Android/Dart/test inputs match. `increment-source.diff` and
+before/first-source/final-source snapshots separate this work from existing uncommitted changes.
+
+| Final local check | Actual result |
+| --- | --- |
+| Focused JVM | **196 tests/10 reports,0 failures/errors/skips**;46 tasks,11 executed/35 up-to-date,1m41s |
+| Fresh full JVM/lint/Release | **444 tests/25 reports,0 failures/errors/skips**;92 tasks,all executed,2m35s |
+| Normal lint | 0 Error/Fatal,3 existing warnings: QueryPermissionsNeeded, AndroidGradlePluginVersion, DataExtractionRules |
+| Isolated fixture main/test/lint | **114 tasks,36 executed/78 up-to-date,1m2s**, pass;0 Error/Fatal,4 warnings |
+| Fixed-input normal packaging | 77 tasks,18 executed/59 up-to-date,19s,pass |
+| APK audit | Three v2 signatures/one matching signer; distinct IDs/exact fixture target; normal excludes peer class/library; identical production SSH library in normal/fixture |
+
+New `SshSecretReadValidationTest` has **13 executed test methods** (corrected from an earlier
+worker estimate of15), including paused invalidation matrices for all three typed paths,
+independent-loan mutation/Throwable cleanup, wrong bindings/BUSY/replay, original budgets,
+store/publication seams, exact final receiver fences and six concurrent revocation cases,
+public role topology, deterministic shared63→64 capacity race and bundle lock ordering.
+Existing public/known_hosts own-CAS, selected callback/Bridge, TOTP, bundle, preview and vault
+regressions passed. Actual receiver must be bounded; test-only pauses establish fence ordering.
+
+First focused run:195tests/10reports,1failure,0errors/skips. The new public whole-operation
+monitor blocked cancellation after native attach, caught by existing
+`cancellationAfterOperationAndSessionBindRevokesWithoutWaitingForFinalClaim`. Fixed by keeping
+only short attachRevocation before the inner role fence; original test unchanged and final pass.
+Independent source review also found role→publication inversion and the shared capacity race;
+the initial capacity fix exposed bundle session→publication inversion, corrected before final run.
+
+| Final APK, not installed | SHA256 |
+| --- | --- |
+| Normal | `585565fe0be8a05528bffbb38b94c2d8c8b559f07900752368de25a22a1acc50` |
+| Fixture | `49b2c017c4ec7a0ef56204504f05444c6829d20094ccd52c9b086a8ed47d1323` |
+| Fixture test | `3c431f96129672930e9731dcf85a2d400726a8361be6e360d1ccf730e4e7404c` |
+
+Production library SHA256:`6f13ac814bd0c8af02597f922448729e44fd98a682c530f7d95e2301aa7e331e`.
+Signer:`8d36c8be418174cb4cda0b897ff3e32b2da6f84032819726e8e5671872df52ef`.
+Package IDs:im.majo.ctos / im.majo.ctos.secretsfixture / im.majo.ctos.secretsfixture.test;
+instrumentation targets only the fixture. Initial normal83721611… remains as normal-first.apk;
+independent native rebuilds differed in bytes, then normal packaging reused the compiled fixture
+production inputs via the existing three native-task exclusions. Fresh full tests/lint/build
+remain separate evidence. No native source changed or native runtime executed this round.
+
+Fixture instrumentation Java compilation executed; unchanged test DEX/packaging and lint report
+rendering were up-to-date. No instrumentation method ran. No Flutter runtime, Android AtomicFile/
+JNI/view lifecycle, device, real vault/account, commit/archive/push/dist or production restore
+claim. Original task remains in_progress/parent implementation_complete=false. Next migrate
+ordinary mutations/trust CAS, then complete detached semantic obligations and final connector.
+
+Final independent review approved the scoped increment after checking actual source, raw XML,
+build/lint logs, ZIP CRC/library/DEX contents, signatures/manifests and hashes. No outstanding
+code finding. Documentation audit:15 changed Markdown files/398 local links/no missing targets;
+13 rows in each context manifest. `git diff --check` passed.
+
+<a id="20261022-ssh-public-read"></a>
+## 2026-10-22 — SSH public read lifecycle and exact native attachment
+
+Continued the original in-progress SSH client task under the frozen
+[public-read contract](ssh-public-read-lifecycle.md). Only SSH_FILES admission, synchronous
+public closure loans, native lease preparation/final attachment and the role-bound known_hosts
+snapshot consumer migrated. Original metadata-only context binds epoch/deadline/guard/immutable
+validator registration before work. Actual authenticated source and independent canonical loan
+validation/closure run outside core/phase/publication/session. Accepted effects consume once;
+wrong owner/purpose/root/connection and valid BUSY do not consume. Private bodies remain excluded.
+
+Synchronous public receivers run outside all locks after a once metadata claim, then recheck
+before return. Cancellation cannot retract already observed/copied public bytes; the original
+worker wipes borrowed bodies after the receiver finishes, never concurrently from cancel.
+This does not grant later role/trust/secret authority or change code/private-key disclosure.
+Native views use a separate opaque preparation, lock-out create and final exact attachment;
+they cannot be published by a generic receiver. The final raw store read precedes the released
+core→original phase/publication/session claim, whose revision check rejects an intervening commit.
+Attach operation first, same session epoch second; postcheck/cancel/lock races cannot return an
+active unreturned local view. Rejected helper arguments retain caller ownership; production
+outer cleanup owns any still-local provisional lease. Existing active views are not replaced.
+
+Existing-role snapshotFor retains its exact role/view and role.deadline. No permanent old-epoch/
+registration lease revoker was added. The original operation/context still cancels the exact
+published loan after approved own-NEW-CAS advances epoch; no deadline/key renewal or trust
+shortcut. Credential/private-key/mutations/trust CAS and remaining sessionManifest callers
+stay separate. No production semantic provider/reviewer or SSH restore opening.
+
+Evidence: `/tmp/ctos-ssh-public-read-20261022.mjbo7874`.
+
+### Final local gates
+
+| Check | Actual result |
+| --- | --- |
+| Final focused JVM | **178 tests/11 reports,0 failures/errors/skips**;46 tasks/10 executed/36 up-to-date/1m1s (`focused-final.log`, `focused-final-jvm/`) |
+| Full normal JVM/lint/Release | **431 fresh tests/24 reports,0 failures/errors/skips**;92 tasks/all executed/2m50s (`normal-final.log`, `full-jvm/`) |
+| Normal lint | 0 errors/fatal,3 existing warnings: QueryPermissionsNeeded, AndroidGradlePluginVersion, DataExtractionRules (`lint-normal.xml`) |
+| Isolated fixture main/test/lint | **114 tasks/35 executed/79 up-to-date/59s**, pass;0 errors/fatal,4 warnings (`fixture-final.log`, `lint-fixture.xml`) |
+| Fixed-input normal packaging | 77 tasks/18 executed/59 up-to-date/19s, pass (`normal-fixed-package.log`) |
+| Final APK audit | Three v2/one matching signer; distinct normal/fixture/test IDs and exact fixture target; normal excludes peer class/library, production SSH library byte-identical in both packages (`apk-audit.log`, `signature-audit.json`, `artifact-audit.json`) |
+| Frozen inputs | Seven source-final and56 protected hashes match; before/final-source and increment-only diff retained |
+
+| Final frozen APK, not installed | SHA256 |
+| --- | --- |
+| Normal | `db7f7806848d6fce5b17c2fa12bd475377c2faf237d84e594c398ceea55c56b8` |
+| Fixture main | `dcffe982815b988d7b05e4d1fbbff88d326dee840138d24f6d5aae4af0304b8e` |
+| Fixture test | `3c431f96129672930e9731dcf85a2d400726a8361be6e360d1ccf730e4e7404c` |
+
+Signer SHA256 is `8d36c8be418174cb4cda0b897ff3e32b2da6f84032819726e8e5671872df52ef`.
+Final production SSH library SHA256 is `bd8ab19905906d55ea4fa93a86edc4b353fbb997b1f8b1fef32ef8e4c316db02`.
+IDs are im.majo.ctos, im.majo.ctos.secretsfixture and im.majo.ctos.secretsfixture.test;
+instrumentation targets only im.majo.ctos.secretsfixture. Initial final-source normal403b472a…
+is retained as normal-first.apk: independent forced native rebuilds produced different normal/
+fixture library bytes (`artifact-initial.json`). Fixed-input normal packaging reused the already
+compiled fixture production library and established equality. It does not replace the fresh
+normal tests/lint/build or establish native runtime behavior. Fixture lint analysis executed;
+unchanged report rendering and final instrumentation Java/DEX/packaging were up-to-date.
+The earlier before-capture-fence fixture had compiled instrumentation Java; final source change
+kept its API unchanged. Fixture warnings: QueryPermissionsNeeded, two UnsafeDynamicallyLoadedCode,
+DataExtractionRules. No instrumentation method executed.
+
+Final independent source/spec/XML/log/ZIP/signature/manifest/hash review passed with no
+remaining concrete finding. Final documentation audit:22 Markdown/509 local links/none missing;12rows per context,source7/protected56 and186evidence hashes pass.
+
+### Review fixes and earlier evidence
+
+First focused172/11reports had1failure,0errors/skips (46tasks11executed35up-to-date/1m42s).
+The new role invalidation matrix reused the setup's live owner/hop/nonce and correctly triggered
+SSH_ROLE_REPLAY before its intended assertions. Use independent binding identities, retaining
+all invalidation cases. Second focused178/11reports passed in1m30s; a subsequent178 run after
+the first session-fence tightening passed in1m38s. That version also passed full431/24reports,
+normal92all-rerun2m42s and fixture114/57s; these are explicitly retained under
+before-capture-fence names, not used as final-source build evidence.
+
+Independent review fixed rejected helper parameters revoking caller-owned views, including
+replay/foreign/closed/identical existing-view cases. Accept only a genuinely caller-owned local
+lease, reserve a single attach attempt and keep nested/replayed attempts from cancelling the
+first owner. Cleanup preserves the original Throwable and records suppressed failures. Tests
+assert accepted failures already made the lease inactive before caller cleanup; pre-ownership
+rejections alone leave cleanup with the caller. Final claim releases core before origin hooks,
+with direct beforePublish revision-gap coverage for synchronous and native delivery.
+
+Foreground plus each potentially lazy session getter must share a session fence. Default
+context epoch, pre-ownership attachedRevocation and capture metadata/key cloning were tightened;
+external role guards remain outside the capture session lock. The last capture fix received a
+fresh final178 focused pass and a full build rerun. Existing VaultSession.lock still revokes
+synchronously under session; only this increment's owned work/loan/failed-local-lease cleanup
+is moved outside locks. No claim of preempting a parser, native call or inherited session revoke.
+
+New SshPublicReadValidationTest has19 methods with paused admission/effect invalidation matrices,
+loan mutation/closure/checked/runtime/Error wiping, context/original budgets, BUSY/reentry,
+wrong bindings/replay/private exclusion, raw-store/publication seams, all-lock-out receivers,
+post-claim cancellation, opaque native attachment ownership/cancel/lock. Cleanup-failure suppression is source-reviewed,
+not separately fault-injected.
+Two new managed-provider methods check role deadlines/view/close; existing own-CAS regression
+now publishes its original loan through the new opaque helper and cancels through origin context.
+JVM native attachment uses a fake Revocation; native create/destroy itself was not executed.
+
+```sh
+./hako bash -lc 'cd android && ./gradlew :app:testReleaseUnitTest --tests im.majo.ctos.SshPublicReadValidationTest --tests im.majo.ctos.SshManagedKnownHostsProviderTest --tests im.majo.ctos.VaultTest --tests im.majo.ctos.VaultSessionTest --tests im.majo.ctos.VaultOperationTest --tests im.majo.ctos.SshPublicFileLeaseTest --tests im.majo.ctos.TotpReadValidationTest --tests im.majo.ctos.TotpTest --tests im.majo.ctos.SshBundleValidationTest --tests im.majo.ctos.SshPreviewValidationTest --tests im.majo.ctos.SshRestoreTest --offline --console=plain'
+./hako bash -lc 'cd android && ./gradlew :app:testReleaseUnitTest :app:lintRelease :app:assembleRelease --offline --rerun-tasks --console=plain'
+./hako bash -lc 'cd android && ./gradlew -PctosSecretsUiFixture=true -PctosSshAuthFixture=true :app:assembleSecretsFixtureRelease :app:assembleSecretsFixtureReleaseAndroidTest :app:lintSecretsFixtureRelease --offline --console=plain'
+./hako bash -lc 'cd android && ./gradlew :app:assembleRelease -x :app:compileSshProductionObjects -x :app:compileSshConfigEvaluator -x :app:compileSshFiles --offline --console=plain'
+```
+
+Actual Android Bridge/AtomicFile/native view lifecycle and concurrent JNI create/destroy were
+not run. No native/Flutter runtime rerun, device/real vault/account/clipboard/install/commit/
+archive/push/dist. Production semantic/restore, other secret reads/mutations/trust, complete
+plans/connector and full client AC remain open. The new7-source/final snapshots and56-protected
+hashes supersede previous turn baselines for current verification; prior TOTP7/55/93 evidence
+was successfully rehashed at this increment's start.
+
+<a id="20261022-totp-read-validation"></a>
+## 2026-10-22 — TOTP typed reads and final code disclosure
+
+Continued the original in-progress SSH client task under the frozen
+[TOTP read contract](totp-read-lifecycle.md). TOTP_CODE/TOTP_LIST now capture their original
+metadata-only context before Bridge queueing. Read admission/effect authenticate an owned
+snapshot, validate mixed content through an independent canonical loan, and generate outside
+core/phase/publication/session locks. Only mixed sources bind the original validator registration;
+pure TOTP works without a provider and through provider churn. Accepted matching effects consume
+once before detached work. Opaque AppSecrets.TotpReadState attached to the exact VaultOperation
+binds original context, revision and completed generation window; free scalar reconstruction is
+not a read receipt. TOTP_SAVE management previews and other SSH typed/mutation/trust paths retain
+their separate contracts. No production semantic provider/reviewer or SSH restore opening added.
+
+Evidence: `/tmp/ctos-totp-read-20261022.CbgSljcf`.
+
+| Check | Actual result |
+| --- | --- |
+| First focused JVM | 137 tests/8 reports,0 failures/errors/skips;46 tasks/11 executed/35 up-to-date/58s (`focused-first.log`, `focused-first-jvm/`) |
+| Final focused JVM | **140 tests/8 reports,0 failures/errors/skips**;46 tasks/8 executed/38 up-to-date/57s (`focused-final.log`, `focused-final-jvm/`) |
+| Full normal JVM/lint/Release | **410 fresh tests/23 reports,0 failures/errors/skips**;92 tasks/all executed/2m16s (`normal-final.log`, `full-jvm/`) |
+| Normal lint | 0 errors/fatal,3 existing warnings: QueryPermissionsNeeded, AndroidGradlePluginVersion, DataExtractionRules (`lint-normal.xml`) |
+| Isolated fixture main/test/lint | **114 tasks/36 executed/78 up-to-date/40s**, pass;0 lint errors/fatal,4 warnings (`fixture-final.log`, `lint-fixture.xml`) |
+| Fixed-input normal packaging | 77 tasks/18 executed/59 up-to-date/11s, pass (`normal-fixed-package.log`) |
+| Final APK audit | Three v2 APKs/one matching signer; distinct normal/fixture/test IDs and exact fixture target; normal has only production SSH library and no peer class; normal/fixture production SSH library byte-identical (`apk-audit.log`, `artifact-audit.json`) |
+| Frozen inputs | Seven changed source/test hashes and55 protected hashes match (`source-final.json`, `protected-before.json`); turn-start/final snapshots and increment-only diff retained |
+
+```sh
+./hako bash -lc 'cd android && ./gradlew :app:testReleaseUnitTest --tests im.majo.ctos.TotpReadValidationTest --tests im.majo.ctos.TotpTest --tests im.majo.ctos.VaultTest --tests im.majo.ctos.VaultSessionTest --tests im.majo.ctos.VaultOperationTest --tests im.majo.ctos.SshBundleValidationTest --tests im.majo.ctos.SshPreviewValidationTest --tests im.majo.ctos.SshRestoreTest --offline --console=plain'
+./hako bash -lc 'cd android && ./gradlew :app:testReleaseUnitTest :app:lintRelease :app:assembleRelease --offline --rerun-tasks --console=plain'
+./hako bash -lc 'cd android && ./gradlew -PctosSecretsUiFixture=true -PctosSshAuthFixture=true :app:assembleSecretsFixtureRelease :app:assembleSecretsFixtureReleaseAndroidTest :app:lintSecretsFixtureRelease --offline --console=plain'
+./hako bash -lc 'cd android && ./gradlew :app:assembleRelease -x :app:compileSshProductionObjects -x :app:compileSshConfigEvaluator -x :app:compileSshFiles --offline --console=plain'
+```
+
+| Final frozen APK, not installed | SHA256 |
+| --- | --- |
+| Normal | `41ce54cc97838c8f652cf50ddd2da9ecec30c6056089f6bc3a758b7c0ff41047` |
+| Fixture main | `96bb6c86bab742f772244468e9e21aa645fa9a27583eb8c2aede92cdd0267bcd` |
+| Fixture test | `3c431f96129672930e9731dcf85a2d400726a8361be6e360d1ccf730e4e7404c` |
+
+Signer SHA256 is `8d36c8be418174cb4cda0b897ff3e32b2da6f84032819726e8e5671872df52ef`.
+IDs are im.majo.ctos, im.majo.ctos.secretsfixture and im.majo.ctos.secretsfixture.test;
+instrumentation targets only im.majo.ctos.secretsfixture. Final packaged production SSH library
+SHA256 is `bad6962642f721e84786ccbdfca43f305fb0dacae5498baa7f5834a33668ca17` in both packages.
+Initial normal `7ce2fb73…` is retained as normal-first.apk: independent forced native rebuilds
+produced different library bytes (`artifact-initial.json`). Reusing the already compiled fixed
+native inputs for normal packaging established byte equality. This packaging-only step does
+not replace the fresh full normal build/tests/lint or establish native runtime behavior.
+Fixture instrumentation Java compiled; unchanged test DEX/packaging and lint report rendering
+were up-to-date. Fixture lint analysis ran; warnings are QueryPermissionsNeeded, two
+UnsafeDynamicallyLoadedCode and DataExtractionRules. No instrumentation tests were executed.
+
+### Scoped review, tests and limits
+
+TotpReadValidationTest adds19 test methods, including paused mixed validators across list/code
+admission/effect invalidations, pure-provider independence, retained loan/key/ciphertext wiping,
+loan mutation/exception/Error, BUSY/reentry, wrong-owner/purpose/resource and once-use replay.
+Additional final assertions cover the second raw store-read mismatch, a publication hook that
+calls completion and then throws, and metadata changes made by the final time supplier.
+Final receipt tests cover reservation, actual-effect invalidation, current 30-second boundaries
+and clock changes. Existing TOTP_SAVE, bundle/preview/restore/session/operation regressions pass.
+No application test failures occurred in either focused run. Independent source/spec review
+clarified the opaque state owner and the temporary comparison-buffer cleanup boundary; owned
+work/Verified/loan cleanup is outside locks, but final raw ciphertext comparison buffers are
+wiped under core before the phase fence.
+
+Issuance/completion/reservation use phase→publicationLock→session, foreground-first. Actual
+list Result.success (which contains codes) or clipboard write retains the existing
+publicationLock→session fence after releasing phase. It rechecks the receipt, original
+permission/deadline/epoch/revision/registration and a fresh generation window, including metadata
+after the clock supplier. copied:true and cleanup run outside locks. This preserves actual-code
+disclosure ordering with session.lock; the preview summary's after-claim delivery policy is not
+applied to codes. No store/parser/generation/core/phase is held during the actual external effect.
+
+The list transport remains a bounded, transport-only, nonreentrant exception inside pub/session.
+An arbitrary Result that reenters core can still form a lock cycle with core→publication;
+this increment does not solve that inherited restriction. Clipboard Binder/transport can delay
+session.lock or context.cancel until returning; phase.cancel remains free. Validator pauses are
+cancellable, but individual parser/crypto/Binder calls are not preempted. Core Throwable cleanup
+is tested; inherited Bridge execute catches Exception rather than Error, so immediate UI
+completion after a worker Error is not newly guaranteed and may await the original timeout.
+
+Final independent source/spec/XML/log/ZIP/signature/manifest/hash review passed with no
+remaining scoped finding. Documentation audit passed:21 Markdown files/478 local links/none
+missing, both focused task contexts13 valid rows. Final93-file evidence manifest verified;
+git diff --check passed.
+
+Actual Android Bridge routing/lifecycle, Binder/clipboard, AtomicFile and mixed-vault runtime
+were not executed. No native or Flutter runtime rerun, no device/real vault/account access,
+no install/commit/archive/push/dist. Seven Java/test inputs changed;55 protected native/config/
+VaultSession/SSH consumer/preview/clipboard/Dart inputs stayed unchanged. Other SSH typed reads,
+ordinary mutations/trust CAS, full detached CONFIG/identity/credential/trust semantics,
+production restore, final plans/connector and complete client AC remain open.
+
+<a id="20261022-bundle-validation"></a>
+## 2026-10-22 — Outside-core SSH bundle admission and effect
+
+Continued the original in-progress SSH client task under the frozen
+[bundle lifecycle contract](ssh-bundle-lifecycle.md). Original native BundleContext is created
+before approval/queueing and binds owner, epoch, deadline, guard and immutable validator
+registration. A once-used operation inherits that context and exact proposal identity.
+Bundle source/candidate validators borrow independent canonical loans outside core; candidate
+owns all entry/file arrays. Accepted effect capture consumes before detached work. Final
+serialized storage retains wrapper, nonce/material/epoch, approval, claim and uncertainty rules.
+No production semantic validator/reviewer registration or SSH restore opening was added.
+
+Evidence: `/tmp/ctos-ssh-bundle-20261022.S0t9zPRZ`.
+
+| Check | Actual result |
+| --- | --- |
+| First focused JVM | 80 tests/6 reports,3 failures/0 errors/0 skips;46 tasks/57s (`focused-first.log`, `focused-first-jvm/`) |
+| Second focused JVM, before final review additions | 80 tests/6 reports,0 failures/errors/skips;46 tasks/1m22s (`focused-second.log`, `focused-second-jvm/`) |
+| Final focused JVM | **81 tests/6 reports,0 failures/errors/skips**;46 tasks/11 executed/35 up-to-date/1m8s (`focused-final.log`, `focused-final-jvm/`) |
+| Full normal JVM/lint/Release | **391 fresh tests/22 reports,0 failures/errors/skips**;92 tasks/all executed/3m33s (`normal-final.log`, `full-jvm/`) |
+| Normal lint | 0 errors/fatal,3 warnings (`lint-normal.xml`) |
+| Isolated fixture main/test/lint | **114 tasks/36 executed/78 up-to-date/50s**, pass;0 lint errors/fatal,4 warnings (`fixture-final.log`, `lint-fixture.xml`) |
+| Fixed-input normal packaging | 77 tasks/18 executed/59 up-to-date/22s, pass (`normal-fixed-package.log`) |
+| Final APK audit | Three v2 APKs/one matching signer; distinct normal/fixture/test IDs and exact fixture target; normal has only production SSH library and no peer class; normal/fixture production SSH library byte-identical (`apk-audit.log`, `artifact-audit.json`) |
+| Frozen inputs | Six changed source/test hashes and52 protected source hashes match (`source-final.json`, `protected-before.json`); turn-start snapshots and increment-only source diff retained |
+
+```sh
+./hako bash -lc 'cd android && ./gradlew :app:testReleaseUnitTest --tests im.majo.ctos.SshBundleValidationTest --tests im.majo.ctos.SshBundleTest --tests im.majo.ctos.SshPreviewValidationTest --tests im.majo.ctos.SshRestoreTest --tests im.majo.ctos.VaultOperationTest --tests im.majo.ctos.VaultSessionTest --offline --console=plain'
+./hako bash -lc 'cd android && ./gradlew :app:testReleaseUnitTest :app:lintRelease :app:assembleRelease --offline --rerun-tasks --console=plain'
+./hako bash -lc 'cd android && ./gradlew -PctosSecretsUiFixture=true -PctosSshAuthFixture=true :app:assembleSecretsFixtureRelease :app:assembleSecretsFixtureReleaseAndroidTest :app:lintSecretsFixtureRelease --offline --console=plain'
+./hako bash -lc 'cd android && ./gradlew :app:assembleRelease -x :app:compileSshProductionObjects -x :app:compileSshConfigEvaluator -x :app:compileSshFiles --offline --console=plain'
+```
+
+| Final frozen APK, not installed | SHA256 |
+| --- | --- |
+| Normal | `633499a5a4cacfe8885cfc0d3782d0ee0bf04163e5927c7c362f3ea0a859c326` |
+| Fixture main | `3d25f1af16d5b63fbb1efc22770b4f3d2d441241bbfa03ed4d4f3aeb7b812018` |
+| Fixture test | `3c431f96129672930e9731dcf85a2d400726a8361be6e360d1ccf730e4e7404c` |
+
+Signer SHA256 is `8d36c8be418174cb4cda0b897ff3e32b2da6f84032819726e8e5671872df52ef`.
+Final packaged production SSH library SHA256 is
+`be90ca98a7f5b745a3304877f6a6d874a42fef2b3d5820f8f7e6f9bd48b87e7e` in both packages.
+Initial normal APK `21438a5d…` is retained as `normal-first.apk`: independently forced native
+rebuilds yielded different normal/fixture library bytes and the first equality assertion failed.
+After reusing the already compiled fixed native inputs for normal packaging, equality and
+signatures were rechecked and passed. Native sources and all frozen Java inputs stayed unchanged.
+The packaging-only command excludes those three compile tasks; it does not replace the earlier
+fresh full normal build/tests/lint or claim a new native runtime pass.
+
+### Review fixes and limits
+
+The first run exposed replay error-priority drift (two failures): the adapter checked stale
+context before an already-consumed operation could reject as VAULT_OPERATION. Skip that stale
+precheck for consumed operations; accepted capture still enforces exact identity/once-use/BUSY.
+The third failure was a recovery fixture counter carried across independent transactions;
+reset it while retaining exact source/candidate file-count assertions.
+
+Independent review found an important production-store incompatibility in the first draft:
+rechecking ciphertext from inside Store.beforeCommit would recursively call AtomicFile.openRead
+during an active write. [AOSP AtomicFile](https://android.googlesource.com/platform/frameworks/base/+/master/core/java/android/util/AtomicFile.java)
+can discard the pending write in this situation. Final snapshot/quick reads now occur BEFORE
+Store.commit; its guards check only metadata and approval, including after caller.beforeCommit.
+The MemoryStore regression explicitly rejects reads while commit is active. Envelope encoding
+also moved before final core serialization. This is source-backed prevention and a JVM boundary
+test, **not actual Android AtomicFile persistence execution**.
+
+Post-publication approval/context/proposal recheck runs outside phase/session, with exact
+provisional-operation removal/cancellation on Throwable. A regression withdraws approval from
+the origin publication callback, verifies no approval under the tiny locks and no orphan capability.
+Final review has no remaining concrete scoped source finding. Twelve new lifecycle test methods
+cover source/candidate admission/effect paused invalidations, original approval deadline/cancel,
+cross-core/reuse, registration/final-read/quick/beforeCommit changes, loan mutation/wiping,
+checked/runtime/Error cleanup, effect IO/replay, independent close orders and BUSY/reentry.
+Existing16 bundle tests preserve last-SSH deletion, exact approval, unrelated credentials/wrapper
+and after-claim cancellation/lock behavior. Arbitrary synchronous providers are not preemptible.
+
+Fixture instrumentation Java recompiled; unchanged test DEX/packaging stayed up-to-date, hence
+the unchanged test APK hash. Fixture lint analysis ran while unchanged report rendering was
+up-to-date; normal reports are fresh. Compilation is not Android execution. No native/Flutter
+source change or runtime, device/real vault/account action, commit/archive/push or dist publication.
+Other typed/sessionManifest/trust lifecycles, detached CONFIG/identity/credential/trust semantics,
+production restore, final plans/connector and full-client AC remain open. Parent stays in_progress.
+
+Final documentation check covers18 Markdown files/441 local targets with none missing;
+implement/check context manifests each contain24 valid rows. Independent checker verified
+all frozen source/protected hashes and raw test/lint/build/signature/ZIP evidence. No automatic
+task/archive/journal commit scripts were run; original task pointer remains active.
+
+<a id="20261021-preview-validation"></a>
+## 2026-10-21 — Outside-core SSH import-preview validation
+
+### Implementation and scope
+
+Continued the original SSH client task and froze the full-manifest proof obligations plus
+[preview lifecycle contract](ssh-validation-lifecycle.md). Only preview capture/authentication/
+supplied-input validation/review/canonical binding/publication migrated. Typed/bundle/current
+sessionManifest callbacks remain on their existing synchronized path; production semantic
+validator/reviewer registration and SSH restore admission remain closed.
+
+Preview providers borrow separate authenticated decoded loans; changes are rejected and
+copies wiped after callbacks or Error. One in-flight slot survives through cleanup. Immutable
+validator registration identity also fences final import storage. Bridge preserves its original
+admission deadline and uses private per-request preview-owner UUIDs; external IDs, TOTP/export
+and exact previewId/importCancel remain separate. Successful review lifetime starts at final
+publication. Phase → session metadata delivery claim is once-only; external result/cleanup is
+outside locks. Invalidation after a winning claim may coexist with delivery of that claimed
+immutable summary, while subsequent commit must reject.
+
+Evidence: `/tmp/ctos-ssh-preview-validation-20261021.kxvZeWH2`.
+
+| Check | Actual result |
+| --- | --- |
+| First focused JVM before formal review fixes | 64 tests/4 reports/zero failures, errors, skips; 46 tasks/46s (`focused-first.log`, `focused-first-jvm/`) |
+| Final focused JVM after review fixes | **66 tests/4 reports/zero failures, errors, skips**, including21 new tests; 46 tasks/47s (`focused-final.log`, `focused-final-jvm/`) |
+| Full normal JVM/lint/Release | **379 fresh tests/21 reports/zero failures, errors, skips**; 92 tasks/all executed/2m18s, pass (`normal-final.log`, `full-jvm/`) |
+| Normal lint | Zero errors/three warnings; report retained as `lint-normal.xml` |
+| Fixture compilation/lint | **114 tasks/36 executed/78 up-to-date/30s**, pass; zero lint errors/four warnings (`fixture-final.log`, `lint-fixture.xml`) |
+| APK signature/isolation | All three v2 signed/one matching signer; normal contains only production SSH library/no peer class; distinct fixture/test IDs and exact fixture target (`apk-audit.log`, `artifact-audit.json`, `test-manifest.log`) |
+| Frozen source baseline | Four changed code/test SHA inputs and seven protected native/config/sessionJNI/VaultSession/VaultOperation/Dart hashes match after all gates |
+
+### Commands
+
+```sh
+./hako bash -lc 'cd android && ./gradlew :app:testReleaseUnitTest --tests im.majo.ctos.SshPreviewValidationTest --tests im.majo.ctos.SshRestoreTest --tests im.majo.ctos.SshBundleTest --tests im.majo.ctos.VaultSessionTest --offline --console=plain'
+./hako bash -lc 'cd android && ./gradlew :app:testReleaseUnitTest :app:lintRelease :app:assembleRelease --offline --rerun-tasks --console=plain'
+./hako bash -lc 'cd android && ./gradlew -PctosSecretsUiFixture=true -PctosSshAuthFixture=true :app:assembleSecretsFixtureRelease :app:assembleSecretsFixtureReleaseAndroidTest :app:lintSecretsFixtureRelease --offline --console=plain'
+```
+
+| Frozen APK | SHA256 |
+| --- | --- |
+| Normal, not installed | `7b6d0c1f9dfd7c6faf5e214c59053218f533a2781b5122243c7c424c231d4f75` |
+| Fixture main, not installed | `81854c4399caebc40f4ca9a7bb45369ec6ea1f2a4a1588fc883b7eac81ae2cc1` |
+| Fixture test, not installed | `3c431f96129672930e9731dcf85a2d400726a8361be6e360d1ccf730e4e7404c` |
+
+Signer SHA256 remains `8d36c8be418174cb4cda0b897ff3e32b2da6f84032819726e8e5671872df52ef`.
+The test APK hash is unchanged: instrumentation Java recompiled against the changed main
+classes, while unchanged test DEX/packaging stayed up-to-date. The fixture main APK and full
+normal Java/JVM inputs were rebuilt. Fixture lint analysis executed; its unchanged report
+rendering stayed up-to-date (retained XML timestamp 2026-10-19). Normal lint report is fresh.
+Source/fixture compilation is not Android execution.
+
+### Review, failures and limits
+
+Formal scoped review fixed boundGuard.publish dropping the parent's publication fence and
+same-named cross-Bridge failure/cancellation reaching an unrelated preview. New coverage includes
+three paused callback stages × four invalidation actions, bounded direct cancellation, validator/
+reviewer registration replacement, post-last-store-read invalidation, final commit registration,
+actual source/target loan bytes, mutation/wiping/Error/slot recovery, locked-start import, old
+preview preservation, independent consent lifetime and before/after-claim/once-only UI delivery.
+Exact background-expiry publication rejects before lazy session revocation; a real blocking
+revocation fixture verifies it cannot seize the request phase mutex. Same-name owner isolation
+tests exercise the core; actual Android Bridge routing is source-reviewed/compiled only.
+
+Initial hako sandbox invocation could not access the Docker socket; the scoped hako escalation
+was accepted and `./hako true` passed. No automatic-review rejection or reduced check policy.
+No failing application test has been observed in the two focused runs. Third-party parser/KDF
+callbacks are not preempted; cancellation prevents later stages/publication and owner cleanup
+waits for callback return. This is not whole-core responsiveness, complete SSH semantics,
+connection/forward/service/UI completion or device acceptance. Native/Flutter were not changed;
+old ARM and device outcomes were not rerun. No device, real vault/account, commit/archive/push
+or dist publication. Prior `/tmp/ctos-ssh-manifest-inspection-20261019.zkcntg11` is absent;
+historical hashes/runtime logs cannot be reverified this session.
+
+Final independent audit rechecked all raw XML/log totals, three APK signatures/target/peer
+isolation and lint report freshness/reuse, all four source/seven protected hashes and ten
+artifact-manifest entries. No remaining scoped finding. Local documentation check covers17
+Markdown files/445 local targets/none missing; implement/check context manifests each21 valid
+rows. Task stays in_progress; this is an increment check, not final full-client acceptance.
+
+<a id="20261019-manifest-inspection"></a>
+## 2026-10-19 — Supplied-manifest SSH material inspection
+
+### Implementation and scope
+
+Implemented [offline material inspection](ssh-manifest-inspection.md) over actual supplied
+source/target/candidate VaultManifest byte copies, using the pinned key/hostfile parsers and
+the extracted shared authentication key policy. Java owns copies before native inspection,
+wipes on every exit, retains a single original deadline, fences cancellation/publication and
+returns an immutable historical report. CSMIv1 is exactly60 bytes; one new material JNI.
+No current-vault recursion or fabricated session/lease/role is needed.
+
+Every report has **contentOnly=true/admissionComplete=false**. CONFIG is CONFIG_DEFERRED;
+ambiguous exact passphrase identities are explicit. Private/public mathematical association,
+credential target semantics, configuration references, certificate validity/principal/CA and
+trust review remain pending. No production attachSshValidator registration or SSH restore
+admission was added. Parent stays in_progress/implementation_complete=false.
+
+Evidence: `/tmp/ctos-ssh-manifest-inspection-20261019.zkcntg11`.
+
+| Check | Actual result |
+| --- | --- |
+| Strict material dynamic/static, existing config regressions and production JNI/shared |12 tasks/18s; corrected test matrix rebuild7 tasks/14s, pass (`native-second.log`, `native-third.log`) |
+| Focused JVM/lint |56 tasks/25s; fresh31 tests/1 report/zero failures, errors, skips (`java-second.log`, `focused-jvm/`) |
+| First passed static ARM material matrix |7780 checks/effects0/safe_logs4/streams34/cleanup pass/exit0 (`material-qemu-third.log`) |
+| Final material matrix against frozen final production archive |**7784 checks/effects0/safe_logs4/streams34/cleanup pass/exit0** (`material-qemu-final.log`) |
+| Existing ARM catalog/effective evaluator/handle, actually rerun |**71923 / 3736 / 5201 checks**, effects0/exit0 (`catalog-qemu.log`, `eval-qemu.log`, `handle-qemu.log`) |
+| Full authentication/PTY ARM regression |**1741410 checks/exit0，synthetic** (`auth-progress-qemu.log`) |
+| Normal full native/JVM/lint/Release all-rerun gate |**95 tasks, all executed,1m37s**, pass (`normal-final.log`) |
+| Fresh full JVM |**358 tests/20 reports/zero failures, errors, skips** (`full-jvm/`, `jvm-full.json`) |
+| Isolated fixture main/test assembly and lint |114 tasks/40 executed/74 up-to-date/27s, pass; exact new method present in DEX (`fixture-final.log`) |
+| Fixed-input normal package |77 tasks/19 executed/58 up-to-date/10s, pass (`normal-fixed-artifact-package.log`) |
+| Targeted host rebuild after expiry-fixture corrections |5 tasks/1 executed/4 up-to-date/7s, pass (`auth-host-final-third-build.log`); frozen production inputs reused |
+| Lint |normal0 errors/3 warnings; fixture0 errors/4 warnings |
+| APK/native audit |three v2 APKs/one matching signer; isolated fixture/test IDs and target; normal only production SSHlib/no peer class; fixture peer depends on production library |
+| Export isolation |eight config JNI/19 session JNI/one material JNI/archive83/forbidden0 (`native-audit.json`) |
+
+### Commands and frozen artifacts
+
+```sh
+./hako bash -lc 'cd android && ./gradlew :app:testSshMaterialInspectorHost :app:testSshMaterialInspectorStaticHost :app:testSshConfigCatalogStaticHost :app:testSshConfigEvaluatorStaticHost :app:testSshConfigHandleStaticHost :app:compileSshFiles --offline --console=plain'
+./hako bash -lc 'cd android && ./gradlew :app:testReleaseUnitTest --tests im.majo.ctos.SshManifestInspectorTest :app:lintRelease --offline --console=plain'
+timeout 180s qemu-aarch64 /tmp/ctos-ssh-manifest-inspection-20261019.zkcntg11/material-static-final
+timeout 180s qemu-aarch64 /tmp/ctos-ssh-manifest-inspection-20261019.zkcntg11/catalog-static-first
+timeout 180s qemu-aarch64 /tmp/ctos-ssh-manifest-inspection-20261019.zkcntg11/eval-static-first
+timeout 180s qemu-aarch64 /tmp/ctos-ssh-manifest-inspection-20261019.zkcntg11/handle-static-first
+./hako bash -lc 'cd android && ./gradlew :app:testSshViewHandleHost :app:testSshNativeClientHost :app:testSshCallbackAdapterHost :app:testReleaseUnitTest :app:compileSshFiles :app:lintRelease :app:assembleRelease --offline --rerun-tasks --console=plain'
+./hako bash -lc 'cd android && ./gradlew -PctosSecretsUiFixture=true -PctosSshAuthFixture=true :app:assembleSecretsFixtureRelease :app:assembleSecretsFixtureReleaseAndroidTest :app:lintSecretsFixtureRelease --offline --console=plain'
+./hako bash .trellis/tasks/10-08-ssh-terminal-client/research/android-material-inspector-build.sh --output /app/build/app/verification/sshMaterialFinalStatic --static-test
+./hako bash -lc 'cd android && ./gradlew :app:assembleRelease -x :app:compileSshProductionObjects -x :app:compileSshConfigEvaluator -x :app:compileSshFiles --offline --console=plain'
+timeout 600s qemu-aarch64 /tmp/ctos-ssh-manifest-inspection-20261019.zkcntg11/auth-progress-static
+```
+
+Production runners retain random temporary build paths. As in the preceding increment,
+freeze archive/shared after full normal and fixture gates; compile independent final static
+tests against that archive, then package normal with validated native inputs. The77-task pass
+does not replace the95-task full gate. Normal/fixture contain byte-identical stripped SSHlib;
+all22 allocated ELF sections match the generated library. Production hashes remain unchanged
+through runtime/packaging (`final-production-before-runtime.sha256`). First all-rerun normal
+APK is separately saved as `normal-all-rerun-initial.apk`, SHA
+`15d4624505a92b7452bf9c063c3b56782d99b2e930ac546a4a6007573c6f10b2`.
+
+| Final artifact | SHA-256 |
+| --- | --- |
+| normal APK |`a1b24a0ed7fed236b85789d258e2fb7336884a5d81a767ea8642c08ae7402655` |
+| fixture APK |`4de3918e3f6f0ecb62994225eb7fb1e79bda9d6dc1e76851fc0e10dfd86cb5fb` |
+| fixture test APK |`3c431f96129672930e9731dcf85a2d400726a8361be6e360d1ccf730e4e7404c` |
+| production archive |`e4a5f9026a657e5c619e2044cc48961c6e437543fbb08e03998bfd93985eef54` |
+| generated production library |`5cddd039ca17233f09d0aae21e7f9709d1364c9733d5773280c50ed1211607bb` |
+| identical packaged library |`51cb7ecdc6e82394861ca95844319f1dcf048ceee36188a8371ba90a5d08c0dc` |
+| final material static binary, executed |`203b273ad49d7e7f6d62af249e017cd9c68877bab94fa5914aaa58a8f473d5ed` |
+| full auth progress-only copy |`31d07fc222b40e0cb1ee732b54ceee70376996a02e9a6559feb842dbf899f093` |
+| original final auth binary,180s outer timeout |`660c5587a16fdc66668bf622d578b0387d9e7f9b79eb45ab25f566ac2f47dbf0` |
+
+Signer SHA256 remains `8d36c8be418174cb4cda0b897ff3e32b2da6f84032819726e8e5671872df52ef`.
+IDs remain `im.majo.ctos.secretsfixture` / `.test`, instrumentation targets fixture.
+
+### Failures, corrections and provenance
+
+Initial strict builds rejected the pinned-header include order/implicit calloc declaration;
+standard headers now precede pinned allocator macros, with no relaxed warnings or manual
+prototypes. A test-only const mismatch was corrected. Initial material runtime expected
+UNSUPPORTED for a synthetic SK record, but pinned ENABLE_SK is disabled and upstream returns
+unknown type/MALFORMED; the test now asserts that exact pinned behavior. Optional final-LF
+truncation sampling and positive PEM-writer return handling were also corrected. Failed
+logs/binaries remain in evidence, not presented as passing runs.
+
+Extracting shared key policy required rerunning full auth/PTY. Under current QEMU the old
+500ms managed-expiry fixture timed out before its intended host callback (evidence=0,
+selected=0,kex=0,errno=110); a1000ms service-handshake fixture failed similarly. Exactly four
+handshake-prepared expiry setups and managed mode8 now use TEST_EXPIRY_PREPARATION_MS=5000;
+only their intended expiry callbacks/direct waits use6000 one-ms polling attempts. Other
+short lifetime cases/default1000-attempt helper stay unchanged. Actual original deadlines
+still expire, production60s role is unchanged, and **all1037 original CHECK source lines are
+identical** (`expiry-fixture-assertions.json`, `auth-test-from-original.diff`). Full strict
+static/dynamic host rebuilds passed after this test-fixture timing correction.
+
+The final original auth run hit the outer180s harness timeout, with no assertion output;
+that run is not counted as pass. An ignored source copy adds exactly47 fixed stage-name
+prints in main and runs with600s outer allowance. Removing those prints restores the final
+original test byte-for-byte, independently checked. Functions/order/CHECKs remain identical;
+no application timeout, production source or test assertion was changed for the progress run. Static Bionic
+compat-minus-reallocarray and TLS alignment adaptation remain test-only.
+
+Source manifest retains75 inputs. Protected-final retains68 unchanged original vault/view/
+IO/config/eval/session/KEX/JNI/Dart inputs, excluding only the deliberately corrected old
+auth test; the original69-input baseline and precise diff are preserved. Final material
+check counts differ7780/7784 because random RSA DER/Base64 lengths alter truncation samples,
+not because coverage was dropped. Final manifests/checker outcome are recorded below.
+
+### Coverage and limits
+
+Actual native matrix covers software keys, encrypted correct/wrong/missing phrases, bounded
+KDF policy before parsing, full outer envelopes, unencrypted PEM top-level DER framing,
+OpenSSH LF versus rejected CRLF and accepted traditional PEM CRLF, public comments versus
+multiple physical key records, cert/type mismatch, all known_hosts rows/markers/empty files,
+strict hashed-host salt/digest, NUL/line/file/phrase bounds, deadlines and cleanup. Observer
+effects0 covers forbidden file/environment/network/command operations; four fixed safe logs
+are counted separately, not described as zero logging. Missing/out-of-policy encrypted
+phrases prove no parser/KDF calls. No signing or private/public mathematical check occurs.
+
+Traditional encrypted PEM decrypted-DER full consumption is **not certified**; no encrypted
+DER-suffix runtime case is claimed. Parsed cert/known_hosts markers do not grant trust,
+validity/principal/CA or host-pattern semantic approval. BAD_PASSPHRASE is an upstream error
+class and may also indicate corruption. Shared authentication behavior is checked separately.
+
+Java31 tests cover actual candidate inputs, exclusive caller loan preservation, all owned
+copies/wiping, exact phrase ambiguity, strict codec, every-file coverage, deadline/cancel/
+Error/reentry and immutable report. Single crypto/KDF calls are not preemptible. Actual
+allocation/ThreadLocal-setup OOM and JNI live-VM exceptions were not injected; upstream
+xalloc system-OOM termination remains. C and fake-binding JVM are distinct from JNI runtime.
+
+`SshManifestInspectorPlatformTest#syntheticSuppliedManifestInspection` was compiled only;
+opt-in ctOS fixture guard plus `ctosSshManifestInspectorPlatformProbe=true` and exact method
+remain required. No install/run. Dynamic ARM built/not run because old Bionic runtime is
+absent; no device files fetched. Flutter unchanged/not rerun. No device/real vault/account,
+commit/archive/push/dist actions. Whole-manifest semantics, restore review, final plans,
+selection/connector and complete product AC remain open.
+
+Final document check resolves437 local targets across23 Markdown files, none missing.
+Both task context manifests validate19 rows. The existing large ssh-native spec exceeds the
+32768-byte automatic injection limit; focused source/contract and current spec sections were
+explicitly read, so the warning is not treated as a full automatic-injection pass.
+Source75/protected68/artifact19/frozen production SHA checks, bash -n, ShellCheck, shfmt and
+git diff --check pass. Final evidence review is recorded in task metadata.
+
+<a id="20261019-config-catalog"></a>
+## 2026-10-19 — Context-free SSH declaration catalog (local gates pass)
+
+### Implementation and scope
+
+Implemented [the catalog contract](ssh-config-catalog.md) in the same pinned namespaced
+readconf lexer. Catalog has no fabricated Request/alias/user/passwd; it collects positive
+literal Host declarations and first sources, traverses root-reachable static managed Include
+in lexical/depth-first order regardless of branch activation, and reports located deferred
+Include sites for any %/$ token. Wildcard/negative/ineligible selectors are omitted with a
+flag. Match is flagged, not evaluated. Unknown directives reject, including after IgnoreUnknown.
+The shared evaluator/64-slot registry/owner facade now has an explicit catalog mode, bounded
+CSCDv1 codec, two added JNI methods and immutable Java entries/sites. Ordinary summary/Options
+and catalog getters reject the opposite mode. Caller lease is only borrowed.
+
+Every result is declarationsOnly: bad recognized Port/Match arguments can pass catalog and
+must fail real evaluation. No semantic validator, SSH restore admission, private/trust check,
+final plan, role, credential, socket, connector or UI added. Production attachSshValidator
+remains absent; import/restore rejection stays closed. A current public lease cannot certify
+a different source/target/candidate manifest. Parent stays in_progress/implementation_complete=false.
+
+Evidence directory: `/tmp/ctos-ssh-config-catalog-20261019.RiaqcP03`.
+
+| Check | Actual result |
+| --- | --- |
+| Strict catalog dynamic/static + ordinary evaluator/handle static + JNI/shared compile |11 tasks,7 executed/4 up-to-date,19s, pass (`native-first.log`) |
+| First static ARM catalog |**71923 checks/effects0/exit0** (`catalog-qemu-first.log`) |
+| Existing static ARM effective evaluator / handle |**3736 / 5201 checks, effects0/exit0** (`eval-qemu-first.log`, `handle-qemu-first.log`) |
+| Focused Java/lint |56 tasks,22 executed/34 up-to-date,24s; fresh39 tests/2 reports/zero failures/errors/skips (`java-first.log`, `focused-jvm/`) |
+| Normal full all-rerun native/JVM/lint/Release |**95 tasks, all executed,1m30s**, pass (`normal-final.log`) |
+| Fresh full JVM |**327 tests/19 reports, zero failures/errors/skips** (`full-jvm/`, `jvm-full.json`) |
+| Isolated fixture main/test assembly + lint |114 tasks,40 executed/74 up-to-date,25s, pass; new method present in test DEX (`fixture-final.log`) |
+| Final static ARM catalog using frozen final production archive |**71923 checks/effects0/exit0** (`catalog-qemu-final.log`); archive/shared unchanged before/after |
+| Fixed-input normal packaging |77 tasks,19 executed/58 up-to-date,9s, pass (`normal-fixed-artifact-package.log`) |
+| Lint |normal0 errors/3 warnings, fixture0 errors/4 warnings; copied reports |
+| APK/signature/isolation |three v2 APKs/one matching signer each, distinct fixture/test IDs and instrumentation target; normal only production SSHlib/no peer class; fixture peer DT_NEEDED production library |
+| Native exports |eight config JNI,19 session JNI,83 archive members, no stock caller/parser exports, test seed or wrap observers (`native-audit.json`) |
+| Static/source checks |bash -n, ShellCheck, shfmt, git diff --check,65 source inputs/16 protected inputs/17 artifact SHA manifest checks pass; formal checker no unresolved finding |
+
+### Commands and frozen inputs
+
+```sh
+./hako bash -lc 'cd android && ./gradlew :app:testSshConfigCatalogHost :app:testSshConfigCatalogStaticHost :app:testSshConfigEvaluatorStaticHost :app:testSshConfigHandleStaticHost :app:compileSshFiles --offline --console=plain'
+./hako bash -lc 'cd android && ./gradlew :app:testReleaseUnitTest --tests im.majo.ctos.SshConfigCatalogTest --tests im.majo.ctos.SshConfigEvaluatorTest :app:lintRelease --offline --console=plain'
+timeout 180s qemu-aarch64 /tmp/ctos-ssh-config-catalog-20261019.RiaqcP03/catalog-static-first
+timeout 180s qemu-aarch64 /tmp/ctos-ssh-config-catalog-20261019.RiaqcP03/eval-static-first
+timeout 180s qemu-aarch64 /tmp/ctos-ssh-config-catalog-20261019.RiaqcP03/handle-static-first
+./hako bash -lc 'cd android && ./gradlew :app:testSshViewHandleHost :app:testSshNativeClientHost :app:testSshCallbackAdapterHost :app:testReleaseUnitTest :app:compileSshFiles :app:lintRelease :app:assembleRelease --offline --rerun-tasks --console=plain'
+./hako bash -lc 'cd android && ./gradlew -PctosSecretsUiFixture=true -PctosSshAuthFixture=true :app:assembleSecretsFixtureRelease :app:assembleSecretsFixtureReleaseAndroidTest :app:lintSecretsFixtureRelease --offline --console=plain'
+./hako bash .trellis/tasks/10-08-ssh-terminal-client/research/android-config-evaluator-build.sh --output /app/build/app/verification/sshConfigCatalogFinalStatic --static-catalog-test
+timeout 180s qemu-aarch64 /tmp/ctos-ssh-config-catalog-20261019.RiaqcP03/catalog-static-final
+./hako bash -lc 'cd android && ./gradlew :app:assembleRelease -x :app:compileSshProductionObjects -x :app:compileSshConfigEvaluator -x :app:compileSshFiles --offline --console=plain'
+```
+
+As in the preceding increment, production runners embed random temporary build paths.
+After the full95-task gate and fixture build, freeze the final archive/shared library, build
+a separate final static test against that archive, then package normal using those validated
+native inputs. The77-task packaging pass does not replace the full gate. Final normal and
+fixture contain byte-identical stripped production SSH libraries, whose22 allocated sections
+match the final generated library (`allocated-sections-final.json`). The final archive/shared
+hashes stayed unchanged through runtime and packaging (`final-production-before-runtime.sha256`).
+Initial all-rerun APK is separately preserved, SHA
+`2dcf6bc2c0b85221db41916fb30522e09da9fa5b84ebc4a144c675de2a6cba33`.
+An initial host audit assertion expected English readelf text; rerunning with LC_ALL=C
+confirmed the peer dependency. This was an audit locale mismatch, no product change.
+
+| Final artifact | SHA-256 |
+| --- | --- |
+| normal APK |`252dc31c20ab97979db8f168ffa855e56f3a56e10096b8babe205b83134e63e4` |
+| fixture APK |`00cda3f3faa80510adbcaf18ae73f076193f788a833a56c1bd8a3bcf0022909b` |
+| fixture test APK |`b31f941a555a519d6e1216a0dc691b83d590ed8cec69affd8bc82d14eb8ddbf4` |
+| generated production archive |`c91456d71dd9f7b79be8532cb60fe6a5f44f328b4f499238cd986d213ef83e50` |
+| generated production library |`3065d10304cb55fe795fa9867c104aa045c78f6a37f407ffe5bab8a66b448a37` |
+| identical normal/fixture packaged library |`72d4c99f53817d943bc4b6e8e1b2368c62c0d1bc3f5b7f020b2fa2a136aa144f` |
+| final static catalog test, executed |`f0e71e3d1c197f1a2afdacb49dc6be50906a115d62eeb07f5526d89aa08320f0` |
+| first static catalog test, executed |`88c36d62e1eb48a9f1545cef60912fee3743d3ebf8b6d5040b64ecd297a05f07` |
+| ordinary evaluator / handle tests, executed |`ab06fb80f39c87666c20fbd161d221397e3d8c217be3a920911568c967c91987` / `f36e8e39f1e9ce2209c26d8b13bd7c558f84fb19b164a0eba21da4e6b60249a0` |
+| dynamic catalog test, built/not run |`552041cb55ff23bdea7313c84085286c45d5e1a56f67e5430ba2c4fc5028cf95` |
+
+Signer SHA-256 remains
+`8d36c8be418174cb4cda0b897ff3e32b2da6f84032819726e8e5671872df52ef`.
+The independent IDs are `im.majo.ctos.secretsfixture` / `.test`, target fixture.
+`source-first.sha256`/`source-final.sha256` retain65 inputs, and `protected-baseline.sha256`
+verifies16 original vault/view/IO/session/KEX/JNI and old test sources unchanged. Parser patch
+SHA is `fc52b0d65d9bbd6e5b659a16b3a25b0d269bb59ecaa241009c15c7968d26ba07`.
+
+### Coverage and remaining boundaries
+
+Native real-parser matrix covers full Host argv after negative tokens, quoting/comments,
+literal []/UTF8/C1, first-source dedup/order, static branches/glob/orphans, dynamic source
+dedup, semantic non-certification, missing/type/path/cycle, alias/deferred/depth/line and
+1024-open/64MiB read budgets, exact70424-byte CSCD frame/canary, parser EBUSY/wrong-thread,
+revocation/expiry/cross-thread cancel, failed-open cleanup and reader retry/FD baseline.
+Formal review identified missing catalog-specific final-publication revoke/cancel cases;
+worker added deterministic final reader munmap hooks before these builds, both exercised.
+Effect observers report0. JVM adds19 catalog tests to unchanged20 ordinary facade tests:
+strict CSCD malformed/count/flags/UTF8/duplicates/trailing/immutable lists, mode/default-binding
+rejection and owner/cancel/Error/cleanup paths. C and fake-binding JVM tests are separate
+evidence, not execution of JNI in an Android VM.
+
+Compiled only: `SshConfigEvaluatorPlatformTest#syntheticManagedConfigCatalog`, opt-in
+`ctosSshConfigCatalogPlatformProbe=true` plus exact class/method and existing fixture guard.
+It uses a synthetic actual public lease/JNI, static/deferred Include and revoke/borrow checks.
+**No install or execution.** Dynamic ARM binary was built/not run because old Bionic runtime
+is absent; no device files fetched. Static compat archive minus reallocarray and TLS alignment
+adaptation remain test-only. No Android/ROM/external-server or real-vault/account acceptance.
+General upstream xalloc OOM and JNI VM exception/concurrent destroy stress limits remain.
+Full authentication/PTY ARM1725125 evidence is historical, not rerun here. Flutter unchanged,
+not rerun. No commit/archive/push/dist; semantic validator, finalization/selection/connector
+and complete product AC remain open.
+
+Final documentation check resolves407 local targets across24 Markdown files, none missing;
+both task context manifests validate16 entries. The existing large ssh-native spec still
+exceeds automatic injection's32768-byte limit and warns about truncation; workers/reviewer
+explicitly loaded the focused source/contract and current top sections. This warning is not
+treated as a full-spec automatic injection pass.
+
+<a id="20261019-config-jni"></a>
+## 2026-10-19 — Config evaluator JNI / Java owner boundary (local gates pass)
+
+### Implementation and scope
+
+Implemented [the managed contract](ssh-config-managed.md): separate64-slot opaque handle
+registry, strict ordinary UTF8 CSEQ/CSES wire, six production JNI entries, Java owner facade
+with immutable Request/Summary/Diagnostic and retryable close/destroy,20 JVM tests and an
+independent opt-in Android fixture. Full Options remains owned by the native evaluator;
+Java metadata retains hasRawFields=true. Caller lease is borrowed and stays usable after
+evaluation close. No role, credential, socket, catalog, semantic validator, connector or
+Flutter flow added. Original evaluator/parser patch, view/IO and session/KEX/JNI sources
+match `unchanged-baseline.sha256` (12 inputs). Parent remains in_progress/implementation_complete=false.
+
+Evidence directory: `/tmp/ctos-ssh-config-jni-20261019.vnQ3FInL`.
+
+| Check | Actual result |
+| --- | --- |
+| Strict native handle dynamic/static tests + production JNI/shared compile |9 tasks,5 executed/4 up-to-date,17s, pass (`native-first.log`) |
+| Focused Java/lint |56 tasks,22 executed/34 up-to-date,25s; fresh20 JVM/1 report/zero failures/errors/skips (`java-first.log`, `focused-jvm/`) |
+| First static ARM registry/parser |5201 checks/effects0/exit0 (`handle-qemu-first.log`), intermediate binary hash below |
+| Final static ARM using final production archive |**5201 checks/effects0/exit0** (`handle-qemu-final.log`); final archive/shared hashes unchanged before/after |
+| Normal full all-rerun test/native/lint/Release |**95 tasks, all executed,1m36s**, pass (`normal-final.log`) |
+| Fresh full Gradle JVM |**308 tests/18 reports, zero failures/errors/skips** (`full-jvm/`, `jvm-full.json`) |
+| Isolated fixture main/test assembly + lint |**114 tasks,40 executed/74 up-to-date,28s**, pass; new platform fixture included in test DEX (`fixture-final.log`) |
+| Fixed-input normal packaging |77 tasks,19 executed/58 up-to-date,9s, pass; reused already compiled native inputs (`normal-fixed-artifact-package.log`) |
+| Lint |normal0 errors/3 warnings; fixture0 errors/4 warnings, copied reports |
+| APK/signature/isolation |three v2 APKs, one matching signer each; independent fixture/test IDs and target; normal only production SSHlib/no peer class; peer dynamically depends on production library |
+| Final native exports |six config JNI +19 original session JNI;83 archive members; no stock caller, test seed or wrap observers; parser exports namespaced |
+| Static/source quality |bash -n, ShellCheck, shfmt, source/baseline SHA checks and git diff --check pass; formal checker no concrete finding/no edits |
+
+### Frozen artifact handling and commands
+
+The production runner rebuilds in random temporary directories and embeds those paths
+in upstream/parser objects. Initial normal APK and fixture-generated shared library
+therefore differed in allocated sections as well as hashes despite unchanged source inputs;
+an attempted equality audit caught this. Initial artifacts/logs remain preserved. No code
+change was needed: after full strict/JVM/lint gates passed, freeze the final generated
+archive/shared library, build a separate static test against that archive without regenerating
+production, and package normal with those already compiled native tasks excluded. This
+packaging pass does not rerun or replace the full95-task gate. The final normal and fixture
+contain **byte-identical stripped production SSH libraries**; all22 ELF allocated sections
+match the final generated library (`allocated-sections-final.json`).
+`final-production-before-runtime.sha256` verifies the final archive/shared library stayed
+unchanged through final ARM execution and packaging. This is source/input correspondence,
+not execution of the APK's JNI inside an Android VM.
+
+```sh
+./hako bash -lc 'cd android && ./gradlew :app:testSshConfigHandleHost :app:testSshConfigHandleStaticHost :app:compileSshFiles --offline --console=plain'
+./hako bash -lc 'cd android && ./gradlew :app:testReleaseUnitTest --tests im.majo.ctos.SshConfigEvaluatorTest :app:lintRelease --offline --console=plain'
+./hako bash -lc 'cd android && ./gradlew :app:testSshViewHandleHost :app:testSshNativeClientHost :app:testSshCallbackAdapterHost :app:testReleaseUnitTest :app:compileSshFiles :app:lintRelease :app:assembleRelease --offline --rerun-tasks --console=plain'
+./hako bash -lc 'cd android && ./gradlew -PctosSecretsUiFixture=true -PctosSshAuthFixture=true :app:assembleSecretsFixtureRelease :app:assembleSecretsFixtureReleaseAndroidTest :app:lintSecretsFixtureRelease --offline --console=plain'
+./hako bash .trellis/tasks/10-08-ssh-terminal-client/research/android-config-evaluator-build.sh --output /app/build/app/verification/sshConfigHandleFinalStatic --static-handle-test
+timeout 180s qemu-aarch64 /tmp/ctos-ssh-config-jni-20261019.vnQ3FInL/handle-static-final
+./hako bash -lc 'cd android && ./gradlew :app:assembleRelease -x :app:compileSshProductionObjects -x :app:compileSshConfigEvaluator -x :app:compileSshFiles --offline --console=plain'
+```
+
+### Actual coverage and remaining boundaries
+
+Native real-parser tests independently construct CSEQ/CSES frames, exact9766/829-byte
+boundaries, standard supplementary UTF8 and C1/malformed/NUL/control rejection, Include
+target/first-value/raw Options retention, five-int errors and repeated run. Resource tests
+exercise positive failed-open cleanup handles, injected borrow-release/close/destroy/unmap
+failure and retry,64-slot capacity/stale tokens/INT64 exhaustion, wrong pthread and mocked
+PID/UID rejection, deadline/revoke during run/after READY, repeated FD baseline. A fread-paused
+parser allows a second thread to cancel before parsing resumes, and rejects owner reentry/
+close/destroy while pinned; effect observers report0. Cancel-vs-destroy safety follows the
+shared short lock and was source-reviewed; no independent concurrent destroy stress race.
+
+JVM20 tests use fake NativeBinding/ViewBinding to check ordinary UTF8 framing, strict
+summary/diagnostic validation, exact rejected line16385, no cache bypass, caller view retention,
+positive token after revocation, cancellation during blocked run/summary, cross-object reentry,
+IO/Linkage/Error cleanup and staged retry. Native C and Java tests are separate evidence;
+JNI immediate exception handling, summary post-array lifetime check and ThreadLocal setup-OOM
+ordering were source-reviewed, not injected inside a live VM. Complete Options remains native;
+copied Summary is historical metadata and future consumers must recheck lifetime/finalize raw fields.
+
+Compiled platform method:
+`SshConfigEvaluatorPlatformTest#syntheticManagedConfigEvaluation`, exact opt-in
+`ctosSshConfigEvaluatorPlatformProbe=true` plus exact class/method and existing fixture guard.
+Its source covers production lease/JNI Include with Unicode host/user, caller lease usability,
+revoke denial and included COMMAND diagnostic. **Not installed or executed.** No current
+device authorization or real vault/account access. Dynamic ARM test is built but not run:
+old Bionic runtime absent, no device files fetched. Static NDK/Bionic compat/TLS test adaptation
+remains test-only; no new Android/ROM/external-server acceptance. General upstream xalloc OOM
+limitation remains. Original parser3736/full-session1725125 results are prior native evidence,
+not newly rerun here. Flutter unchanged, not rerun. No commit/archive/push/dist.
+
+### Final SHA-256
+
+| Artifact | SHA-256 |
+| --- | --- |
+| Final normal APK, fixed-input package |`284e956666e81e053dfbea9551aa061962dffe347fb8dd0e9c54ea66db3b2320` |
+| Fixture main APK |`faccd363baac6fb5d3c033fef4f655f36063da3897fb960c20e9be8b9c055e6f` |
+| Fixture test APK |`b1e3c4ce43792b5975f16d60f56b7e3045269454cd4f268bdfa63bdc04a1b075` |
+| Generated shared library |`d42bd93b20215b9e56ccc69942d8df506f10d7aab739d11d11dc40a405aa9f4f` |
+| Identical normal/fixture packaged stripped SSH library |`c58f41e9cf37b23df7e76c5303139a36aa35be95e80a66974f1e8da9870cc0ba` |
+| Final linked production archive |`c339a52efbe7234e6867eaf0056912541ecee8c8a6732dd7da8dd1b5c5a8c197` |
+| Final static handle test, executed5201/effects0 |`1291ceadf1d1cd46cb8ec9bc8f0dc9d39846627257b84adb9ccfab18ffbb5e01` |
+| Dynamic handle test, built/not run |`b4fd203696c254fad9618cb83f0049b90e3ddac2725a761707a7da47b72a8a79` |
+| Initial all-rerun normal APK, historical |`3f3de1858b529e8e4f0019589d1033ac64e683b396e40eba4b86a2dfeb6d3808` |
+| Initial static handle test, executed5201/effects0 |`f03ad972d60e335b2b5d1155e8a03cf4da7dcf4e72bb812c8bae0ead768a5d0e` |
+
+`artifact-audit.json`, final signature log and source/artifact manifests bind final evidence;
+`artifact-audit-initial.json` and `normal-all-rerun-initial.apk` preserve earlier artifacts.
+Same signer SHA256 as prior gates:
+`8d36c8be418174cb4cda0b897ff3e32b2da6f84032819726e8e5671872df52ef`.
+Temporary evidence may expire; this document and the contracts/spec retain the durable facts.
+
+<a id="20261019-config-evaluator"></a>
+## 2026-10-19 — Managed native readconf evaluator (local gates pass)
+
+### Scope and result
+
+Implemented `ssh_config_eval.[ch]`, scoped parser hooks, the independent pinned readconf
+patch/runner, Gradle integration and real-parser tests under the existing SSH task.
+Contract: [native evaluator](ssh-config-evaluator.md). Full owned Options is retained;
+`has_raw_fields=1` explicitly requires later field finalization. This is not a launch plan,
+JNI binding, catalog, AppSecrets semantic validator, connector or completed SSH client.
+Original session/KEX/JNI source hashes remained unchanged during this increment.
+
+Evidence: `/tmp/ctos-ssh-config-evaluator-20261019.DNFND9Yx`.
+
+| Check | Actual result |
+| --- | --- |
+| Final focused strict object/dynamic/static test build + production shared link | 9 tasks, 5 executed/4 up-to-date, 17s, pass (`focused-eighth.log`) |
+| Immutable static ARM evaluator, host QEMU/NDK Bionic | **3736 checks, effects=0, exit0** (`qemu-eighth.log`) |
+| Existing full native session/auth/PTY regression linked with new config objects | **1725125 checks, exit0**, synthetic AF_UNIX peers (`session-coexist-qemu.log`) |
+| Normal all-rerun test/native/lint/Release | **95 tasks, all executed, 1m36s**, pass (`normal-final.log`) |
+| Fresh Gradle JVM XML | **288 tests /17 reports, 0 failures/errors/skips** (`fresh-jvm/`) |
+| Isolated fixture main/test assembly + lint | **114 tasks,31 executed/83 up-to-date,23s**, pass (`fixture-final.log`) |
+| Lint | normal0 errors/3 warnings; fixture0 errors/4 warnings, reports copied |
+| Three APKs | v2 verified, one matching signer each; fixture/test IDs and instrumentation target isolated |
+| Native packaging | normal only `lib/arm64-v8a/libctos_ssh_files.so`; peer class absent; archive83/forbidden0; session JNI19; seven new native config APIs, upstream parser exports namespaced |
+| Shell/source checks | bash -n, ShellCheck, shfmt, source SHA checks and original session/KEX/JNI SHA checks pass |
+
+APK stripped library matches the Gradle `stripReleaseDebugSymbols` output; generated library
+and packaged stripped library have distinct hashes below. Both expose the expected config
+APIs and19 session JNI exports. Fixture peer DT_NEEDED includes the production shared
+library; it does not embed another OpenSSH/crypto. `apk-audit.log` and `artifact-audit.json`
+contain signer/target/symbol details. Signer SHA256 remains
+`8d36c8be418174cb4cda0b897ff3e32b2da6f84032819726e8e5671872df52ef`.
+
+### Commands actually run
+
+```sh
+./hako bash -lc 'cd android && ./gradlew :app:compileSshConfigEvaluator :app:testSshConfigEvaluatorHost :app:testSshConfigEvaluatorStaticHost :app:compileSshFiles --offline --console=plain'
+timeout 300s qemu-aarch64 /tmp/ctos-ssh-config-evaluator-20261019.DNFND9Yx/eval-static-eighth
+./hako bash -lc 'cd android && ./gradlew :app:testSshViewHandleHost :app:testSshNativeClientHost :app:testSshCallbackAdapterHost :app:testReleaseUnitTest :app:compileSshFiles :app:lintRelease :app:assembleRelease --offline --rerun-tasks --console=plain'
+./hako bash -lc 'cd android && ./gradlew -PctosSecretsUiFixture=true -PctosSshAuthFixture=true :app:assembleSecretsFixtureRelease :app:assembleSecretsFixtureReleaseAndroidTest :app:lintSecretsFixtureRelease --offline --console=plain'
+timeout 180s qemu-aarch64 /tmp/ctos-ssh-config-evaluator-20261019.DNFND9Yx/session-with-config-static
+```
+
+The coexistence build's complete compiler/link command is in `session-coexist-build.log`;
+it adds managed file IO and both config objects to the existing session test closure.
+Normal/fixture Gradle native host gates compile but cannot run QEMU inside hako;
+the separate immutable host executions above supply the actual ARM runtime evidence.
+The runner verifies full G1 baseline hashes before and after, uses batch/fuzz0 patching
+in a private temporary directory and leaves the original baseline unchanged.
+
+### Covered boundaries, fixes and limitations
+
+Real readconf tests cover Host patterns/negation/first-value, additive identities, Match
+first/final, managed nested/glob/conditional Include and lexical order, raw jump/forward/
+session preservation, command/trust/provider/effect refusals, input errors and subsequent
+valid recovery. Tests include exact line/depth/list/jump/forward limits, independent `%C`
+SHA1 vector, escaped `%%`, literal explicit User, numeric/scoped host handling, included
+source provenance, decoded jump255/256 and invalid UTF8. Effect observers include host
+file/env/NSS/DNS/socket/exec/log paths and report0. Real CSPV create/borrow/evaluate/revoke/
+getter-denial/cleanup, wrong pthread/reentry, cancel/deadline, injected read/unmap failures
+and repeated FD cleanup run. PID/UID rejection and borrow-release-failure recovery remain
+source-reviewed rather than dynamically injected; upstream xalloc system OOM remains
+terminating. No claim of recoverable general OOM or complete ssh-G postprocessing.
+
+Failed build/runtime rounds are retained, not counted as passes: initial runner tool/Groovy
+closure issues and strict signedness errors; first static execution exposed poison pointer
+containers in pinned initialize_options (canonical domains/permitted CNAMEs). Complete
+cleanup now initializes both to NULL and frees omitted strings/arrays and duplicate/inactive
+forward temporaries. Fifth runtime exposed lost postparse HostName/User source; first-assignment
+provenance now also covers algorithm assembly. Sixth3498/seventh3677 were intermediate
+passes; final3736 and eighth hash alone describe the final evaluator sources. Formal full
+source review followed by focused delta reviews found no remaining concrete issue.
+
+Dynamic ARM test is built but **not run**: old board-derived Bionic runtime is absent and
+was not fetched again. Static tests use a test-only compat copy without duplicate
+reallocarray and native TLS alignment64, not changes to production compat. Evaluator
+static ELF has no interpreter/dynamic section. Session synthetic socketpair execution uses
+approved host access; no external endpoint. This does not establish Android/JNI/device,
+real-vault/account, UI or external-server acceptance. Flutter unchanged and not rerun
+(prior227/analyze evidence remains historical). No APK installed, commit/archive/push/dist.
+Parent task remains `in_progress` / `implementation_complete=false`.
+
+### Final SHA-256
+
+| Artifact | SHA-256 |
+| --- | --- |
+| normal APK | `dd2dd9a0fbe119006e1e4cc8bf77aa01609228a18212a3fb3fc4b2ae2608a8a0` |
+| fixture main APK | `74c68d9666e2b1570d91d16da7648ed52b14f5d5ac2d3ed77bdd864222989cf3` |
+| fixture test APK (unchanged/up-to-date) | `17c47f1bba31300a1ceb1d08f861de1cbe92316f98540ae355a0c610dd050ab5` |
+| generated production SSH library | `379cc0bd30df40eae7b21f5e3a51d290262ff2767c4fa1f600048e7ef68c2bd5` |
+| packaged stripped SSH library | `b890c143d6335cc1a9dd4cd5308aaa7b77c9762c25bc75378b3b93491b26a6fb` |
+| evaluator static, executed | `9f1fb6ba6ada2353ff6de52f2cc15ef6190784581d7ef20adb5d865a52686ef0` |
+| evaluator dynamic, not executed | `ce2589306760df81c961a3d5d24c09564935531170a93237325d142a4dbd23e8` |
+| session with config static, executed | `be3c2f74f2683f369767ae0bb5ba23477973cfe228484b0c03015fc04e70027b` |
+| pinned readconf patch | `7cc3b4d84d5b6357d31457b1101dc112c8089bed14153c34267996de951a91dc` |
+
+`source-eighth.sha256` binds the seven final code/build inputs; `session-baseline.sha256`
+protects original client/KEX/JNI sources. `source-final.sha256` additionally snapshots current
+application changes and native support inputs. Full artifact and copied parser input/baseline
+manifests remain in the evidence directory. `/tmp` evidence is temporary; durable findings
+and exact commands are recorded here and in the contract/spec.
+
+<a id="20261019-managed-host"></a>
+## 2026-10-19 — Actual offered host key / exact NEW review (local packaging and synthetic checks pass)
+
+### Resumed local verification
+
+The previous approval-service capacity blocker is resolved. No production source changed
+during this continuation. Rebuilt normal and isolated fixture APKs now cover this increment;
+the earlier PTY APKs are no longer used as its packaging evidence.
+
+Evidence: `/tmp/ctos-ssh-managed-host-resume-20261019.ruWFiwIc/`.
+
+| Check | Actual result |
+| --- | --- |
+| Normal complete gate | **94 tasks / 94 executed / 1m30s**, strict native/JNI, three ABI, tests, lint and Release pass |
+| Fresh Gradle JVM | **288 tests / 17 reports / 0 failures, errors or skips** |
+| Isolated fixture assembly + lint | **113 tasks / 16s**, 21 executed, 92 up-to-date; both APKs rebuilt |
+| Lint | normal 0 errors/3 warnings; fixture 0 errors/4 warnings, including existing fixture dynamic-load warnings |
+| APK audit | all three APKs v2, one identical signer; fixture/test IDs and instrumentation target isolated |
+| Normal SSH packaging | only `lib/arm64-v8a/libctos_ssh_files.so`; 19 session JNI including openManaged; archive83, forbidden callers0 |
+| Fixture native linkage | peer DT_NEEDED references production `libctos_ssh_files.so`, libdl and libc |
+| ARM QEMU, independent static Bionic test | **87,300 managed checks**, **1,724,636 complete checks**, both exit0 |
+| Independent source/spec/fixture review | no concrete defect; no source edits |
+| Device / accounts / commit | not performed; original local-only scope retained |
+
+| Immutable artifact | SHA256 |
+| --- | --- |
+| Normal APK | `84e98c04c984b91540ea7455721243a3975407ad4786bf5639d4f17cad84ec96` |
+| Fixture APK | `9009448df3bc5318b0c4ad9e6be5de1d73082b9574e69ae1280fcc83b0862d53` |
+| Instrumentation APK | `17c47f1bba31300a1ceb1d08f861de1cbe92316f98540ae355a0c610dd050ab5` |
+| Normal packaged SSH library | `c5b62954f5875ba1ae359dc6a5f9f08a02c1b75ad9739ed01736e35b58fd5f36` |
+| Rebuilt dynamic native test (not executed) | `2d220209304f444ced5ea5348f01ca306fc6c78447861ba65ae39e7432f93477` |
+| Executed static native test | `6520ff350ce3ba639a95f3e19c407b0f15854625c565257ca1770ee9e6ae1248` |
+
+The former `/tmp` evidence and board-derived dynamic Bionic runtime are absent. No device
+was contacted to recreate them. The standard dynamic test was rebuilt and preserved but
+**not rerun**. The additional QEMU result uses the same project sources, production archive,
+OpenSSL and NDK27 Bionic static libraries in a separate test executable. It is not a rerun
+of the old dynamic binary or Android/JNI runtime, and its check counts belong only to its hash.
+
+To recreate that static test, reuse the exact `testSshNativeClientHost` compiler/source/link
+list in `android/app/build.gradle`, replacing `-fPIE -pie` with
+`-static -fno-pie -fno-emulated-tls`. Copy the compat archive to a test-only path and remove
+only `reallocarray.o` with NDK `llvm-ar d`: NDK static libc already provides that symbol.
+Link that copy, leaving the original archive and production APK unchanged. Add a test-only
+C input containing `_Thread_local _Alignas(64) unsigned char ctos_static_test_tls_alignment;`
+to satisfy ARM64 Bionic PT_TLS alignment. Verify no INTERP/dynamic section, PT_TLS alignment
+64 and PT_LOAD alignment 16384 before running the immutable copied test:
+
+```sh
+ulimit -c 0
+timeout 120s qemu-aarch64 /tmp/ctos-ssh-managed-host-resume-20261019.ruWFiwIc/native-static-native-tls --managed-host-only
+timeout 120s qemu-aarch64 /tmp/ctos-ssh-managed-host-resume-20261019.ruWFiwIc/native-static-native-tls
+```
+
+Failed alternative-build logs are retained: redundant `-no-pie` rejected under Werror;
+duplicate reallocarray; Bionic TLS alignment8 abort before test entry; an emulated-TLS
+marker did not fix that alignment. The final native-TLS build fixes these test-link issues
+without relaxed compiler/linker checks. Its sandbox run then failed the native-open
+admission assertion at line1026; approved host execution of the identical binary passed
+both suites. The earlier escalated run of the underaligned binary also aborted at startup;
+that failure was TLS, not socket admission. No failed run is counted as a pass.
+
+`normal-build.log`, `fixture-build.log`, `apk-audit.log`, `artifact-audit.json`, source/artifact
+manifests and `qemu-static-*-approved.log` retain this continuation's actual evidence.
+Flutter source is unchanged; prior227/analyze remains historical and was not rerun.
+New MANAGED/controller Android execution and production readconf/catalog/connector/service
+remain open. Parent task stays in_progress / implementation_complete=false; no archive/push/dist.
+
+### Initial implementation record (historical packaging status)
+
+Contract: [launcher prerequisite](ssh-launcher.md). Existing PINNED, selected authentication,
+SUCCESS-only PTY, original role deadline and revocation/owner contracts remain. Explicit
+MANAGED native/Java/JNI open takes no caller host key; the actual transport verifier alone
+classifies and one-shot pins the offered public key after KNOWN or approved exact NEW/CAS.
+Pending-host guard cannot approve/sign/complete before binding. Signature and NEWKEYS remain
+required. Product readconf evaluator/catalog/connector/service are still absent.
+
+Evidence: `/tmp/ctos-ssh-managed-host-20261019.j484FN3T`.
+
+| Check | Actual result |
+| --- | --- |
+| Strict focused native rebuild | third build6tasks13s, pass |
+| ARM QEMU/Bionic managed-host suite | **87,305 checks / exit0**, `qemu-managed-third.log` |
+| ARM QEMU/Bionic complete native suite | **1,724,409 checks / exit0**, `qemu-full-third.log` |
+| Focused Gradle Java/JNI/lint | **55tasks23s**, session51 + mailbox8; `managed-focused.log` |
+| Final host JDK compile + full JUnit | **288 tests pass /39.199s**, all17 test classes recompiled; `host-java-full.log` |
+| Final managed Android fixture source compile | pass, `host-fixture-compile.log`; not APK assembly or device execution |
+| Generated production native library | sessionJNI19 including openManaged; archive83, forbidden stock callers0 |
+| Scoped formal cross-layer + final delta source review | no concrete defects; no duplicate builds by reviewer |
+| Final full Gradle/Release/APK/fixture packaging | **not executed**: automatic approval service capacity failure on three attempts |
+| Flutter | unchanged since prior227/analyze pass; not rerun for this Java/native increment |
+| Device / accounts / commit | not performed, per retained user scope |
+
+Immutable executed binary `native-third` SHA256:
+`00b689663e927d7deda4edb76d4cb0ad7f136e0da19ab9f57c6f8be7e17e95a4`.
+Final native header clarification changed comments only; source-native-final.sha256 records
+that exact source set. Generated JNI library SHA256:
+`4bd3bfcc6f5d8f172c4d80f4142af519b21d8d4091d19c99f851ed859345318a`.
+These are not APK hashes; existing APKs remain the previous shell increment artifacts.
+
+Native dynamic coverage adds13 encrypted denial scenarios, unbound/one-shot/expiry/pinned/
+cycle guard cases and six PINNED/MANAGED KNOWN/NEW × password/private-key shell roundtrips.
+Two initial failures corrected new test expectations only: expired role slots are reclaimed
+(close reports ENOENT), and a1s wait helper needs a shorter synthetic expiry budget. Logs and
+first/second binaries retained; no authentication bypass or production deadline relaxation.
+Allocation failure, opaque proof corruption and arbitrary sink blocking are not injected.
+
+Mailbox JVM cases cover exact metadata/role identity and cloned digests, separate-thread
+approval, missing UI/reject/duplicate/foreign/stale tickets, cancel/expiry/view/callback loss,
+actual waiting owner wakeup/polling, frozen-clock wall cap, interruption/Error cleanup and
+Sink.present reentry. Added two final methods after focused Gradle test; final full host
+JUnit recompiles the three affected production Java files and all17 tests using project
+cached dependencies and existing compiled unchanged classes. Host JDK21 compiler lacks
+ct.sym (`--release17` unavailable), so fallback used `-source17 -target17` with one module-path
+warning; it does not replace Android API/lint/packaging validation. Full288 pass includes
+session51, mailbox10 and existing controller/auth/vault regressions.
+
+`syntheticManagedHostChain` requires `allowSshAuthFixture=true` and that exact class selector
+plus existing isolated-package/UID/fresh-state guards. It exercises real production JNI
+managed open, KNOWN/NEW × password/encrypted Ed25519 shell command/output/resize/exit, exact
+NEW mailbox on a separate response thread and original managed CAS; reject/cancel asserts
+no approval/CAS/epoch change/auth request. The source compiles against cached Android/test
+classes; the revised fixture has **not been assembled or run on Android**.
+
+The mailbox waits on an independent monitor <=50ms per slice, <=30s wall time and original
+role deadline; live checks run before/during/after approval. Sink hooks must be nonblocking.
+JNI retains global sessions_lock during callback, so other session JNI waits too; UI resolve/
+cancel must avoid session JNI and the blocked owner queue. No claim of concurrent-hop pump.
+Already committed, explicitly approved trust writes are not rolled back on later KEX failure.
+
+Three escalated `./hako` full-build attempts were not executed because automatic approval
+review reported: "Selected model is at capacity ... action was not executed ... review
+failure, not a determination that the action is unsafe." No bypass attempted. A safe host
+compiler/JUnit alternative completed the independent Java checks above. Required remaining
+local gates when that service recovers:
+
+```sh
+./hako bash -lc 'cd android && ./gradlew :app:testSshViewHandleHost :app:testSshNativeClientHost :app:testSshCallbackAdapterHost :app:testReleaseUnitTest :app:compileSshFiles :app:lintRelease :app:assembleRelease --offline --rerun-tasks --console=plain'
+./hako bash -lc 'cd android && ./gradlew -PctosSecretsUiFixture=true -PctosSshAuthFixture=true :app:assembleSecretsFixtureRelease :app:assembleSecretsFixtureReleaseAndroidTest :app:lintSecretsFixtureRelease --offline --console=plain'
+```
+
+Copy rebuilt native executable to a new immutable evidence name before running final QEMU;
+record its own hash/count rather than reusing native-third's result. Re-audit normal APK
+fixture exclusion,19JNI/archive83, independent fixture IDs/target, v2/signer and peer DT_NEEDED.
+Do not install any APK or request commit/device permission again under current scope.
+Parent task remains in_progress / implementation_complete=false; no archive/push/dist.
+
+<a id="20261019-ssh-shell"></a>
+## 2026-10-19 — Session channel / PTY / shell and existing terminal (local pass)
+
+Frozen contract: [session channel](ssh-session-channel.md). Authentication implementation
+251b0f3 and handoff b4ed4e2 have identical ctOS trees to current-history b4ec864 and
+12a1357; workspace was clean at recovery. Existing task resumed, no new task/archive.
+
+Native opens one session channel only after selected final SUCCESS, sequentially
+confirms PTY/shell, applies bounded windows/partial stdin and merged stdout/stderr,
+resizes, tracks EOF/u32 exit-status/exit-signal and drains CLOSE before final state.
+Java/JNI add six entries (18 session exports total); original step wire and KEX-only
+milestone remain. Owner, accepted cycle/session digest, view/role/cancel/original
+deadline, one selected credential attempt and cleanup retry remain enforced.
+
+Evidence directory: `/tmp/ctos-ssh-shell-20261019.8nfypcZH`.
+
+| Local check | Actual result |
+| --- | --- |
+| Native strict cross-build | pass, final focused rebuild14s |
+| ARM QEMU/Bionic shell-only | **407,797 checks / exit0**, `qemu-shell-corrected.log` |
+| ARM QEMU/Bionic full native suite | **1,652,108 checks / exit0**, `qemu-full.log` |
+| Session JVM + normal lint | **43/0/0/0**,55tasks23s, `managed-final-check.log` |
+| Isolated fixture main/test build + lint |113tasks25s, `fixture-second-build.log` |
+| Scoped formal C/JNI/Java/fixture source review | no confirmed implementation defects; no repeated builds by reviewer |
+| Final normal full gate | **94tasks all rerun /1m29s**, native/view/callback35/strictJNI/threeABI/lint/Release pass |
+| Final fresh JVM | **270/0/0/0**,16reports; session43 + controller11 included |
+| Flutter full / analyze | **227 pass** / no issues; typed lifecycle, SSH arrows and App/Root regressions |
+| Final isolated fixture build/lint | **113tasks43s**, includes real JNI shell and controller fixture methods |
+| Final rebuilt ARM binary full runtime | **1,651,641 checks / exit0**, `native-final`, `qemu-final.log` |
+| Final normal APK | v2/one signer, archive83/sessionJNI18/forbidden stock callers0, fixture class/library absent |
+| Final isolated APK pair | v2/same signer/separate package+test target; peer DT_NEEDED production libctos_ssh_files.so, libc/libdl only |
+
+Both runtime commands use the immutable `native-shell-corrected`, SHA256
+`7a8a87fdf45c51938d1bc9563c04efddbdb3ecb0e3db0d5f8ccb69f1c20f599a`.
+The full --rerun-tasks gate regenerated the pinned PIC archive, so its new final
+test binary has SHA256 `bbf14ab476f771218a84b4a6ad161e7094318025f5bd4b024730c760c8df5f7f`.
+That exact immutable `native-final` was also fully executed (1,651,641/exit0);
+do not substitute the earlier binary/check count for this final artifact.
+Reproduce from ctOS after focused Gradle rebuild:
+
+```sh
+ulimit -c 0
+timeout 120s qemu-aarch64 -L /tmp/ctos-ssh-arm-runtime-20261017.O81ADtu5 -E LD_LIBRARY_PATH=/system/lib64 /tmp/ctos-ssh-shell-20261019.8nfypcZH/native-shell-corrected --shell-only
+timeout 120s qemu-aarch64 -L /tmp/ctos-ssh-arm-runtime-20261017.O81ADtu5 -E LD_LIBRARY_PATH=/system/lib64 /tmp/ctos-ssh-shell-20261019.8nfypcZH/native-shell-corrected
+```
+
+Sandboxed QEMU failed the same old socket-admission errno assertion in both new and
+immutable authentication baseline binaries; approved host execution passed. First
+host run then exposed an insufficient test loop:3-byte turns×20,000 could not
+deliver65,536 bytes. Increased bounded fixture turns to40,000, without changing
+production window/cap; retained failing logs and first binary separately.
+
+Native dynamic shell coverage: password/private-key success, exact command/output,
+resize, both stdout/stderr, partial acceptance and zero-window/backpressure, read
+window credit, rejection/open-PTY-shell ordering, malformed packets, EOF direction,
+u32 exit/signal, buffered close followed by socket shutdown, cancel/view denial and
+close retry. Shell-specific deadline/alien environment, duplicate/open-before-drain
+and unknown-request replies remain source/shared-guard reviewed rather than new
+native runtime cases. JVM explicitly tests all shell entries for owner/reentry and
+precise pre/post cancel/expiry/view errors, accepted EOF stickiness and read wiping.
+
+Independent Android fixture now has `syntheticShellChannelChain`: actual production
+KEX/auth with synthetic MemoryStore/keys, small8-byte peer maxpacket and16-byte
+window, command/UTF8/extended output/resize/exit, NEW/CAS+encrypted key, open/PTY/shell
+rejections, pending cancel and public-loan revoke. At this point it is **built, not
+device-run**. First final-protocol fixture hashes f21acaa1…/c34e26ac… and v2/one signer
+were checked before the final UI/controller rebuild described below.
+
+The final pair adds `syntheticTerminalControllerChain`, running real session and peer
+on one serial owner with production controller, normal command/output/resize/exit
+and pending cancellation; extra resources close after the session. Both methods are
+**locally compiled, not device-run**. Final hashes:
+
+- Normal APK: `3d7e28d31a0db21fd90f954763f8cac7cd0a2d37c685aab0eb2264bdcdbbd6b5`.
+- Fixture main: `5866f825098f5b47c3a8428c1b904875740fc6cedd61bb66ab5f10905d55a3f5`.
+- Fixture test: `9285e1ca6a1e749b101c9fc41a48c1c8520e3b52b4db14276aa3a4d29aa597e5`.
+
+MainActivity host-only factory and SshTerminalSession now route authenticated channels
+into existing write/resize/Stop/output paths. The real product profile/resolver/socket/
+host-key discovery launcher is still absent; no fake SSH picker was added. Typed host
+state replaces exit-by-output-text, UTF8 decoder resets per generation and SSH arrows
+go directly remote. Controller queues<=64KiB input and one<=32KiB acknowledged output;
+Stop, Error, queued startup cancellation, exact owner cleanup, late acknowledgement
+and destruction/shutdown races were fixed and tested. Formal reviewer rechecked fixes;
+the final real-controller instrumentation source was reviewed by main, not run.
+
+No device or real account operation, normal APK install, dist publication, commit,
+push or archive has occurred. Native allocator/packet failure injection and listed
+protocol gaps, full Android JNI/UI/device acceptance, product launcher, forward/service,
+KBI/MFA, rekey/compression and broad compatibility remain open. Parent
+implementation_complete remains false.
+
+Final user decision: retain uncommitted workspace and local results only. Device
+execution and commit were explicitly declined for this round; no pending approval
+is required to retain this completed local increment. No further build was needed
+after the final documentation/metadata-only synchronization.
+
 <a id="20261019-android-auth"></a>
 ## 2026-10-19 — Android/JNI authentication, encrypted private keys and real NEW CAS
 

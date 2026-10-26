@@ -20,11 +20,14 @@ final class SshCredentialBridge {
         final String path;
         final String keyIdentity;
         final SshAuthenticationSelection selection;
+        final AppSecrets.EffectGuard originalEffectGuard;
         private boolean closed;
 
         private Request(SshCredentialBridge owner, VaultOperation operation, SshRoleContext role,
                 SshHostKeyAuthority.Proof hostKey, Kind kind, String entryId,
-                String path, String keyIdentity, SshAuthenticationSelection selection) {
+                String path, String keyIdentity, SshAuthenticationSelection selection,
+                AppSecrets.EffectGuard originalEffectGuard) {
+            this.originalEffectGuard = originalEffectGuard;
             this.selection = selection;
             this.owner = owner;
             this.operation = operation;
@@ -40,9 +43,11 @@ final class SshCredentialBridge {
             if (closed) throw new VaultException("VAULT_CANCELLED", "The SSH secret request is closed");
         }
 
-        @Override public synchronized void close() {
-            if (closed) return;
-            closed = true;
+        @Override public void close() {
+            synchronized (this) {
+                if (closed) return;
+                closed = true;
+            }
             owner.vault.cancelOperation(operation);
         }
     }
@@ -50,11 +55,30 @@ final class SshCredentialBridge {
     private final AppSecrets vault;
     private final SshHostKeyAuthority hostAuthority;
     private final SshRoleContext.Clock clock;
+    private final SshTransientPassword transientPassword;
 
     SshCredentialBridge(AppSecrets vault, SshHostKeyAuthority hostAuthority, SshRoleContext.Clock clock) {
+        this(vault, hostAuthority, clock, null);
+    }
+
+    SshCredentialBridge(AppSecrets vault, SshHostKeyAuthority hostAuthority, SshRoleContext.Clock clock,
+            SshTransientPassword transientPassword) {
         this.vault = java.util.Objects.requireNonNull(vault);
         this.hostAuthority = java.util.Objects.requireNonNull(hostAuthority);
         this.clock = java.util.Objects.requireNonNull(clock);
+        this.transientPassword = transientPassword;
+    }
+
+    boolean hasTransientPassword() { return transientPassword != null; }
+
+    byte[] transientPasswordBytes(SshRoleContext role, SshHostKeyAuthority.Proof hostKey,
+            SshKexProof kex, SshAuthenticationSelection selection, AppSecrets.EffectGuard guard)
+            throws VaultException {
+        if (transientPassword == null || selection == null || selection.kind != Kind.PASSWORD)
+            throw SshAuthenticationSelection.invalid();
+        selection.requireMatches(role, Kind.PASSWORD, clock);
+        hostKey.requireMatches(role); kex.requireMatches(role, hostKey);
+        return transientPassword.take(role, hostKey, kex, selection, guard);
     }
 
     Request openCredential(SshRoleContext role, SshHostKeyAuthority.Evidence evidence,
@@ -73,11 +97,12 @@ final class SshCredentialBridge {
      */
     Request openCredential(SshRoleContext role, SshHostKeyAuthority.Proof hostKey,
             String entryId, Kind kind) throws VaultException {
-        return openCredential(role, hostKey, entryId, kind, null);
+        return openCredential(role, hostKey, entryId, kind, null, null, null);
     }
 
     private Request openCredential(SshRoleContext role, SshHostKeyAuthority.Proof hostKey,
-            String entryId, Kind kind, SshAuthenticationSelection selection) throws VaultException {
+            String entryId, Kind kind, SshAuthenticationSelection selection, SshKexProof kex,
+            AppSecrets.EffectGuard effectGuard) throws VaultException {
         if (kind == null || kind == Kind.PRIVATE_KEY || entryId == null || entryId.isEmpty()
                 || role == null || hostKey == null) {
             throw new VaultException("PARAMETERS", "The SSH credential request is invalid");
@@ -92,9 +117,10 @@ final class SshCredentialBridge {
                 ? VaultManifest.EntryType.SSH_KEY_PASSPHRASE : VaultManifest.EntryType.SSH_PASSWORD;
         VaultOperation operation = null;
         try {
-            operation = vault.beginSshCredential(entryId, role.targetIdentity, role.connectionId, expected);
+            AppSecrets.SshSecretReadContext context = secretContext(role, hostKey, selection, kex, effectGuard);
+            operation = vault.beginSshCredential(entryId, role.targetIdentity, role.connectionId, expected, context);
             operation.bindRole(role, hostKey);
-            return new Request(this, operation, role, hostKey, kind, entryId, "", "", selection);
+            return new Request(this, operation, role, hostKey, kind, entryId, "", "", selection, effectGuard);
         } catch (VaultException | RuntimeException | Error failure) {
             if (operation != null) vault.cancelOperation(operation);
             throw failure;
@@ -113,11 +139,12 @@ final class SshCredentialBridge {
     /** Opens a private-key request from the adapter's already bound host proof. */
     Request openPrivateKey(SshRoleContext role, SshHostKeyAuthority.Proof hostKey,
             String path, String keyIdentity) throws VaultException {
-        return openPrivateKey(role, hostKey, path, keyIdentity, null);
+        return openPrivateKey(role, hostKey, path, keyIdentity, null, null, null);
     }
 
     private Request openPrivateKey(SshRoleContext role, SshHostKeyAuthority.Proof hostKey,
-            String path, String keyIdentity, SshAuthenticationSelection selection) throws VaultException {
+            String path, String keyIdentity, SshAuthenticationSelection selection, SshKexProof kex,
+            AppSecrets.EffectGuard effectGuard) throws VaultException {
         if (role == null || hostKey == null || path == null || keyIdentity == null
                 || path.isEmpty() || keyIdentity.isEmpty()) {
             throw new VaultException("PARAMETERS", "The SSH private-key request is invalid");
@@ -131,11 +158,12 @@ final class SshCredentialBridge {
         VaultOperation operation = null;
         try {
             String entryId = selection == null ? "" : selection.entryId;
+            AppSecrets.SshSecretReadContext context = secretContext(role, hostKey, selection, kex, effectGuard);
             operation = entryId.isEmpty()
-                    ? vault.beginSshPrivateKey(path, keyIdentity, role.targetIdentity, role.connectionId)
-                    : vault.beginSshPrivateKeyBundle(path, keyIdentity, entryId, role.targetIdentity, role.connectionId);
+                    ? vault.beginSshPrivateKey(path, keyIdentity, role.targetIdentity, role.connectionId, context)
+                    : vault.beginSshPrivateKeyBundle(path, keyIdentity, entryId, role.targetIdentity, role.connectionId, context);
             operation.bindRole(role, hostKey);
-            return new Request(this, operation, role, hostKey, Kind.PRIVATE_KEY, entryId, path, keyIdentity, selection);
+            return new Request(this, operation, role, hostKey, Kind.PRIVATE_KEY, entryId, path, keyIdentity, selection, effectGuard);
         } catch (VaultException | RuntimeException | Error failure) {
             if (operation != null) vault.cancelOperation(operation);
             throw failure;
@@ -144,12 +172,31 @@ final class SshCredentialBridge {
 
     Request openSelection(SshRoleContext role, SshHostKeyAuthority.Proof hostKey,
             SshAuthenticationSelection selection) throws VaultException {
+        return openSelection(role, hostKey, selection, null, null);
+    }
+
+    Request openSelection(SshRoleContext role, SshHostKeyAuthority.Proof hostKey,
+            SshAuthenticationSelection selection, SshKexProof kex, AppSecrets.EffectGuard effectGuard)
+            throws VaultException {
         if (selection == null) throw SshAuthenticationSelection.invalid();
         selection.requireMatches(role, selection.kind, clock);
         if (selection.kind == Kind.PASSWORD) {
-            return openCredential(role, hostKey, selection.entryId, selection.kind, selection);
+            return openCredential(role, hostKey, selection.entryId, selection.kind, selection, kex, effectGuard);
         }
-        return openPrivateKey(role, hostKey, selection.path, selection.keyIdentity, selection);
+        return openPrivateKey(role, hostKey, selection.path, selection.keyIdentity, selection, kex, effectGuard);
+    }
+
+    private AppSecrets.SshSecretReadContext secretContext(SshRoleContext role, SshHostKeyAuthority.Proof hostKey,
+            SshAuthenticationSelection selection, SshKexProof kex, AppSecrets.EffectGuard effectGuard)
+            throws VaultException {
+        AppSecrets.EffectGuard origin = AppSecrets.boundGuard(effectGuard == null ? () -> { } : effectGuard, () -> {
+            role.requireActive(clock);
+            hostKey.requireMatches(role);
+            if (selection != null) selection.requireMatches(role, selection.kind, clock);
+            if (kex != null) kex.requireMatches(role, hostKey);
+        });
+        origin.check();
+        return vault.newSshSecretReadContext(role.deadline, origin);
     }
 
     void release(Request request, SshKexProof kex, Receiver receiver) throws VaultException {
@@ -170,21 +217,34 @@ final class SshCredentialBridge {
             if (kex == null)
                 throw new VaultException("SSH_KEX_REQUIRED", "Signed SSH key exchange proof is required");
             final VaultOperation operation = request.operation;
-            final AppSecrets.EffectGuard finalGuard = () -> {
-                request.requireOpen();
-                if (request.selection != selection) throw SshAuthenticationSelection.invalid();
-                if (selection != null) {
-                    selection.requireMatches(request.role, request.kind, clock);
-                    if (!selection.entryId.equals(request.entryId) || !selection.path.equals(request.path)
-                            || !selection.keyIdentity.equals(request.keyIdentity)) {
-                        throw SshAuthenticationSelection.invalid();
+            final AppSecrets.SshRoleGuard finalGuard = new AppSecrets.SshRoleGuard() {
+                @Override public void check() throws VaultException {
+                    request.requireOpen();
+                    if (request.selection != selection) throw SshAuthenticationSelection.invalid();
+                    if (selection != null) {
+                        selection.requireMatches(request.role, request.kind, clock);
+                        if (!selection.entryId.equals(request.entryId) || !selection.path.equals(request.path)
+                                || !selection.keyIdentity.equals(request.keyIdentity)) {
+                            throw SshAuthenticationSelection.invalid();
+                        }
                     }
+                    request.role.requireActive(clock);
+                    request.hostKey.requireMatches(request.role);
+                    kex.requireMatches(request.role, request.hostKey);
+                    operation.requireRole(request.role, request.hostKey);
+                    if (effectGuard != null) effectGuard.check();
                 }
-                request.role.requireActive(clock);
-                request.hostKey.requireMatches(request.role);
-                kex.requireMatches(request.role, request.hostKey);
-                operation.requireRole(request.role, request.hostKey);
-                if (effectGuard != null) effectGuard.check();
+                @Override public void publish(AppSecrets.EffectGuard publication) throws VaultException {
+                    AppSecrets.EffectGuard locked = () -> {
+                        synchronized (request) { check(); publication.check(); }
+                    };
+                    // The same original guard already surrounds this call through the core context.
+                    if (effectGuard == null || effectGuard == request.originalEffectGuard) locked.check();
+                    else effectGuard.publish(locked);
+                }
+                @Override public void withRole(AppSecrets.EffectGuard publication) throws VaultException {
+                    request.role.publishBound(clock, publication);
+                }
             };
             // This first check gives callers a stable fail-closed result. The same
             // checks run again inside AppSecrets immediately before receiver use.

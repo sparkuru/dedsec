@@ -3,13 +3,15 @@
 Use the existing layer that owns the behavior. Flutter owns presentation and
 interaction; Android Java owns platform APIs, permissions, and long-lived
 service lifecycle; Python owns portable tool cores and its HTTP implementation;
-C is limited to the JNI PTY and the two bundled native executables.
+C owns native PTY/executable adapters and the managed SSH engine boundaries;
+Android service and lifecycle policy stays in Java.
 
 | Path | Ownership |
 | --- | --- |
 | `lib/` | Flutter application, view models, and UI-facing APIs; see the [frontend index](../frontend/index.md) |
 | `android/app/src/main/java/im/majo/ctos/` | Android host, MethodChannel routing, snapshots, Root adapter, file broker, and HFTP service |
-| `android/app/src/main/cpp/` | `pty.c`, `python_exec.c`, and `hftp_relay.c`; do not move service policy here |
+| `android/app/src/main/cpp/` | PTY, executable adapters and managed SSH engine/file/config/crypto boundaries; do not move Android service policy here |
+| `android/ssh/` | Canonical pinned SSH build/test runners and patches; builds must not depend on active or archived Trellis task directories |
 | `android/app/src/main/python/` | Workbench protocol, SDK, portable cores, CLI, and HFTP server |
 | `android/app/src/main/assets/portable/` | APK-bundled package manifest and runtime data, not user-installed plugins |
 | `test/` | Flutter unit and widget tests |

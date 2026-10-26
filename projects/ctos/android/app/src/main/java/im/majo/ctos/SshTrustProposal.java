@@ -196,6 +196,7 @@ final class SshTrustProposal implements AutoCloseable {
     final int roleHop;
     private final byte[] baseDigest;
     private final byte[] content;
+    private final byte[] replacementDigest;
     final String binding;
     private boolean closed;
 
@@ -300,9 +301,11 @@ final class SshTrustProposal implements AutoCloseable {
             String computedBinding = hex(bindingDigest);
             this.baseDigest = baseCopy;
             this.content = contentCopy;
+            this.replacementDigest = contentDigest;
             this.binding = computedBinding;
             baseCopy = null;
             contentCopy = null;
+            contentDigest = null;
         } finally {
             // The proposal only takes ownership after every derived binding
             // value has been computed successfully.
@@ -349,20 +352,18 @@ final class SshTrustProposal implements AutoCloseable {
                 || !fingerprint.equals(evidence.fingerprint)) return false;
         byte[] evidenceBase = evidence.baseDigest();
         byte[] evidenceReplacement = evidence.replacementDigest();
-        byte[] digest = VaultCodec.digest(content);
         try {
             return MessageDigest.isEqual(baseDigest, evidenceBase)
-                    && MessageDigest.isEqual(digest, evidenceReplacement);
+                    && MessageDigest.isEqual(replacementDigest, evidenceReplacement);
         } finally {
             VaultCodec.wipe(evidenceBase);
             VaultCodec.wipe(evidenceReplacement);
-            VaultCodec.wipe(digest);
         }
     }
 
     synchronized byte[] baseDigest() throws VaultException { requireOpen(); return baseDigest.clone(); }
     synchronized byte[] newContent() throws VaultException { requireOpen(); return content.clone(); }
-    synchronized byte[] newDigest() throws VaultException { requireOpen(); return VaultCodec.digest(content); }
+    synchronized byte[] newDigest() throws VaultException { requireOpen(); return replacementDigest.clone(); }
     synchronized void requireOpen() throws VaultException {
         if (closed) throw new VaultException("VAULT_EXPIRED", "Trust proposal expired");
     }

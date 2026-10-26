@@ -525,6 +525,19 @@ void main() {
     );
     messenger.setMockMethodCallHandler(native, (call) async {
       nativeCalls.add(call.method);
+      if (call.method == 'terminalStart') {
+        await messenger.handlePlatformMessage(
+          'ctos/terminal',
+          const StandardMethodCodec().encodeSuccessEnvelope({
+            'type': 'state',
+            'generation': 1,
+            'state': 'running',
+            'mode': 'app · PTY',
+            'remote': false,
+          }),
+          null,
+        );
+      }
       return switch (call.method) {
         'snapshot' => jsonEncode({
           'root': false,

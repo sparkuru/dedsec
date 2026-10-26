@@ -11,6 +11,8 @@ import 'device_page.dart';
 import 'export_preview.dart';
 import 'settings_page.dart';
 import 'terminal_interaction.dart';
+import 'terminal_events.dart';
+import 'ssh/password_connect_page.dart';
 import 'traffic.dart';
 import 'workbench.dart';
 import 'ui/ctos_theme.dart';
@@ -55,6 +57,7 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
   final terminalInputKey = GlobalKey<TerminalCommandInputState>();
   final terminalLineTracker = TerminalEditableLineTracker();
   final terminalHistory = TerminalCommandHistory();
+  final terminalEventDecoder = TerminalEventDecoder();
   Timer? timer;
   Timer? terminalLineSyncTimer;
   Timer? connectionStaleTimer;
@@ -72,7 +75,7 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
   bool session = false;
   bool terminalBusy = false;
   bool terminalShortcutsExpanded = true;
-  bool terminalExitedDuringStart = false;
+  bool terminalRemote = false;
   int terminalGeneration = 0;
   int terminalLineSyncGeneration = 0;
   bool terminalLineSyncPending = false;
@@ -112,31 +115,36 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     terminalEvents = const EventChannel('ctos/terminal')
         .receiveBroadcastStream()
-        .map((event) => event as List<int>)
-        .transform(const Utf8Decoder(allowMalformed: true))
         .listen((event) {
-          terminal.write(event);
-          if (terminalLineSyncPending) {
+          if (!mounted) return;
+          final update = terminalEventDecoder.accept(event);
+          if (update == null) return;
+          terminal.write(update.output);
+          if (update.output.isNotEmpty && terminalLineSyncPending) {
             terminalLineLastOutputAt = DateTime.now();
             scheduleTerminalLineSync();
           }
-          if (event.contains('[session exited:') && mounted) {
+          final state = update.state;
+          if (state != null) {
             cancelTerminalLineSync(resetTracker: true);
+            terminalHistory.reset();
+            terminalInputKey.currentState?.clearLocalWithoutWrite();
             setState(() {
-              if (terminalBusy && !session) terminalExitedDuringStart = true;
-              session = false;
-              terminalMode = '未连接';
-              terminalGeneration++;
+              terminalGeneration = state.generation;
+              session = state.state == 'running';
+              terminalRemote = state.remote;
+              terminalMode = session ? state.mode : '未连接';
+              if (session) terminalShortcutsExpanded = true;
             });
+            if (!session) {
+              final detail = state.exitStatus ?? state.reason ?? state.state;
+              terminal.write('\r\n[session ${state.state}: $detail]\r\n');
+            }
           }
         }, onError: (Object e) => terminal.write('\r\n$e\r\n'));
     terminal.onOutput = (text) => sendTerminal(text);
     terminal.onResize = (columns, rows, width, height) {
-      if (session)
-        native.invokeMethod('terminalResize', {
-          'columns': columns,
-          'rows': rows,
-        });
+      if (session) unawaited(resizeTerminal(columns, rows));
     };
     refresh();
     refreshDevice();
@@ -299,24 +307,14 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
     setState(() {
       terminalBusy = true;
       terminalShortcutsExpanded = true;
-      terminalExitedDuringStart = false;
     });
     try {
       terminal.write('\r\n── ${privileged ? 'Root PTY' : '应用 Shell'} ──\r\n');
-      final mode = await native.invokeMethod<String>('terminalStart', {
+      await native.invokeMethod<String>('terminalStart', {
         'root': privileged,
         'columns': terminal.viewWidth,
         'rows': terminal.viewHeight,
       });
-      if (mounted) {
-        setState(() {
-          session = !terminalExitedDuringStart;
-          terminalMode = session
-              ? mode ?? (privileged ? 'Root PTY' : '应用 Shell')
-              : '未连接';
-          terminalGeneration++;
-        });
-      }
     } catch (e) {
       notice(e.toString());
     } finally {
@@ -328,15 +326,16 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
     if (!session || terminalBusy) return;
     cancelTerminalLineSync(resetTracker: true);
     terminalInputFocus.unfocus();
+    final generation = terminalGeneration;
     setState(() => terminalBusy = true);
     try {
       await terminalWriteTail;
-      await native.invokeMethod('terminalStop');
-      if (mounted) {
+      await native.invokeMethod('terminalStop', {'generation': generation});
+      if (mounted && terminalGeneration == generation) {
+        terminal.write(terminalEventDecoder.retire(generation));
         setState(() {
           session = false;
           terminalMode = '未连接';
-          terminalGeneration++;
         });
       }
     } catch (e) {
@@ -346,22 +345,62 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
     }
   }
 
+  Future<void> startPasswordSsh() async {
+    if (session || terminalBusy || !foreground) return;
+    terminalInputFocus.unfocus();
+    setState(() => terminalBusy = true);
+    try {
+      await showPasswordSshConnect(
+        context,
+        columns: terminal.viewWidth.clamp(1, 4096).toInt(),
+        rows: terminal.viewHeight.clamp(1, 4096).toInt(),
+        canOpen: () => mounted && !session && foreground,
+      );
+    } finally {
+      if (mounted) setState(() => terminalBusy = false);
+    }
+  }
+
+  Future<void> resizeTerminal(int columns, int rows) async {
+    final generation = terminalGeneration;
+    try {
+      await native.invokeMethod('terminalResize', {
+        'generation': generation,
+        'columns': columns,
+        'rows': rows,
+      });
+    } catch (e) {
+      if (mounted && session && terminalGeneration == generation) {
+        notice(e.toString());
+      }
+    }
+  }
+
   void sendTerminal(String text) {
     if (!session || terminalBusy || text.isEmpty) return;
     final generation = terminalGeneration;
     terminalWriteTail = terminalWriteTail.then((_) async {
       if (!session || generation != terminalGeneration) return;
       try {
-        await native.invokeMethod('terminalWrite', {'text': text});
+        await native.invokeMethod('terminalWrite', {
+          'generation': generation,
+          'text': text,
+        });
       } catch (e) {
-        notice(e.toString());
+        if (mounted && session && terminalGeneration == generation) {
+          notice(e.toString());
+        }
       }
     });
   }
 
   void sendTerminalInput(String text) {
     if (text.contains('\r') || text.contains('\n')) {
-      terminalHistory.record(terminalInputKey.currentState?.visibleText ?? '');
+      if (!terminalRemote) {
+        terminalHistory.record(
+          terminalInputKey.currentState?.visibleText ?? '',
+        );
+      }
       cancelTerminalLineSync(resetTracker: true);
     } else if (session) {
       terminalLineTracker.captureBeforeInput(terminal);
@@ -495,6 +534,14 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
   void sendTerminalControl(String label, String sequence) {
     final input = terminalInputKey.currentState;
     if (label == '↑' || label == '↓') {
+      if (terminalRemote) {
+        input?.prepareForShellControl(flushComposing: true);
+        input?.clearLocalWithoutWrite();
+        cancelTerminalLineSync(resetTracker: true);
+        sendTerminal(sequence);
+        terminalInputFocus.requestFocus();
+        return;
+      }
       if (terminalLineSyncPending) {
         notice('请等待当前补全完成');
         terminalInputFocus.requestFocus();
@@ -1606,7 +1653,7 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
             if (MediaQuery.viewInsetsOf(context).bottom == 0)
               const CtosPageHeading(
                 title: '选择终端会话',
-                subtitle: '打开本机 Shell，连续输入与查看输出',
+                subtitle: '打开本机 Shell 或连接 SSH 主机',
               )
             else ...[
               Text('选择终端会话', style: Theme.of(context).textTheme.titleLarge),
@@ -1652,6 +1699,26 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
                 ),
                 trailing: Icon(root ? Icons.arrow_forward : Icons.lock_outline),
                 onTap: terminalBusy || !root ? null : () => startTerminal(true),
+              ),
+            ),
+            Card(
+              child: ListTile(
+                key: const Key('terminal-ssh-entry'),
+                leading: const Icon(
+                  Icons.computer_outlined,
+                  color: mint,
+                  size: 28,
+                ),
+                title: const Text(
+                  'SSH 连接',
+                  style: TextStyle(fontWeight: FontWeight.w600),
+                ),
+                subtitle: const Padding(
+                  padding: EdgeInsets.only(top: 8),
+                  child: Text('连接远端主机，密码仅用于本次连接'),
+                ),
+                trailing: const Icon(Icons.arrow_forward),
+                onTap: terminalBusy ? null : () => startPasswordSsh(),
               ),
             ),
           ],

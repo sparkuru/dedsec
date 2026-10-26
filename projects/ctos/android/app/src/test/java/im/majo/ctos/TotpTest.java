@@ -161,21 +161,24 @@ public final class TotpTest {
     }
     @Test public void publicationHasNoStoreReadAndRejectsAdmittedMutationLockCancelAndDeadline() throws Exception {
         VaultOperation op = vault.beginTotpList(); vault.totpList(op, 59);
-        long revision = vault.totpPublication(op), epoch = vault.session.epoch();
         int reads = store.reads; AtomicBoolean published = new AtomicBoolean();
-        vault.publishTotp(epoch, revision, clock.time + 120000, OK, () -> published.set(true));
+        vault.publishTotpRead(op, () -> 59, () -> published.set(true));
         assertTrue(published.get()); assertEquals(reads, store.reads);
+        VaultOperation pending = vault.beginTotpList(); vault.totpList(pending, 59);
         store.admission = () -> {
-            try { vault.publishTotp(epoch, revision, clock.time + 120000, OK, () -> fail("Old read published")); fail("Old revision accepted"); }
+            try { vault.publishTotpRead(pending, () -> 59, () -> fail("Old read published")); fail("Old revision accepted"); }
             catch (VaultException error) { assertEquals("VAULT_CHANGED", error.code); }
         };
         vault.renameTotp(vault.beginTotpRename("existing"), "existing", "Changed", OK);
-        rejects("VAULT_CHANGED", () -> vault.publishTotp(epoch, revision, clock.time + 120000, OK, () -> fail("Published")));
-        long currentEpoch = vault.session.epoch(), currentRevision = vault.contentRevision;
-        rejects("VAULT_CANCELLED", () -> vault.publishTotp(currentEpoch, currentRevision, clock.time + 120000,
-                () -> { throw new VaultException("VAULT_CANCELLED", "cancel"); }, () -> fail("Published")));
-        rejects("VAULT_CHANGED", () -> vault.publishTotp(currentEpoch, currentRevision, clock.time, OK, () -> fail("Published")));
-        vault.lock(); rejects("VAULT_CHANGED", () -> vault.publishTotp(currentEpoch, currentRevision, clock.time + 120000, OK, () -> fail("Published")));
+        rejects("VAULT_CHANGED", () -> vault.publishTotpRead(pending, () -> 59, () -> fail("Published")));
+        VaultOperation cancelled = vault.beginTotpList(); vault.totpList(cancelled, 59); vault.cancelOperation(cancelled);
+        rejects("VAULT_CANCELLED", () -> vault.publishTotpRead(cancelled, () -> 59, () -> fail("Published")));
+        VaultOperation expired = vault.beginTotpList(); vault.totpList(expired, 59);
+        clock.time = expired.deadline;
+        rejects("VAULT_EXPIRED", () -> vault.publishTotpRead(expired, () -> 59, () -> fail("Published")));
+        clock.time = 0;
+        VaultOperation locked = vault.beginTotpList(); vault.totpList(locked, 59);
+        vault.lock(); rejects("VAULT_CHANGED", () -> vault.publishTotpRead(locked, () -> 59, () -> fail("Published")));
     }
     @Test public void imageLimitsAreEnforcedBeforeResourceConsumption() throws Exception {
         for (int[] dim : new int[][]{{0, 1}, {8193, 1}, {8192, 8192}, {4001, 4000}}) rejects("TOTP_LIMIT", () -> TotpQrImages.dimensions(dim[0], dim[1]));

@@ -239,6 +239,17 @@ void mockHost({void Function(MethodCall)? onCall}) {
           'partial': false,
         });
       case 'terminalStart':
+        await messenger.handlePlatformMessage(
+          'ctos/terminal',
+          const StandardMethodCodec().encodeSuccessEnvelope({
+            'type': 'state',
+            'generation': 1,
+            'state': 'running',
+            'mode': 'App · PTY',
+            'remote': false,
+          }),
+          null,
+        );
         return 'App · PTY';
       case 'pythonCatalog':
         return jsonEncode({
