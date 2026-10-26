@@ -24,7 +24,7 @@
 
 ## 父子执行顺序
 
-父 task 维护源需求/依赖/集成，不作为实施入口。最终规划批准后，先执行 [公共认证底座](../10-08-app-authentication/implement.md)，交付独立可验收接口，再执行 [SSH 接入](../10-08-ssh-terminal-client/implement.md)。下文为 SSH 主体清单，供子任务引用。
+父 task 维护源需求/依赖/集成，不作为实施入口。最终规划批准后，先执行 [公共认证底座](../10-08-app-authentication/implement.md)，交付独立可验收接口，再执行 [SSH 接入](../archive/2026-10/10-08-ssh-terminal-client/implement.md)。下文为 SSH 主体清单，供子任务引用。
 
 ## 1. 客户端与协议探针
 

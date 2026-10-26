@@ -611,7 +611,7 @@ KBI/MFA、channel/PTY/forward/service/UI 和完整客户端 AC 继续开放。
 - 保持 `ssh_native_client` 的 `ENOTSUP`/null-client/zero-progress/FD-owner contract，
   不把 fixture `ssh_api` 流程或 fingerprint 猜测升级为产品 KEX。下一输入必须同时冻结
   上游 hostfile issuer、candidate 生命周期/清零/uncertain-commit handoff，以及与 pinned
-  object manifest 的同构链接证据；详见任务 [阻塞记录](../.trellis/tasks/10-08-ssh-terminal-client/research/production-kex-caller-blocker-20261015.md)。
+  object manifest 的同构链接证据；详见任务 [阻塞记录](../.trellis/tasks/archive/2026-10/10-08-ssh-terminal-client/research/production-kex-caller-blocker-20261015.md)。
 
 ## 2026-10-15 — HostEvidence/CAS native↔Java contract
 

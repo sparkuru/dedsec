@@ -64,7 +64,7 @@
 
 用户最新明确把 Authenticator 主口令/便携库/设备快捷解锁模型应用到 SSH。统一契约见 [App 秘密库与公共认证](../../../design/app-authentication.md)；公共底座持有 KDF/加密文件/库会话/设备包装，SSH 只提供类型化身份 adapter 与受管 native 通道，不另建认证 UI/加密库。现有宿主尚无此实现。
 
-先交付 [统一秘密库底座](../10-08-app-authentication/design.md)，独立验证格式/会话/两消费者及平台认证，再交付 [SSH 接入](../10-08-ssh-terminal-client/design.md)；Authenticator 也依赖此底座但不依赖 SSH。父任务只管理源需求/依赖/集成；公共接口默认 App 内部复用，不导出跨 App 服务，不自动改变既有 Root/HFTP 策略。
+先交付 [统一秘密库底座](../10-08-app-authentication/design.md)，独立验证格式/会话/两消费者及平台认证，再交付 [SSH 接入](../archive/2026-10/10-08-ssh-terminal-client/design.md)；Authenticator 也依赖此底座但不依赖 SSH。父任务只管理源需求/依赖/集成；公共接口默认 App 内部复用，不导出跨 App 服务，不自动改变既有 Root/HFTP 策略。
 
 ## 建议模块与数据流
 

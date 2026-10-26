@@ -6,7 +6,7 @@
 
 2026-10-18 status update: the recommended explicit C service-negotiation slice is
 implemented and passes encrypted ARM QEMU/Bionic synthetic tests. See
-[`design/verification.md`](../../../../design/verification.md#2026-10-18--native-post-kex-userauth-service-negotiation)
+[`design/verification.md`](../../../../../../design/verification.md#2026-10-18--native-post-kex-userauth-service-negotiation)
 for actual evidence and limits. The findings below remain the original research;
 typed auth username/immutable selection binding is still the next open contract.
 

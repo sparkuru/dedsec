@@ -31,7 +31,7 @@
     "android/app/src/main/cpp/pty.c",
     "design/app-authentication.md"
   ],
-  "notes": "2026-10-10 用户在最新完整规划摘要后回复“批准”。先启动公共统一秘密库/认证底座实施，并前置协调 SSH 无明文磁盘文件访问探针；公共底座已 in_progress，TOTP 与 SSH 完整接入仍依赖底座验收。HOTP 全部撤销，其他平台迁移排除。当前批准包含本地实现、构建和隔离技术验证，不包含真实设备安装/账号操作；未运行的产品或平台验收不标通过。 2026-10-13用户验收TOTP并要求继续下一项，客户端子task已恢复in_progress，从Android native内存文件访问G0开始；父task只维护需求/联合集成，不将客户端或平台gate记已完成。",
+  "notes": "2026-10-10 用户在最新完整规划摘要后回复“批准”。先启动公共统一秘密库/认证底座实施，并前置协调 SSH 无明文磁盘文件访问探针；公共底座已 in_progress，TOTP 与 SSH 完整接入仍依赖底座验收。HOTP 全部撤销，其他平台迁移排除。当前批准包含本地实现、构建和隔离技术验证，不包含真实设备安装/账号操作；未运行的产品或平台验收不标通过。 2026-10-13用户验收TOTP并要求继续下一项，客户端子task已恢复in_progress，从Android native内存文件访问G0开始；父task只维护需求/联合集成，不将客户端或平台gate记已完成。 2026-10-26前台密码SSH已通过Android实机界面并安装正式APK；用户要求将客户端本次交付归档。child完成只表示前台password milestone，原完整R1–R11/AC1–AC9仍有未完，父task保持in_progress，详见design/plan.md。",
   "meta": {
     "planning_role": "parent",
     "planning_stage": "approved",
@@ -41,6 +41,8 @@
       "scope": "公共底座实施及前置 SSH 内存文件访问探针；后续业务依赖底座验收",
       "device_authorized": false,
       "account_authorized": false
-    }
+    },
+    "full_scope_complete": false,
+    "archived_client_delivery_scope": "Foreground password SSH only; config/import/key/cert/KBI/credentials/jump/forward/rekey/background/full restore remain deferred"
   }
 }

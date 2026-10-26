@@ -148,7 +148,7 @@ userauth；[本轮验证](verification.md#2026-10-18--recovered-board-android-jn
 65,838 checks / exit0。已修复 role admission errno、pinned banner 分片状态、KEX output
 未排空即完成及 failed-open guard 遗留；normal gate 94 tasks 成功，APK `f3327427…`
 未安装。Android JNI 与真实 managed CAS/vault、userauth、PTY/forward/service/UI 继续
-开放。下一本地协议切片研究见 [userauth 前置研究](../.trellis/tasks/10-08-ssh-terminal-client/research/next-userauth-20261017.md)，
+开放。下一本地协议切片研究见 [userauth 前置研究](../.trellis/tasks/archive/2026-10/10-08-ssh-terminal-client/research/next-userauth-20261017.md)，
 尚未实现；[本轮验证](verification.md#2026-10-17--host-qemu-arm-native-runtime-and-production-fixes)。
 
 2026-10-17 当前增量：独立 JNI fixture 以预算 3 编码验证分片 server banner、初始
@@ -315,7 +315,7 @@ live role/PID/UID、CLOEXEC/NONBLOCK 受管 socket、callback token/environment�
 OpenSSH/KEX client、不触发 JNI/credential。host gate=27；普通 APK 未包含该 boundary
 或 fixture OpenSSH object。待 pinned hostfile issuer、一次性 candidate handoff、同构
 source/object manifest 冻结后，才补真实 partial I/O、EOF、cancel/deadline、close retry、
-inbound NEWKEYS/JNI proof，详见任务 [阻塞记录](../.trellis/tasks/10-08-ssh-terminal-client/research/production-kex-caller-blocker-20261015.md)。
+inbound NEWKEYS/JNI proof，详见任务 [阻塞记录](../.trellis/tasks/archive/2026-10/10-08-ssh-terminal-client/research/production-kex-caller-blocker-20261015.md)。
 
 2026-10-14 前一窄增量：同进程KEX-only native launcher仍仅作为独立opt-in fixture/host seam；用户已确认同进程 topology 与当前 native event-loop 线程同步附着 JNI callback，adapter 已编入正常 `libctos_ssh_files.so`。当时已实现 bounded managed-provider handoff：生产 NEW host 只能由精确 role/hop-bound proposal 通过，typed password/private-key bytes 只能在匹配 host proof + KEX proof 后经 `SshCredentialBridge` 释放，native/JNI 会清零 Java array 与 caller buffer。adapter 对 role/PID/UID/deadline、JNIEnv/JavaVM、线程、重入、取消、迟到回调及 native-first cleanup fail-closed；host `gate=11`、162 JVM、lint、Release 构建通过。当时真实 OpenSSH event loop/caller、受管 config/known_hosts file view 与 trust CAS 写回、ARM、设备、外部SSH、vault、auth/PTY/forward/service/UI仍未接入。
 下一历史阶段是把已实现的 managed file/provider contract 接到真实 OpenSSH caller；不把 `ssh_api` 内存流或 fixture control transport 视为产品 transport。

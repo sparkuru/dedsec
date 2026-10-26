@@ -1,0 +1,12 @@
+{"file": ".trellis/spec/backend/ssh-password-connect.md", "reason": "Focused executable real password connection/lifetime/ownership contracts"}
+{"file": "design/ssh-password-connect.md", "reason": "Current reviewed password connection vertical path, protocol/ownership/lifetime/UI contract"}
+{"file": ".trellis/spec/backend/host-bridge.md", "reason": "Existing host threading/MethodChannel/ownership rules"}
+{"file": ".trellis/spec/backend/ssh-native.md", "reason": "Existing proof/transport/auth/close guarantees; current contract extends shell-only lifetime"}
+{"file": ".trellis/spec/backend/app-secrets.md", "reason": "Original request/epoch/guard/loan/mutation/CAS rules"}
+{"file": ".trellis/spec/backend/ssh-manifest.md", "reason": "One latest model/writer and shared TOTP protection"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Layer-specific checks serialized bymain"}
+{"file": ".trellis/spec/frontend/terminal-interaction.md", "reason": "Existing typed terminal stream and soleinput preserve"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "Material theme/layout/accessibility/sensitive form conventions"}
+{"file": ".trellis/tasks/archive/2026-10/10-08-ssh-terminal-client/research/password-host-path-20261025.md", "reason": "Missing production factory/transient source/trust dependencies"}
+{"file": ".trellis/tasks/archive/2026-10/10-08-ssh-terminal-client/research/password-ui-path-20261025.md", "reason": "Protected form and independent attempt/review protocol"}
+{"file": ".trellis/tasks/archive/2026-10/10-08-ssh-terminal-client/research/password-transport-path-20261025.md", "reason": "Socket ownership/publication and established guard split"}

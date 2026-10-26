@@ -3,7 +3,7 @@
 状态：已实现并完成本地验证。[实测与限制](verification.md#20261024-certificate-facts)：ARM22239/effects0、全量JVM638及normal/fixture/APK审计通过。
 
 日期2026-10-24。接续[私钥审计](ssh-private-material-ownership.md)及
-[证书源码研究](../.trellis/tasks/10-08-ssh-terminal-client/research/certificate-facts-native-20261023.md)。
+[证书源码研究](../.trellis/tasks/archive/2026-10/10-08-ssh-terminal-client/research/certificate-facts-native-20261023.md)。
 本轮为后续信任/reviewer提供实际证书的有限事实，不改变v1、旧材料/pair/private APIs、
 生产证书拒绝门、validator/provider、恢复或connector。
 

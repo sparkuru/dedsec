@@ -76,7 +76,7 @@
 ## 下一步行动（最新有效，2026-10-24，证书事实之后）
 
 1. 接管前置：读design入口/plan/constraints、当前合同/规范/验证、task/git；在ctOS核对source10/protected299/artifacts-final（若/tmp仍在）。全匹配后继续；失去临时证据只标不可复核，不冒充重验，不回滚dirty/归档父task。
-2. 当前焦点/未开始：基于[模型研究](../.trellis/tasks/10-08-ssh-terminal-client/research/identity-authority-model-20261023.md)设计精确持久关系authority与password account/target模型。先冻结明确purpose/ID关联/新authenticated plaintext version及v1精确roundtrip、所有candidate重建/restore覆盖/显式修复迁移，不用同名或当前partial报告替代。完成判据是可执行schema及正反兼容向量；不能静默迁移/丢失旧字段。
+2. 当前焦点/未开始：基于[模型研究](../.trellis/tasks/archive/2026-10/10-08-ssh-terminal-client/research/identity-authority-model-20261023.md)设计精确持久关系authority与password account/target模型。先冻结明确purpose/ID关联/新authenticated plaintext version及v1精确roundtrip、所有candidate重建/restore覆盖/显式修复迁移，不用同名或当前partial报告替代。完成判据是可执行schema及正反兼容向量；不能静默迁移/丢失旧字段。
 3. 未开始：为实际证书用途及信任source/target审阅冻结approvedCA来源、真实purpose/principal/Unix time/撤销政策和精确review binding。CSCF只提供事实，不能作为批准；需要actual known_hosts/CA selector/marker及revocation/KRL范围的实现/验收。不得用假/null主体绕过上下文，不复用SystemClock BOOTTIME当Unix validity，不把embeddedCA digest当authority。
 4. 待验证：真实Request动态/cwd/key-loader/default及逐字段最终消费（含.pub/-cert）；保持生产证书拒绝/完整provider/SSH恢复关闭，全部义务/入口/reviewer完成后再开放相应路径，之后推进connector/jump/forward/service/UI及父AC。
 5. 停止条件：Android JNI/锁页/真实端点验收需届时精确设备/隔离fixture/当前授权，不沿用历史许可；当前无阻止下一轮本地设计的外部阻塞。不设备/真实库账号/安装/commit/archive/push/dist。
@@ -100,8 +100,8 @@
 ## 下一步行动（最新有效，2026-10-23，全部private审计之后）
 
 1. 接管前置：读design入口/plan/constraints与当前合同/规范/验证、task/git；在ctOS重算source10/protected295/artifacts-final（若/tmp尚在），全匹配后继续，缺失只标不可复核。保留dirty，原task不归档。
-2. 当前焦点/未开始：完整关系authority和password account模型需要显式认证metadata/version设计，参考[研究](../.trellis/tasks/10-08-ssh-terminal-client/research/identity-authority-model-20261023.md)。先列v1精确roundtrip、所有candidate重建/restore coverage/migration约束及正反向量，再冻结新schema/产品修复语义；不得从本轮v1唯一owner推出private/public/cert关系。
-3. 未开始：基于[证书源码研究](../.trellis/tasks/10-08-ssh-terminal-client/research/certificate-facts-native-20261023.md)明确type/serial/Unix validity/principal/criticaloption/embeddedCA与信任边界，复用pinned parser；CString归一化不能冒充raw UTF8规范证明，embedded签名不是CA authority。完成实际CA/time/principal/revocation/reviewer与source/target差异验收前，保留生产证书拒绝门。
+2. 当前焦点/未开始：完整关系authority和password account模型需要显式认证metadata/version设计，参考[研究](../.trellis/tasks/archive/2026-10/10-08-ssh-terminal-client/research/identity-authority-model-20261023.md)。先列v1精确roundtrip、所有candidate重建/restore coverage/migration约束及正反向量，再冻结新schema/产品修复语义；不得从本轮v1唯一owner推出private/public/cert关系。
+3. 未开始：基于[证书源码研究](../.trellis/tasks/archive/2026-10/10-08-ssh-terminal-client/research/certificate-facts-native-20261023.md)明确type/serial/Unix validity/principal/criticaloption/embeddedCA与信任边界，复用pinned parser；CString归一化不能冒充raw UTF8规范证明，embedded签名不是CA authority。完成实际CA/time/principal/revocation/reviewer与source/target差异验收前，保留生产证书拒绝门。
 4. 待验证：真实Request动态/cwd/key-loader/default及逐字段最终消费，尤其.pub/-cert后续读取；不探宿主/不凭suffix批准。全部离线义务/入口/reviewer完成前保持生产provider和SSH恢复关闭，之后再connector/jump/forward/service/UI及父AC。
 5. 停止条件：Android JNI/锁页/真实端点验收需届时精确目标/独立fixture/当前授权，不沿用历史设备许可。当前无阻止后续本地设计的外部阻塞；不设备/真实库账号/安装/commit/archive/push/dist。
 

@@ -19,7 +19,10 @@ source/archive SHA、no-symlink/forbidden/output检查和权限保留。9份bash
 
 本次归档只关闭前台密码SSH交付；原完整SSH父任务及未完AC继续保留，不把子任务数量
 当作全部需求验收。提交使用ctOS显式路径，归档/日志禁用脚本自动commit，以免纳入
-共享Git索引中的其他项目改动。归档后的实际构建结果另记于本节收尾记录。
+共享Git索引中的其他项目改动。任务实际移入归档、活动目录已不存在后，再次执行同一
+production/config/JNI构建链通过，7任务（3执行/4保留）16s。归档JSONL上下文路径校验
+通过，文档引用已按实际移动位置修复。构建使用固定source与patch，临时编译路径导致
+的二进制字符串/布局差异不冒充可重复构建保证；本轮安装的是明确哈希的已验收APK。
 
 <a id="20261026-password-android"></a>
 ## 2026-10-26 前台密码SSH：真实Android bridge与Flutter界面通过
@@ -3271,7 +3274,7 @@ PTY/forward/service/UI 仍未实现，缺 issuer 时 native client 继续 `ENOTS
 `hostfile.o` 仍依赖 OpenSSH key/buffer/HMAC 以及 `fopen`、`fdopen`、`mkstemp`、`link`、
 `rename` 等未经生产 provider 收窄的文件系统闭包。
 
-本轮测得对象哈希见 [production caller blocker](../.trellis/tasks/10-08-ssh-terminal-client/research/production-kex-caller-blocker-20261015.md#2026-10-15-sourceobject-closure-re-audit)。尚无 project-owned、同 pinned source/object manifest 的 hostfile issuer，故未链接普通 APK，
+本轮测得对象哈希见 [production caller blocker](../.trellis/tasks/archive/2026-10/10-08-ssh-terminal-client/research/production-kex-caller-blocker-20261015.md#2026-10-15-sourceobject-closure-re-audit)。尚无 project-owned、同 pinned source/object manifest 的 hostfile issuer，故未链接普通 APK，
 未改变 `ssh_native_client` 的 `ENOTSUP` fail-closed 边界；无代码、APK、设备、网络、
 真实 vault 或 commit 变更。
 
@@ -3534,25 +3537,25 @@ post-fix 固定 hako 环境中 `:app:testReleaseUnitTest` **150项通过、0 fai
 
 ## 2026-10-13 SSH 真实KEX完成守卫
 
-当前开发板独立UID10191/test10192，真实签名/NEWKEYS与每跳完成绑定 **27用例/1项6.999秒通过**；三类主机key、六种KEX、双向rekey、signature篡改、缺/到期role、NEWKEYS前拒绝和两hop交错/独立撤销。fixture15秒构建/lint、v2验签、真实段/ELF/安装读回一致；两个fixture已卸载，自有UID为空，正式APK3bc762d9…保持。正常release/133 JVM/lint41秒通过，APK55aef7e4…仅本地，实际排除全部测试探针与assets。失败轮与限制见[阶段检查](../.trellis/tasks/10-08-ssh-terminal-client/check.md#真实kex完成守卫27例当前板通过)。
+当前开发板独立UID10191/test10192，真实签名/NEWKEYS与每跳完成绑定 **27用例/1项6.999秒通过**；三类主机key、六种KEX、双向rekey、signature篡改、缺/到期role、NEWKEYS前拒绝和两hop交错/独立撤销。fixture15秒构建/lint、v2验签、真实段/ELF/安装读回一致；两个fixture已卸载，自有UID为空，正式APK3bc762d9…保持。正常release/133 JVM/lint41秒通过，APK55aef7e4…仅本地，实际排除全部测试探针与assets。失败轮与限制见[阶段检查](../.trellis/tasks/archive/2026-10/10-08-ssh-terminal-client/check.md#真实kex完成守卫27例当前板通过)。
 
 这是实际上游KEX完成时序的证据，合成已知主机key由夹具签发；产品role issuer、未知host/证书/撤销核验、私钥/口令释放、用户认证/PTY/转发/服务/UI和联合恢复仍开放。
 
 ## 2026-10-13 SSH 原生控制通道
 
-独立App UID10189在当前`.14` API30/4KiB/Permissive下 **24项transport用例、1项0.388秒通过**，包括实际SCM发送者、绑定/顺序/重放/截断拒绝、只读匿名FD收取和无泄漏回收。15秒构建/lint、v2签名、段核对/ELF与安装读回一致；两fixture已卸载、自有UID进程为空、正式APK3bc762d9…保持，见[完整证据](../.trellis/tasks/10-08-ssh-terminal-client/check.md#原生控制transport24例当前板通过)。
+独立App UID10189在当前`.14` API30/4KiB/Permissive下 **24项transport用例、1项0.388秒通过**，包括实际SCM发送者、绑定/顺序/重放/截断拒绝、只读匿名FD收取和无泄漏回收。15秒构建/lint、v2签名、段核对/ELF与安装读回一致；两fixture已卸载、自有UID进程为空、正式APK3bc762d9…保持，见[完整证据](../.trellis/tasks/archive/2026-10/10-08-ssh-terminal-client/check.md#原生控制transport24例当前板通过)。
 
 这是控制transport，不证明host-key分类、真实KEX完成、私钥/凭据释放或生产角色。真实源码先做host-key callback后验签，认证授权须在真实KEX证明后；不能从UI确认或终端文本直接放行。生产认证桥、协议/PTY/转发/服务/UI与混合恢复仍开放。
 
 ## 2026-10-13 SSH 通用文件解析与撤销
 
-真实readconf/glob通过通用闭包视图读取：**147用例/1项0.780秒通过**；同批JNI **16用例/0.239秒通过**，实际128文件与8MiB正文边界。补齐发布后取消绑定后 **17用例/0.314秒通过**、133 JVM及lint通过。三轮独立夹具均已卸载，自有UID为空，正式APK3bc762d9…保持；426本地native用例/1634擦除检查另为host证据。完整产物/source pins、失败与限制见[阶段检查](../.trellis/tasks/10-08-ssh-terminal-client/check.md#当前通用文件解析147例与发布后撤销17例通过)。
+真实readconf/glob通过通用闭包视图读取：**147用例/1项0.780秒通过**；同批JNI **16用例/0.239秒通过**，实际128文件与8MiB正文边界。补齐发布后取消绑定后 **17用例/0.314秒通过**、133 JVM及lint通过。三轮独立夹具均已卸载，自有UID为空，正式APK3bc762d9…保持；426本地native用例/1634擦除检查另为host证据。完整产物/source pins、失败与限制见[阶段检查](../.trellis/tasks/archive/2026-10/10-08-ssh-terminal-client/check.md#当前通用文件解析147例与发布后撤销17例通过)。
 
 公开文件借用不含私钥正文，类型/路径/闭包/预算独立检查，锁库/更换会话/取消精确撤销；FILE按上游真实POSIX形态读取且没有普通明文文件回退。控制transport正在接入，生产KEX/每跳授权、私钥/凭据释放、协议/PTY/转发/服务、UI与混合恢复仍未验收，不能据fixture或host结果启用生产validator。
 
 ## 2026-10-13 SSH 受管跳板参数与公共文件桥接
 
-真实ssh.c跳板参数生成器新增逐项引用和字面百分号处理，实际percent_expand、8项自有系统shell builtin roundtrip及2项生成字段检查均完成。17秒构建/lint、v2验签与打包ELF/段核对通过，main55e39733…/test24851017…安装读回一致。当前板UID10181/test10182 **127例、1项0.796秒通过，无skip**；两fixture已卸载，自有UID进程为空，正式APK3bc762d9…保持。完整hash、固定源码及清理见[阶段检查](../.trellis/tasks/10-08-ssh-terminal-client/check.md#当前受管跳板参数127例通过公共文件视图桥接实施中)。
+真实ssh.c跳板参数生成器新增逐项引用和字面百分号处理，实际percent_expand、8项自有系统shell builtin roundtrip及2项生成字段检查均完成。17秒构建/lint、v2验签与打包ELF/段核对通过，main55e39733…/test24851017…安装读回一致。当前板UID10181/test10182 **127例、1项0.796秒通过，无skip**；两fixture已卸载，自有UID进程为空，正式APK3bc762d9…保持。完整hash、固定源码及清理见[阶段检查](../.trellis/tasks/archive/2026-10/10-08-ssh-terminal-client/check.md#当前受管跳板参数127例通过公共文件视图桥接实施中)。
 
 公共库同步文件接口随后加入私钥描述、公开正文与精确请求/库/连接绑定，正文借用结束即清零，私钥正文不在公开视图中；125 JVM与lint实际通过。JNI文件视图/锁库撤销继续实施，完整角色、生产provider、每跳审批/认证、协议/PTY/转发和客户端仍开放；参数引用通过不赋予任意命令或端点权限。
 
@@ -3560,13 +3563,13 @@ post-fix 固定 hako 环境中 `:app:testReleaseUnitTest` **150项通过、0 fai
 
 在已通过101例基础上加入真实read_config_file_depth/compat glob、锁页匿名配置FILE，以及嵌套/相对目录/通配首值、parse-only执行拦截、展开后路径/缺失/深度8和每目标政策。两个扩展失败轮均0.166秒，数字诊断指出实际解析已成功，但存在额外拒绝文件访问1次；显式OpenSSL初始化NO_LOAD_CONFIG后归零，未放宽接受条件或实际读取普通配置文件。
 
-修后18秒fixture构建/lint、实际v2验签通过，main0ead24fc…/test16751c66…安装读回一致。当前板UID10179/test10180 **117例、1项0.189秒通过，无skip**；fixture已卸载，自有进程为空、正式APK3bc762d9…保持。完整hash/失败诊断/边界及临时原始证据见 [check](../.trellis/tasks/10-08-ssh-terminal-client/check.md#原生配置政策与include回归117例通过)。生产file provider、受管shell参数、完整每跳审批/认证及协议仍开放。
+修后18秒fixture构建/lint、实际v2验签通过，main0ead24fc…/test16751c66…安装读回一致。当前板UID10179/test10180 **117例、1项0.189秒通过，无skip**；fixture已卸载，自有进程为空、正式APK3bc762d9…保持。完整hash/失败诊断/边界及临时原始证据见 [check](../.trellis/tasks/archive/2026-10/10-08-ssh-terminal-client/check.md#原生配置政策与include回归117例通过)。生产file provider、受管shell参数、完整每跳审批/认证及协议仍开放。
 
 ## 2026-10-13 SSH 原生配置政策增量实测
 
 冻结G1/G2之外新增真实上游三文件policy patch、缺provider早拒绝及独立测试APK。原parser保留none/no、inactive及首值语义，Match exec在展开前拒绝；有效指纹绕过/外部依赖和严格跳板语法按真实枚举处理。只证明缺provider时提前拒绝，不是人工信任审批或完整生产客户端。
 
-19秒/111 tasks/36 executed构建、lint0错误3既有警告、v2/单signer及三个非法开关拒绝通过；正常APK13秒构建/lint，ZIP排除全部研究输出，hashd43dff68…保持。当前`.14`独立UID10173/test10174、公开合成固定方法 **1项/0.154秒通过，无skip，101用例**。test/main安装hash实际匹配，两个fixture已卸载，自有UID进程为空，正式APK3bc762d9…前后相同。完整hash/失败构建修正/阶段记录见 [check](../.trellis/tasks/10-08-ssh-terminal-client/check.md#原生配置政策首批增量通过)。
+19秒/111 tasks/36 executed构建、lint0错误3既有警告、v2/单signer及三个非法开关拒绝通过；正常APK13秒构建/lint，ZIP排除全部研究输出，hashd43dff68…保持。当前`.14`独立UID10173/test10174、公开合成固定方法 **1项/0.154秒通过，无skip，101用例**。test/main安装hash实际匹配，两个fixture已卸载，自有UID进程为空，正式APK3bc762d9…前后相同。完整hash/失败构建修正/阶段记录见 [check](../.trellis/tasks/archive/2026-10/10-08-ssh-terminal-client/check.md#原生配置政策首批增量通过)。
 
 真实嵌套Include/受管路径、每跳绑定/审批、安全shell参数、信任CAS、认证/PTY/转发与公共库接入仍开放；本轮不接真实库，不把语法正例当已实现完整跳板。
 
@@ -3576,13 +3579,13 @@ post-fix 固定 hako 环境中 `:app:testReleaseUnitTest` **150项通过、0 fai
 
 修后源码/严格编译/1240输入覆盖/17秒fixture构建、lint及v2验签通过。main `23d33cca…`、test `cf673b52…`实际安装读回一致，fresh UID10171/test10172；指定方法 **1项/4.496秒通过，无skip**，六组、真实parent2199/jump2200及代次73、cleanup/gate全部通过。runtime crypto_version810549392出现；不据此标全算法矩阵通过。
 
-两个fixture已精确卸载，自有UID进程表为空，正式APK SHA `3bc762d9…`前后相同。未操作真实库、外部SSH账号、Root、剪贴板或系统设置。完整hash与临时日志入口见 [task check](../.trellis/tasks/10-08-ssh-terminal-client/check.md#g2-第二轮当前设备回归通过与清理)。API30/4KiB/Permissive、固定16对象/16KiB可信合成及identification-only loopback是本轮证据边界；生产配置限制/主机信任、完整认证/PTY/转发及公共库接入继续实施。
+两个fixture已精确卸载，自有UID进程表为空，正式APK SHA `3bc762d9…`前后相同。未操作真实库、外部SSH账号、Root、剪贴板或系统设置。完整hash与临时日志入口见 [task check](../.trellis/tasks/archive/2026-10/10-08-ssh-terminal-client/check.md#g2-第二轮当前设备回归通过与清理)。API30/4KiB/Permissive、固定16对象/16KiB可信合成及identification-only loopback是本轮证据边界；生产配置限制/主机信任、完整认证/PTY/转发及公共库接入继续实施。
 
 ## 2026-10-13 SSH G0 本地实现与构建隔离
 
 TOTP 用户验收已提交 `566ca51`、归档 `f3762ba`、journal `74f8324`，当前复用原 SSH 客户端 task 为 in_progress。用户批准继续下一项，随后明确批准本轮 `.14` SSH G0安装/合成自动测试/卸载，并追加允许真实秘密库操作；凭据不记录。**G0已在当前板独立AppUID实际通过，完整OpenSSH与生产客户端仍未通过**；本轮仅合成数据，未操作真实库、SSH账号、锁屏输入、Root/剪贴板/系统设置或远程端点。
 
-实现包含 opt-in C PIE、fixture-only Gradle 输出目录与固定方法的 Java instrumentation。对 ASharedMemory / raw memfd syscall 分别检查，不把 mmap 或诊断完成等同可用；至少一个完整候选通过才允许 G0 通过。固定合成载荷不创建普通数据文件，不启动页面、访问真实库/账号/剪贴板、Root 或网络。独立源码审阅及最终产物 hash 维护在 [SSH 阶段检查](../.trellis/tasks/10-08-ssh-terminal-client/check.md)。
+实现包含 opt-in C PIE、fixture-only Gradle 输出目录与固定方法的 Java instrumentation。对 ASharedMemory / raw memfd syscall 分别检查，不把 mmap 或诊断完成等同可用；至少一个完整候选通过才允许 G0 通过。固定合成载荷不创建普通数据文件，不启动页面、访问真实库/账号/剪贴板、Root 或网络。独立源码审阅及最终产物 hash 维护在 [SSH 阶段检查](../.trellis/tasks/archive/2026-10/10-08-ssh-terminal-client/check.md)。
 
 本地实际执行：首轮14秒重建和 lint 0错误/3既有警告；API28/arm64/NDK27 严格编译，真实 AArch64 PIE `/system/bin/linker64` / `0x4000` PT_LOAD，动态依赖 libandroid/libdl/libc；两夹具 APK v2/单 signer 通过。随后又收紧失败路径诊断：未 reap 子进程不能输出 cleanup=pass；最终8秒重新构建/lint通过，最终ELF/v2验签、source SHA逐份匹配及唯一probe路径/arm64 ABI核对通过。最终两fixture hash为 `a14f1767…` / `0dafbda4…`，完整标识见task check。
 
@@ -3592,7 +3595,7 @@ TOTP 用户验收已提交 `566ca51`、归档 `f3762ba`、journal `74f8324`，�
 
 G1 官方源码 payload、版本/许可证及工具链实际核对，来源见 [依赖](dependencies.md#2026-10-13-ssh-android-g1-构建输入)。unmodified stock make先在Bionic sentinel/兼容空宏冲突失败，后续两fresh兼容版本分别暴露bzero函数式宏与fallback定义冲突、私有resolver state不可用；三个失败run完整保留。最终兼容patch保留实际bzero函数和byte-identical explicit_bzero，仅研究专用 `__BIONIC__ && CTOS_ANDROID_ABI_BASELINE_ONLY` 分支使用公开res_init/res_query，不fake私有state/cache/headerchecks；仍不能证明EDNS0/DO/AD可信或VerifyHostKeyDNS可靠，后续受约束native必须拒绝提前accept并保留人工指纹批准。
 
-最终 `stock-run.lOHF9Oai` 实际全量cross-build成功：OpenSSL3.5.9静态PIC库与私有install_dev，OpenSSH10.6p1 configure/WITH_OPENSSL1/WITH_ZLIB1、ssh/ssh-keygen及readelf均exit0。两个ELF实际AArch64/PIE、linker64、所有PT_LOAD0x4000，DT_NEEDED仅libz/libdl/libc、无hostglibc/动态libcrypto/TEXTREL；bzero/explicit_bzero/OPENSSL_cleanse/OpenSSL_version均有已定义符号。ssh **6,593,352B / `5a3a15e6…`**，ssh-keygen **6,172,496B / `591eb4a8…`**；完整hash和finalrunner/patch见 [阶段检查](../.trellis/tasks/10-08-ssh-terminal-client/check.md)。只计ABI兼容构建，不计unmodified stock、完整G1/运行算法/协议或生产trust通过；未执行、安装或打入正式APK。
+最终 `stock-run.lOHF9Oai` 实际全量cross-build成功：OpenSSL3.5.9静态PIC库与私有install_dev，OpenSSH10.6p1 configure/WITH_OPENSSL1/WITH_ZLIB1、ssh/ssh-keygen及readelf均exit0。两个ELF实际AArch64/PIE、linker64、所有PT_LOAD0x4000，DT_NEEDED仅libz/libdl/libc、无hostglibc/动态libcrypto/TEXTREL；bzero/explicit_bzero/OPENSSL_cleanse/OpenSSL_version均有已定义符号。ssh **6,593,352B / `5a3a15e6…`**，ssh-keygen **6,172,496B / `591eb4a8…`**；完整hash和finalrunner/patch见 [阶段检查](../.trellis/tasks/archive/2026-10/10-08-ssh-terminal-client/check.md)。只计ABI兼容构建，不计unmodified stock、完整G1/运行算法/协议或生产trust通过；未执行、安装或打入正式APK。
 
 G2 上游文件六组/Include/ProxyJump/配置执行与信任边界、G3秘密库/每跳/协议/PTY/转发/服务及父完整AC仍开放；缺失生产SSH provider继续fail-closed。当前G0不能代替Enforcing、API28/29或真实16KiB设备；编译不能代替实际协议/crypto算法。失败路径时钟/中断仍是源码审阅，未做设备故障注入。
 
@@ -3602,7 +3605,7 @@ G2 上游文件六组/Include/ProxyJump/配置执行与信任边界、G3秘密�
 
 真实10.6p1/OpenSSL3.5.9的独立driver/VFS client/closefrom observer已实现并完成本地构建与只读审阅。六组源码调用真实readconf/glob/authfile/hostfile及单跳ProxyJump，使用固定可信合成输入、匿名锁页和有界public proposal流；不是生产配置政策/信任provider或完整登录客户端。
 
-审查修复固定metadata缺失误通过、清理回执忽略bootstrap错误、teardown信号竞态/重复关闭FD、未确认group丢失primary及reap后PGID复用风险。独立CLI与Gradle均检查完整输入树；1240文件aggregate构建前后核对，实际Gradle输入与独立oracle比较零缺失，包含.gitignore。相关pin/源码SHA及失败run全部见 [阶段检查](../.trellis/tasks/10-08-ssh-terminal-client/check.md#g2-最终本地构建与可审阅产物)。
+审查修复固定metadata缺失误通过、清理回执忽略bootstrap错误、teardown信号竞态/重复关闭FD、未确认group丢失primary及reap后PGID复用风险。独立CLI与Gradle均检查完整输入树；1240文件aggregate构建前后核对，实际Gradle输入与独立oracle比较零缺失，包含.gitignore。相关pin/源码SHA及失败run全部见 [阶段检查](../.trellis/tasks/archive/2026-10/10-08-ssh-terminal-client/check.md#g2-最终本地构建与可审阅产物)。
 
 最终fixture release/test/lint **17秒通过，111 tasks/27 executed，lint0错误/3既有警告**。两APK实际v2/1 signer、独立包名/SDK28/arm64通过；main **`aba810c1…`**、test **`cf673b52…`**。APK恰含三个G2程序及完整许可证/patch/输入manifest；strip后的.text/.rodata与最终build逐字节一致，真实APK ELF均PIE/linker64/LOAD0x4000、动态依赖仅libz/libdl/libc。G2输出已存在时正常release/lint13秒通过，ZIP不含研究程序/专用assets，正常控制APK仍`d43dff68…`，未安装。
 

@@ -1,6 +1,232 @@
 # SSH 接入实施计划
 
-## 下一增量：session channel / PTY（用户已确认，尚未实施）
+## 当前：前台密码连接闭环（2026-10-25）
+
+2026-10-26增加一份实际UI验收测试；root串行执行用户授权的具名Android11板测试与
+清理，真实bridge及Flutter表单→SSH→终端输出均通过，独立raw复核PASS。314份原有
+代码/runner保留；仅测试驱动修正，无产品源码变更。[证据](../../../../../design/verification.md#20261026-password-android)。
+
+[合同](../../../../../design/ssh-password-connect.md)。Trellis native/session implement拥有C/JNI/
+Java session lifetime与FD接管；host implement拥有真实配置/validator/临时密码/connector/
+bridge/MainActivity；UI implement拥有新Flutter表单/API及main入口/测试。明确文件分工，
+禁止worker并行构建，main串行所有检查和文档；独立check复核源码与raw证据。保留既有dirty。
+
+45source/269protected、438before保留。本地实现和门禁完成；实际运行修复UTF8 UNDERFLOW、
+端口/hash/大小写主机键匹配、API28 FD兼容及issuer错误码，未放宽权限断言。
+最终client/issuer/独立服务端与APK原始证据复核通过，临时服务/密码全部清理。
+授权Android连接验收已于2026-10-26完成，不再扩基础模型来代替使用。[验证](../../../../../design/verification.md#20261025-password-connect)。
+
+## 用户更正：唯一正式主线（2026-10-25，当前有效）
+
+按[正式合同](../../../../../design/ssh-manifest.md)直接实现，覆盖下方旧双格式安排。Trellis schema
+worker负责VaultManifest及改名schema测试；core worker负责AppSecrets/SshRestoreReview及
+改名lifecycle测试，其他产品源码保留；main串行构建/文档，独立check复核。窄旧TOTP输入
+适配保护已交付数据；一个最新writer/模型，无格式业务分支。目标继续实际SSH可用流程。
+
+本轮收敛已实现并本地验证：定向177/全量691 JVM、lint/normal92/fixture111与三APK审计及独立raw复核PASS。source5/protected307；[实测](../../../../../design/verification.md#20261025-ssh-mainline)。父客户端实际可用性仍待最小密码连接闭环验收。
+
+## 2026-10-25 当前增量：v2显式关系与账号基础（本地门禁通过）
+
+[合同](../../../../../design/ssh-manifest.md)新增显式版本化KeyBinding/Account声明及严格结构校验，v1字节roundtrip/默认create不变，不推断旧target/关系或自动迁移。四处candidate重建保留version/metadata，loans/export/rekey保留actual bytes；源/目标v2恢复在该侧validator前拒绝并防御bind，原source-first顺序保留。此为schema/保留基础，不是数学/完整coverage/账号认证/信任/reviewer/provider/connector完成。Trellis schema/core限定源码，main串行构建/文档，check独立复核。本地未提交，无设备/真实库账号/安装/发布。证据`/tmp/ctos-ssh-manifest-v2-20261025.stybeq0l`。
+
+生产编译41tasks17s，定向200/全量679 JVM全0，normal92全重跑/fixture111及三APK/lint审计通过；source9/protected303，独立源码/41新测试与raw证据复核PASS，无遗留finding。[实际结果](../../../../../design/verification.md#20261025-manifest-v2)。父任务仍in_progress/implementation_complete=false。
+
+## 2026-10-24 当前增量：全部证书事实与签名政策（本地增量完成）
+
+[合同](../../../../../design/ssh-certificate-facts.md)扫描实际清单全部CERTIFICATE，仅复制其正文；同pinned parser嵌入签名验证后施加明确软件/现代签名政策，CSCF168固定public事实，unsigned u64保留bits、物理record来源、三个不同public摘要。不构造host/user/purpose/time/CA authority；不把事实解释为信任/适用性，不改旧CSMI/CSKA/CSKP/v1/生产证书拒绝/provider/恢复/connector。Trellis native/Java implement限定文件，main串行全部构建/文档，check独立复核。本地未提交，无设备/真实库账号/安装/发布。证据`/tmp/ctos-ssh-certificate-facts-20261024.izvxli13`。
+
+本地门禁：首compile41tasks18s/strict13tasks18s，实际ARM22239/effects0与旧private19980/pair13814/material7784、定向145/fresh全量638 JVM全0；normal100全重跑1m47s/fixture11120s及三APK/v2/隔离/同SSH库/22ALLOC/JNI15_19_1_1_1_1/archive83通过，source10/protected299匹配。[实际验证与限制](../../../../../design/verification.md#20261024-certificate-facts)。父任务继续进行中。
+
+## 2026-10-23 当前增量：全部私钥材料与凭据归属（本地增量完成）
+
+[合同](../../../../../design/ssh-private-material-ownership.md)补齐所有PRIVATE_KEY实际self-sign/verify及所有非TOTP凭据v1元数据归属审计。重复private identity无phrase仍逐个检查；有phrase时owner/phrase必须唯一，否则显式歧义、不猜选、不复制歧义secret。password仅target namespace/opaque suffix，未验证真实账号。CSKP60独立于旧CSMI/CSKA；复用strict parser/shared signing helper，原期限/owner/cleanup与v1格式保留。Trellis implement限定源码；main所有构建/文档；check独立源码/证据复核。本地未提交，无设备/真实库账号/安装/commit/archive/push/dist。证据 `/tmp/ctos-ssh-identity-next-20261023.j_o6gwfz`。
+
+本地门禁通过：strict11tasks15s、ARM19976/effects0与最终独立pair13812/material7784、定向120/fresh全量613 JVM全部通过；normal98全执行1m46s/fixture11119s、三v2同signer/隔离target/同生产SSH库/22ALLOC/JNI15_19_1_1_1/archive83。source10/protected295，原v1/production provider与父AC保留。[实际验证与限制](../../../../../design/verification.md#20261023-private-material)。
+
+## 2026-10-23 当前增量：显式密钥配对证明（本地增量完成）
+
+[合同](../../../../../design/ssh-key-association.md)冻结精确ID选择、证书plain subject与固定domain实签验签、CSKA60严格wire、原期限/一次owner及擦除。新pair独立限制RSA所有组成字段并拒绝传统加密PEM；旧材料/auth行为保留。只证明调用方选定pairs，不建立整库authority，不注册validator或开放恢复/connector。主会话负责安全边界实现与全部构建，限定worker负责构建接线/独立JVM向量。证据 `/tmp/ctos-ssh-key-association-20261023.1p6pj89y`。本地未提交，无设备/真实库账号/安装/发布。
+
+本地门禁：ARM13814/effects0、旧材料7784/fresh认证1748333、定向80/全量586 JVM全部通过；normal96全执行1m42s/fixture11121s及三APK/22ALLOC/JNI15_19_1_1/archive83通过，source9/protected292匹配。主会话源码复核与独立原始证据核对完成，[实际结果与限制](../../../../../design/verification.md#20261023-key-association)。父任务继续进行中。
+
+## 2026-10-23 当前增量：显式资源类型与引用绑定（本地增量完成）
+
+- [x] 核对前轮source15/protected307，保存399文件baseline；恢复后确认未开始资源实现。
+- [x] 聚焦五类argv/none/路径/public loader事实与方案压力审查，冻结资源合同。
+- [x] native限定mode/hooks/metadata资源分类/wire/JNI/新矩阵，Java限定facade/inspector/新测试/fixture。
+- [x] main串行构建strict/ARM新旧矩阵/IO/JVM/lint/normal/fixture/APK审计，独立checker复核。
+- [x] 同步spec/design/task/mainline/handoff/journal，父AC继续开放，本地未提交。
+
+证据：`/tmp/ctos-ssh-config-resource-20261023.gmfy0g24`。无设备/真实库账号/提交/发布。
+
+本地门禁通过：ARM Resource4439含基线/全部旧矩阵/IO426、定向151/全量564 JVM、normal94全部重跑/fixture111及三APK审计。source15/protected311，独立checker无具体遗留finding。[实际结果](../../../../../design/verification.md#20261023-config-resources)。完整数学/凭据/信任/provider/恢复/connector与父AC仍开放。
+
+## 2026-10-23 当前增量：CONFIG静态引用与本地效果审计（本地增量完成）
+
+- [x] 前轮source15/protected303核对、393文件before baseline。
+- [x] 聚焦native policy/edge seams研究与合同草案；独立checker压力审查。
+- [x] native实现模式/有限政策/边/严格wire与真实矩阵；Java实现codec/facade/inspectAudit与真实reference验证/测试/隔离fixture。
+- [x] main更新补丁hash/构建runner，串行strict/ARM/旧矩阵/IO/JVM/lint/normal/fixture/APK审计。
+- [x] checker最终源码/证据复核；spec/design/task/mainline/handoff/journal同步，本地未提交。
+
+证据：`/tmp/ctos-ssh-config-audit-20261023.uvozbgq0`。无设备/真实库账号/提交/发布，父AC保持开放。
+
+本地实现与门禁通过：ARM13290含基线/旧矩阵/IO426、JVM124/全量537、normal94全部重跑/fixture111与三APK审计；source15/protected307，独立checker无具体遗留finding。[实际结果与限制](../../../../../design/verification.md#20261023-config-audit)。完整语义/生产恢复/connector与父AC仍开放。
+
+## 2026-10-23 当前增量：实际清单受管配置检查（本地增量完成）
+
+- [x] 核验上一轮source7/protected272，保存383文件接管baseline，聚焦研究reserve/load与累计预算。
+- [x] 冻结[受管合同](../../../../../design/ssh-detached-config-managed.md)，明确单份受保护存储、owner先发、剩余额度及partial-only结果。
+- [x] native implement限定registry/JNI/evaluator/IO与实际C矩阵；Java implement限定facade/inspector/JVM与独立fixture。
+- [x] main串行strict/native ARM/原矩阵、focused/full JVM、lint/Release/fixture与APK审计，独立checker复核。
+- [x] 同步spec/design/task/mainline/handoff/journal，保留完整语义/恢复/connector和父AC开放。
+
+证据：`/tmp/ctos-ssh-detached-managed-20261023.oeRy2d9W`。不设备/真实库账号/提交/归档/发布。
+
+本地实现与门禁完成：ARM3683（含基线）/原矩阵/IO426、定向101/fresh全量514 JVM、normal94全部重跑/fixture111及三APK审计通过；[实际结果与限制](../../../../../design/verification.md#20261023-detached-managed)。新spec已同步，source15/protected303；完整语义/恢复/connector与父AC继续开放，本地未提交。
+
+## 2026-10-23 当前增量：独立 native 配置输入（本地增量完成）
+
+- [x] 恢复原任务，核对交接/源码，保存379文件baseline；旧TOTP mutation临时证据已失，不声称重验。
+- [x] 聚焦研究活动 view 与配置 IO 耦合、Include 引用义务，冻结[合同](../../../../../design/ssh-detached-config.md)。
+- [x] implement代理实现限定 native IO/evaluator 与独立真实parser测试；main拥有构建脚本/文档。
+- [x] main串行strict/ARM QEMU新矩阵与原eval/catalog/handle/IO回归、JVM/lint/APK；独立check复核。
+- [x] 同步spec/验证/task/mainline/handoff/journal；本地未提交，父AC开放。
+
+专项ARM1261/effects0/capabilities0、原eval3736/catalog71923/handle5201、IO426与fresh JVM483通过。最终normal94全重跑/fixture111复用同native、lint0errors3/4warnings与三APK审计通过。失败轮/锁页额度/缓存重建见[验证](../../../../../design/verification.md#20261023-detached-config)。
+
+证据：`/tmp/ctos-ssh-detached-config-20261023.mUF8aSF0`；source7/protected272。无设备/真实账号/安装/提交/发布。
+
+## 2026-10-23 当前增量：TOTP mutation（本地增量完成）
+
+[TOTP写入与票据交接](../../../../../design/totp-mutation-lifecycle.md)已实现：原origin/预算/注册、锁外独占source/candidate校验、跨Request精确票据交接和唯一effect claim。修复取消/旧票据替换/BUSY并发清理与pin可见性。定向196/全量483 JVM、normal/fixture构建和lint通过；[实际验证](../../../../../design/verification.md#20261023-totp-mutation)。主会话负责文档/构建，implement/check负责限定Java与独立复核。本地未提交，无设备/真实库账号；完整语义provider/恢复/最终计划connector与父AC保持开放。
+
+## 2026-10-22 当前增量：trust CAS（本地增量完成）
+
+继续[trust CAS 生命周期合同](../../../../../design/ssh-trust-cas-lifecycle.md)：审批前原context、锁外校验、可取消provider与精确view延续；落盘后交付失败明确uncertain。主会话负责文档/全部构建，implement/check代理负责限定Java/测试与独立复核。仅本地未提交，无设备/真实库账号。
+
+定向202/全量469、normal92全重跑/fixture114、lint与三APK审计通过。源码8/protected266；新增14测试。[实际验证](../../../../../design/verification.md#20261022-ssh-trust-cas)。下一项剩余TOTP mutation，完整语义/恢复/connector与父AC继续开放。
+
+## 2026-10-22 当前增量：普通SSH凭据保存/删除（本地增量完成）
+
+- [x] 核验上一轮8source/264protected/707artifacts，保存611文件baseline。
+- [x] 冻结[entry mutation合同](../../../../../design/ssh-entry-mutation-lifecycle.md)，区分原context与唯一effect claim；trust CAS/own-view continuation独立后续。
+- [x] 迁移SSH_SAVE/SSH_DELETE admission/effect与adapter，独占candidate/loan及原预算/host gate，新增针对性回归。
+- [x] main串行定向/全量JVM、lint/Release/fixture/APK审计，独立check复核。
+- [x] 同步spec/design/verification/task/check/mainline/handoff/journal；本地未提交，父AC开放。
+
+证据：`/tmp/ctos-ssh-mutation-20261022.3u9ri93v`。主会话负责文档和构建，代理负责
+AppSecrets/VaultOperation/SshVaultAdapter及新JVM测试；不修改TOTP/trust共用旧mutation。
+
+## 2026-10-22 当前增量：SSH typed秘密读取（本地增量完成）
+
+- [x] 恢复原task；前一轮7source/56protected/186artifacts重算一致，保存609文件baseline；hako可用。
+- [x] 冻结[secret read合同](../../../../../design/ssh-secret-read-lifecycle.md)，明确原role预算、selected proof与最终受管复制锁序。
+- [x] implement迁移credential/private-key/bundle admission/effect及生产selected调用链，加入有意义竞态回归。
+- [x] main串行focused/fresh全量JVM、lint/Release、隔离fixture/APK审计；独立checker复核。
+- [x] 同步spec/design/verification/task/check/mainline/handoff/journal，保留未完成父AC与本地未提交边界。
+
+本轮baseline：`/tmp/ctos-ssh-secret-read-20261022.umpy0yd0`。主会话拥有构建及文档；
+实现代理仅相关Java及测试；不操作设备/真实库账号、不提交/归档/发布。
+
+## 2026-10-22 当前增量：SSH public读取
+
+- [x] 复用原task、核验上一轮7source/55protected/93artifacts，保存本轮baseline/56protected；hako可用。
+- [x] 研究并冻结public read合同，明确同步loan与native lease final attach、role budget和own-CAS边界。
+- [x] implement迁移限定Java入口并加入有意义回归；独立check复核。
+- [x] main串行focused/full JVM、lint/Release/fixture/最终APK/hash审计。
+- [x] 同步design/spec/verification/task/check/mainline/handoff/journal；原任务保持进行中。
+
+## 2026-10-22 当前增量：TOTP read admission/effect/publication
+
+- [x] 复用原task，核验上一增量6/52/26份hash，保存本轮baseline/55 protected；hako可用。
+- [x] 研究并冻结[TOTP read生命周期](../../../../../design/totp-read-lifecycle.md)，区分mixed注册/pure无provider、read与管理preview、metadata claim与实际代码披露。
+- [x] 实现原read context、锁外source/loan/generation、一次操作/receipt、Bridge原phase和窗口/cleanup绑定及定向回归。
+- [x] main串行focused/full JVM、lint/Release/fixture/最终APK审计，trellis-check独立复核并修复finding。
+- [x] 同步spec/design/verification/task/check/mainline/handoff/journal；任务保持进行中，本地未提交，无设备/真实库账号。
+
+## 2026-10-22 当前增量：bundle admission/effect
+
+- [x] 恢复现有 task、读取当前合同/源码，保存本轮源码快照与保护输入；hako 容器可用。
+- [x] 冻结 [bundle 生命周期](../../../../../design/ssh-bundle-lifecycle.md)，聚焦原context、所有权与一次消费。
+- [x] 实现 BundleContext/operation 绑定、锁外 capture/work/guarded effect、独占 candidate/loan 与定向回归。
+- [x] main 串行最终focused81/full JVM391、normal92全重跑/lint/Release、fixture114及固定native输入normal77/APK签名隔离；独立checker复核通过。
+- [x] 同步设计索引/验证/spec/check/task/mainline/handoff/journal；保持父任务进行中，不提交/设备。
+
+## 2026-10-21 当前增量：恢复预览校验生命周期
+
+- [x] 恢复原in_progress任务；核对现有源码/历史验证及本地未提交范围。旧/tmp证据已不存在，不能重新核验历史hash。
+- [x] 冻结[语义义务/锁/取消/期限/失败/恢复审阅合同](../../../../../design/ssh-validation-lifecycle.md)；研究定位Bridge原deadline、reviewer核心锁与迟到UI交付问题。
+- [x] 实现preview-only capture/work/publish及不可变validator注册、临时loan/变更拒绝、direct cancel、原deadline与最终commit/UI fence。
+- [x] focused66项/4reports零失败；新增21项含3stage×4失效动作与同名owner隔离/parent publication传播；原SshRestore/SshBundle/VaultSession通过。
+- [x] fresh全量JVM379/21reports零失败，normal92全重跑2m18s；fixture114/30s、lint0错误3/4警告、三APK签名隔离及4changed/7protected源码hash通过。无设备/真实库账号/提交/push/dist。
+- [x] trellis-check独立源码与最终XML/log/APK/hash证据复核通过；修复parent publish传播与同名Bridge误取消，更新spec/design/check/task/mainline/handoff/journal。17份Markdown/445本地链接无缺失，两个context各21行合法。
+
+主会话拥有构建/验证及文档；implement agent仅相关Java与定向测试，checker不得重写无关旧增量。
+完成本轮不勾父AC/implementation_complete，不迁移其他typed/bundle入口，不注册生产语义hook。
+
+## 2026-10-19 实际manifest离线文件内容检查
+
+- [x] 恢复原task、两项聚焦研究及design/ssh-manifest-inspection.md合同冻结。
+- [x] 分工native材料解析/共享策略/JNI/真实矩阵与Java实际manifest owner/codec/JVM/独立fixture。
+- [x] 正式checker、main独占strict/完整认证ARM与配置回归/fresh JVM/normal/fixture/APK审计。
+- [x] 同步spec/design/task/verification/handoff/journal；本地未提交，无设备/账号。
+
+## 2026-10-19 无上下文声明catalog
+
+- [x] 恢复原task，研究native Host/Include词法与AppSecrets候选清单边界，冻结design/ssh-config-catalog.md。
+- [x] 实现native扫描/parser patch/registry/JNI/真实测试及Java catalog codec/facade/测试/平台fixture，分配文件所有权。
+- [x] 正式checker复核；main串行strict、既有与新ARM回归、JVM/lint/normal/fixture/APK审计。
+- [x] 同步spec/design/task/验证/handoff/journal；父task仍进行中，不提交/设备。
+
+本增量已通过：目录ARM71923/effects0、原求值3736/handle5201、fresh JVM327、normal95/
+fixture114及最终固定输入APK审计。语义validator/恢复/最终计划/connector仍后续。
+实际命令/工件/边界见design/verification.md#20261019-config-catalog。
+
+## 2026-10-19 JNI/Java配置求值边界
+
+- [x] 恢复原task并研究lease/borrow/JNI边界，冻结design/ssh-config-managed.md。
+- [x] 并行实现native registry/wire/JNI/构建/真实测试与Java facade/宿主测试，分配文件所有权。
+- [x] 正式checker复核；main串行strict/ARM/JVM/lint/Release/fixture与APK审计。
+- [x] 同步spec/design/verification/task/handoff/journal；父任务继续进行中，不提交/设备。
+
+## 2026-10-19 生产native受管配置求值器
+
+- [x] 恢复原task，冻结design/ssh-config-evaluator.md；聚焦既有parser/helper的fatal与宿主副作用。
+- [x] 实现独立固定readconf patch/构建闭包、上下文与完整Options生命周期、受管Include和诊断。
+- [x] 实现真实parser正反矩阵与effect/cleanup守卫，main串行执行strict/ARM/normal与APK审计。
+- [x] 正式check代理复核、修复后重跑相应关卡，更新spec/design/verification/task/handoff。
+
+本native入口增量已通过本地门（ARM3736/effects0、共同链接会话1725125、normal95/JVM288/fixture114）；catalog/导入/JNI/UI/connector/设备保持后续。不提交/归档/push。
+
+## 2026-10-19 继续：生产启动器前置链路
+
+- [x] 研究真实offered host key、同步NEW审批、配置/catalog生产缺口。
+- [x] 冻结design/ssh-launcher.md；本轮先显式managed-open+审批邮箱，不重做认证/PTY。
+- [x] native pending-host guard/actual-key一次pin与真实加密合成回归。
+- [x] Java/JNI openManaged及有界exact NEW mailbox；宿主JVM288与fixture源码编译。
+- [x] 正式源码check、native ARM full1724409/专项87305及spec/design/verification/task同步。
+- [x] 完整Gradle/Release及隔离fixture APK构建、验签/隔离审计：续做normal94全重跑、JVM288、fixture113与三APK审计通过；旧审批容量阻塞解除。
+- [x] 旧动态运行环境已失后，独立静态NDK/Bionic测试专项87300/完整1724636通过；严格区分动态未重跑与Android未执行。
+
+继续沿用不提交、不设备操作、无真实账号；父任务保持进行中。产品启动器后续尚含
+readconf生产化/catalog/connector与既有Include/ProxyJump/服务合同，不静默改为自写子集。
+
+## 2026-10-19 session channel / PTY / shell 执行
+
+- [x] 恢复原task；原认证251b0f3/交接b4ed4e2与当前b4ec864/12a1357项目树一致。
+- [x] 研究pinned ssh_api/clientloop/session与RFC4254，冻结design/ssh-session-channel.md。
+- [x] native单channel与合成加密peer正反矩阵；strict/QEMU实际运行。
+- [x] JNI/Java explicit shell API、phase与owner/reentry/liveness回归；独立fixture本地构建。
+- [x] 合成闭环通过后接现有终端输入/输出/resize/Stop，修复远端文本不得伪造exit事件。
+- [x] normal全量94tasks全重跑、fresh JVM270/0/0/0、Flutter227/analyze、fixture113tasks通过。
+- [x] 正式checker跨层复核；取消/ack/Error/资源owner/销毁竞争修复并补回归。
+- [x] spec/design/verification/task/handoff最终工件同步；设备授权与提交确认单独处理。
+
+父任务保持in_progress/implementation_complete=false；不重做认证、不用真实账号。
+收尾用户已选择保留未提交工作区和本地结果，不提交、不设备操作，不归档/push。
+
+## 历史计划：session channel / PTY（当时已确认，现已本地实现）
 
 用户于2026-10-19确认先提交认证阶段，再续做 session channel / PTY 与终端闭环。
 保持原 task `in_progress`；先用 `trellis-continue` 恢复并研究现有 native/Java/JNI 与终端
@@ -532,7 +758,7 @@ driver只接受与自身APK native目录相同的固定两个client basename，�
 
 下方planning状态/待批准语句是历史实施计划；已批准范围见顶头当前状态及task metadata。
 
-执行主体清单与命令引用 [父实施计划](../10-08-ssh-terminal/implement.md)，顺序为 native OpenSSH 探针 → 私有配置导入/受约束求值 → 会话/认证桥/基础 TCP 转发 → 统一秘密库的 SSH adapter 接入 → UI/本机终端回归 → 当前授权设备验收。
+执行主体清单与命令引用 [父实施计划](../../../10-08-ssh-terminal/implement.md)，顺序为 native OpenSSH 探针 → 私有配置导入/受约束求值 → 会话/认证桥/基础 TCP 转发 → 统一秘密库的 SSH adapter 接入 → UI/本机终端回归 → 当前授权设备验收。
 
 集成额外验证：公共验证取消、锁定、不可用、过期、后台及迟到回调不能释放秘密；每跳 host key/身份绑定后才提供匹配凭据；连接结束使上下文失效。SSH 输入验证按父 R2/AC2 的字符/控制键/输出/窗口事件进行，不把本机历史截获套给 SSH，不建立特定远端程序兼容验收。父 AC1–AC9 和跨子任务验收全部映射至真实证据。
 

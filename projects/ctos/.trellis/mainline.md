@@ -4,7 +4,7 @@
 
 用户已要求并授权正式安装与提交。APK6fa5c1…已保留数据覆盖安装到指定板，实际路径
 与SHA核对通过；[功能入口/限制](../design/ssh-terminal.md)和[安装验证](../design/verification.md#20261026-formal-install)
-已记录。当前按前台密码SSH milestone归档，原全功能父需求保持in_progress。
+已记录。当前前台密码SSH milestone已[归档](tasks/archive/2026-10/10-08-ssh-terminal-client/prd.md)，原全功能父需求保持in_progress。
 构建runner/patch已迁入android/ssh，不依赖活动任务生命周期。后续模式为guided：归档
 不自动启动父规划的其他能力，等待用户选择。相邻项目改动不纳入本次提交。
 
@@ -347,7 +347,7 @@ partial I/O、EOF、cancel、close retry、inbound NEWKEYS/JNI proof、设备和
 ## 2026-10-10 统一秘密库、TOTP 与 SSH 规划待审（批准前记录）
 
 - **Mode / Authorization:** guided；持续仅规划，未获代码、构建、设备或账号操作授权，不运行 task.py start。
-- **Tasks:** [统一秘密库](tasks/10-08-app-authentication/prd.md)、[Authenticator](tasks/archive/2026-10/10-08-authenticator/prd.md)、[SSH 接入](tasks/10-08-ssh-terminal-client/prd.md) 与 [SSH 父任务](tasks/10-08-ssh-terminal/prd.md) 均 planning / awaiting_final_review；ID/原树关系保留。
+- **Tasks:** [统一秘密库](tasks/10-08-app-authentication/prd.md)、[Authenticator](tasks/archive/2026-10/10-08-authenticator/prd.md)、[SSH 接入](tasks/archive/2026-10/10-08-ssh-terminal-client/prd.md) 与 [SSH 父任务](tasks/10-08-ssh-terminal/prd.md) 均 planning / awaiting_final_review；ID/原树关系保留。
 - **Scope:** 用户撤销 HOTP 的全部设计/实现，只保留已确定离线 TOTP（相机/图片/手动、条目/时间码/复制）与 ctOS 自身完整加密备份，其他平台迁移排除；已确定 SSH 客户端/config/Include/ProxyJump/信任/转发/手动 Stop 范围保留。
 - **Base:** 唯一主口令/KDF/密文文件与受管 SSH 文件对象/设备生物或锁屏快捷/共同秘密库设置/使用会话/管理认证解密/改口令/完整导入导出事务/敏感窗口与复制 helper。前台共享、锁屏/手动即锁/重启锁定；后台默认 30 秒可选（0 即锁），验证码复制默认 30 秒可调且仅尽力清理本次 clip，两项设置独立。
 - **Dependencies:** 先交付并验收公共底座，再由 TOTP 与 SSH 分别接入；TOTP 页面不是 SSH 的依赖。SSH 父任务管理完整需求和最终集成，不是另一份业务实现；真实依赖写在子 task，而非由父子树位置推导。

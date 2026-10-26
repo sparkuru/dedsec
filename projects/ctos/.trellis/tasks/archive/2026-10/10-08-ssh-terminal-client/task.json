@@ -1,0 +1,2842 @@
+{
+  "id": "ssh-terminal-client",
+  "name": "ssh-terminal-client",
+  "title": "前台密码 SSH 正式交付与安装",
+  "description": "复用已批准SSH客户端task；2026-10-13 TOTP用户验收归档后恢复实施，先Android匿名内存/受管执行探针，后真实OpenSSH与统一秘密库集成。",
+  "status": "completed",
+  "dev_type": "fullstack",
+  "scope": "terminal",
+  "package": null,
+  "priority": "P2",
+  "creator": "ctos",
+  "assignee": "ctos",
+  "createdAt": "2026-10-08",
+  "completedAt": "2026-10-26",
+  "branch": null,
+  "base_branch": "antitrust",
+  "worktree_path": null,
+  "commit": "0c162418201defd425518848c7c1197ffdf084ac",
+  "latest_increment": "Foreground password SSH validated on authorized Android 11 board through actual shared-vault bridge and actual Flutter UI, command and rendered output; test environment cleaned.",
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": "10-08-ssh-terminal",
+  "relatedFiles": [
+    "design/ssh-terminal.md",
+    "android/app/build.gradle",
+    "android/app/src/main/cpp/ssh_memory_probe.c",
+    "android/app/src/main/cpp/ssh_upstream_probe.c",
+    "android/app/src/androidTestSecretsFixture/java/im/majo/ctos/SshMemoryPlatformTest.java",
+    "android/app/src/androidTestSecretsFixture/java/im/majo/ctos/SshUpstreamPlatformTest.java",
+    "android/ssh/android-upstream-build.sh",
+    "lib/main.dart",
+    "lib/terminal_interaction.dart",
+    "design/app-authentication.md",
+    "android/app/src/main/cpp/ssh_config_policy.c",
+    "android/app/src/main/cpp/ssh_config_policy.h",
+    "android/app/src/main/cpp/ssh_config_policy_probe.c",
+    "android/app/src/androidTestSecretsFixture/java/im/majo/ctos/SshPolicyPlatformTest.java",
+    "android/app/src/main/java/im/majo/ctos/SshFileSnapshot.java",
+    "android/app/src/main/java/im/majo/ctos/SshPublicFileLease.java",
+    "android/app/src/main/cpp/ssh_file_view.c",
+    "android/app/src/main/cpp/ssh_file_view.h",
+    "android/app/src/main/cpp/ssh_file_jni.c",
+    "android/app/src/main/cpp/ssh_role_bootstrap.c",
+    "android/app/src/main/cpp/ssh_role_bootstrap.h",
+    "android/app/src/test/cpp/ssh_role_bootstrap_test.c",
+    "android/app/src/main/cpp/ssh_role_jni.c",
+    "android/app/src/main/java/im/majo/ctos/SshNativeRoleBootstrap.java",
+    "android/app/src/test/java/im/majo/ctos/SshNativeRoleBootstrapTest.java",
+    "android/app/src/main/cpp/ssh_callback_adapter.c",
+    "android/app/src/main/cpp/ssh_callback_adapter.h",
+    "android/app/src/main/cpp/ssh_callback_jni.c",
+    "android/app/src/main/java/im/majo/ctos/SshManagedProvider.java",
+    "android/app/src/main/java/im/majo/ctos/SshManagedKnownHostsProvider.java",
+    "android/app/src/test/java/im/majo/ctos/SshManagedKnownHostsProviderTest.java",
+    "android/app/src/main/java/im/majo/ctos/SshCredentialBridge.java",
+    "android/app/src/main/java/im/majo/ctos/SshHostKeyAuthority.java",
+    "android/app/src/main/java/im/majo/ctos/SshTrustProposal.java",
+    "android/app/src/main/java/im/majo/ctos/SshNativeCallbackAdapter.java",
+    "android/app/src/test/cpp/ssh_callback_adapter_test.c",
+    "android/app/src/test/java/im/majo/ctos/SshNativeCallbackAdapterTest.java",
+    "android/app/src/test/java/im/majo/ctos/SshProductionBridgeTest.java",
+    "android/app/src/androidTestSecretsFixture/java/im/majo/ctos/SshFileViewPlatformTest.java",
+    "android/app/src/main/cpp/ssh_file_io.c",
+    "android/app/src/main/cpp/ssh_file_io.h",
+    "android/app/src/main/cpp/ssh_control.c",
+    "android/app/src/main/cpp/ssh_control.h",
+    "android/app/src/main/java/im/majo/ctos/VaultOperation.java",
+    "android/app/src/androidTestSecretsFixture/java/im/majo/ctos/SshControlPlatformTest.java",
+    "android/app/src/main/cpp/ssh_kex_guard.c",
+    "android/app/src/main/cpp/ssh_kex_guard.h",
+    "android/app/src/main/cpp/ssh_native_launcher.c",
+    "android/app/src/main/cpp/ssh_native_launcher.h",
+    "android/app/src/test/cpp/ssh_kex_test.c",
+    "android/app/src/androidTestSecretsFixture/java/im/majo/ctos/SshKexPlatformTest.java",
+    "android/ssh/android-kex-build.sh",
+    "android/ssh/openssh-10.6p1-kex-guard.patch",
+    "android/app/src/main/cpp/ssh_native_client.h",
+    "android/app/src/main/cpp/ssh_native_client.c",
+    "android/app/src/test/cpp/ssh_native_client_test.c",
+    "android/app/src/main/cpp/ssh_view_handle.h",
+    "android/app/src/main/cpp/ssh_view_handle.c",
+    "android/app/src/test/cpp/ssh_view_handle_test.c",
+    "android/app/src/main/java/im/majo/ctos/SshNativeSession.java",
+    "android/app/src/test/java/im/majo/ctos/SshNativeSessionTest.java",
+    "android/app/src/main/java/im/majo/ctos/SshRoleContext.java",
+    "android/app/src/main/cpp/ssh_session_jni.c",
+    "android/app/src/androidTestSecretsFixture/java/im/majo/ctos/SshNativeSessionPlatformTest.java",
+    "android/app/src/main/cpp/ssh_hostfile_issuer.c",
+    "android/app/src/main/cpp/ssh_hostfile_issuer.h",
+    "android/app/src/test/cpp/ssh_hostfile_issuer_test.c",
+    ".trellis/tasks/archive/2026-10/10-08-ssh-terminal-client/research/openssh-10.6p1-production-kex-source-map-20261015.md",
+    ".trellis/tasks/archive/2026-10/10-08-ssh-terminal-client/research/production-kex-caller-blocker-20261015.md",
+    "android/ssh/openssh-10.6p1-hostfile-stream-writer.patch",
+    "android/ssh/android-hostfile-issuer-build.sh",
+    "android/ssh/android-production-openssh-build.sh",
+    "android/app/src/main/cpp/ssh_pinned_client.c",
+    "android/app/src/main/cpp/ssh_pinned_client.h",
+    "android/app/src/test/cpp/ssh_pinned_client_test.c",
+    "design/verification.md",
+    "android/app/src/main/java/im/majo/ctos/SshAuthenticationSelection.java",
+    "android/app/src/test/java/im/majo/ctos/SshAuthenticationSelectionTest.java",
+    ".trellis/tasks/archive/2026-10/10-08-ssh-terminal-client/research/auth-selection-20261018.md",
+    ".trellis/tasks/archive/2026-10/10-08-ssh-terminal-client/research/native-auth-selection-20261018.md",
+    ".trellis/tasks/archive/2026-10/10-08-ssh-terminal-client/research/selected-credential-callback-20261019.md",
+    ".trellis/tasks/archive/2026-10/10-08-ssh-terminal-client/research/password-userauth-20261019.md",
+    "android/app/src/main/java/im/majo/ctos/AppSecrets.java",
+    "android/app/src/main/java/im/majo/ctos/VaultSession.java",
+    "android/app/src/test/java/im/majo/ctos/VaultSessionTest.java",
+    "android/app/src/androidTestSecretsFixture/cpp/ssh_auth_peer_jni.c",
+    "android/app/src/secretsFixture/java/im/majo/ctos/SshAuthFixturePeer.java",
+    "android/app/src/androidTestSecretsFixture/java/im/majo/ctos/SshPasswordAuthPlatformTest.java",
+    ".trellis/spec/backend/app-secrets.md",
+    ".trellis/tasks/archive/2026-10/10-08-ssh-terminal-client/research/auth-integration-final-20261019.md",
+    "design/ssh-session-channel.md",
+    "design/handoff-ssh-terminal-client.md",
+    "android/app/src/main/java/im/majo/ctos/SshTerminalSession.java",
+    "android/app/src/test/java/im/majo/ctos/SshTerminalSessionTest.java",
+    "android/app/src/main/java/im/majo/ctos/MainActivity.java",
+    "lib/terminal_events.dart",
+    "test/terminal_events_test.dart",
+    "test/terminal_interaction_test.dart",
+    ".trellis/spec/frontend/terminal-interaction.md",
+    "design/ssh-launcher.md",
+    "android/app/src/main/java/im/majo/ctos/SshHostKeyReviewMailbox.java",
+    "android/app/src/test/java/im/majo/ctos/SshHostKeyReviewMailboxTest.java",
+    ".trellis/tasks/archive/2026-10/10-08-ssh-terminal-client/research/launcher-native-20261019.md",
+    ".trellis/tasks/archive/2026-10/10-08-ssh-terminal-client/research/launcher-managed-20261019.md",
+    "design/ssh-config-managed.md",
+    "android/app/src/main/cpp/ssh_config_handle.c",
+    "android/app/src/main/cpp/ssh_config_handle.h",
+    "android/app/src/main/cpp/ssh_config_jni.c",
+    "android/app/src/test/cpp/ssh_config_handle_test.c",
+    "android/app/src/main/java/im/majo/ctos/SshConfigEvaluator.java",
+    "android/app/src/test/java/im/majo/ctos/SshConfigEvaluatorTest.java",
+    "android/app/src/androidTestSecretsFixture/java/im/majo/ctos/SshConfigEvaluatorPlatformTest.java",
+    ".trellis/tasks/archive/2026-10/10-08-ssh-terminal-client/research/config-jni-20261019.md",
+    "design/ssh-config-catalog.md",
+    ".trellis/tasks/archive/2026-10/10-08-ssh-terminal-client/research/catalog-native-20261019.md",
+    ".trellis/tasks/archive/2026-10/10-08-ssh-terminal-client/research/catalog-vault-20261019.md",
+    "android/app/src/test/cpp/ssh_config_catalog_test.c",
+    "android/app/src/test/java/im/majo/ctos/SshConfigCatalogTest.java",
+    "design/ssh-manifest-inspection.md",
+    "android/app/src/main/cpp/ssh_key_policy.c",
+    "android/app/src/main/cpp/ssh_key_policy.h",
+    "android/app/src/main/cpp/ssh_material_inspect.c",
+    "android/app/src/main/cpp/ssh_material_inspect.h",
+    "android/app/src/main/cpp/ssh_material_jni.c",
+    "android/app/src/test/cpp/ssh_material_inspect_test.c",
+    "android/app/src/main/java/im/majo/ctos/SshManifestInspector.java",
+    "android/app/src/test/java/im/majo/ctos/SshManifestInspectorTest.java",
+    "android/app/src/androidTestSecretsFixture/java/im/majo/ctos/SshManifestInspectorPlatformTest.java",
+    "android/ssh/android-material-inspector-build.sh",
+    ".trellis/tasks/archive/2026-10/10-08-ssh-terminal-client/research/manifest-validator-20261019.md",
+    ".trellis/tasks/archive/2026-10/10-08-ssh-terminal-client/research/manifest-native-20261019.md",
+    "design/ssh-validation-lifecycle.md",
+    "android/app/src/main/java/im/majo/ctos/AppSecretsBridge.java",
+    "android/app/src/main/java/im/majo/ctos/VaultRequestPhase.java",
+    "android/app/src/test/java/im/majo/ctos/SshPreviewValidationTest.java",
+    ".trellis/tasks/archive/2026-10/10-08-ssh-terminal-client/research/validation-boundary-20261021.md",
+    "design/ssh-bundle-lifecycle.md",
+    "android/app/src/test/java/im/majo/ctos/SshBundleValidationTest.java",
+    "design/totp-read-lifecycle.md",
+    ".trellis/tasks/archive/2026-10/10-08-ssh-terminal-client/research/totp-read-lifecycle-20261022.md",
+    "android/app/src/test/java/im/majo/ctos/TotpReadValidationTest.java",
+    "android/app/src/main/java/im/majo/ctos/TotpVaultAdapter.java",
+    "design/ssh-public-read-lifecycle.md",
+    ".trellis/tasks/archive/2026-10/10-08-ssh-terminal-client/research/ssh-public-read-lifecycle-20261022.md",
+    "android/app/src/test/java/im/majo/ctos/SshPublicReadValidationTest.java",
+    "design/ssh-trust-cas-lifecycle.md",
+    "android/app/src/test/java/im/majo/ctos/SshTrustValidationTest.java",
+    "android/app/src/test/java/im/majo/ctos/TotpMutationValidationTest.java",
+    "android/app/src/main/java/im/majo/ctos/TotpPreviews.java",
+    "android/app/src/test/java/im/majo/ctos/VaultTest.java",
+    "design/totp-mutation-lifecycle.md",
+    "design/ssh-detached-config.md",
+    ".trellis/spec/backend/ssh-detached-config.md",
+    ".trellis/tasks/archive/2026-10/10-08-ssh-terminal-client/research/detached-config-20261023.md",
+    "android/app/src/main/cpp/ssh_config_eval.c",
+    "android/app/src/main/cpp/ssh_config_eval.h",
+    "android/app/src/test/cpp/ssh_config_detached_test.c",
+    "design/ssh-detached-config-managed.md",
+    "android/app/src/main/java/im/majo/ctos/SshManifestConfigInspector.java",
+    "android/app/src/test/java/im/majo/ctos/SshManifestConfigInspectorTest.java",
+    "android/app/src/test/java/im/majo/ctos/SshDetachedConfigEvaluatorTest.java",
+    "android/app/src/test/cpp/ssh_config_managed_detached_test.c",
+    "android/app/src/androidTestSecretsFixture/java/im/majo/ctos/SshManifestConfigInspectorPlatformTest.java",
+    "design/ssh-config-audit.md",
+    ".trellis/spec/backend/ssh-config-audit.md",
+    "android/app/src/test/cpp/ssh_config_audit_test.c",
+    "android/app/src/test/java/im/majo/ctos/SshConfigAuditTest.java",
+    "android/app/src/test/java/im/majo/ctos/SshManifestConfigAuditTest.java",
+    "android/app/src/androidTestSecretsFixture/java/im/majo/ctos/SshManifestConfigAuditPlatformTest.java",
+    "design/ssh-config-resources.md",
+    ".trellis/spec/backend/ssh-config-resources.md",
+    "android/app/src/test/cpp/ssh_config_resource_test.c",
+    "android/app/src/test/java/im/majo/ctos/SshConfigResourceAuditTest.java",
+    "android/app/src/test/java/im/majo/ctos/SshManifestConfigResourceAuditTest.java",
+    "android/app/src/androidTestSecretsFixture/java/im/majo/ctos/SshManifestConfigResourceAuditPlatformTest.java",
+    "design/ssh-key-association.md",
+    ".trellis/tasks/archive/2026-10/10-08-ssh-terminal-client/research/key-association-native-20261023.md",
+    "android/app/src/main/java/im/majo/ctos/SshManifestKeyAssociationInspector.java",
+    "android/app/src/test/java/im/majo/ctos/SshManifestKeyAssociationInspectorTest.java",
+    "android/app/src/test/cpp/ssh_key_association_test.c",
+    ".trellis/spec/backend/ssh-key-association.md",
+    "android/app/src/androidTestSecretsFixture/java/im/majo/ctos/SshManifestKeyAssociationPlatformTest.java",
+    "design/ssh-private-material-ownership.md",
+    "android/app/src/main/java/im/majo/ctos/SshManifestPrivateMaterialInspector.java",
+    "android/app/src/test/java/im/majo/ctos/SshManifestPrivateMaterialInspectorTest.java",
+    "android/app/src/androidTestSecretsFixture/java/im/majo/ctos/SshManifestPrivateMaterialPlatformTest.java",
+    "android/app/src/test/cpp/ssh_private_material_test.c",
+    ".trellis/spec/backend/ssh-private-material.md",
+    ".trellis/tasks/archive/2026-10/10-08-ssh-terminal-client/research/identity-authority-model-20261023.md",
+    ".trellis/tasks/archive/2026-10/10-08-ssh-terminal-client/research/certificate-facts-native-20261023.md",
+    "design/ssh-certificate-facts.md",
+    "android/app/src/main/java/im/majo/ctos/SshManifestCertificateInspector.java",
+    "android/app/src/test/java/im/majo/ctos/SshManifestCertificateInspectorTest.java",
+    "android/app/src/androidTestSecretsFixture/java/im/majo/ctos/SshManifestCertificatePlatformTest.java",
+    "android/app/src/test/cpp/ssh_certificate_facts_test.c",
+    ".trellis/spec/backend/ssh-certificate-facts.md",
+    "design/ssh-manifest.md",
+    "android/app/src/main/java/im/majo/ctos/VaultSshMetadata.java",
+    "android/app/src/test/java/im/majo/ctos/VaultManifestTest.java",
+    "android/app/src/test/java/im/majo/ctos/VaultManifestLifecycleTest.java",
+    ".trellis/tasks/archive/2026-10/10-08-ssh-terminal-client/research/v2-reconstruction-20261025.md",
+    ".trellis/tasks/archive/2026-10/10-08-ssh-terminal-client/research/account-target-contract-20261025.md",
+    ".trellis/spec/backend/ssh-manifest.md",
+    "android/app/src/main/java/im/majo/ctos/VaultManifest.java",
+    "android/app/src/main/java/im/majo/ctos/VaultCodec.java",
+    "android/app/src/main/java/im/majo/ctos/SshBundleProposal.java",
+    "android/app/src/main/java/im/majo/ctos/SshRestoreReview.java",
+    ".trellis/tasks/archive/2026-10/10-08-ssh-terminal-client/research/single-mainline-impact-20261025.md",
+    "design/ssh-password-connect.md",
+    ".trellis/tasks/archive/2026-10/10-08-ssh-terminal-client/research/password-host-path-20261025.md",
+    ".trellis/tasks/archive/2026-10/10-08-ssh-terminal-client/research/password-ui-path-20261025.md",
+    ".trellis/tasks/archive/2026-10/10-08-ssh-terminal-client/research/password-transport-path-20261025.md"
+  ],
+  "notes": "2026-10-26 用户明确授权指定开发板隔离测试安装/合成账号验收/清理。实际bridge OK1/5.924s及真实Flutter UI OK1/12.802s通过；314既有代码/runner未改，仅新增UI测试。两测试包/进程/请求/reverse及临时SSH服务/卷/network/relay/密码已清理，正式已安装APK哈希前后3bc762d9一致，正式新APK6fa5c1已构建但未覆盖安装。当前前台密码闭环已实际使用并完成验收；父SSH全功能task继续进行中，同一正式主线，无提交/归档/发布。",
+  "current_increment": {
+    "date": "2026-10-25",
+    "scope": "Operable foreground password SSH connection on the single formal mainline",
+    "state": "implemented_validated_android_foreground_password",
+    "contract": "design/ssh-password-connect.md",
+    "evidence_dir": "/tmp/ctos-ssh-password-connect-20261025.fez9zf8o",
+    "implementation_complete": true,
+    "parent_implementation_complete": false,
+    "code_implemented": true,
+    "android_runtime_executed": true,
+    "production_validator_registered": true,
+    "supported_subset": "TOTP plus exact generated CONFIG and KNOWN_HOSTS; other SSH objects rejected",
+    "actual_tcp_connector": true,
+    "password_persisted": false,
+    "foreground_only": true,
+    "baseline_files": 438,
+    "source_files": 45,
+    "protected_files": 269,
+    "flutter": {
+      "analyze": "pass",
+      "tests": 242,
+      "focused_tests": 15
+    },
+    "jvm": {
+      "tests": 718,
+      "reports": 42,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "final_errno_only_build": "UP-TO-DATE; fresh full result retained"
+    },
+    "native": {
+      "client_checks": 1756509,
+      "issuer_cases": 33,
+      "runtime": "ARM/QEMU static Bionic; synthetic encrypted peer and actual descriptors",
+      "inputs": "verified current source/header/archive/binary; three modes"
+    },
+    "normal": {
+      "all_tasks_rerun": 92,
+      "all_rerun_seconds": 116,
+      "final_errno_only_seconds": 17,
+      "final_tasks": 92,
+      "final_executed": 21,
+      "final_up_to_date": 71
+    },
+    "fixture": {
+      "first_tasks": 111,
+      "first_executed": 42,
+      "first_up_to_date": 69,
+      "first_seconds": 38,
+      "final_tasks": 111,
+      "final_executed": 20,
+      "final_up_to_date": 91,
+      "final_seconds": 12,
+      "final_native_reused": true
+    },
+    "apk_audit": {
+      "normal": {
+        "sha256": "6fa5c1bee28af584023f91a20ab0252abc02e53867bb13f1fb571468286417e8",
+        "sshLibraries": [
+          "lib/arm64-v8a/libctos_ssh_files.so"
+        ],
+        "authPeerClass": false,
+        "package": "im.majo.ctos",
+        "metadataClasses": true
+      },
+      "fixture": {
+        "sha256": "f5c11f452dfe108d4bc1610b3eb401366e0f33f9f903d8c1325a386b66ec729e",
+        "sshLibraries": [
+          "lib/arm64-v8a/libctos_ssh_auth_peer.so",
+          "lib/arm64-v8a/libctos_ssh_files.so"
+        ],
+        "authPeerClass": true,
+        "package": "im.majo.ctos.secretsfixture",
+        "metadataClasses": true
+      },
+      "test": {
+        "sha256": "0b5c9164ea3a427e7ed2797112c7a426b3b728663e111c1e044cbfe024c306e7",
+        "sshLibraries": [],
+        "authPeerClass": true,
+        "package": "im.majo.ctos.secretsfixture.test",
+        "metadataClasses": false
+      },
+      "signer": "8d36c8be418174cb4cda0b897ff3e32b2da6f84032819726e8e5671872df52ef",
+      "packagedLibrary": "64d72382456f016cff9cd7cfc8d61c7e553f987971b3c81d0388a83e4306a091",
+      "generatedLibrary": "6a1ea39202ed5d57d9dad2668c9dbdc1297a976be0ecdde73dbedeba50032c0f",
+      "matchingAllocatedSections": 22,
+      "jni": {
+        "SshConfigEvaluator": 15,
+        "SshNativeSession": 20,
+        "SshManifestInspector": 1,
+        "SshManifestKeyAssociationInspector": 1,
+        "SshManifestPrivateMaterialInspector": 1,
+        "SshManifestCertificateInspector": 1,
+        "SshNativeRoleBootstrap": 4
+      },
+      "archiveMembers": 83,
+      "lint": {
+        "normal": {
+          "errors": 0,
+          "warnings": 3
+        },
+        "fixture": {
+          "errors": 0,
+          "warnings": 4
+        }
+      }
+    },
+    "independent_server": {
+      "version": "OpenSSH_10.3p1 OpenSSL_3.5.7",
+      "image": "d42d0d9d40e02c441870792bd3f679b446715cee38f81354366a33c9b0d84573",
+      "route": "host loopback TCP relay to owned internal Docker network",
+      "trust": "actual preconfigured public key; managed KNOWN only",
+      "final_runtime": "PASS: signed KEX, password SUCCESS, PTY marker, resize, actual 70-second hold, expired auth then fresh shell traffic, exit7/EOF/CLOSE and cleanup",
+      "android_ui_tested": false,
+      "temporary_resources_cleaned": true
+    },
+    "verification": "design/verification.md#20261025-password-connect",
+    "remaining": [
+      "Optional private-key/certificate/complex restore/jump/forward/rekey/background-service capabilities remain follow-up on the same mainline; not preconditions for this completed foreground password path"
+    ],
+    "review": "Independent source/tests and raw XML/log/actual APK v2 signature/contentdigest/AXML/DEX/ELF/archive/hash/final runtime PASS; no findings",
+    "next_step": "Delivered foreground password scope installed and archived at user request; follow parent deferred scope only when selected.",
+    "documentation_audit": {
+      "markdown_files": 22,
+      "local_links": 866,
+      "missing": [],
+      "contexts": {
+        "implement.jsonl": 12,
+        "check.jsonl": 12
+      },
+      "history_preserved": true,
+      "before_files": 438,
+      "source_files": 45,
+      "protected_files": 269,
+      "parent_in_progress": true,
+      "device_runtime": false
+    },
+    "cleanup": {
+      "owned_container_removed": true,
+      "anonymous_image_volume_removed": true,
+      "owned_internal_network_removed": true,
+      "loopback_relay_stopped": true,
+      "synthetic_password_file_removed": true,
+      "password_absent_from_evidence": true,
+      "public_key_sha256": "adc6ad8ccd08d46cda0e8c2a8ffc871f89a3b66459bef5f7e93bb1232f4ae5da",
+      "fingerprint": "SHA256:vuorwT2Ozj61MNfB5Dh4EpiNpEL0Le/Cn2R3tEZICYA",
+      "loopback_port": 42101,
+      "runtime": "final independent OpenSSH test passed; Android not run"
+    },
+    "independent_review": "PASS: source/tests/raw APK signatures and contentdigest/AXML/DEX/ELF/native inputs and runtime; no outstanding findings",
+    "artifact_manifest_entries": 699,
+    "real_user_vault_or_account_used": false,
+    "commit_archive_publish": false,
+    "device_validation": {
+      "date": "2026-10-26",
+      "authorization": "User explicitly replied 允许 to named board isolated install/test/cleanup request",
+      "target": "192.168.9.14:5555",
+      "model": "AIO-3568J",
+      "android": "11",
+      "abi": "arm64-v8a",
+      "user_state": "RUNNING_UNLOCKED",
+      "evidence_dir": "/tmp/ctos-ssh-device-20261026.crqhdkf1",
+      "bridge_test": "SshPasswordConnectPlatformTest#actualBridgeNewThenKnownPasswordShellAndProtectionRelease",
+      "bridge_result": "OK (1 test), method status0, runner-1, host exit0, 5.924s",
+      "ui_result": "OK (1 test), method status0, runner-1, host exit0, 12.802s",
+      "formal_app_installed": false,
+      "test_packages_owned_new": true,
+      "cleanup": "complete; exact owned test packages/processes/files/reverse/container/volume/network/relay/password removed",
+      "api": 30,
+      "ui_test": "SshPasswordUiPlatformTest#actualFlutterPasswordFormTrustAndShell",
+      "ui_failure_history": [
+        "owner stat argument quoting; guard kept strict",
+        "rendered-output phase; preserved",
+        "hardware Back injection rejected; real AppBar Back used instead"
+      ],
+      "source_files": 1,
+      "protected_code_files": 314,
+      "product_code_changed": false,
+      "final_build_tasks": 84,
+      "final_build_executed": 16,
+      "final_build_up_to_date": 68,
+      "final_build_seconds": 15,
+      "ui_apk_audit": {
+        "test_apk_sha256": "46fc5720e4028d4c78848b7f2c14c52c758ee9cd95b15a7cc19d5fd5002d7930",
+        "signature": "v2 verified same existing signer",
+        "target": "im.majo.ctos.secretsfixture",
+        "contains_actual_bridge_and_UI_tests": true,
+        "lint_errors": 0,
+        "lint_warnings": 4
+      },
+      "device_cleanup": {
+        "serial": "192.168.9.14:5555",
+        "uninstall": {
+          "im.majo.ctos.secretsfixture.test": "Success",
+          "im.majo.ctos.secretsfixture": "Success"
+        },
+        "test_packages_absent": true,
+        "test_processes_absent": true,
+        "owned_remote_files_absent": true,
+        "owned_reverse_removed": true,
+        "reverse_before": "",
+        "reverse_after": "",
+        "formal_apk_sha256_before": "3bc762d9e6463ab9612393b9382923f4a29f613ceec3dbe4d9159aae0078f252",
+        "formal_apk_sha256_after": "3bc762d9e6463ab9612393b9382923f4a29f613ceec3dbe4d9159aae0078f252",
+        "formal_apk_unchanged": true
+      },
+      "server_cleanup": {
+        "container_removed": true,
+        "anonymous_image_volume_removed": true,
+        "internal_network_removed": true,
+        "owned_relay_stopped": true,
+        "synthetic_password_file_removed": true,
+        "password_absent_from_text_evidence": true,
+        "owned_name": "ctos-ssh-device-crqhdkf1"
+      },
+      "review": "Independent actual source/raw APK signature and contentdigest/AXML/DEX/installed hashes/runner/phases/server logs/after PASS; no findings",
+      "verification": "design/verification.md#20261026-password-android",
+      "documentation_audit": {
+        "source_files": 1,
+        "protected_existing_code_files": 314,
+        "markdown_files": 19,
+        "local_links": 791,
+        "missing": [],
+        "contexts": {
+          "implement.jsonl": 13,
+          "check.jsonl": 13
+        },
+        "history_preserved": true,
+        "foreground_increment_complete": true,
+        "parent_in_progress": true
+      },
+      "previous_local_artifact_entries_verified": 699,
+      "independent_review": "PASS: actual source, APK signature/contentdigest/AXML/DEX, installed hashes, raw bridge/UI runner and phases, server logs and cleanup-after; no findings",
+      "artifact_manifest_entries": 102
+    },
+    "formal_install": {
+      "target": "192.168.9.14:5555",
+      "package": "im.majo.ctos",
+      "apk_path": "/data/app/~~9J7bqaxVYWqNbp_FSnPfpw==/im.majo.ctos-Cya6hoaR9nxccY2uY7cYjw==/base.apk",
+      "installed_sha256": "6fa5c1bee28af584023f91a20ab0252abc02e53867bb13f1fb571468286417e8",
+      "mode": "adb install -r; data retained; no pm clear/uninstall",
+      "launch_requested": true,
+      "model": "AIO-3568J"
+    }
+  },
+  "local_docker_ssh_smoke": {
+    "date": "2026-10-14",
+    "state": "device_to_ephemeral_docker_ssh_public_key_login_pass_cleaned",
+    "device": "192.168.9.14:5555 AIO-3568J Android 11 arm64-v8a",
+    "endpoint": "192.168.9.5:2222",
+    "server_image": "linuxserver/openssh-server:latest",
+    "server_image_id": "d42d0d9d40e0",
+    "client": "OpenSSH_10.6p1 OpenSSL_3.5.9",
+    "client_sha256": "5a3a15e6f4de095419aa369383a8e133861ca2bdff3c521cdb86fa896d81fa16",
+    "public_key_fingerprint": "SHA256:QzXjQEBk1g1dx7uotibsDAJqHM004Yp/dDdNefst9u0",
+    "result": "host_key_match_publickey_auth_fixed_printf_exit_0",
+    "cleanup": "container_device_temp_dir_and_host_key_material_removed",
+    "production_path": false
+  },
+  "meta": {
+    "native_authentication_selection_metadata": {
+      "date": "2026-10-19",
+      "state": "CSAS_v1_native_metadata_implemented_reviewed_JVM_ARM_synthetic_pass",
+      "wire": "big_endian_magic_CSAS_version1_flags0_role_hop_nonce_connectionBinding_kind_five_u32_length_fields",
+      "max_wire_bytes": 1050624,
+      "receipt": "SHA256_exact_canonical_metadata_not_authority",
+      "scope": "Java_encoder_session_default_overload_single_JNI_open_nullable_array_native_owned_copy_hash_explicit_readonly_receipt",
+      "admission": "strict_UTF8_scalar_ISO_controls_typed_shape_exact_live_role_pre_socket_transfer",
+      "compatibility": "null_legacy_unchanged_old_binding_nonnull_fail_closed_no_open_time_receipt_call",
+      "fixed_findings": [
+        "new_getter_direct_adapter_cancel_closing_guard_and_SESSION_CANCELLED_mapping",
+        "encoder_temporary_allocations_inside_nullable_finally_scope"
+      ],
+      "source_review": "formal_check_no_remaining_findings_no_new_edits",
+      "focused_gate": "56_tasks28s_18exec38uptodate_53_JVM_0_failures_errors_skips_native_JNI_lint_pass",
+      "normal_gate": "94_tasks64s_29exec65uptodate_view_native_callback24_production_Release_lint_pass",
+      "jvm_fresh": "208_tests_0_failures_0_errors_0_skipped_15_reports",
+      "arm_runtime": "host_QEMU_Bionic_final253155checks_exit0",
+      "native_executable_sha256": "5c18eac4e893e5d346e0afafec8174c2f98ef517d47486a9117c8bb5a09c6821",
+      "apk_sha256": "bda806ca9670f51cdae1160d4615ec59098788888d550268691cca99a2e41ccf",
+      "packaging": "v2_one_signer_archive83_six_session_JNI_forbidden0_only_production_SSH_lib",
+      "evidence_dir": "/tmp/ctos-ssh-native-selection-20261019.4F7DmbUU",
+      "coverage_limits": "new_getter_wrongthread_existing_callback_gate_source_review_only_environment_dynamic_malloc_hash_failure_and_accepted_1MiB_not_injected",
+      "modified_android_JNI_runtime": false,
+      "credential_callback_USERAUTH_key_parse": false,
+      "device_real_vault_accounts": false,
+      "installed_published_dist": false,
+      "implementation_complete": false
+    },
+    "managed_authentication_selection": {
+      "date": "2026-10-18",
+      "state": "managed_metadata_selection_implemented_reviewed_jvm_synthetic_pass",
+      "scope": "Java_exact_role_explicit_username_fixed_password_or_privatekey_resource_no_native_wire",
+      "username": "strict_UTF8_1_to_255_bytes_no_ISO_controls_or_malformed_surrogate_no_normalization",
+      "receipt": "same_immutable_selection_object_exact_role_object_not_role_binding_string",
+      "adapter": "one_shot_before_callbacks_or_issued_session_claim_sticky_after_failed_open_selected_legacy_kind_only_rejected",
+      "provider_bridge": "bypass_legacy_source_open_exact_request_repeat_selection_host_kex_role_operation_final_guard_bounded_copy_wipe_close",
+      "new_jvm_tests": 12,
+      "focused_gate": "55_tasks_27s_17_executed_38_up_to_date_46_tests_0_failures_errors_skips_lint_pass",
+      "normal_gate": "91_tasks_57s_26_executed_65_up_to_date_production_strict_native_Release_lint_pass",
+      "full_jvm_fresh": "201_tests_0_failures_0_errors_0_skipped_15_reports",
+      "source_review": "formal_check_no_findings_no_edits",
+      "apk_sha256": "e6c4d58b28537e5b14a351ea1a35b4d72d64781dd34c05e0dea4d452ef57470b",
+      "packaging": "v2_one_signer_archive83_five_session_JNI_forbidden0_only_production_SSH_lib",
+      "native_source_hashes_unchanged": 34,
+      "native_test_executable_unchanged": true,
+      "native_artifacts": "archive_and_library_regenerated_by_existing_forced_production_task_not_expected_hash_stable",
+      "evidence_dir": "/tmp/ctos-ssh-auth-selection-20261018.y8DyzgNU",
+      "coverage_limit": "selected_specific_mid_return_cancel_reentry_uses_shared_pipeline_existing_tests_no_new_dedicated_case",
+      "public_key_blob": "immutable_expected_declaration_only_no_private_key_parse_or_equal_public",
+      "selected_passphrase_keyboard_interactive": "unsupported_no_passphrase_field_key_vs_target_capability_open",
+      "native_receipt_wire_current_cycle_service_gate": false,
+      "qemu_rerun": false,
+      "device_actions": false,
+      "real_vault_accounts": false,
+      "apk_installed_published_or_dist": false,
+      "implementation_complete": false
+    },
+    "native_userauth_service": {
+      "date": "2026-10-18",
+      "state": "explicit_c_service_negotiation_implemented_reviewed_arm_synthetic_pass",
+      "scope": "post_initial_kex_SERVICE_REQUEST_SERVICE_ACCEPT_only_no_username_credentials_or_authentication",
+      "apis": [
+        "ctos_ssh_native_client_begin_userauth_service",
+        "ctos_ssh_native_client_userauth_service_ready",
+        "ctos_ssh_callback_check_live"
+      ],
+      "compatibility": "existing_complete_and_Java_JNI_remain_KEX_only",
+      "liveness_and_proof": "owner_environment_role_view_cancel_deadline_and_unique_successful_current_kex_cycle_before_begin_and_each_active_step",
+      "service_parser": "drain_request_before_exact_payloadless_or_encoded_empty_accept_reject_malformed_out_of_phase_and_rekey_20_through_49",
+      "source_review": "formal_check_no_findings_no_source_edits",
+      "focused_gate": "7_tasks_14s_callback24_pass",
+      "normal_gate": "94_tasks_all_executed_1m24s_strict_native_three_ABI_Release_lint_assemble_pass",
+      "jvm_fresh": "189_tests_0_failures_0_errors_0_skipped_14_reports",
+      "arm_runtime": "host_QEMU_Bionic_encrypted_KNOWN_NEW_CAS_service_matrix_246808_checks_exit0",
+      "executable_sha256": "3fcaee6aab8647adbdfd4af0cf4ce4f18ab6387d86b72ea7f687bc4b02079560",
+      "apk_sha256": "8cd6da66d836255341b81dd30577b84a85998727865a84f74154f28c8190f4a6",
+      "apk_verification": "v2_one_signer_archive83_five_session_JNI_exports_forbidden0_SSH_production_lib_only",
+      "evidence_dir": "/tmp/ctos-ssh-userauth-service-20261018.uFA94Ngt",
+      "coverage_limit": "current_cycle_mismatch_source_reviewed_not_dynamically_injected_opaque_ssh_pointer_retained",
+      "credential_callbacks": 0,
+      "device_actions": false,
+      "installed_published_or_dist": false,
+      "full_android_service_userauth_real_cas_vault_product_acceptance": false,
+      "implementation_complete": false
+    },
+    "android_jni_fragmented_transport_eof_runtime": {
+      "date": "2026-10-18",
+      "state": "current_production_fixture_arm_jni_transport_known_eof_pass_cleaned",
+      "user_response": "已恢复",
+      "authorization": "continuation_of_explicit_independent_synthetic_test_and_cleanup_scope",
+      "target": "192.168.9.14:5555 AIO-3568J Android11 API30 arm64-v8a",
+      "user_state": "RUNNING_UNLOCKED",
+      "fixture_main_sha256": "eb2349b9da92d2ade7e55008db21a4ebf5a95de3c2344b6cd6708fed322c5bc2",
+      "fixture_test_sha256": "d0634aa524053b14a94aefe9eec0ad12a3749a5140537fd7b9406c1c0503ee87",
+      "local_gate": "112_tasks_20s_29_executed_83_up_to_date_build_lint_pass_v2_same_certificate",
+      "test": "SshNativeSessionPlatformTest#syntheticNativeSessionHandle",
+      "result": "OK_1_test_0.202s_method_status0_runner_code_minus1_host_exit0",
+      "step_budget": 3,
+      "actual_cases": "fragmented_banner_initial_kexinit_readback_known_verify_revoke_and_independent_eof_terminal_owner_cleanup",
+      "cleanup": "both_fixture_packages_uninstalled_pm_path_and_pidof_empty",
+      "formal_apk_sha256_before_after": "3bc762d9e6463ab9612393b9382923f4a29f613ceec3dbe4d9159aae0078f252",
+      "source_changed": false,
+      "normal_full_gate_jvm_qemu_rerun": false,
+      "full_android_kex_userauth_real_cas_vault_product_acceptance": false,
+      "implementation_complete": false
+    },
+    "arm_qemu_native_runtime": {
+      "date": "2026-10-17",
+      "state": "actual_arm_synthetic_pass_after_four_production_fixes",
+      "emulator": "host_qemu-aarch64_10.0.13_Debian_1:10.0.13+ds-0+deb13u1",
+      "runtime_source": "read_only_public_API30_board_linker64_libc_libdl_libm_libz",
+      "evidence_dir": "/tmp/ctos-ssh-arm-runtime-20261017.O81ADtu5",
+      "runtime_result": "exit_0_checks_65838",
+      "executable_sha256": "5b030e73a72a67a08d381abd74c754703d46dd60036ebe1f05933110cde96fb8",
+      "banner_patch_sha256": "ba61f35303233ebd2bf1c39d167774667766b3461721657f8af0483e51258a18",
+      "normal_gate": "94_tasks_21s_35_executed_59_up_to_date_pass",
+      "jvm_reports": "189_0_0_0_UP_TO_DATE_not_freshly_rerun",
+      "final_focused_gate": "6_tasks_12s_pass",
+      "apk_sha256": "f3327427ce0af90ff7a8a5ea3b5cbba0ac7a7f1c396853c2fd247a45a2328dbd",
+      "archive_members": 83,
+      "session_jni_exports": 5,
+      "forbidden_stock_caller_definitions": 0,
+      "normal_apk_ssh_entry": "lib/arm64-v8a/libctos_ssh_files.so_only",
+      "production_fixes": [
+        "deterministic_role_admission_errno",
+        "incomplete_banner_atomicity",
+        "completion_after_output_drain",
+        "failed_open_kex_guard_unbind"
+      ],
+      "device_install_this_continuation": false,
+      "android_jni_runtime": "not-run_board_still_RUNNING_LOCKED_rebuild_fixture_before_retry",
+      "real_managed_cas_vault_userauth_product_acceptance": false,
+      "implementation_complete": false
+    },
+    "android_jni_fragmented_transport_eof": {
+      "date": "2026-10-17",
+      "state": "local_build_review_pass_device_start_blocked_user_locked_cleaned",
+      "fixture_main_sha256": "78f71309dea6fc39804b9bc591c3db4a32dd291cdab5ddcd50fae02ff1e1bbf4",
+      "fixture_test_sha256": "d0634aa524053b14a94aefe9eec0ad12a3749a5140537fd7b9406c1c0503ee87",
+      "local_gate": "112_tasks_20s_java_compile_assemble_lint_pass_v2_same_certificate",
+      "source_review": "implement_and_check_agents_pass_findings_fixed",
+      "target": "192.168.9.14:5555 AIO-3568J API30 arm64-v8a",
+      "current_device_authorization": "允许，仅独立合成测试并清理",
+      "device_runtime": "not-run",
+      "device_blocker": "RUNNING_LOCKED_process_start_rejected_not_encryption_aware",
+      "user_followup": "暂时无法解锁，保留本地结果",
+      "cleanup": "owned_hanging_am_process_terminated_both_packages_uninstalled_pm_path_pidof_empty",
+      "formal_apk_sha256_before_after": "3bc762d9e6463ab9612393b9382923f4a29f613ceec3dbe4d9159aae0078f252",
+      "step_budget": 3,
+      "transport_turn_limit": 2000,
+      "encoded_cases": "fragmented_banner_initial_kexinit_readback_known_verify_revoke_then_independent_eof_terminal_owner_close",
+      "java_terminal_code": "SSH_SESSION_STEP",
+      "normal_production_gate_rerun": false,
+      "implementation_complete": false
+    },
+    "planning_role": "child",
+    "planning_stage": "approved",
+    "implementation_approval": {
+      "date": "2026-10-13",
+      "response": "效果不错；可以提交验收；然后继续做下一项",
+      "scope": "既有SSH规划的本地实施/构建/隔离技术验证；先Android native无明文磁盘文件访问关卡",
+      "device_authorized": true,
+      "device_scope": "2026-10-13用户批准192.168.9.14:5555独立SSH G0安装/合成自动测试/精确卸载；同时允许真实秘密库操作。凭据不写任务或日志，当前G0只使用合成数据。",
+      "real_vault_authorized": true,
+      "g2_device_scope": "2026-10-13用户明确允许在192.168.9.14:5555安装已审查两份独立SSH G2 APK、仅合成上游内存文件/跳板及owned127.0.0.1两个随机listener测试、结束卸载；不覆盖正式ctOS，不操作真实库/Root/剪贴板/系统设置或外部SSH账号。",
+      "account_authorized": false
+    },
+    "implementation_phase": "G3_android_arm_jni_fragmented_transport_known_eof_runtime_pass",
+    "implementation_complete": false,
+    "g0_local_check": {
+      "date": "2026-10-13",
+      "state": "build_lint_signature_source_review_packaging_pass",
+      "fixture_main_sha256": "a14f176711b571cf8fa6083897f3c4831ff793a86377b0d109240ca3c742e4ea",
+      "fixture_test_sha256": "0dafbda4774cfc6c3a5cee3cf21218cf851d717da0ae8344478b84298dd9f17a",
+      "device_state": "passed_1_test_1.693s_fixtures_removed",
+      "device_scope": "AIO-3568J Android11 API30 arm64 4KiB SELinux Permissive independent UID10167",
+      "eligible_backend": "raw_memfd_syscall",
+      "unsupported_backend": "ASharedMemory_fstat_file_shape_errno95",
+      "production_openssh": false
+    },
+    "g1_build": {
+      "date": "2026-10-13",
+      "state": "abi_compat_baseline_cross_build_and_elf_pass",
+      "run": "build/ssh-native-g1/stock-run.lOHF9Oai",
+      "openssh": "10.6p1",
+      "openssl": "3.5.9",
+      "ssh_sha256": "5a3a15e6f4de095419aa369383a8e133861ca2bdff3c521cdb86fa896d81fa16",
+      "ssh_keygen_sha256": "591eb4a865b3b9d9fbf3a9ba51702d8505a8053224a5844481f6953be0eb161d",
+      "libcrypto_sha256": "feb776737f8f84d4110492a03e4c4d91312a65638408851c3a509aabb9736376",
+      "runtime_crypto_dnssec_or_production_trust_pass": false
+    },
+    "g2_precheck": {
+      "date": "2026-10-13",
+      "state": "source_review_input_coverage_build_lint_signature_packaging_and_device_pass_fixtures_removed",
+      "valid_baseline_config": "app_help_pass_7s",
+      "negative_config_cases": [
+        "false_option",
+        "no_fixture",
+        "missing_baseline",
+        "escaped_baseline"
+      ],
+      "fixture_build_pass": true,
+      "fixture_main_sha256": "23d33ccadab6be86391557e79f370d5a36825c1805c5f56393734d4395176b53",
+      "fixture_test_sha256": "cf673b520cac854c37e02775634eb09a94f0edc28db53213b2d3b04b65413806",
+      "native_run": "build/ssh-native-g2/run.pVUcIdvd",
+      "baseline_input_count": 1240,
+      "device_scope_confirmation_pending": false,
+      "device_authorized_response": "允许，测试后清理",
+      "device_pass": true,
+      "device_second_run": "passed_1_test_4.496s_six_groups_real_parent2199_jump2200_generation73",
+      "device_second_run_cleanup": "own_uid10171_empty_both_fixtures_uninstalled_formal_apk_hash_unchanged",
+      "device_first_run": "failed_1_test_3.418s_proxy_inherit_reported_errno10_not_root_cause_confirmed",
+      "device_first_run_cleanup": "own_uid10169_empty_both_fixtures_uninstalled_formal_apk_hash_unchanged",
+      "production_openssh": false
+    },
+    "policy_increment": {
+      "date": "2026-10-13",
+      "state": "build_lint_signature_packaging_and_device_pass_fixtures_removed",
+      "native_run": "build/ssh-native-policy/run.Wc7BAJSa",
+      "fixture_main_sha256": "d241c70e2ea258513fa9cbcce025f1cf97122ac1bd5f5d5e2702b0ef18c62650",
+      "fixture_test_sha256": "c9c2f6f4ec979b781df6749573ab086fec08360cba19fb433f6c1cad5a67f314",
+      "device_test_count": 1,
+      "synthetic_case_count": 101,
+      "device_seconds": 0.154,
+      "device_uid": 10173,
+      "test_uid": 10174,
+      "cleanup": "own_uids_empty_both_fixtures_uninstalled_formal_apk_hash_unchanged",
+      "production_provider_or_complete_policy_pass": false
+    },
+    "include_increment": {
+      "date": "2026-10-13",
+      "state": "build_lint_signature_and_device_pass_fixtures_removed",
+      "native_run": "build/ssh-native-policy/run.L15qyw90",
+      "fixture_main_sha256": "0ead24fc2c7b65856ffde31789c0851511e972d7eef4afbea3bb4f2be4bcd06d",
+      "fixture_test_sha256": "16751c66518e65fdc3856ea0009f259987eb8b1bf1ad35e011b2bbb9dd6b742e",
+      "device_test_count": 1,
+      "synthetic_case_count": 117,
+      "device_seconds": 0.189,
+      "device_uid": 10179,
+      "test_uid": 10180,
+      "previous_expanded_runs": "two_failed_0.166s_first_include_effect_counter1_no_complete_gate",
+      "fix": "OpenSSL_INIT_NO_LOAD_CONFIG_before_public_parser_entries",
+      "cleanup": "own_uids_empty_both_fixtures_uninstalled_formal_apk_hash_unchanged",
+      "production_provider_or_complete_policy_pass": false
+    },
+    "proxy_increment": {
+      "date": "2026-10-13",
+      "state": "build_lint_signature_packed_segments_device_pass_fixtures_removed",
+      "native_run": "build/ssh-native-policy/run.d3GNr1d2",
+      "fixture_main_sha256": "55e3973352eb0b7c4fe35abd403a953393284d8669bac3280aa62014eebafa7b",
+      "fixture_test_sha256": "248510175eaeb3856982dc90c4419654b491df3602513eb739e23fba0861e419",
+      "device_test_count": 1,
+      "synthetic_case_count": 127,
+      "device_seconds": 0.796,
+      "device_uid": 10181,
+      "test_uid": 10182,
+      "cleanup": "own_uids_empty_both_fixtures_uninstalled_formal_apk_hash_unchanged",
+      "production_role_or_complete_client_pass": false
+    },
+    "public_file_view": {
+      "date": "2026-10-13",
+      "state": "device_pass_17_cases_fixtures_removed",
+      "fixture_main_sha256": "05477234e79618e778ecd1ac332165998b9204c013112f22db6a0c1a2474f780",
+      "fixture_test_sha256": "c107d8d39589024d3f06ce0562dbe5c28997f7002da3497d9d7a884a56138616",
+      "device_test_count": 1,
+      "cases": 17,
+      "seconds": 0.314,
+      "device_uid": 10187,
+      "test_uid": 10188,
+      "jvm_tests": 133,
+      "native_host_cases": 426,
+      "native_mapping_wipe_checks": 1634,
+      "cleanup": "own_uids_empty_fixtures_removed_formal_apk_hash_unchanged",
+      "private_release_or_production_provider": false
+    },
+    "managed_file_parser": {
+      "state": "device_pass_147_cases_fixtures_removed",
+      "native_run": "build/ssh-native-policy/run.YDuVYoaN",
+      "fixture_main_sha256": "2ba6954524a853a0a4503022195ddb8cb3f61d0327dc683fc289bd5e80ebbd0d",
+      "fixture_test_sha256": "8846656003822f3794e6458dfe43e27d0dd08b0331aa06decc8936d5e3c4ab38",
+      "cases": 147,
+      "seconds": 0.78,
+      "device_uid": 10185,
+      "test_uid": 10186,
+      "production_entry_or_trust_provider": false
+    },
+    "control_transport": {
+      "date": "2026-10-13",
+      "state": "device_pass_24_cases_fixtures_removed",
+      "fixture_main_sha256": "b1f7343a9d706a34e9643dc1843d14e9a55005058b6f836a3f651837b57ad039",
+      "fixture_test_sha256": "54770ece1573dcbedd12ec269294deecf8e309d66ec471dce2f4303a3e5338c7",
+      "device_test_count": 1,
+      "cases": 24,
+      "seconds": 0.388,
+      "device_uid": 10189,
+      "test_uid": 10190,
+      "cleanup": "own_uids_empty_fixtures_removed_formal_apk_hash_unchanged",
+      "production_role_kex_or_secret_release": false
+    },
+    "real_kex_guard": {
+      "date": "2026-10-13",
+      "state": "device_pass_27_cases_fixtures_removed",
+      "native_run": "build/ssh-native-kex/run.uGkaa9Pd",
+      "fixture_main_sha256": "802ffb446921331cd1722fbfc8c57effe64c4b493aaebf8e86b102c14159009c",
+      "fixture_test_sha256": "63b9efde097ae46bb3c6fbd949242e4d49378b7677af18826a9bc2054718e9f6",
+      "device_test_count": 1,
+      "cases": 27,
+      "seconds": 6.999,
+      "device_uid": 10191,
+      "test_uid": 10192,
+      "cleanup": "own_uids_empty_fixtures_removed_formal_apk_hash_unchanged",
+      "production_host_authority_or_private_release": false,
+      "normal_build": {
+        "seconds": 41,
+        "jvm_tests": 133,
+        "sha256": "55aef7e487acff41a8670e34a2b06ff4e3436871663fd9bf6a71eab63d63915f",
+        "installed": false,
+        "all_probe_exclusion": true
+      }
+    },
+    "production_role_lifecycle": {
+      "date": "2026-10-13",
+      "state": "host_and_normal_build_pass",
+      "host_gate": "bootstrap1198/cleanup1/gate1198",
+      "jvm_tests": 150,
+      "normal_build": "testReleaseUnitTest_lintRelease_assembleRelease_pass",
+      "apk_sha256": "538cae5a32499c9ff0aa4dcbca76a2e6637b6186c4177c1785dfdf86e2f843f9",
+      "jni_exports": [
+        "open",
+        "owns",
+        "release"
+      ],
+      "installed": false,
+      "production_event_loop_or_complete_client": false
+    },
+    "kex_only_launcher_fixture": {
+      "date": "2026-10-14",
+      "state": "fixture_host_and_normal_build_pass",
+      "run": "build/ssh-native-kex/run.CYUJUpCa",
+      "host_gate": "handshake27/cleanup1/gate27",
+      "launcher_sha256": "506d35caf2d7939542978d1227b1895fbf5ecb890ca80f58d8d59f7c0cd8bb22",
+      "launcher_header_sha256": "8507bccd4c4236c4b627b104c33a3d341a232855ff4e5b6eeaea876f1ae67bd6",
+      "test_sha256": "773e85a63cc11084b7617c4b65e11d6055d1882fe01fd7ee6fa8bf60821e5deb",
+      "artifact_sha256": "ad8c73c8acaaefed7b12f693ec6ea78759974a55384c8e500d74a98b5ef140a8",
+      "baseline_manifest": "before_after_match",
+      "strict_native_compile": true,
+      "jvm_tests": 150,
+      "normal_build": "testReleaseUnitTest_lintRelease_assembleRelease_pass",
+      "apk_sha256": "538cae5a32499c9ff0aa4dcbca76a2e6637b6186c4177c1785dfdf86e2f843f9",
+      "apk_fixture_exclusion": true,
+      "arm_executed": false,
+      "production_event_loop_or_complete_client": false
+    },
+    "managed_provider_handoff": {
+      "date": "2026-10-14",
+      "state": "bounded_role_bound_proposal_and_typed_credential_handoff_pass",
+      "host_gate": "thread_reentry1/cancel_deadline_cleanup5/credential_bytes5/gate11",
+      "jvm_tests": 162,
+      "normal_build": "testSshCallbackAdapterHost_testReleaseUnitTest_lintRelease_assembleRelease_pass",
+      "apk_sha256": "f32bbc83a401c9997a3b901eccc4e2e5966808093ee1a3c17851ad62056df9ea",
+      "credential_max_bytes": 1048576,
+      "role_hop_bound_new_proposal": true,
+      "typed_handoff": [
+        "PASSWORD",
+        "KEY_PASSPHRASE",
+        "KEYBOARD_INTERACTIVE",
+        "PRIVATE_KEY"
+      ],
+      "jni_java_array_wipe": true,
+      "native_failure_output_wipe": true,
+      "cleanup_context_deferred_until_slot_removal": true,
+      "concrete_public_file_view_or_trust_cas_writer": false,
+      "production_event_loop_or_complete_client": false
+    },
+    "production_caller_boundary": {
+      "date": "2026-10-15",
+      "historical_scope": "provider-missing boundary before the managed known_hosts CAS provider increment",
+      "superseded_by": "managed_known_hosts_cas_provider",
+      "state": "provider_missing_fail_closed_boundary_pass",
+      "host_gate": "admission27/provider1/cleanup1/gate27",
+      "gradle_task": "testSshNativeClientHost_pass",
+      "normal_build": "testSshNativeClientHost_testSshCallbackAdapterHost_testReleaseUnitTest_lintRelease_assembleRelease_pass",
+      "jvm_rerun": "testReleaseUnitTest_rerun_tasks_pass_162_0_0_0",
+      "jvm_tests": 162,
+      "apk_sha256": "28fc98aaf64d1e010cd63a2ba69086b891de6afc7851376ff65c663a8fc0a179",
+      "strict_native_compile": true,
+      "validates": [
+        "live_role",
+        "same_pid_uid",
+        "cloexec_nonblock_socket",
+        "callback_token_environment",
+        "future_deadline",
+        "bounded_step_buffers"
+      ],
+      "provider_missing_errno": 95,
+      "openSSH_or_kex_called": false,
+      "jni_or_credential_called": false,
+      "caller_socket_closed_on_rejection": false,
+      "normal_apk_inclusion": false,
+      "normal_apk_inclusion_scope": "host_only_boundary_and_fixture_openssh_objects",
+      "normal_apk_ssh_entry": "lib/arm64-v8a/libctos_ssh_files.so_only",
+      "production_event_loop_or_complete_client": false
+    },
+    "host_evidence_cas_contract": {
+      "date": "2026-10-15",
+      "historical_scope": "host evidence seam before the managed known_hosts CAS provider increment",
+      "superseded_by": "managed_known_hosts_cas_provider",
+      "state": "role_hop_target_bound_native_java_contract_pass",
+      "host_gate": "thread_reentry1/cancel_deadline_cleanup5/credential_bytes5/host_evidence4/gate15",
+      "jvm_tests": 166,
+      "normal_build": "testSshNativeClientHost_testSshCallbackAdapterHost_testReleaseUnitTest_lintRelease_assembleRelease_pass",
+      "apk_sha256": "26747c49c3333eeff65544be9131668699281eaef7736166224b2856106bff06",
+      "contract_fields": [
+        "role_token",
+        "hop",
+        "target",
+        "classification",
+        "key_type",
+        "fingerprint",
+        "base_digest",
+        "replacement_digest"
+      ],
+      "known_cas_status": "NOT_REQUIRED",
+      "new_requires": [
+        "exact_proposal",
+        "explicit_approval",
+        "exact_cas_COMMITTED"
+      ],
+      "native_result_revalidation": true,
+      "proposal_body_crosses_jni": false,
+      "concrete_file_view_or_cas_writer": false,
+      "production_event_loop_or_complete_client": false
+    },
+    "managed_known_hosts_cas_provider": {
+      "date": "2026-10-15",
+      "historical_scope": "provider-only gate before the dedicated native-to-managed candidate handoff",
+      "superseded_by": "native_managed_known_hosts_candidate_handoff",
+      "state": "managed_appsecrets_known_hosts_cas_provider_pass",
+      "native_client_gate": 27,
+      "callback_host_gate": 15,
+      "jvm_result": "174/0/0/0",
+      "normal_build": "compileSshFiles_lintRelease_assembleRelease_three_abis_pass",
+      "apk_sha256": "718c3934f3e972a3ac6996ab3a54aeae1116ddc3728fed1f751fdcf2619fe624",
+      "provider": "SshManagedKnownHostsProvider",
+      "cas_backend": "AppSecrets",
+      "candidate_source": "caller_supplied_exact_replacement_bytes",
+      "strict_native_compile": true,
+      "normal_apk_inclusion": false,
+      "normal_apk_inclusion_scope": "host_only_boundary_and_fixture_openssh_objects",
+      "normal_apk_ssh_entry": "lib/arm64-v8a/libctos_ssh_files.so_only",
+      "production_hostfile_issuer": false,
+      "production_event_loop_or_complete_client": false
+    },
+    "native_managed_known_hosts_candidate_handoff": {
+      "date": "2026-10-15",
+      "state": "dedicated_one_shot_candidate_handoff_and_proposal_cleanup_pass",
+      "native_client_gate": 27,
+      "callback_host_gate": 20,
+      "jvm_result": "177/0/0/0",
+      "focused_provider_tests": "11/11",
+      "normal_build": "compileSshFiles_lintRelease_assembleRelease_three_abis_pass",
+      "apk_sha256": "3a6228f4237380dfc2cd98ccd537c16d4c6e81bc2e64e6205cdd6d556af9ded6",
+      "proposal_receipt_validated_before_close": true,
+      "proposal_close_on_rejection": true,
+      "partial_java_body_clone_cleanup": true,
+      "native_jni_managed_body_wipe": true,
+      "cshr_wire_unchanged": true,
+      "normal_apk_inclusion": false,
+      "normal_apk_inclusion_scope": "host_only_boundary_and_fixture_openssh_objects",
+      "production_hostfile_issuer": false,
+      "production_event_loop_or_complete_client": false
+    },
+    "pinned_caller_fixture": {
+      "date": "2026-10-15",
+      "state": "host_fixture_source_object_caller_pass_runtime_not_run",
+      "run": "build/ssh-native-g3/run.3PZSbIzM",
+      "runner_result": "SSH_HOSTFILE_CALLER_BUILD gate=pass runtime=not-run normal_apk=not-wired",
+      "stream_writer_patch_sha256": "a786566e1842996c0282647457f4dd63558cde00bc79ae1ba6bcd552bf30484a",
+      "kex_guard_patch_sha256": "50a59606000dc871f1b29e33eeb6d77fb5da456f40526d2871357758b61f8785",
+      "jvm_result": "177/0/0/0",
+      "callback_host_gate": 20,
+      "native_boundary_gate": 27,
+      "normal_build": "testSshCallbackAdapterHost_testSshNativeClientHost_testReleaseUnitTest_compileSshFiles_lintRelease_assembleRelease_pass",
+      "apk_sha256": "67668e34e2bba40359e43e048404ffeb5645629a130f86e86b2d855a170ffff9",
+      "aarch64_pie_links": 2,
+      "qemu_aarch64": false,
+      "runtime": "not-run",
+      "normal_apk_inclusion": false,
+      "production_caller": false,
+      "production_event_loop_or_complete_client": false
+    },
+    "new_candidate_cas_precommit": {
+      "date": "2026-10-15",
+      "state": "production_new_candidate_handoff_and_cas_commit_host_regression_pass",
+      "focused_gate": "BUILD_SUCCESSFUL_production_gate_pass_native_gate_pass_runtime_not_run_qemu_aarch64_unavailable",
+      "normal_gate": "94_tasks_view_native_callback_host_junit_189_0_0_0_compile_lint_three_abis_assemble_pass",
+      "apk_sha256": "7f0bd0f14ec2a5ae9175ee340512acfdeaf0aa76f843834d1a3c87107c97993b",
+      "candidate_before_evidence": true,
+      "replacement_body_exact": true,
+      "cas_committed": true,
+      "rollback_once_and_terminal_step": true,
+      "close_retryable": true,
+      "qemu_aarch64": false,
+      "runtime": "not-run",
+      "implementation_complete": false
+    },
+    "synthetic_kex_completion": {
+      "date": "2026-10-16",
+      "state": "production_kex_done_host_proof_regression_cross_link_pass",
+      "focused_gate": "BUILD_SUCCESSFUL_production_gate_pass_native_gate_pass_runtime_not_run_qemu_aarch64_unavailable",
+      "normal_gate": "94_tasks_view_native_callback_host_junit_189_0_0_0_compile_lint_three_abis_assemble_pass",
+      "apk_sha256": "7195a67fad84185714d00cbb2bbc899fbdf788b61f722282fae8b99ae8ba5f69",
+      "server": "synthetic_nonblocking_openssh_socketpair",
+      "server_fragment_bytes": 2,
+      "server_eagain_asserted": true,
+      "server_short_write_asserted": true,
+      "host_evidence_exactly_once": true,
+      "kex_complete_exactly_once": true,
+      "evidence_before_kex": true,
+      "kex_cycle": 1,
+      "session_digest_nonzero_and_peer_bound": true,
+      "post_completion_step": "EALREADY",
+      "realloc_macro_isolated": true,
+      "qemu_aarch64": false,
+      "runtime": "not-run",
+      "implementation_complete": false
+    },
+    "new_cas_full_kex": {
+      "date": "2026-10-16",
+      "state": "production_new_cas_kex_done_host_proof_cross_link_pass",
+      "focused_gate": "BUILD_SUCCESSFUL_production_gate_pass_native_gate_pass_runtime_not_run_qemu_aarch64_unavailable",
+      "normal_gate": "94_tasks_view_native_callback_host_junit_189_0_0_0_compile_lint_three_abis_assemble_pass",
+      "apk_sha256": "7ccac2fb8f705edd761d34574b9cead4b9e2296864dfe5568d2e9b1105fd849f",
+      "managed_known_hosts": "empty",
+      "candidate_exactly_once": true,
+      "evidence_exactly_once": true,
+      "kex_complete_exactly_once": true,
+      "order": "candidate_evidence_kex_complete",
+      "cas_status": "CAS_COMMITTED",
+      "route_fields_bound": true,
+      "replacement_body_and_digests_exact": true,
+      "kex_cycle": 1,
+      "session_digest_nonzero_and_peer_bound": true,
+      "server_eagain_and_short_write": true,
+      "post_completion_step": "EALREADY",
+      "cleanup_double_close": "EBADF_asserted",
+      "qemu_aarch64": false,
+      "runtime": "not-run",
+      "implementation_complete": false
+    },
+    "android_known_host_proof": {
+      "date": "2026-10-16",
+      "state": "production_java_jni_native_known_host_proof_arm_runtime_pass",
+      "target": "192.168.9.14:5555",
+      "model": "AIO-3568J",
+      "android_api": 30,
+      "abi": "arm64-v8a",
+      "fixture_main_sha256": "1e3a10c709fed7d514a90e247494c61345da6a0f71dd142c17157f34ea4e9de6",
+      "fixture_test_sha256": "2b9f80678220d89a7a67e23197bd5f85c1eee7543763bfb895da8d31a801f7e7",
+      "test": "SshNativeSessionPlatformTest#syntheticNativeSessionHandle",
+      "known_hosts_exact_wire_blob_base64": true,
+      "production_verify_host_key_before_revoke": true,
+      "result": "OK_1_test_status_0_duration_0.089s",
+      "fixture_build_lint_java_compile": "pass",
+      "cleanup": "both_fixture_packages_uninstalled_pm_path_and_pidof_empty",
+      "network": false,
+      "credentials": false,
+      "vault_mutation": false,
+      "kex_or_packet_runtime": false,
+      "native_host_qemu_runtime": "not-run",
+      "implementation_complete": false
+    },
+    "android_jni_empty_peer_eagain": {
+      "date": "2026-10-16",
+      "state": "production_java_jni_step_empty_peer_eagain_and_known_host_proof_arm_runtime_pass",
+      "target": "192.168.9.14:5555",
+      "model": "AIO-3568J",
+      "android_api": 30,
+      "abi": "arm64-v8a",
+      "fixture_main_sha256": "79776aad22be067e057fb2abd2a9af74bc365f890de44b1d3ba689c18d9560d3",
+      "fixture_test_sha256": "fc71429d9e06d33334cc51cbb9fa64a7b8f672f2bb8752922052aac5ec6dc71e",
+      "test": "SshNativeSessionPlatformTest#syntheticNativeSessionHandle",
+      "step_result": {
+        "bytes_read": 0,
+        "input_appended": 0,
+        "read_would_block": true,
+        "bytes_written_unconstrained": true
+      },
+      "production_verify_host_key_before_revoke": true,
+      "result": "OK_1_test_status_0_duration_0.11s",
+      "fixture_build_lint_java_compile": "pass",
+      "cleanup": "both_fixture_packages_uninstalled_pm_path_and_pidof_empty",
+      "network": false,
+      "credentials": false,
+      "vault_mutation": false,
+      "kex_or_packet_runtime": false,
+      "native_host_qemu_runtime": "not-run",
+      "implementation_complete": false
+    },
+    "receipt_bound_selected_credential_handoff": {
+      "date": "2026-10-19",
+      "state": "implemented_reviewed_local_synthetic_JVM_ARM_pass",
+      "scope": "native_client_optional_selected_C_JNI_callback_Java_adapter_provider_bridge_finalEffectGuard_no_USERAUTH",
+      "native_gate": "owned_CSAS_kind_receipt_service_READY_current_unique_completion_cycle_saved_reported_digest_fresh_raw_session_id_SHA256_before_and_after_provider",
+      "output": "private_bounded_scratch_postcheck_before_copy_error_wipe_length0",
+      "attempt": "preflight_EPERM_premature_no_consume_scratch_ENOMEM_retry_attempt_immediately_before_callback_all_later_errors_terminal",
+      "java_gate": "owned_native_claim_exact_receipt_current_host_KEX_cycle_digest_cloned_metadata_shared_one_shot_sticky_no_object_downgrade",
+      "fixed_findings": [
+        "JNI_immediate_exception_check_each_metadata_allocation_write",
+        "finish_keeps_reentry_guard_through_clock_then_rechecks_cancel",
+        "escaping_Error_wipes_unhanded_result_aborts_invocation_allows_owner_cleanup_preserves_Error"
+      ],
+      "formal_review": "no_remaining_findings",
+      "focused_gate": "57_tasks33s_19exec38uptodate_66_JVM_0_failures_errors_skips_native_JNI_lint_pass",
+      "normal_gate": "94_tasks66s_29exec65uptodate_view_native_callback35_production_Release_lint_pass",
+      "jvm_fresh": "221_tests_0_failures_0_errors_0_skipped_15_reports",
+      "added_jvm_methods": 13,
+      "callback_host_groups": 35,
+      "selected_callback_host_groups": 11,
+      "arm_runtime": "host_QEMU_Bionic_final323726checks_exit0",
+      "native_executable_sha256": "292d8c7e01cc2ac7bc125edcaece31e3a7226b00adfffb7e2a12c0fe2c50fd85",
+      "apk_sha256": "f329056e8ce108316dbd7d1674f4296b25ba286f0ce283030637cb33cba57a3f",
+      "packaging": "v2_one_signer_archive83_six_session_JNI_forbidden0_only_production_SSH_lib",
+      "evidence_dir": "/tmp/ctos-ssh-selected-credential-20261019.tCsurTHc",
+      "coverage_limits": "native_cycle_raw_session_drift_ENOMEM_hash_not_injected_JNI_exception_cleanup_and_internal_adapter_Error_result_wipe_source_reviewed",
+      "modified_android_JNI_runtime": false,
+      "USERAUTH_key_parse": false,
+      "device_real_vault_accounts": false,
+      "installed_published_dist": false,
+      "implementation_complete": false
+    },
+    "explicit_native_password_userauth": {
+      "date": "2026-10-19",
+      "state": "C_only_password_USERAUTH_implemented_reviewed_ARM_synthetic_pass",
+      "scope": "native_client_h_c_test_only_no_Java_JNI_entrypoint_or_private_key_auth",
+      "api": [
+        "ctos_ssh_native_client_begin_password_auth",
+        "ctos_ssh_native_client_password_auth_result"
+      ],
+      "input": "owned_CSAS_username_offset_length_PASSWORD_selection_8192_bytes_all_NUL_rejected_exact_put_string",
+      "gate": "READY_current_unique_KEX_cycle_saved_digest_fresh_raw_session_SHA_live_owner_env_role_view_deadline_no_output_no_rekey_before_and_after_selected_handoff",
+      "attempt": "shares_existing_selected_one_shot_no_none_probe_retry_next_method_or_password_change",
+      "wire": "USERAUTH_REQUEST_username_ssh_connection_password_false_exact_password_add_padding64",
+      "result": "NOT_STARTED_PENDING_SUCCESS_REJECTED_PARTIAL_CHANGE_REQUIRED_readonly_proof_guarded_output_zero_on_error",
+      "plaintext_cleanup": "scratch_wipe_free_pinned_successful_outgoing_reset_failure_start_IGNORE_reset_only_no_send_EIO_rekey_queue_prevented",
+      "response": "request_drain_before_final_bounded_banner16_text8192_lang128_methods1024_DISCONNECT_ECONNRESET_unexpected_EPROTO",
+      "formal_review": "no_remaining_findings_no_checker_edits_main_added_discriminating_pending_banner_positive",
+      "new_synthetic_connections": 67,
+      "focused_gate": "7tasks13s_3exec4uptodate_strictnative_callback35_pass",
+      "normal_gate": "94tasks19s_23exec71uptodate_view_native_callback35_production_strictJNI_lint_Release_pass",
+      "jvm_result": "UP_TO_DATE_retained221_0_0_0_15reports_not_fresh",
+      "arm_runtime": "host_QEMU_Bionic_final785537checks_exit0",
+      "native_executable_sha256": "db01d8f7aec9d7a8e9cf6f2e8477d8592f4a5041ad41e3d8025a1e4687d06829",
+      "apk_sha256": "983f2032f89adc6a71f4968c77219e455b6a6a9f3c51b12d101e321f39ad09ad",
+      "packaging": "v2_one_signer_archive83_six_session_JNI_forbidden0_only_production_SSH_lib",
+      "evidence_dir": "/tmp/ctos-ssh-password-userauth-20261019.obv9zw5H",
+      "coverage_limits": "ENOMEM_hash_opaque_proof_drift_serialization_failure_reset_padding_upstream_wipe_precise_postparse_cancel_source_review_only_missing_target_reuses_prior_getter",
+      "compatibility_limits": "IGNORE_DEBUG_UNIMPLEMENTED_unsupported_delayed_compression_channel_interop_not_established",
+      "Android_password_auth_privatekey_auth": false,
+      "device_real_vault_accounts_external_sshd": false,
+      "installed_published_dist": false,
+      "implementation_complete": false
+    },
+    "continuous_auth_integration": {
+      "date": "2026-10-19",
+      "state": "implemented_verified_synthetic_Android_cleaned",
+      "trigger": "user_asked_when_Android_JNI_and_privatekey_will_be_done",
+      "implementation_complete": true,
+      "parent_implementation_complete": false,
+      "stage": "Java_JNI_password_and_direct_signed_unencrypted_encrypted_key_auth_with_real_NEW_CAS",
+      "jni_exports": 12,
+      "wire": "CSASv1_unchanged_CSASv2_exact_passphrase_entry_CSKBv1_atomic_bundle_max1MiB",
+      "key_algorithms": [
+        "Ed25519",
+        "ECDSA_p256",
+        "ECDSA_p384",
+        "ECDSA_p521",
+        "RSA_SHA2_only_exact_advertisement"
+      ],
+      "encryption": "OpenSSH_bcrypt_aes256ctr_rounds1to64_salt1to64_and_legacy_AES128or256CBC_PEM_PKCS8_encrypted_rejected",
+      "source_review": "early_Java_JNI_formal_checker_then_main_security_implementation_self_review_actual_positive_negative_tests",
+      "normal_gate": "94tasks65s_37exec57uptodate_native_callback35_lint_Release_pass",
+      "jvm": {
+        "tests": 244,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "arm_checks": 1244010,
+      "arm_exit": 0,
+      "native_sha256": "8e65b06ba5b30f06d71a830dd73b8710ca14dee3500eee57e1137045fed84d53",
+      "apk_sha256": "89eb642529d9e5a8977b52a5d5672b7883b0f8d4836a9e4b77cbd56e606bbabc",
+      "packaging": "archive83_12sessionJNI_forbidden0_normal_peer_library_class_absent_fixture_peer_DT_NEEDED_production_shared_library",
+      "device": "192.168.9.14:5555_AIO3568J_API30_arm64_RUNNING_UNLOCKED",
+      "authorization": "same_conversation_explicit_independent_synthetic_testing_and_cleanup_only",
+      "device_methods": [
+        {
+          "method": "syntheticPasswordAuthenticationChain",
+          "result": "OK_1_test",
+          "seconds": 26.954
+        },
+        {
+          "method": "syntheticPrivateKeyAuthenticationChain",
+          "result": "OK_1_test",
+          "seconds": 27.418
+        },
+        {
+          "method": "syntheticEncryptedPrivateKeyAuthenticationChain",
+          "result": "OK_1_test",
+          "seconds": 23.781
+        },
+        {
+          "method": "syntheticNewHostAuthenticationChain",
+          "result": "OK_1_test",
+          "seconds": 23.906
+        }
+      ],
+      "device_cleanup": "both_packages_and_processes_absent_production_APK_unchanged",
+      "production_device_apk_sha256": "3bc762d9e6463ab9612393b9382923f4a29f613ceec3dbe4d9159aae0078f252",
+      "real_accounts": false,
+      "real_vault": false,
+      "normal_apk_installed": false,
+      "fixed_issues": [
+        "real_view120s_vs_role60s_exact_deadline_in_client_and_hostfile",
+        "final_effect_guard_after_last_vault_store_read",
+        "own_approved_NEW_CAS_revokes_its_original_public_loan",
+        "unknown_supported_SK_policy_errno_classification"
+      ],
+      "evidence": "/tmp/ctos-ssh-android-auth-20261019.yqKxcIaN",
+      "remaining": "encrypted_PKCS8_KBI_MFA_rekey_compression_external_server_matrix_channels_PTY_forward_service_UI_full_product_AC"
+    },
+    "session_channel_pty_shell": {
+      "date": "2026-10-19",
+      "state": "local_implemented_reviewed_pass_device_not_run",
+      "contract": "design/ssh-session-channel.md",
+      "authentication_baseline": "251b0f3/current-history_b4ec864_identical_ctOS_tree",
+      "handoff_baseline": "b4ed4e2/current-history_12a1357_identical_ctOS_tree",
+      "normal_gate": "94tasks_all_rerun_1m29s",
+      "fresh_jvm": "270_0_0_0_16reports",
+      "flutter": "227_pass_analyze_clean",
+      "fixture_gate": "113tasks43s_build_lint_pass",
+      "session_jni_exports": 18,
+      "archive_members": 83,
+      "arm_runtime_checks": 1651641,
+      "arm_runtime_exit": 0,
+      "native_sha256": "bbf14ab476f771218a84b4a6ad161e7094318025f5bd4b024730c760c8df5f7f",
+      "normal_apk_sha256": "3d7e28d31a0db21fd90f954763f8cac7cd0a2d37c685aab0eb2264bdcdbbd6b5",
+      "fixture_main_sha256": "5866f825098f5b47c3a8428c1b904875740fc6cedd61bb66ab5f10905d55a3f5",
+      "fixture_test_sha256": "9285e1ca6a1e749b101c9fc41a48c1c8520e3b52b4db14276aa3a4d29aa597e5",
+      "evidence_dir": "/tmp/ctos-ssh-shell-20261019.8nfypcZH",
+      "scope": "SUCCESS_only_single_channel_PTY_shell_bounded_io_resize_exit_cleanup_native_JNI_Java_terminal_host_factory_typed_events_generation_UTF8_remote_arrows",
+      "review": "formal_cross_layer_no_remaining_confirmed_findings_main_reviewed_added_controller_fixture_source",
+      "native_coverage_limits": "shell_specific_deadline_alien_environment_duplicate_open_drain_unknown_request_replies_not_dynamic_shared_guard_source_reviewed",
+      "device_runtime": false,
+      "real_accounts": false,
+      "product_launcher": false,
+      "parent_implementation_complete": false,
+      "user_final_decision": "retain_uncommitted_workspace_local_results_only_no_device_no_commit"
+    },
+    "actual_offered_host_review": {
+      "date": "2026-10-19",
+      "state": "local_normal_fixture_APK_audit_and_additional_static_ARM_pass",
+      "contract": "design/ssh-launcher.md",
+      "native_exit": 0,
+      "focused_gradle": "55tasks23s_session51_mailbox8_JNI_lint_pass",
+      "final_host_java": "288_tests_pass_39.199s_all17_testclasses_recompiled_JDK21_source17target17_one_module_path_warning",
+      "final_fixture_source_compile": "compiled_assembled_and_linted_not_Android_runtime",
+      "generated_session_jni_exports": 19,
+      "archive_members": 83,
+      "final_full_gradle_apk_fixture_packaging": "normal94_all_executed_1m30s_fixture113_16s_21executed92uptodate_v2_one_signer_isolated_target_JNI19_archive83_forbidden0",
+      "review": "resumed_independent_source_spec_fixture_review_no_concrete_defects_no_source_edits",
+      "evidence_dir": "/tmp/ctos-ssh-managed-host-resume-20261019.ruWFiwIc",
+      "product_launcher_complete": false,
+      "device_runtime": false,
+      "commit": false,
+      "real_accounts": false,
+      "parent_implementation_complete": false,
+      "user_scope": "local_only_uncommitted_no_device",
+      "initial_evidence_dir": "/tmp/ctos-ssh-managed-host-20261019.j484FN3T",
+      "initial_dynamic_runtime_result": {
+        "checks_managed": 87305,
+        "checks_full": 1724409,
+        "sha256": "00b689663e927d7deda4edb76d4cb0ad7f136e0da19ab9f57c6f8be7e17e95a4",
+        "evidence_available": false
+      },
+      "fresh_gradle_jvm": "288_tests_17_reports_zero_failures_errors_skips",
+      "normal_apk_sha256": "84e98c04c984b91540ea7455721243a3975407ad4786bf5639d4f17cad84ec96",
+      "fixture_apk_sha256": "9009448df3bc5318b0c4ad9e6be5de1d73082b9574e69ae1280fcc83b0862d53",
+      "test_apk_sha256": "17c47f1bba31300a1ceb1d08f861de1cbe92316f98540ae355a0c610dd050ab5",
+      "rebuilt_dynamic_native": {
+        "sha256": "2d220209304f444ced5ea5348f01ca306fc6c78447861ba65ae39e7432f93477",
+        "executed": false,
+        "reason": "old_tmp_dynamic_Bionic_runtime_missing_no_device_access"
+      },
+      "additional_static_native": {
+        "sha256": "6520ff350ce3ba639a95f3e19c407b0f15854625c565257ca1770ee9e6ae1248",
+        "managed_checks": 87300,
+        "full_checks": 1724636,
+        "exit": 0,
+        "scope": "same_project_sources_and_production_archive_NDK_static_Bionic_test_only_compat_copy_without_reallocarray_and_native_TLS_align64_not_Android_JNI"
+      },
+      "approval_capacity_blocker_resolved": true
+    },
+    "managed_config_evaluator": {
+      "date": "2026-10-19",
+      "state": "native_implemented_reviewed_local_gates_pass",
+      "contract": "design/ssh-config-evaluator.md",
+      "research": ".trellis/tasks/10-08-ssh-terminal-client/research/config-evaluator-20261019.md",
+      "evidence_dir": "/tmp/ctos-ssh-config-evaluator-20261019.DNFND9Yx",
+      "scope": "native_only_no_JNI_catalog_validator_connector",
+      "implementation_complete": true,
+      "device_accounts_commit": false,
+      "parent_implementation_complete": false,
+      "normal_gate": "95_tasks_all_executed_1m36s",
+      "fixture_gate": "114_tasks_31_executed_83_up_to_date_23s",
+      "fresh_jvm": {
+        "tests": 288,
+        "reports": 17,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "focused_gate": "9_tasks_5_executed_17s",
+      "arm_evaluator": {
+        "checks": 3736,
+        "effects": 0,
+        "exit": 0,
+        "sha256": "9f1fb6ba6ada2353ff6de52f2cc15ef6190784581d7ef20adb5d865a52686ef0"
+      },
+      "arm_session_with_config": {
+        "checks": 1725125,
+        "exit": 0,
+        "sha256": "be3c2f74f2683f369767ae0bb5ba23477973cfe228484b0c03015fc04e70027b"
+      },
+      "dynamic_eval": {
+        "built": true,
+        "executed": false,
+        "sha256": "ce2589306760df81c961a3d5d24c09564935531170a93237325d142a4dbd23e8",
+        "reason": "old_Bionic_runtime_missing_no_device_fetch"
+      },
+      "normal_apk_sha256": "dd2dd9a0fbe119006e1e4cc8bf77aa01609228a18212a3fb3fc4b2ae2608a8a0",
+      "fixture_apk_sha256": "74c68d9666e2b1570d91d16da7648ed52b14f5d5ac2d3ed77bdd864222989cf3",
+      "test_apk_sha256": "17c47f1bba31300a1ceb1d08f861de1cbe92316f98540ae355a0c610dd050ab5",
+      "packaging": "v2_one_matching_signer_normal_only_production_SSH_library_no_peer_class_JNI19_archive83_namespaced_parser_exports",
+      "raw_fields": "full_Options_retained_not_runtime_launch_plan",
+      "review": "full_source_then_focused_final_deltas_no_remaining_concrete_findings",
+      "limits": "xalloc_system_OOM_terminating_PID_UID_borrow_release_failure_source_reviewed_not_injected",
+      "remaining": "JNI_managed_results_catalog_semantic_validator_finalization_connector_product_AC",
+      "verification": "design/verification.md#20261019-config-evaluator"
+    },
+    "managed_config_jni": {
+      "date": "2026-10-19",
+      "state": "implemented_reviewed_local_gates_pass",
+      "contract": "design/ssh-config-managed.md",
+      "implementation_complete": true,
+      "evidence_dir": "/tmp/ctos-ssh-config-jni-20261019.vnQ3FInL",
+      "parent_implementation_complete": false,
+      "focused_native": "9_tasks_5_executed_17s_strict",
+      "focused_java": "56_tasks_22_executed_25s_20_tests_1_report_zero_failure_error_skip",
+      "normal_gate": "95_tasks_all_executed_1m36s",
+      "fresh_jvm": {
+        "tests": 308,
+        "reports": 18,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "fixture_gate": "114_tasks_40_executed_74_up_to_date_28s",
+      "fixed_artifact_package": "77_tasks_19_executed_58_up_to_date_9s_reuse_validated_native_inputs",
+      "native_final": {
+        "checks": 5201,
+        "effects": 0,
+        "exit": 0,
+        "sha256": "1291ceadf1d1cd46cb8ec9bc8f0dc9d39846627257b84adb9ccfab18ffbb5e01"
+      },
+      "native_first": {
+        "checks": 5201,
+        "effects": 0,
+        "exit": 0,
+        "sha256": "f03ad972d60e335b2b5d1155e8a03cf4da7dcf4e72bb812c8bae0ead768a5d0e"
+      },
+      "dynamic_native": {
+        "built": true,
+        "executed": false,
+        "sha256": "b4fd203696c254fad9618cb83f0049b90e3ddac2725a761707a7da47b72a8a79"
+      },
+      "normal_apk_sha256": "284e956666e81e053dfbea9551aa061962dffe347fb8dd0e9c54ea66db3b2320",
+      "fixture_apk_sha256": "faccd363baac6fb5d3c033fef4f655f36063da3897fb960c20e9be8b9c055e6f",
+      "test_apk_sha256": "b1e3c4ce43792b5975f16d60f56b7e3045269454cd4f268bdfa63bdc04a1b075",
+      "normal_initial_all_rerun_apk_sha256": "3f3de1858b529e8e4f0019589d1033ac64e683b396e40eba4b86a2dfeb6d3808",
+      "packaged_production_library_sha256": "c58f41e9cf37b23df7e76c5303139a36aa35be95e80a66974f1e8da9870cc0ba",
+      "packaging": "v2_one_matching_signer_normal_fixture_identical_stripped_SSH_lib_22_allocated_sections_match_generated_no_peer_in_normal_JNI_config6_session19_archive83_no_test_seed_wrap",
+      "raw_fields": "full_Options_native_only_Summary_historical_not_launch_authority",
+      "review": "full_current_increment_source_review_no_concrete_finding_no_checker_edits",
+      "coverage_limits": "JNI_live_VM_allocation_exception_paths_not_injected_cancel_destroy_stress_not_run_xalloc_OOM_terminating",
+      "platform_fixture": "SshConfigEvaluatorPlatformTest#syntheticManagedConfigEvaluation_compiled_not_installed_or_executed",
+      "device_accounts_commit_archive_dist": false,
+      "remaining": "catalog_semantic_validator_per_field_finalization_selection_connector_product_AC",
+      "verification": "design/verification.md#20261019-config-jni"
+    },
+    "declaration_catalog": {
+      "date": "2026-10-19",
+      "state": "implemented_local_gates_pass",
+      "contract": "design/ssh-config-catalog.md",
+      "implementation_complete": true,
+      "evidence_dir": "/tmp/ctos-ssh-config-catalog-20261019.RiaqcP03",
+      "scope": "declarations_only_no_semantic_validator_restore_or_connector",
+      "strict_tasks": 11,
+      "focused_jvm": 39,
+      "arm_catalog_checks": 71923,
+      "arm_eval_regression_checks": 3736,
+      "arm_handle_regression_checks": 5201,
+      "effects": 0,
+      "normal_tasks": 95,
+      "normal_all_rerun": true,
+      "jvm_tests": 327,
+      "jvm_reports": 19,
+      "jvm_failures_errors_skipped": 0,
+      "fixture_tasks": 114,
+      "fixed_native_package_tasks": 77,
+      "config_jni_exports": 8,
+      "session_jni_exports": 19,
+      "archive_members": 83,
+      "allocated_sections_match": 22,
+      "normal_fixture_identical_production_library": true,
+      "source_inputs": 65,
+      "protected_inputs": 16,
+      "artifact_inputs": 17,
+      "normal_apk_sha256": "252dc31c20ab97979db8f168ffa855e56f3a56e10096b8babe205b83134e63e4",
+      "fixture_apk_sha256": "00cda3f3faa80510adbcaf18ae73f076193f788a833a56c1bd8a3bcf0022909b",
+      "test_apk_sha256": "b31f941a555a519d6e1216a0dc691b83d590ed8cec69affd8bc82d14eb8ddbf4",
+      "final_static_catalog_sha256": "f0e71e3d1c197f1a2afdacb49dc6be50906a115d62eeb07f5526d89aa08320f0",
+      "parser_patch_sha256": "fc52b0d65d9bbd6e5b659a16b3a25b0d269bb59ecaa241009c15c7968d26ba07",
+      "review": "source_review_late_cancel_revoke_coverage_fixed_final_evidence_review_no_remaining_findings",
+      "platform_fixture": "SshConfigEvaluatorPlatformTest#syntheticManagedConfigCatalog_compiled_not_installed_or_executed",
+      "device_accounts_commit_archive_dist": false,
+      "remaining": "whole_manifest_semantic_validator_private_trust_restore_per_field_finalization_selection_connector_product_AC",
+      "verification": "design/verification.md#20261019-config-catalog"
+    },
+    "manifest_inspection": {
+      "date": "2026-10-19",
+      "state": "implemented_reviewed_local_gates_pass",
+      "implementation_complete": true,
+      "contract": "design/ssh-manifest-inspection.md",
+      "evidence_dir": "/tmp/ctos-ssh-manifest-inspection-20261019.zkcntg11",
+      "verification": "design/verification.md#20261019-manifest-inspection",
+      "content_only": true,
+      "admission_complete": false,
+      "arm_material_checks": 7784,
+      "arm_material_effects": 0,
+      "safe_logs": 4,
+      "arm_catalog_regression_checks": 71923,
+      "arm_eval_regression_checks": 3736,
+      "arm_handle_regression_checks": 5201,
+      "jvm_tests": 358,
+      "jvm_reports": 20,
+      "jvm_failures_errors_skipped": 0,
+      "focused_jvm_tests": 31,
+      "normal_tasks": 95,
+      "normal_all_rerun": true,
+      "fixture_tasks": 114,
+      "fixed_native_package_tasks": 77,
+      "config_jni_exports": 8,
+      "session_jni_exports": 19,
+      "material_jni_exports": 1,
+      "archive_members": 83,
+      "allocated_sections_match": 22,
+      "source_inputs": 75,
+      "protected_inputs": 68,
+      "artifact_inputs": 19,
+      "normal_apk_sha256": "a1b24a0ed7fed236b85789d258e2fb7336884a5d81a767ea8642c08ae7402655",
+      "fixture_apk_sha256": "4de3918e3f6f0ecb62994225eb7fb1e79bda9d6dc1e76851fc0e10dfd86cb5fb",
+      "test_apk_sha256": "3c431f96129672930e9731dcf85a2d400726a8361be6e360d1ccf730e4e7404c",
+      "material_static_sha256": "203b273ad49d7e7f6d62af249e017cd9c68877bab94fa5914aaa58a8f473d5ed",
+      "auth_progress_static_sha256": "31d07fc222b40e0cb1ee732b54ceee70376996a02e9a6559feb842dbf899f093",
+      "platform_fixture": "SshManifestInspectorPlatformTest#syntheticSuppliedManifestInspection_compiled_not_installed_or_run",
+      "device_accounts_commit_archive_dist": false,
+      "remaining": "whole_manifest_semantics_config_references_identity_association_credential_targets_certificate_trust_restore_final_plans_connector_product_AC",
+      "arm_auth_regression_checks": 1741410,
+      "arm_auth_exit": 0,
+      "auth_progress_only_added_stage_lines": 47,
+      "original_auth_check_lines_preserved": 1037,
+      "review": "full_increment_source_review_and_final_evidence_audit_pass_no_remaining_concrete_findings"
+    },
+    "preview_validation_lifecycle": {
+      "date": "2026-10-21",
+      "state": "implemented_reviewed_local_gates_pass",
+      "contract": "design/ssh-validation-lifecycle.md",
+      "evidence_dir": "/tmp/ctos-ssh-preview-validation-20261021.kxvZeWH2",
+      "implementation_complete": true,
+      "parent_implementation_complete": false,
+      "scope": "preview_only_capture_actual_authenticated_loans_validate_review_publish_commit_registration_and_Bridge_owner_delivery_fences",
+      "new_jvm_tests": 21,
+      "focused_jvm_tests": 66,
+      "full_jvm_tests": 379,
+      "full_jvm_reports": 21,
+      "jvm_failures_errors_skipped": 0,
+      "normal_tasks": 92,
+      "normal_all_rerun": true,
+      "fixture_tasks": 114,
+      "lint_normal_errors_warnings": [
+        0,
+        3
+      ],
+      "lint_fixture_errors_warnings": [
+        0,
+        4
+      ],
+      "fixture_lint_report_rendering": "up_to_date_analysis_executed",
+      "source_changed_hashes": 4,
+      "protected_unchanged_hashes": 7,
+      "normal_apk_sha256": "7b6d0c1f9dfd7c6faf5e214c59053218f533a2781b5122243c7c424c231d4f75",
+      "fixture_apk_sha256": "81854c4399caebc40f4ca9a7bb45369ec6ea1f2a4a1588fc883b7eac81ae2cc1",
+      "test_apk_sha256": "3c431f96129672930e9731dcf85a2d400726a8361be6e360d1ccf730e4e7404c",
+      "packaging": "three_v2_one_matching_signer_distinct_fixture_target_normal_no_peer_library_or_class",
+      "production_validator_reviewer_registered": false,
+      "remaining": "other_typed_bundle_sessionManifest_lifecycle_full_manifest_semantics_config_identity_credential_certificate_trust_production_restore_final_plans_connector_product_AC",
+      "device_accounts_commit_archive_dist": false,
+      "verification": "design/verification.md#20261021-preview-validation"
+    },
+    "bundle_validation_lifecycle": {
+      "date": "2026-10-22",
+      "state": "implemented_reviewed_local_gates_pass",
+      "contract": "design/ssh-bundle-lifecycle.md",
+      "evidence_dir": "/tmp/ctos-ssh-bundle-20261022.S0t9zPRZ",
+      "verification": "design/verification.md#20261022-bundle-validation",
+      "implementation_complete": true,
+      "parent_implementation_complete": false,
+      "new_jvm_test_methods": 12,
+      "focused_jvm_tests": 81,
+      "full_jvm_tests": 391,
+      "full_jvm_reports": 22,
+      "jvm_failures_errors_skipped": 0,
+      "normal_tasks": 92,
+      "normal_all_rerun": true,
+      "fixture_tasks": 114,
+      "fixed_input_normal_package_tasks": 77,
+      "lint_normal_errors_warnings": [
+        0,
+        3
+      ],
+      "lint_fixture_errors_warnings": [
+        0,
+        4
+      ],
+      "normal_apk_sha256": "633499a5a4cacfe8885cfc0d3782d0ee0bf04163e5927c7c362f3ea0a859c326",
+      "fixture_apk_sha256": "3d25f1af16d5b63fbb1efc22770b4f3d2d441241bbfa03ed4d4f3aeb7b812018",
+      "test_apk_sha256": "3c431f96129672930e9731dcf85a2d400726a8361be6e360d1ccf730e4e7404c",
+      "normal_fixture_native_byte_equal": true,
+      "source_changed_hashes": 6,
+      "protected_unchanged_hashes": 52,
+      "production_validator_reviewer_registered": false,
+      "android_runtime_executed": false,
+      "device_accounts_commit_archive_dist": false,
+      "review": "independent_source_spec_XML_logs_APK_hash_review_pass_no_remaining_concrete_findings",
+      "remaining": "other_typed_trust_sessionManifest_lifecycles_full_CONFIG_identity_credential_trust_semantics_production_restore_final_plans_connector_product_AC"
+    },
+    "totp_read_lifecycle": {
+      "date": "2026-10-22",
+      "state": "implemented_reviewed_local_gates_pass",
+      "contract": "design/totp-read-lifecycle.md",
+      "evidence_dir": "/tmp/ctos-totp-read-20261022.CbgSljcf",
+      "verification": "design/verification.md#20261022-totp-read-validation",
+      "implementation_complete": true,
+      "parent_implementation_complete": false,
+      "new_jvm_test_methods": 19,
+      "focused_first_jvm_tests": 137,
+      "focused_jvm_tests": 140,
+      "full_jvm_tests": 410,
+      "full_jvm_reports": 23,
+      "jvm_failures_errors_skipped": 0,
+      "normal_tasks": 92,
+      "normal_all_rerun": true,
+      "fixture_tasks": 114,
+      "fixed_input_normal_package_tasks": 77,
+      "lint_normal_errors_warnings": [
+        0,
+        3
+      ],
+      "lint_fixture_errors_warnings": [
+        0,
+        4
+      ],
+      "normal_apk_sha256": "41ce54cc97838c8f652cf50ddd2da9ecec30c6056089f6bc3a758b7c0ff41047",
+      "fixture_apk_sha256": "96bb6c86bab742f772244468e9e21aa645fa9a27583eb8c2aede92cdd0267bcd",
+      "test_apk_sha256": "3c431f96129672930e9731dcf85a2d400726a8361be6e360d1ccf730e4e7404c",
+      "normal_fixture_native_byte_equal": true,
+      "production_library_sha256": "bad6962642f721e84786ccbdfca43f305fb0dacae5498baa7f5834a33668ca17",
+      "source_changed_hashes": 7,
+      "protected_unchanged_hashes": 55,
+      "actual_code_disclosure_fence": "publicationLock_then_session_after_phase_only_once_reservation",
+      "pure_totp_requires_ssh_provider": false,
+      "production_validator_reviewer_registered": false,
+      "android_runtime_executed": false,
+      "native_flutter_runtime_executed": false,
+      "device_accounts_commit_archive_dist": false,
+      "review": "independent_source_spec_XML_logs_ZIP_signatures_manifest_hash_review_pass_no_remaining_concrete_findings",
+      "inherited_limits": [
+        "bounded_transport_Result_must_not_reenter_core",
+        "Binder_transport_may_delay_session_lock_context_cancel",
+        "Bridge_worker_Error_immediate_UI_completion_not_guaranteed"
+      ],
+      "remaining": "SSH_public_snapshot_sessionManifest_secret_typed_reads_mutations_trust_CAS_full_CONFIG_identity_credential_trust_semantics_production_restore_final_plans_connector_product_AC",
+      "final_evidence_files": 93,
+      "documentation_audit": {
+        "markdown_files": 21,
+        "local_links": 478,
+        "missing": 0,
+        "context_rows_each": 13
+      }
+    },
+    "ssh_public_read_lifecycle": {
+      "date": "2026-10-22",
+      "state": "implemented_reviewed_local_gates_pass",
+      "contract": "design/ssh-public-read-lifecycle.md",
+      "evidence_dir": "/tmp/ctos-ssh-public-read-20261022.mjbo7874",
+      "implementation_complete": true,
+      "parent_implementation_complete": false,
+      "focused_first_tests": 172,
+      "focused_first_failures": 1,
+      "focused_second_tests": 178,
+      "focused_second_failures": 0,
+      "source_changed_hashes": 7,
+      "protected_unchanged_hashes": 56,
+      "production_validator_reviewer_registered": false,
+      "android_jni_runtime_executed": false,
+      "device_accounts_commit_archive_dist": false,
+      "verification": "design/verification.md#20261022-ssh-public-read",
+      "new_public_jvm_test_methods": 19,
+      "new_provider_jvm_test_methods": 2,
+      "focused_jvm_tests": 178,
+      "focused_jvm_reports": 11,
+      "full_jvm_tests": 431,
+      "full_jvm_reports": 24,
+      "jvm_failures_errors_skipped": 0,
+      "normal_tasks": 92,
+      "normal_all_rerun": true,
+      "fixture_tasks": 114,
+      "fixed_input_normal_package_tasks": 77,
+      "lint_normal_errors_warnings": [
+        0,
+        3
+      ],
+      "lint_fixture_errors_warnings": [
+        0,
+        4
+      ],
+      "normal_apk_sha256": "db7f7806848d6fce5b17c2fa12bd475377c2faf237d84e594c398ceea55c56b8",
+      "fixture_apk_sha256": "dcffe982815b988d7b05e4d1fbbff88d326dee840138d24f6d5aae4af0304b8e",
+      "test_apk_sha256": "3c431f96129672930e9731dcf85a2d400726a8361be6e360d1ccf730e4e7404c",
+      "production_library_sha256": "bd8ab19905906d55ea4fa93a86edc4b353fbb997b1f8b1fef32ef8e4c316db02",
+      "normal_fixture_native_byte_equal": true,
+      "review": "independent_source_spec_XML_logs_ZIP_signatures_manifest_hash_review_pass_no_remaining_concrete_findings",
+      "final_capture_fence_rerun": true,
+      "fixture_final_instrumentation_java_dex_package": "up_to_date_earlier_before_capture_fixture_compiled_API_unchanged",
+      "remaining": "credential_private_key_typed_release_original_role_request_host_KEX_proof_mutations_trust_CAS_full_semantics_restore_final_plans_connector_product_AC",
+      "documentation_audit": {
+        "markdown_files": 22,
+        "local_links": 509,
+        "missing": [],
+        "context_rows": {
+          "implement.jsonl": 12,
+          "check.jsonl": 12
+        },
+        "source_hashes": 7,
+        "protected_hashes": 56,
+        "task": "in_progress"
+      },
+      "final_evidence_files": 186
+    },
+    "original_title": "OpenSSH 终端与公共认证接入"
+  },
+  "increment_history": {
+    "ssh_secret_read_lifecycle": {
+      "date": "2026-10-22",
+      "scope": "SSH credential/private-key/private-key-bundle original-context lifecycle and final host/KEX guarded copy",
+      "state": "implemented_reviewed_local_gates_pass",
+      "contract": "design/ssh-secret-read-lifecycle.md",
+      "evidence_dir": "/tmp/ctos-ssh-secret-read-20261022.umpy0yd0",
+      "parent_implementation_complete": false,
+      "device_accounts_commit_archive_dist": false,
+      "implementation_complete": true,
+      "focused_jvm_tests": 196,
+      "full_jvm_tests": 444,
+      "new_jvm_test_methods": 13,
+      "verification": "design/verification.md#20261022-ssh-secret-read",
+      "normal_tasks": 92,
+      "fixture_tasks": 114,
+      "source_hashes": 8,
+      "protected_hashes": 264,
+      "normal_apk_sha256": "585565fe0be8a05528bffbb38b94c2d8c8b559f07900752368de25a22a1acc50",
+      "fixture_apk_sha256": "49b2c017c4ec7a0ef56204504f05444c6829d20094ccd52c9b086a8ed47d1323",
+      "android_native_runtime_executed": false,
+      "production_validator_registered": false,
+      "review": "independent_source_XML_logs_ZIP_signature_manifest_hash_pass_no_outstanding_findings",
+      "final_evidence_files": 707,
+      "documentation_audit": {
+        "markdown_files": 15,
+        "local_links": 398,
+        "missing": 0,
+        "context_rows_each": 13
+      }
+    },
+    "ssh_entry_mutation_lifecycle": {
+      "date": "2026-10-22",
+      "scope": "SSH_SAVE/SSH_DELETE detached lifecycle",
+      "state": "implemented_reviewed_local_gates_pass",
+      "contract": "design/ssh-entry-mutation-lifecycle.md",
+      "evidence_dir": "/tmp/ctos-ssh-mutation-20261022.3u9ri93v",
+      "parent_implementation_complete": false,
+      "device_accounts_commit_archive_dist": false,
+      "implementation_complete": true,
+      "focused_jvm_tests": 152,
+      "full_jvm_tests": 455,
+      "new_jvm_test_methods": 11,
+      "verification": "design/verification.md#20261022-ssh-entry-mutation",
+      "normal_tasks": 92,
+      "fixture_tasks": 114,
+      "source_hashes": 4,
+      "protected_hashes": 269,
+      "normal_apk_sha256": "77340ea74c1eb72474ae3d1b218111e8d53c4e2da27e621d4d54f89745b5054b",
+      "fixture_apk_sha256": "7fcc885cc7c17a4b7032a0b2884c384950b140e00d53dfde5c9bde7b1b7570a6",
+      "android_native_runtime_executed": false,
+      "production_validator_registered": false,
+      "review": "independent_source_XML_logs_ZIP_signature_manifest_hash_pass_no_outstanding_findings",
+      "final_evidence_files": 684,
+      "documentation_audit": {
+        "markdown_files": 14,
+        "local_links": 398,
+        "missing": 0,
+        "context_rows_each": 14
+      }
+    },
+    "ssh_trust_cas_lifecycle": {
+      "date": "2026-10-22",
+      "scope": "trust CAS original approval context, detached validation and exact view continuation",
+      "state": "implemented_reviewed_local_gates_pass",
+      "contract": "design/ssh-trust-cas-lifecycle.md",
+      "evidence_dir": "/tmp/ctos-ssh-trust-cas-20261022.3koy1mha",
+      "implementation_complete": true,
+      "parent_implementation_complete": false,
+      "device_accounts_commit_archive_dist": false,
+      "focused_first_tests": 199,
+      "focused_first_failures": 4,
+      "focused_jvm_tests": 202,
+      "full_jvm_tests": 469,
+      "full_jvm_reports": 27,
+      "new_jvm_test_methods": 14,
+      "jvm_failures_errors_skipped": 0,
+      "normal_tasks": 92,
+      "normal_all_rerun": true,
+      "fixture_tasks": 114,
+      "fixed_input_normal_package_tasks": 77,
+      "source_hashes": 8,
+      "protected_hashes": 266,
+      "verification": "design/verification.md#20261022-ssh-trust-cas",
+      "normal_apk_sha256": "b6f6e80f5dc939dc941f857fbb13a93852b41d38e4382e789fc73fc610c439e9",
+      "fixture_apk_sha256": "d573c78cd228356169532eb02b129ad2fc404db0f191177ac817df5f43c8f421",
+      "test_apk_sha256": "3c431f96129672930e9731dcf85a2d400726a8361be6e360d1ccf730e4e7404c",
+      "production_library_sha256": "51303ed8b5414df8a5760f1d185b2ef2c11e29ed34109b06e4cd1be6a676de51",
+      "android_native_runtime_executed": false,
+      "production_validator_registered": false,
+      "review": "independent_source_XML_logs_ZIP_signature_manifest_hash_pass_no_outstanding_findings",
+      "documentation_audit": {
+        "markdown_files": 15,
+        "local_links": 469,
+        "missing": [],
+        "context_rows": {
+          "implement.jsonl": 15,
+          "check.jsonl": 15
+        },
+        "hashes": {
+          "source-final": {
+            "count": 8,
+            "mismatches": []
+          },
+          "protected-final": {
+            "count": 266,
+            "mismatches": []
+          }
+        }
+      },
+      "final_evidence_files": 732
+    },
+    "totp_mutation_lifecycle": {
+      "date": "2026-10-23",
+      "scope": "TOTP mutation and original preview ticket handoff lifecycle",
+      "state": "implemented_reviewed_local_gates_pass",
+      "contract": "design/totp-mutation-lifecycle.md",
+      "evidence_dir": "/tmp/ctos-totp-mutation-20261022.envakycq",
+      "implementation_complete": true,
+      "parent_implementation_complete": false,
+      "device_accounts_commit_archive_dist": false,
+      "focused_jvm_tests": 196,
+      "full_jvm_tests": 483,
+      "full_jvm_reports": 28,
+      "new_jvm_test_methods": 14,
+      "jvm_failures_errors_skipped": 0,
+      "normal_tasks": 92,
+      "normal_all_rerun": true,
+      "fixture_tasks": 114,
+      "fixed_input_normal_package_tasks": 77,
+      "source_hashes": 7,
+      "protected_hashes": 268,
+      "verification": "design/verification.md#20261023-totp-mutation",
+      "normal_apk_sha256": "2c1741874dd750e1d8e00c22d21760ba747fc1dbd7a651fcf71b5112b17f3898",
+      "fixture_apk_sha256": "234a4882e6fdb0ad0d623cadf315528434c315391f59e1f4b75dcaed9b0e6e80",
+      "test_apk_sha256": "3c431f96129672930e9731dcf85a2d400726a8361be6e360d1ccf730e4e7404c",
+      "production_library_sha256": "14fc64749df192e13fa8c8e1b65eee04d739b38f4dfa5e184ce7b810c9f6c8f8",
+      "android_native_runtime_executed": false,
+      "production_validator_registered": false,
+      "review": "independent_source_XML_logs_ZIP_signature_manifest_hash_pass_no_outstanding_findings",
+      "documentation_audit": {
+        "markdown_files": 17,
+        "local_links": 508,
+        "missing": [],
+        "context_rows": {
+          "implement.jsonl": 18,
+          "check.jsonl": 18
+        },
+        "hashes": {
+          "source-final": {
+            "count": 7,
+            "mismatches": []
+          },
+          "protected-final": {
+            "count": 268,
+            "mismatches": []
+          }
+        }
+      },
+      "final_evidence_files": 751
+    },
+    "detached_native_config_source": {
+      "date": "2026-10-23",
+      "scope": "Native-only detached supplied configuration source and owned input lifecycle",
+      "state": "implemented_reviewed_local_gates_pass",
+      "contract": "design/ssh-detached-config.md",
+      "evidence_dir": "/tmp/ctos-ssh-detached-config-20261023.mUF8aSF0",
+      "verification": "design/verification.md#20261023-detached-config",
+      "implementation_complete": true,
+      "parent_implementation_complete": false,
+      "device_accounts_commit_archive_dist": false,
+      "native_detached_checks": 1261,
+      "native_effects": 0,
+      "native_live_capability_calls": 0,
+      "native_wiped_sources": 53,
+      "native_existing_checks": {
+        "evaluator": 3736,
+        "catalog": 71923,
+        "handle": 5201
+      },
+      "host_file_io_cases": 426,
+      "host_file_io_wipe_checks": 1634,
+      "full_jvm_tests": 483,
+      "full_jvm_reports": 28,
+      "jvm_failures_errors_skipped": 0,
+      "new_jvm_test_methods": 0,
+      "normal_tasks": 94,
+      "normal_all_rerun": true,
+      "normal_seconds": 103,
+      "fixture_tasks": 111,
+      "fixture_executed_tasks": 33,
+      "fixture_up_to_date_tasks": 78,
+      "fixture_seconds": 17,
+      "fixture_native_inputs_reused": true,
+      "fixture_excluded_tasks": [
+        "compileSshProductionObjects",
+        "compileSshConfigEvaluator",
+        "compileSshFiles"
+      ],
+      "fixture_main_test_java_dex_test_package": "up_to_date",
+      "fixture_peer_lint_analysis_report": "executed",
+      "source_hashes": 7,
+      "protected_hashes": 272,
+      "normal_apk_sha256": "1059397d833d91582c7ba99bc800f8a408b8dcbf208ca2d154aebb57a5e50432",
+      "fixture_apk_sha256": "3536ff7a56ef04c5307fd5f32de38407f2dfaf36dcaa153e0fa7e8d3d393e984",
+      "test_apk_sha256": "3c431f96129672930e9731dcf85a2d400726a8361be6e360d1ccf730e4e7404c",
+      "production_library_sha256": "fd2ae50d1bb1562067683bd1b60bd6a6a6d63dbbf5743b187ca479261aee8b40",
+      "generated_library_sha256": "00fb79b566ebc2242f4629ac79937a60ddf1469db83b86fd531fa46b91e38244",
+      "normal_fixture_native_byte_equal": true,
+      "matching_allocated_sections": 22,
+      "jni_exports": {
+        "config": 8,
+        "session": 19,
+        "material": 1
+      },
+      "production_archive_members": 83,
+      "lint_normal_errors_warnings": [
+        0,
+        3
+      ],
+      "lint_fixture_errors_warnings": [
+        0,
+        4
+      ],
+      "synthetic_arm_runtime_executed": true,
+      "android_native_runtime_executed": false,
+      "production_validator_registered": false,
+      "production_ssh_restore_open": false,
+      "limits": [
+        "host_memlock_soft_hard_8192KiB",
+        "8MiB_shape_admission_and_injected_lock_failure_cleanup_not_successful_full_size_locking",
+        "6MiB_real_locked_source_plus_1MiB_reader_pass",
+        "C_only_no_Java_JNI_manifest_orchestrator",
+        "Include_reference_edges_all_branch_policy_key_cert_credential_trust_semantics_pending"
+      ],
+      "build_environment_recovery": "two_source_TLS_failures_then_four_unchanged_cached_wheels_explicit_temporary_Gradle_no_index_find_links_pass",
+      "review": "independent_source_XML_logs_ZIP_signature_manifest_hash_pass_no_outstanding_findings",
+      "documentation_audit": {
+        "markdown_files": 18,
+        "local_links": 587,
+        "missing": [],
+        "context_rows": {
+          "implement.jsonl": 9,
+          "check.jsonl": 9
+        },
+        "hashes": {
+          "source-final": {
+            "count": 7,
+            "mismatches": []
+          },
+          "protected-final": {
+            "count": 272,
+            "mismatches": []
+          }
+        }
+      }
+    },
+    "managed_detached_config_inspection": {
+      "date": "2026-10-23",
+      "scope": "Managed actual-manifest configuration inspection with staged owner and aggregate budgets",
+      "state": "implemented_locally_validated",
+      "contract": "design/ssh-detached-config-managed.md",
+      "evidence_dir": "/tmp/ctos-ssh-detached-managed-20261023.oeRy2d9W",
+      "implementation_complete": true,
+      "parent_implementation_complete": false,
+      "device_accounts_commit_archive_dist": false,
+      "production_validator_registered": false,
+      "android_native_runtime_executed": false,
+      "source_files": 15,
+      "protected_files": 303,
+      "native_managed_checks": 3683,
+      "native_managed_includes_baseline": true,
+      "native_managed_baseline_checks": 1262,
+      "native_effects": 0,
+      "native_capabilities": 0,
+      "native_direct_checks": 1261,
+      "native_evaluator_checks": 3736,
+      "native_catalog_checks": 71923,
+      "native_handle_checks": 5201,
+      "host_io_cases": 426,
+      "host_wipe_checks": 1634,
+      "focused_jvm_tests": 101,
+      "full_jvm_tests": 514,
+      "full_jvm_reports": 30,
+      "jvm_failures": 0,
+      "jvm_errors": 0,
+      "jvm_skips": 0,
+      "normal_tasks": "94 executed/94 total, 1m58s",
+      "fixture_tasks": "37 executed/74 up-to-date/111 total, 22s; final native compile tasks excluded",
+      "normal_lint_errors": 0,
+      "fixture_lint_errors": 0,
+      "lint_warnings": [
+        3,
+        4
+      ],
+      "jni_exports": {
+        "config": 11,
+        "session": 19,
+        "material": 1
+      },
+      "production_archive_members": 83,
+      "apk_hashes": {
+        "normal": {
+          "sha256": "6d57ef36d1720904b2230a00bde42ea47820d8bb9e04af2d93275bbe8a66de94",
+          "sshLibraries": [
+            "lib/arm64-v8a/libctos_ssh_files.so"
+          ],
+          "authPeerClass": false
+        },
+        "fixture": {
+          "sha256": "b6dc530b150515049807ba9ed0ca4819d4cefa51618fae6585c8c9d972e72b6f",
+          "sshLibraries": [
+            "lib/arm64-v8a/libctos_ssh_auth_peer.so",
+            "lib/arm64-v8a/libctos_ssh_files.so"
+          ],
+          "authPeerClass": true
+        },
+        "test": {
+          "sha256": "4fdd949749f5f45af38e7a97ba619625ede19bebe31eb0f3bc6e3de98da53f2b",
+          "sshLibraries": [],
+          "authPeerClass": true
+        },
+        "signer": "8d36c8be418174cb4cda0b897ff3e32b2da6f84032819726e8e5671872df52ef",
+        "packagedLibrary": "426368dfc55a9a2b777045d05e69293b1cd50c9d926b89a653635517ca0c5acf",
+        "generatedLibrary": "da0655eafcd047fa18529115b206c186be8f721637235e32531e19446d53edad",
+        "matchingAllocatedSections": 22,
+        "jni": {
+          "SshConfigEvaluator": 11,
+          "SshNativeSession": 19,
+          "SshManifestInspector": 1
+        },
+        "archiveMembers": 83,
+        "lintWarnings": {
+          "normal": 3,
+          "fixture": 4
+        }
+      },
+      "limitations": [
+        "JNI exception path source-reviewed/compiled and C abort seam tested, Android runtime unexecuted",
+        "Host8192KiB memlock cap retained; exact8MiB successful locking not claimed",
+        "Declaration-only, not full Include-edge/policy/identity/credential/certificate/trust semantic admission",
+        "No provider registration, restore, connector, device, real account, install, commit, archive, push or dist"
+      ],
+      "next_steps": [
+        "Freeze typed CONFIG/Include edges and all-branch policy without synthetic Request",
+        "Complete identity/key/certificate/credential target/trust semantics and reviewer",
+        "Only then register full provider and consider restore/final plan/connector gates"
+      ]
+    },
+    "config_static_include_local_effects_audit": {
+      "date": "2026-10-23",
+      "scope": "All-CONFIG static Include direct-reference and local-effects audit",
+      "state": "implemented_locally_validated",
+      "contract": "design/ssh-config-audit.md",
+      "evidence_dir": "/tmp/ctos-ssh-config-audit-20261023.uvozbgq0",
+      "implementation_complete": true,
+      "parent_implementation_complete": false,
+      "production_validator_registered": false,
+      "android_native_runtime_executed": false,
+      "device_accounts_commit_archive_dist": false,
+      "source_files": 15,
+      "protected_files": 307,
+      "native_audit_checks": 13290,
+      "native_audit_includes_baseline": true,
+      "native_audit_baseline_checks": 1262,
+      "native_effects": 0,
+      "native_capabilities": 0,
+      "old_native_checks": {
+        "managed_detached": 3683,
+        "direct_detached": 1261,
+        "evaluator": 3736,
+        "catalog": 71923,
+        "handle": 5201
+      },
+      "host_io_cases": 426,
+      "host_wipe_checks": 1634,
+      "focused_jvm_tests": 124,
+      "full_jvm_tests": 537,
+      "full_jvm_reports": 32,
+      "jvm_failures": 0,
+      "jvm_errors": 0,
+      "jvm_skips": 0,
+      "normal_tasks": "94 executed/94 total, 1m39s",
+      "fixture_tasks": "37 executed/74 up-to-date/111 total, 21s; three production native compile tasks excluded",
+      "lint_errors": [
+        0,
+        0
+      ],
+      "lint_warnings": [
+        3,
+        4
+      ],
+      "patch_sha256": "72f09e8a4cb7766c80e1ebb3123b34a61ac6e5d361bcaa611b36156a2a75f17b",
+      "apk_audit": {
+        "normal": {
+          "sha256": "54d64b0896aa2257d0f49b4ab468adac765387534b37e2701f89e25cae4f2701",
+          "sshLibraries": [
+            "lib/arm64-v8a/libctos_ssh_files.so"
+          ],
+          "authPeerClass": false
+        },
+        "fixture": {
+          "sha256": "cc2d7aad7048ad47e8e37990b45e41377ed60dd7b7d5fd8c1c64e3d64d4eaffa",
+          "sshLibraries": [
+            "lib/arm64-v8a/libctos_ssh_auth_peer.so",
+            "lib/arm64-v8a/libctos_ssh_files.so"
+          ],
+          "authPeerClass": true
+        },
+        "test": {
+          "sha256": "2c637750d4f9af8335e5edefcc48c460552e05ae87ea87e55a9d1d6aeb8cdd64",
+          "sshLibraries": [],
+          "authPeerClass": true
+        },
+        "signer": "8d36c8be418174cb4cda0b897ff3e32b2da6f84032819726e8e5671872df52ef",
+        "packagedLibrary": "e09350a1b31f04862e351b4096e1c06ecce8cc34bb1087e85c99ddeaa8384e7c",
+        "generatedLibrary": "52535a0657e23b1d026d53cc409164cb7cbbf94a431154978a1f1a7079ae4fd5",
+        "matchingAllocatedSections": 22,
+        "jni": {
+          "SshConfigEvaluator": 13,
+          "SshNativeSession": 19,
+          "SshManifestInspector": 1
+        },
+        "archiveMembers": 83,
+        "lintWarnings": {
+          "normal": 3,
+          "fixture": 4
+        }
+      },
+      "limitations": [
+        "Finite policy and observed static Include references only, always admissionComplete=false",
+        "Actual Android/JNI VM exception and locked-memory runtime unexecuted; upstream xmalloc OOM unchanged",
+        "No provider/reviewer registration, restore, connector, device, real account, install, commit, archive, push or dist"
+      ],
+      "next_steps": [
+        "Freeze non-Include typed references and remaining real-Request obligations without fake alias/user",
+        "Complete exact identity/key/certificate mathematical associations, credential-target/trust semantics and reviewer",
+        "Only complete providers/all entry chains can open production restore/final plan/connector"
+      ]
+    },
+    "config_resource_reference_audit": {
+      "date": "2026-10-23",
+      "scope": "Explicit typed CONFIG resource declaration references",
+      "state": "implemented_locally_validated",
+      "contract": "design/ssh-config-resources.md",
+      "evidence_dir": "/tmp/ctos-ssh-config-resource-20261023.gmfy0g24",
+      "implementation_complete": true,
+      "parent_implementation_complete": false,
+      "production_validator_registered": false,
+      "android_native_runtime_executed": false,
+      "device_accounts_commit_archive_dist": false,
+      "source_files": 15,
+      "protected_files": 311,
+      "native_resource_checks": 4439,
+      "native_resource_includes_baseline": true,
+      "native_resource_baseline_checks": 1262,
+      "native_effects": 0,
+      "native_capabilities": 0,
+      "old_native_checks": {
+        "audit": 13290,
+        "managed_detached": 3683,
+        "direct_detached": 1261,
+        "evaluator": 3736,
+        "catalog": 71923,
+        "handle": 5201
+      },
+      "host_io_cases": 426,
+      "host_wipe_checks": 1634,
+      "focused_jvm_tests": 151,
+      "full_jvm_tests": 564,
+      "full_jvm_reports": 34,
+      "jvm_failures": 0,
+      "jvm_errors": 0,
+      "jvm_skips": 0,
+      "normal_tasks": "94 executed/94 total, 1m52s",
+      "fixture_tasks": "37 executed/74 up-to-date/111 total, 21s; three production native compile tasks excluded",
+      "lint_errors": [
+        0,
+        0
+      ],
+      "lint_warnings": [
+        3,
+        4
+      ],
+      "patch_sha256": "7afd7a9a4ed9c17096b1bb4a3cd20d41ec9ed2d5720df5c552da93384d60fd5e",
+      "apk_audit": {
+        "normal": {
+          "sha256": "afe1a021409a6517ba4304c318f3a06baacdde80bd991e7f49e59f22ecf6b580",
+          "sshLibraries": [
+            "lib/arm64-v8a/libctos_ssh_files.so"
+          ],
+          "authPeerClass": false
+        },
+        "fixture": {
+          "sha256": "fe7fcd1940f73e81cd50ac3a9fb496dcfdb8002a4b6e0d413d6cd29890dc836b",
+          "sshLibraries": [
+            "lib/arm64-v8a/libctos_ssh_auth_peer.so",
+            "lib/arm64-v8a/libctos_ssh_files.so"
+          ],
+          "authPeerClass": true
+        },
+        "test": {
+          "sha256": "bdfc94e2e443e04ed1e93e7ed0e1be2e8a2d054d02249f9a50a75f97857bc55a",
+          "sshLibraries": [],
+          "authPeerClass": true
+        },
+        "signer": "8d36c8be418174cb4cda0b897ff3e32b2da6f84032819726e8e5671872df52ef",
+        "packagedLibrary": "5e390ecf3f8dfafa02747529e303a43024752c2977255f4aa5c2b4ad24a88075",
+        "generatedLibrary": "d97bd27cc4ca28fa3bed38ac34baaa85f3ba50df77804f867a06300d33d33256",
+        "matchingAllocatedSections": 22,
+        "jni": {
+          "SshConfigEvaluator": 15,
+          "SshNativeSession": 19,
+          "SshManifestInspector": 1
+        },
+        "archiveMembers": 83,
+        "lintWarnings": {
+          "normal": 3,
+          "fixture": 4
+        }
+      },
+      "limitations": [
+        "Explicit static literal base/type/directref metadata only; defaults/suffix/math/signer/trust remain unresolved",
+        "Context/cwd/key-loader deferrals visible; always admissionComplete=false",
+        "Actual Android/JNI/platform/lock runtime unexecuted, original host lock/OOM boundaries unchanged",
+        "No provider registration, restore/connector, device/account, install, commit/archive/push/dist"
+      ],
+      "next_steps": [
+        "Freeze exact private/public/certificate mathematical association and actual credential targets/passphrase uniqueness",
+        "Complete trust/CA/revocation/principal/time and independent reviewer",
+        "Prove remaining dynamic/cwd/key-loader/default/final Request enforcement before full provider/restore/connector"
+      ]
+    },
+    "explicit_supplied_key_pair_proof": {
+      "date": "2026-10-23",
+      "scope": "Explicit supplied private/public/certificate-subject signing proof",
+      "state": "implemented_locally_validated",
+      "contract": "design/ssh-key-association.md",
+      "evidence_dir": "/tmp/ctos-ssh-key-association-20261023.1p6pj89y",
+      "implementation_complete": true,
+      "parent_implementation_complete": false,
+      "device_accounts_commit_archive_dist": false,
+      "production_validator_registered": false,
+      "android_native_runtime_executed": false,
+      "focused_jvm_tests": 80,
+      "focused_jvm_reports": 4,
+      "full_jvm_tests": 586,
+      "full_jvm_reports": 35,
+      "new_jvm_test_methods": 22,
+      "jvm_failures_errors_skipped": 0,
+      "native_pair_checks": 13814,
+      "native_pair_baseline_checks": 7773,
+      "native_material_checks": 7784,
+      "native_effects": 0,
+      "native_auth_checks": 1748333,
+      "native_auth_fresh_build": true,
+      "native_auth_sandbox_boundary": "sandbox getsockopt EPERM; granted AF_UNIX-only unsandboxed execution passed",
+      "normal_tasks": 96,
+      "normal_all_rerun": true,
+      "normal_seconds": 102,
+      "fixture_tasks": 111,
+      "fixture_executed_tasks": 37,
+      "fixture_up_to_date_tasks": 74,
+      "fixture_seconds": 21,
+      "fixture_final_native_reused": true,
+      "source_files": 9,
+      "protected_files": 292,
+      "apk_audit": {
+        "normal": {
+          "sha256": "8919c45b814d92f70dec52ba00a0835b538c3aa7971c1e7372293cbd223678a3",
+          "sshLibraries": [
+            "lib/arm64-v8a/libctos_ssh_files.so"
+          ],
+          "authPeerClass": false
+        },
+        "fixture": {
+          "sha256": "a6e294a217f261de2cc3994586479885d2a64edf2d02e531ec71c067ab570525",
+          "sshLibraries": [
+            "lib/arm64-v8a/libctos_ssh_auth_peer.so",
+            "lib/arm64-v8a/libctos_ssh_files.so"
+          ],
+          "authPeerClass": true
+        },
+        "test": {
+          "sha256": "17157b32d09bc5d692d2f1d43054c821caf03c97406b0a5637b00459cbb586aa",
+          "sshLibraries": [],
+          "authPeerClass": true
+        },
+        "matchingAllocatedSections": 22,
+        "packagedLibrary": "771438db49ad9899b629c967d4440c6ba1388002ad83aee9924f8be21262cb23",
+        "generatedLibrary": "2c6c490023c7f5d9e7052f8f70b9c8bc74dd1759d233b3fd5d9de5c73e10143d",
+        "signer": "8d36c8be418174cb4cda0b897ff3e32b2da6f84032819726e8e5671872df52ef",
+        "jni": {
+          "SshConfigEvaluator": 15,
+          "SshNativeSession": 19,
+          "SshManifestInspector": 1,
+          "SshManifestKeyAssociationInspector": 1
+        },
+        "archiveMembers": 83,
+        "lint": {
+          "normal": {
+            "errors": 0,
+            "warnings": 3
+          },
+          "fixture": {
+            "errors": 0,
+            "warnings": 4
+          }
+        }
+      },
+      "production_ssh_restore_open": false,
+      "verification": "design/verification.md#20261023-key-association",
+      "code_review": "primary-source-contract-review",
+      "independent_evidence_review": "raw XML/log/hash/ZIP/ELF and source/protected/input manifests pass",
+      "limits": [
+        "explicit selected pairs only; no persisted authority/coverage",
+        "certificate trust/password targets/full format validity still pending",
+        "no Android JNI or platform runtime; heap scratch not globally locked",
+        "single parser/KDF/crypto nonpreemptible; postparse RSA limits do not eliminate parser cost",
+        "old CONFIG binaries rerun, not freshly rebuilt"
+      ],
+      "documentation_audit": {
+        "markdown_files": 22,
+        "local_links": 722,
+        "missing": [],
+        "context_rows": {
+          "implement.jsonl": 8,
+          "check.jsonl": 8
+        },
+        "history_preserved": true,
+        "parent_still_in_progress": true,
+        "hashes": {
+          "source-final.sha256": {
+            "count": 9,
+            "mismatches": []
+          },
+          "protected-final.sha256": {
+            "count": 292,
+            "mismatches": []
+          }
+        }
+      },
+      "final_evidence_files": 575
+    },
+    "all_private_material_ownership": {
+      "date": "2026-10-23",
+      "scope": "All-private signing material and v1 credential-owner ambiguity audit",
+      "state": "implemented_locally_validated",
+      "contract": "design/ssh-private-material-ownership.md",
+      "evidence_dir": "/tmp/ctos-ssh-identity-next-20261023.j_o6gwfz",
+      "implementation_complete": true,
+      "parent_implementation_complete": false,
+      "device_accounts_commit_archive_dist": false,
+      "production_validator_registered": false,
+      "android_native_runtime_executed": false,
+      "baseline_files": 413,
+      "source_files": 10,
+      "protected_files": 295,
+      "focused_jvm_tests": 120,
+      "focused_jvm_reports": 4,
+      "full_jvm_tests": 613,
+      "full_jvm_reports": 36,
+      "new_jvm_test_methods": 27,
+      "jvm_failures_errors_skipped": 0,
+      "native_private_checks": 19976,
+      "native_private_baseline_checks": 13815,
+      "native_pair_checks": 13812,
+      "native_material_checks": 7784,
+      "native_effects": 0,
+      "normal_tasks": 98,
+      "normal_all_rerun": true,
+      "normal_seconds": 106,
+      "fixture_tasks": 111,
+      "fixture_executed_tasks": 37,
+      "fixture_up_to_date_tasks": 74,
+      "fixture_seconds": 19,
+      "fixture_final_native_reused": true,
+      "apk_audit": {
+        "normal": {
+          "sha256": "0899625b7d1afbe14412ca35e43965a857896f1654505a900896664443dd7784",
+          "sshLibraries": [
+            "lib/arm64-v8a/libctos_ssh_files.so"
+          ],
+          "authPeerClass": false
+        },
+        "fixture": {
+          "sha256": "4fd9c2b9d97a13f1062935ec9327a2470d419304b4bad3fe2540ce4e60179624",
+          "sshLibraries": [
+            "lib/arm64-v8a/libctos_ssh_auth_peer.so",
+            "lib/arm64-v8a/libctos_ssh_files.so"
+          ],
+          "authPeerClass": true
+        },
+        "test": {
+          "sha256": "7425ab8afb767a70b4aec23133b9d75e8421d735b08d505d7cd4c9e7b0545a2a",
+          "sshLibraries": [],
+          "authPeerClass": true
+        },
+        "matchingAllocatedSections": 22,
+        "packagedLibrary": "d29a9e42f9f5c263015523e183669a1e545d67187c9137ef39115fa63e54af1b",
+        "generatedLibrary": "51f8aa2e870214cf55c916e193e05b7bc94239ad3842febfe90959962f53b789",
+        "signer": "8d36c8be418174cb4cda0b897ff3e32b2da6f84032819726e8e5671872df52ef",
+        "jni": {
+          "SshConfigEvaluator": 15,
+          "SshNativeSession": 19,
+          "SshManifestInspector": 1,
+          "SshManifestKeyAssociationInspector": 1,
+          "SshManifestPrivateMaterialInspector": 1
+        },
+        "archiveMembers": 83,
+        "lint": {
+          "normal": {
+            "errors": 0,
+            "warnings": 3
+          },
+          "fixture": {
+            "errors": 0,
+            "warnings": 4
+          }
+        }
+      },
+      "production_ssh_restore_open": false,
+      "verification": "design/verification.md#20261023-private-material",
+      "code_review": "Trellis independent production and tests review passed",
+      "limits": [
+        "v1 ownership metadata only, no persisted association graph/account model",
+        "strict private signing subset not arbitrary DER/full-format proof",
+        "Android JNI/platform fixture runtime unexecuted; heap scratch not fully locked",
+        "single parser/KDF/crypto nonpreemptible; RSA postparse bounds do not gate parser cost",
+        "auth/PTY/config/Flutter were not rerun in this increment"
+      ],
+      "documentation_audit": {
+        "markdown_files": 25,
+        "local_links": 759,
+        "missing": [],
+        "context_rows": {
+          "implement.jsonl": 8,
+          "check.jsonl": 8
+        },
+        "history_preserved": true,
+        "parent_still_in_progress": true,
+        "hashes": {
+          "source-final.sha256": {
+            "count": 10,
+            "mismatches": []
+          },
+          "protected-final.sha256": {
+            "count": 295,
+            "mismatches": []
+          }
+        }
+      },
+      "review": "independent_source_test_raw_XML_logs_ZIP_v2_AXML_ELF_input_hash_pass_no_outstanding_findings",
+      "final_evidence_files": 635
+    },
+    "all_certificate_facts": {
+      "date": "2026-10-24",
+      "scope": "All-certificate facts and embedded signature algorithm policy",
+      "state": "implemented_locally_validated",
+      "contract": "design/ssh-certificate-facts.md",
+      "evidence_dir": "/tmp/ctos-ssh-certificate-facts-20261024.izvxli13",
+      "implementation_complete": true,
+      "parent_implementation_complete": false,
+      "device_accounts_commit_archive_dist": false,
+      "production_validator_registered": false,
+      "android_native_runtime_executed": false,
+      "baseline_files": 421,
+      "source_files": 10,
+      "protected_files": 299,
+      "focused_jvm_tests": 145,
+      "focused_jvm_reports": 5,
+      "full_jvm_tests": 638,
+      "full_jvm_reports": 37,
+      "new_jvm_test_methods": 25,
+      "jvm_failures_errors_skipped": 0,
+      "native_certificate_checks": 22239,
+      "native_certificate_baseline_checks": 19977,
+      "native_certificate_signs_including_baseline": 59,
+      "native_certificate_verifies_including_baseline": 127,
+      "native_private_checks": 19980,
+      "native_pair_checks": 13814,
+      "native_material_checks": 7784,
+      "native_effects": 0,
+      "normal_tasks": 100,
+      "normal_all_rerun": true,
+      "normal_seconds": 107,
+      "fixture_tasks": 111,
+      "fixture_executed_tasks": 37,
+      "fixture_up_to_date_tasks": 74,
+      "fixture_seconds": 20,
+      "fixture_final_native_reused": true,
+      "apk_audit": {
+        "normal": {
+          "sha256": "21401db29f5056389f96eb63ce86615f4c407fc008ebfd70a6f05bca8993d343",
+          "sshLibraries": [
+            "lib/arm64-v8a/libctos_ssh_files.so"
+          ],
+          "authPeerClass": false
+        },
+        "fixture": {
+          "sha256": "40fee028fa526514768445a7ab56a6814e8b65cedadb04e70d192c154a66e9d5",
+          "sshLibraries": [
+            "lib/arm64-v8a/libctos_ssh_auth_peer.so",
+            "lib/arm64-v8a/libctos_ssh_files.so"
+          ],
+          "authPeerClass": true
+        },
+        "test": {
+          "sha256": "95ad1b51d56a4701e56f3b7701cde26e898c19854929cbe4c123cb47874b087b",
+          "sshLibraries": [],
+          "authPeerClass": true
+        },
+        "matchingAllocatedSections": 22,
+        "packagedLibrary": "208cf211879acb495f3eea812519881c54c23184fd24787a4d3516be0b5c4500",
+        "generatedLibrary": "3f30ad96b9cb86b4b12ee08b5179f6c9344d282a871eb9b0b9ddc11b941a668b",
+        "signer": "8d36c8be418174cb4cda0b897ff3e32b2da6f84032819726e8e5671872df52ef",
+        "jni": {
+          "SshConfigEvaluator": 15,
+          "SshNativeSession": 19,
+          "SshManifestInspector": 1,
+          "SshManifestKeyAssociationInspector": 1,
+          "SshManifestPrivateMaterialInspector": 1,
+          "SshManifestCertificateInspector": 1
+        },
+        "archiveMembers": 83,
+        "lint": {
+          "normal": {
+            "errors": 0,
+            "warnings": 3
+          },
+          "fixture": {
+            "errors": 0,
+            "warnings": 4
+          }
+        }
+      },
+      "production_ssh_restore_open": false,
+      "production_certificate_rejection_unchanged": true,
+      "verification": "design/verification.md#20261024-certificate-facts",
+      "code_review": "Trellis independent production and tests pass",
+      "limits": [
+        "facts/software/signature policy only, no CA authority/time/principal/revocation check",
+        "no rawUTF8/canonical/principal/option semantics guarantee",
+        "embedded verification precedes postparse policy and is nonpreemptible; some deep errors normalized upstream",
+        "Android JNI/platform fixture runtime unexecuted; heap scratch not all-heap locked",
+        "auth/PTY/config/Flutter runtime not rerun this increment"
+      ],
+      "documentation_audit": {
+        "markdown_files": 24,
+        "local_links": 793,
+        "missing": [],
+        "context_rows": {
+          "implement.jsonl": 7,
+          "check.jsonl": 7
+        },
+        "history_preserved": true,
+        "parent_still_in_progress": true,
+        "hashes": {
+          "source-final.sha256": {
+            "count": 10,
+            "mismatches": []
+          },
+          "protected-final.sha256": {
+            "count": 299,
+            "mismatches": []
+          }
+        }
+      },
+      "review": "independent_source_test_raw_XML_log_ZIP_v2_AXML_ELF_inputs_hash_pass_no_outstanding_findings",
+      "final_evidence_files": 686
+    },
+    "explicit_metadata_foundation": {
+      "date": "2026-10-25",
+      "scope": "Explicit v2 key-binding/account metadata with v1 compatibility and lossless reconstruction",
+      "state": "implemented_locally_validated",
+      "contract": "design/ssh-manifest-v2.md",
+      "evidence_dir": "/tmp/ctos-ssh-manifest-v2-20261025.stybeq0l",
+      "implementation_complete": true,
+      "parent_implementation_complete": false,
+      "device_accounts_commit_archive_dist": false,
+      "production_validator_registered": false,
+      "android_native_runtime_executed": false,
+      "baseline_files": 427,
+      "source_files": 9,
+      "protected_files": 303,
+      "focused_jvm_tests": 200,
+      "focused_jvm_reports": 9,
+      "full_jvm_tests": 679,
+      "full_jvm_reports": 39,
+      "new_jvm_test_methods": 41,
+      "jvm_failures_errors_skipped": 0,
+      "normal_tasks": 92,
+      "normal_all_rerun": true,
+      "normal_seconds": 113,
+      "fixture_tasks": 111,
+      "fixture_executed_tasks": 33,
+      "fixture_up_to_date_tasks": 78,
+      "fixture_seconds": 20,
+      "fixture_final_native_reused": true,
+      "apk_audit": {
+        "normal": {
+          "sha256": "35f375105a2165e21cedbc7d9796dc3fd53bfc7534efd50e385db500c8a027bb",
+          "sshLibraries": [
+            "lib/arm64-v8a/libctos_ssh_files.so"
+          ],
+          "authPeerClass": false,
+          "package": "im.majo.ctos",
+          "v2MetadataClasses": true
+        },
+        "fixture": {
+          "sha256": "a42b561980ea4c369d414db18023afc5d8cccc9fde76ebca82941cba513830cf",
+          "sshLibraries": [
+            "lib/arm64-v8a/libctos_ssh_auth_peer.so",
+            "lib/arm64-v8a/libctos_ssh_files.so"
+          ],
+          "authPeerClass": true,
+          "package": "im.majo.ctos.secretsfixture",
+          "v2MetadataClasses": true
+        },
+        "test": {
+          "sha256": "95ad1b51d56a4701e56f3b7701cde26e898c19854929cbe4c123cb47874b087b",
+          "sshLibraries": [],
+          "authPeerClass": true,
+          "package": "im.majo.ctos.secretsfixture.test",
+          "v2MetadataClasses": false
+        },
+        "signer": "8d36c8be418174cb4cda0b897ff3e32b2da6f84032819726e8e5671872df52ef",
+        "packagedLibrary": "476598b82070589e039453f2a104b636518e39b1607b312f20a9d48d34d40130",
+        "generatedLibrary": "94f22a8b17d624839ef68de52f3f74dc1f04319899ce5c2679c420340ed6d49e",
+        "matchingAllocatedSections": 22,
+        "jni": {
+          "SshConfigEvaluator": 15,
+          "SshNativeSession": 19,
+          "SshManifestInspector": 1,
+          "SshManifestKeyAssociationInspector": 1,
+          "SshManifestPrivateMaterialInspector": 1,
+          "SshManifestCertificateInspector": 1
+        },
+        "archiveMembers": 83,
+        "lint": {
+          "normal": {
+            "errors": 0,
+            "warnings": 3
+          },
+          "fixture": {
+            "errors": 0,
+            "warnings": 4
+          }
+        }
+      },
+      "production_ssh_restore_open": false,
+      "v2_restore_open": false,
+      "v1_default_and_wire_preserved": true,
+      "native_source_changed": false,
+      "native_runtime_executed": false,
+      "flutter_source_changed": false,
+      "verification": "design/verification.md#20261025-manifest-v2",
+      "code_review": "Trellis independent 7 production + 41 new test methods and fixture correction PASS",
+      "limits": [
+        "Declarations and structural references only; full v2 mathematical/coverage/account/trust semantics pending",
+        "No automatic migration/default v2 writer/UI; existing v1 bytes retained",
+        "V2 restore denied before each side validator; source-v1 earlier errors preserve precedence",
+        "No ARM/native/Flutter/Android JNI/platform runtime this increment; instrumentation APK unchanged and reused",
+        "No production validator/reviewer registration or final connector admission"
+      ],
+      "review": "independent_source_tests_raw_XML_log_actual_ZIP_v2_signature_contentdigest_AXML_ELF_dynsym_archive_hash_PASS",
+      "next_steps": [
+        "Full v2 binding coverage and exact private/public/certificate mathematical proofs with bounded expansion",
+        "Exact Account to actual Request/role/selection consumption and explicit native representability rejection",
+        "Real CA/purpose/principal/Unix time/revocation semantics and graph-aware restore reviewer",
+        "Complete providers/all entry chains before production restore/final plan/connector"
+      ],
+      "documentation_audit": {
+        "markdown_files": 22,
+        "local_links": 804,
+        "missing": [],
+        "context_rows": {
+          "implement.jsonl": 8,
+          "check.jsonl": 8
+        },
+        "history_preserved": true,
+        "parent_still_in_progress": true,
+        "hashes": {
+          "source-final.sha256": {
+            "count": 9,
+            "mismatches": []
+          },
+          "protected-final.sha256": {
+            "count": 303,
+            "mismatches": []
+          },
+          "first-source.sha256": {
+            "count": 7,
+            "mismatches": []
+          },
+          "baseline.sha256": {
+            "count": 427,
+            "mismatches": []
+          }
+        }
+      },
+      "final_evidence_files": 571
+    },
+    "single_formal_ssh_mainline": {
+      "date": "2026-10-25",
+      "scope": "Single latest formal SSH manifest mainline; remove parallel business format policies",
+      "state": "implemented_locally_validated",
+      "contract": "design/ssh-manifest.md",
+      "evidence_dir": "/tmp/ctos-ssh-mainline-20261025.73vkexd5",
+      "implementation_complete": true,
+      "parent_implementation_complete": false,
+      "production_validator_registered": false,
+      "device_accounts_commit_archive_dist": false,
+      "baseline_files": 434,
+      "source_files": 5,
+      "protected_files": 307,
+      "focused_jvm_tests": 177,
+      "focused_jvm_reports": 9,
+      "current_schema_test_methods": 28,
+      "current_lifecycle_test_methods": 25,
+      "focused_failures_errors_skipped": 0,
+      "verification": "design/verification.md#20261025-ssh-mainline",
+      "scope_limits": [
+        "No parallel SSH models/writers or product version selection",
+        "Narrow old empty/pure TOTP input only; old SSH plaintext rejected without storage mutation",
+        "Actual metadata review gap remains gated; production providers not registered",
+        "No native/Flutter source changes or runtime/device/real account/install/commit/archive/dist"
+      ],
+      "next_steps": [
+        "Complete minimum usable password SSH path with exact account/Request binding and real host-key confirmation",
+        "Wire authorized path admission, connector and operable entrypoint, then verify practical connection",
+        "Implement optional certificate and graph-aware restore capabilities under their own explicit conditions on the same mainline"
+      ],
+      "full_jvm_tests": 691,
+      "full_jvm_reports": 39,
+      "jvm_failures_errors_skipped": 0,
+      "normal_tasks": 92,
+      "normal_all_rerun": true,
+      "normal_seconds": 203,
+      "first_compile_before_import_source_correction": true,
+      "fixture_tasks": 111,
+      "fixture_executed_tasks": 33,
+      "fixture_up_to_date_tasks": 78,
+      "fixture_seconds": 39,
+      "fixture_final_native_reused": true,
+      "apk_audit": {
+        "normal": {
+          "sha256": "0c5bac0b16c0b59f221f8817a231df5aa17db26b769a187dd2e7626eeacbdb44",
+          "sshLibraries": [
+            "lib/arm64-v8a/libctos_ssh_files.so"
+          ],
+          "authPeerClass": false,
+          "package": "im.majo.ctos",
+          "metadataClasses": true
+        },
+        "fixture": {
+          "sha256": "f7ddbb23177855a4ec789d17486cad3d26d0e416d8cf5f810e118546bf6abf75",
+          "sshLibraries": [
+            "lib/arm64-v8a/libctos_ssh_auth_peer.so",
+            "lib/arm64-v8a/libctos_ssh_files.so"
+          ],
+          "authPeerClass": true,
+          "package": "im.majo.ctos.secretsfixture",
+          "metadataClasses": true
+        },
+        "test": {
+          "sha256": "95ad1b51d56a4701e56f3b7701cde26e898c19854929cbe4c123cb47874b087b",
+          "sshLibraries": [],
+          "authPeerClass": true,
+          "package": "im.majo.ctos.secretsfixture.test",
+          "metadataClasses": false
+        },
+        "signer": "8d36c8be418174cb4cda0b897ff3e32b2da6f84032819726e8e5671872df52ef",
+        "packagedLibrary": "7bed3d9ff9299bc4059f438cd7e48135d311a1aa5b48204e3560ce69703a4d7f",
+        "generatedLibrary": "9f243821e23cf02bcef455ed588a702580eec91f6e50418747f0c838cc051447",
+        "matchingAllocatedSections": 22,
+        "jni": {
+          "SshConfigEvaluator": 15,
+          "SshNativeSession": 19,
+          "SshManifestInspector": 1,
+          "SshManifestKeyAssociationInspector": 1,
+          "SshManifestPrivateMaterialInspector": 1,
+          "SshManifestCertificateInspector": 1
+        },
+        "archiveMembers": 83,
+        "lint": {
+          "normal": {
+            "errors": 0,
+            "warnings": 3
+          },
+          "fixture": {
+            "errors": 0,
+            "warnings": 4
+          }
+        }
+      },
+      "new_jvm_test_methods": 12,
+      "pure_totp_restore_available": true,
+      "unreviewed_metadata_restore_open": false,
+      "sole_model_writer": true,
+      "legacy_totp_input_only": true,
+      "native_source_changed": false,
+      "flutter_source_changed": false,
+      "native_runtime_executed": false,
+      "android_native_runtime_executed": false,
+      "code_review": "Independent Trellis single-mainline contract, final3production and53currentmethods PASS; OR gate gap fixed",
+      "review": "Independent production/tests and raw_XML_logs_actual_ZIP_AXML_DEX_signatures_contentdigests_ELF_dynsym_archive_hash_PASS",
+      "documentation_audit": {
+        "markdown_files": 21,
+        "local_links": 818,
+        "missing": [],
+        "context_rows": {
+          "implement.jsonl": 8,
+          "check.jsonl": 8
+        },
+        "history_preserved": true,
+        "parent_still_in_progress": true,
+        "expected_renamed_paths": [
+          "design/ssh-manifest-v2.md",
+          ".trellis/spec/backend/ssh-manifest-v2.md",
+          "android/app/src/test/java/im/majo/ctos/VaultManifestV2Test.java",
+          "android/app/src/test/java/im/majo/ctos/VaultManifestV2LifecycleTest.java"
+        ],
+        "hashes": {
+          "source-final.sha256": {
+            "count": 5,
+            "mismatches": []
+          },
+          "protected-final.sha256": {
+            "count": 307,
+            "mismatches": []
+          },
+          "baseline.sha256": {
+            "count": 434,
+            "mismatches": []
+          }
+        }
+      },
+      "final_evidence_files": 576
+    }
+  },
+  "closure": {
+    "date": "2026-10-26",
+    "request": "安装、说明功能，最后归档并提交",
+    "scope": "Accepted foreground password SSH milestone; original broader client requirements retained in parent",
+    "original_full_acceptance_complete": false,
+    "delivered_increment_complete": true,
+    "deferred_to": [
+      ".trellis/tasks/10-08-ssh-terminal/prd.md",
+      "design/plan.md"
+    ],
+    "human_review": "human-optional",
+    "human_review_reason": "Named-device bridge and actual Flutter UI passed; installed APK verified; remaining product limitations explicit",
+    "formal_install": {
+      "target": "192.168.9.14:5555",
+      "package": "im.majo.ctos",
+      "apk_path": "/data/app/~~9J7bqaxVYWqNbp_FSnPfpw==/im.majo.ctos-Cya6hoaR9nxccY2uY7cYjw==/base.apk",
+      "installed_sha256": "6fa5c1bee28af584023f91a20ab0252abc02e53867bb13f1fb571468286417e8",
+      "mode": "adb install -r; data retained; no pm clear/uninstall",
+      "launch_requested": true,
+      "model": "AIO-3568J"
+    },
+    "build_inputs": "9 runners and 6 unchanged patches promoted to android/ssh, no active-task runtime dependency",
+    "archive_post_build": "PASS after active task removal: compileSshConfigEvaluator, compileSshProductionObjects and compileSshFiles, 7 tasks/3 executed/4 retained, 16s",
+    "work_commit": "0c162418201defd425518848c7c1197ffdf084ac",
+    "pre_archive_build": "PASS compileSshFiles chain: 7 tasks, 16s",
+    "archive_path": ".trellis/tasks/archive/2026-10/10-08-ssh-terminal-client",
+    "commit_review": "human-optional: real named-device bridge/UI passed, installed APK verified, post-archive build passed; advanced parent ACs explicitly deferred"
+  }
+}

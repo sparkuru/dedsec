@@ -7,7 +7,7 @@
 Implementation follow-up: the frozen managed slice is now implemented and formally
 reviewed. Focused46 and fresh full JVM201 tests pass, as do lint/Release/package
 checks. Actual evidence and remaining native/passphrase/key-match limits are in
-[`design/verification.md`](../../../../design/verification.md#2026-10-18--managed-immutable-ssh-authentication-selection).
+[`design/verification.md`](../../../../../../design/verification.md#2026-10-18--managed-immutable-ssh-authentication-selection).
 The report below records the source research before implementation.
 
 ## Findings

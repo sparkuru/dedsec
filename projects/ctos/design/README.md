@@ -1,7 +1,7 @@
 # ctOS 信息入口
 
 2026-10-26：正式SSH APK已覆盖安装到指定开发板；[功能与使用入口](ssh-terminal.md)和
-[安装记录](verification.md#20261026-formal-install)已更新。本轮按前台密码连接交付归档，
+[安装记录](verification.md#20261026-formal-install)已更新。本轮已按前台密码连接交付归档，
 其他SSH能力保留在父规划，仍只有一个正式主线。
 
 2026-10-26 当前：[前台密码 SSH 连接](ssh-password-connect.md)已在授权的 Android 11

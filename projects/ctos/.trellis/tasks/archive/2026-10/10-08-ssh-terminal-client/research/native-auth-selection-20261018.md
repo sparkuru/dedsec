@@ -8,7 +8,7 @@
 formally reviewed. Focused53/fullfresh208 JVM and final ARM253155 checks pass,
 along with lint/Release/v2/package checks. Main's final contract uses EACCES for
 native absent selection and nonterminal SSH_AUTH_SELECTION in the Java getter;
-suggested null/ENODATA alternatives below were not adopted. [Actual evidence](../../../../design/verification.md#2026-10-19--csas-native-selection-metadata-and-receipt).
+suggested null/ENODATA alternatives below were not adopted. [Actual evidence](../../../../../../design/verification.md#2026-10-19--csas-native-selection-metadata-and-receipt).
 
 ## Findings
 

@@ -1,5 +1,333 @@
 # SSH 客户端阶段检查
 
+## 当前：2026-10-26 前台密码SSH实机验收通过
+
+- [OK] 用户本轮明确授权指定板隔离测试安装/合成账号/清理；AIO-3568J/Android11/arm64已解锁。
+- [OK] 实际bridge OK1/5.924s：shared vault、NEW精确审批/CAS、PASSWORD/PTY/保护释放后命令及KNOWN重连。
+- [OK] 实际Flutter UI最终OK1/12.802s：真实控件建库/输入/完整指纹与算法确认/信任保存/命令发送/非回显输出快照/AppBar返回/关闭，含遮蔽与FLAG_SECURE。
+- [OK] 新UI测试来源与实际测试APK46fc572…/installed SHA吻合；原314代码/runner未改，最终84任务15s/lint0错误4警告。独立源码与实际签名/内容摘要/AXML/DEX/runner/phases/serverlog/after核对PASS，无finding。
+- [OK] 两测试包/进程、JSON/XML/reverse、临时容器/匿名卷/network/relay/密码精确清理；正式已安装APK前后3bc762d9…一致。正式新APK6fa5c1…未覆盖安装。
+- [LIMIT] 结论限具名API30板隔离包与合成账号的前台密码路径；不外推其他Android/真实用户资料或后台功能。父任务全功能仍进行中，当前密码闭环完成。
+
+[实际记录](../../../../../design/verification.md#20261026-password-android)。此前“待授权/待设备”均为历史阶段。
+
+## 前序：前台密码连接本地检查
+
+- [OK] 正式UI、共享实际库与完整受支持子集validator、真实TCP/MANAGED host review/CAS、临时selected密码及PTY交接；45source/269protected/before438保留。
+- [OK] Flutter242/analyze、fresh JVM718/42全0；normal92全重跑116s、fixture11142执行69保留38s，末次仅native errno修改的normal17s/fixture12s通过，Java报告如实保留。
+- [OK] 最终ARM client1,756,509、issuer33；含FD实际属性/ownership、端口/hash/大小写隔离、权限拒绝及错误码。独立OpenSSH_10.3p1密码/PTY/resize/70秒过auth期限后新流量/exit7/EOF/close全部通过。
+- [OK] 三APK实际ZIP/签名与内容摘要/AXML28/DEX/隔离target/同生产SSH库/22ALLOC/JNI15_20_1_1_1_1_4/archive83及source/input/binary hashes独立核对通过，无遗留finding。临时服务、匿名卷/network/relay/随机密码及失败测试core已精确清理。
+- [LIMIT] 独立服务端互通是C-engine managedKNOWN；NEW/CAS有本地受管和合成协议回归，新的Android实际MainActivity/shared VaultStore/NEW→KNOWN fixture只构建，Flutter真机点击未测。未连接设备/真实库账号/安装/提交/归档/发布。
+- [NEXT] 获当前具体设备测试授权后直接执行命名Android板的隔离实际连接测试；不要重复询问已批准范围，也不以可选完整扩展阻塞此路径验收。父task继续进行中。
+
+[完整证据](../../../../../design/verification.md#20261025-password-connect)；以下为历史记录。
+
+## 2026-10-25 用户更正：一个正式SSH主线（当前有效）
+
+- [OK] [正式合同](../../../../../design/ssh-manifest.md)及spec已取代双格式政策；一个模型/四列表构造/current writer，移除formatVersion/version2及两份versioned测试名称。
+- [OK] 已交付empty/纯TOTP旧输入可读取且无read-side写入；正常内容修改/rekey/import采用正式编码，原raw认证/guard/数据保留。
+- [OK] 内容metadata门取代格式门，empty/纯TOTP当前数据可恢复；独立原文expected检验loan，restore从raw authenticated来源派生正文。保留model变异与raw变异有分别验证。
+- [OK] 独立合同/生产3文件/schema28+生命周期25测试静态审查通过，补齐仅binding/仅PASSWORD-account/两者的OR内容门矩阵。
+- [OK] 首末定向177/9均全0，最终补齐独立metadata矩阵；fresh全量691/39全0，normal92全执行3m23s、fixture11133exec78UP-TO-DATE39s，lint0errors3/4warnings及三APK/隔离/签名/共享SSHbytes/22ALLOC/JNI/archive通过。
+- [OK] 最终source5/protected307及before434核对通过，独立raw证据复核PASS；首compile为import来源修正前记录，最终编译/测试以final source为准。没有遗留finding。
+- [LIMIT] 这次收敛不等于实际SSH已可用；下一阶段以最小密码连接所需账号/主机键/路径准入、connector和操作入口形成闭环。
+
+[本轮实测](../../../../../design/verification.md#20261025-ssh-mainline)，证据`/tmp/ctos-ssh-mainline-20261025.73vkexd5`。以下为历史记录，不覆盖最新用户决定。
+
+## 2026-10-25 显式关系/账号清单 v2（本地门禁通过）
+
+- [OK] 前证书source10/protected299/artifacts686核验；427baseline/9source/303protected，7生产首编译源保持，前current_increment完整保留history。
+- [OK] 默认v1/原wire兼容、显式v2/empty保留；不可变metadata/全局ID/typed refs/owner/target唯一性、raw host/target与new-only strictUTF8、12MiB等上限；独立golden与畸形向量。
+- [OK] 四实际mutation的source/candidate独占loans/擦除、withObjects结构重验及无effect破坏拒绝；默认create、export/rekey exact bytes。
+- [OK] 每侧decode后/该侧validator前及bind拒绝v2，empty/pure不绕过；source-first错误序/取消/旧preview/旧v1正反恢复保留，无provider注册变化。
+- [FIXED] 首focused199/2fail：新fixture误把mutation禁重读用于既有v1 restore。仅两旧restore显式核对exact target并计数；mutation/quickMaterial限制保持，产品未修复。
+- [OK] 最终focused200/9与fresh full679/39全0；normal92全执行1m53s、fixture11133exec78UP-TO-DATE20s，lint0errors3/4warnings；三APK/v2/单signer/隔离target/normal无peer/新模型类/无JVM测试类/同SSH bytes/22ALLOC/JNI15_19_1_1_1_1/archive83。
+- [OK] Trellis独立合同/7生产/41新测试/夹具修正审查PASS；raw XML/日志/实际ZIP/v2签名及contentdigest/AXML/ELF/dynsym/archive/hash独立复核PASS，无遗留finding。
+- [LIMIT] 无新增依赖或native/Flutter源码；normal编译native但无ARM/native/Flutter/Android JNI/platform runtime。未变化instrumentation APK使用缓存，与上轮bytes相同。
+- [OPEN] v2完整数学/coverage/实际账号消费、CA/time/principal/revocation/graph-aware reviewer、动态资源/真实Request、完整provider/恢复/connector/父AC。本地未提交，无设备/真实库账号/安装/commit/archive/push/dist。
+
+[实际验证](../../../../../design/verification.md#20261025-manifest-v2)；证据`/tmp/ctos-ssh-manifest-v2-20261025.stybeq0l`。
+
+## 2026-10-24 全CERT事实与签名政策（本地检查通过）
+
+- [OK] 前轮10source/295protected/635artifacts核验；本轮421baseline/source10/protected299。
+- [OK] 全CERT实际loan/仅public cert副本、原ordinal/物理recordline、原期限/owner/oneattempt/ThreadLocal/cleanup slots/cancel/finalwipe，固定输出168×128及8MiB输入预算。
+- [OK] 三独立public摘要、完整unsignedbits、现代subject/CA/签名政策；rawprincipal/critical/time只保留事实，信任相关报告false。旧C/API/JNI前缀仅ssh2.h include外字节保留，新SHA1拒绝与旧CSMI PARSED有真实对照。
+- [OK] 首compile41tasks18s/strict13tasks18s，首末certARM22239/effects0，最终独立private19980/pair13814/material7784全部exit0；八模式最终input manifests均匹配最终源码/archive/binary。
+- [OK] 定向145/5reports、fresh全量638/37reports全0；normal100全执行1m47s、fixture11137执行74UP-TO-DATE20s、lint0errors3/4warnings；三APK v2/同一signer/隔离target/normal无peer/同SSH bytes/22ALLOC/JNI15_19_1_1_1_1/archive83。
+- [LIMIT] Android JNI/平台fixture只编译；无wallclock/target/approvedCA/authority检查，pinned parser错误归一化与非抢占成本保留，不声称所有堆锁页。
+- [OPEN] 持久graph/账号模型、完整CA/time/principal/revocation/reviewer、动态资源/真实Request逐字段消费与完整provider/恢复/connector/父AC。生产证书拒绝/v1/provider注册不改；本地未提交，无设备/真实库账号/安装/发布。
+
+[验证](../../../../../design/verification.md#20261024-certificate-facts)；证据`/tmp/ctos-ssh-certificate-facts-20261024.izvxli13`。
+
+## 2026-10-23 全部private/v1凭据归属（本地检查通过）
+
+- [OK] 前轮9source/292protected/575artifacts核验；本轮413baseline/295protected。v1/无关AppSecrets/auth/config/Flutter/Python源未变。
+- [OK] 每个private与非TOTP声明均visit，重复private无phrase仍逐个自检；有phrase时owner与phrase唯一才用，否则无选中phrase/无复制/无JNI，password只namespace/opaque target，密码/TOTP不复制。
+- [OK] strict parser/RSA/shared proof复用、CSKP60/type2/domain隔离、错seed实签失败、ALLOC/SYSTEM/LIBCRYPTO不吞为材料不匹配；oldCSMI/CSKA原政策/challenge保持。
+- [OK] 原期限/取消/oneattempt/owner/跨实例重入、preflight/cleanup slots及最终wipe fence；8MiB private预算、不输出秘密摘要。
+- [OK] 首compile41tasks17s/strict11tasks15s；最终ARMprivate19976/effects0、独立pair13812/material7784，六native final input manifests匹配最终archive/source。随机PEM长度引起旧CHECK计数微变，未删/弱化断言。
+- [OK] 定向120/4reports、fresh全量613/36reports全0；normal98全重跑1m46s、fixture11137执行74UP-TO-DATE19s复用final native；lint0errors3/4warnings。三APK v2/同单signer/normal无peer/隔离target/shared SSH bytes/22ALLOC/JNI15_19_1_1_1/archive83。
+- [LIMIT] 平台fixture仅编译，不声称Android JNI/锁页；单crypto/KDF不可抢占，PEM parser先行成本及DER完整性范围保留。认证/PTY/config/Flutter未本轮重跑，不复用旧结果冒充当前。
+- [OPEN] 持久graph authority/覆盖、password account/target、完整CA/time/principal/revocation/reviewer、dynamic/default/key-loader/final Request、完整provider/恢复/connector/父AC。本地未提交，无设备/真实库账号/安装/commit/archive/push/dist。
+
+[实际验证](../../../../../design/verification.md#20261023-private-material)，证据`/tmp/ctos-ssh-identity-next-20261023.j_o6gwfz`；Trellis implement/check分工与主会话串行构建/文档。
+
+## 2026-10-23 显式key pair（本地检查通过）
+
+- [OK] 实际独占loan/精确三ID tuple，所选副本/清理slot、64MiB工作量/128pair、原期限/取消/一次owner与跨实例重入保护。
+- [OK] 复用原parser、cert plain subject、equal+固定domain实签验签；CSKA60闭包/非成功零digest、系统错误不吞为MISMATCH；新RSA组成字段/multiprime限制、legacy encrypted PEM提前拒绝，旧材料/auth保留。
+- [OK] ARM pair13814/effects0、独立材料7784、fresh源码/archive认证1748333；沙箱getsockopt EPERM另记，获批沙箱外仅AF_UNIX合成回归通过。旧CONFIG缓存矩阵重跑全部通过，未声称新编译。
+- [OK] 定向80/4reports与fresh全量586/35reports全0；normal96全执行1m42s、fixture11137执行74UP-TO-DATE21s、lint0errors3/4warnings，三v2/同signer/normal无peer/共享库/22ALLOC/JNI15_19_1_1/archive83。
+- [OK] 主会话源码复核、独立XML/log/hash/ZIP/ELF证据复核；source9/protected292匹配。
+- [LIMIT] JNI/平台fixture仅编译，未Android运行；非抢占KDF/crypto、PEM parser既有成本与heap scratch未锁页事实保留。
+- [OPEN] 全库关联authority/覆盖、全格式消费、口令唯一归属、密码target/account、证书CA/时间/主体/撤销/reviewer、动态资源/真实Request/provider/恢复/connector与父AC。
+
+[实际验证](../../../../../design/verification.md#20261023-key-association)，证据`/tmp/ctos-ssh-key-association-20261023.1p6pj89y`。本地未提交，无设备/真实库账号/安装/发布。
+
+## 2026-10-23 显式资源类型与引用（本地检查通过）
+
+- [OK] 前轮source15/protected307核对；399文件baseline，daemon恢复时确认资源代码未实施。最终source15/protected311当前匹配，无额外代码变化。
+- [OK] 显式第四mode/CSCR与旧mode隔离；五类显式资源类型/路径/none/locator/真实parent直接引用；非CONFIG只metadata、不body IO。
+- [OK] 明确relativeCWD/context/missing-baseKEY_RESOLUTION；Global美元字面、Certificate none字面、Revoked PUBLIC-only，不认证suffix/数学/信任/实际消费，报告始终partial-only。
+- [OK] 首Java38tasks10s、strict7tasks15s、新旧native15tasks25s；ARM Resource4439（含baseline1262）effects0/capabilities0，旧Audit13290/managed3683/direct1261/eval3736/catalog71923/handle5201，IO426/wipe1634全通过。
+- [OK] 定向151/9reports、fresh全量564/34reports失败错误跳过0；normal94全部执行1m52s，fixture11137执行74UP-TO-DATE21s；主/testJava/两DEX/testpackage重编译并复用final native。
+- [OK] lint0errors3/4warnings，三APK v2/同单signer/隔离target/normal无peer/shared SSH bytes/22ALLOC，JNI15/19/1/archive83；patch7afd7a9a…runner一致。
+- [OK] 独立源码/测试/raw XML/log/APK/ELF/输入hash复核，无具体finding；本轮全部首轮检查成功。
+- [LIMIT] Android/JNI/新fixture runtime未执行，C seam/source编译不是VM证明。宿主8192KiB锁页与xmalloc OOM边界保持。
+- [OPEN] 完整密钥/证书数学关系、凭据目标/口令唯一性、信任/reviewer、动态/cwd/key-loader/default/final Request与生产provider/恢复/connector/父AC。无设备/真实库账号/安装/提交/发布。
+
+[完整验证](../../../../../design/verification.md#20261023-config-resources)。证据`/tmp/ctos-ssh-config-resource-20261023.gmfy0g24`含baseline/首末源码/实际binary/runtime/XML/log/三APK/audit/hash/独立复核。
+
+## 2026-10-23 CONFIG 静态引用与本地效果审计（本地检查通过）
+
+- [OK] 前轮source15/protected303核对、393文件before；最终source15/protected307当前一致，无额外代码变化。
+- [OK] 独立AUDIT/CSCA、有限policy与Match无上下文语法、真实parent-line-child/direct references；原inspect/effective/catalog/Include锚点/预算/owner/清理保持，仍partial-only。
+- [FIXED] 首strict新helper宏定义顺序；正式审查的Match early-all余参检查/grammar优先，以及纯标量与复杂enabled分类。坏例和两原允许all-empty例均有真实parser回归，旧mode未改。
+- [OK] ARM Audit13290（含baseline1262）/managed3683/direct1261/eval3736/catalog71923/handle5201 effects0，detached类capabilities0；hostIO426/wipe1634。
+- [OK] 定向124/7reports、fresh完整537/32reports失败错误跳过0；normal94全部执行1m39s，fixture11137执行74UP-TO-DATE21s，主/testJava/DEX/testpackage重编译并复用final native。
+- [OK] lint0errors3/4warnings；三APK v2/same单signer/隔离target/normal无peer/相同SSH库、22ALLOC、JNI13/19/1/archive83；新patch72f09e8a…与runner一致。
+- [LIMIT] 平台fixture仅编译，JNI VM异常/Android锁页未执行；不弱化保护或声称xmalloc OOM可恢复。
+- [OPEN] 动态/非Include typed引用、完整配置值/身份/私公钥/证书/凭据目标/信任与reviewer、生产provider/恢复/最终计划connector/父AC。无设备/真实库账号/安装/提交/发布。
+
+[完整验证](../../../../../design/verification.md#20261023-config-audit)。证据`/tmp/ctos-ssh-config-audit-20261023.uvozbgq0`含失败轮与首末源码/native binaries/runtime/XML/log/三APK/audit/hash/独立复核。
+
+## 2026-10-23 实际清单受管配置检查（本地检查通过）
+
+- [OK] 接管前轮source7/protected272、383文件baseline；最终source15/protected303一致，无额外代码变化。
+- [OK] reserve先发owner/load单份受保护CSDI/取消attach/原期限/全部CONFIG与原ordinal/真实剩余额度/最终wipe与cleanup fence；失败owner保留重试。
+- [OK] 真实ARM managed3683（含baseline1262）/effects0/capabilities0；独立direct1261/eval3736/catalog71923/handle5201 effects0，hostIO426/wipe1634。
+- [OK] 定向101/5reports、fresh全量514/30reports失败错误跳过0；normal94全部执行1m58s，fixture11137执行74UP-TO-DATE22s，fixture主Java/testJava/DEX/打包重编译并复用同native。
+- [OK] lint0errors3/4warnings，三APK v2/same单signer/隔离ID/精确target/normal无peer/相同生产库、22ALLOC节、configJNI11/session19/material1/archive83。
+- [FIXED] 首JVM96/1fail的测试passphrase关联修正；移除多加的ssh/路径前缀；剩余结果quota前置decoder分配；修正新平台fixture bare Include对应.ssh/child，保留原解析语义。独立源码/原始证据复核无遗留finding。
+- [LIMIT] JNI实际VM异常/Android锁页/平台fixture只编译未运行；C abort seam不冒充JNI实测。原8192KiB宿主锁页限制保持，无未锁页fallback。
+- [OPEN] typed CONFIG/Include引用边/全分支政策、身份/凭据/证书/信任语义provider/reviewer、恢复/最终计划connector/父AC。本地未提交，无设备/真实库账号/发布。
+
+[完整验证](../../../../../design/verification.md#20261023-detached-managed)。证据`/tmp/ctos-ssh-detached-managed-20261023.oeRy2d9W`含失败轮/首末源码、ARM二进制/runtime/XML/log/三APK/audit/hash/独立报告。
+
+## 2026-10-23 独立 native 配置输入（本地检查通过）
+
+- [OK] 379-file接管baseline、source-final7/protected272一致；原TOTP mutation/tmp已失不冒充重验。
+- [OK] 独立CONFIG/type/path副本、原BOOTTIME/owner/cancel、任意真实root/原ordinal、失败构造CLOSING owner与close/destroy重试；无虚构vault/view。补回两个旧errno顺序并加断言。
+- [OK] 最终真实ARM1261/effects0/capabilities0/wipes53；旧eval3736/catalog71923/handle5201均effects0，host IO426/wipe1634通过。
+- [OK] 最终fresh JVM483/28reports失败/错误/跳过0；normal94任务全部执行1m43s，fixture111任务17s复用native；lint0errors3/4warnings，三APK v2/同signer/独立IDs/精确fixture target/normal无peer，生产库字节一致且22ALLOC节对应生成库。
+- [LIMIT] 首runtime测试wrapper误捕libc advice已修为受管映射追踪；第二runtime8MiB+metadata真实mlock超宿主8192KiB，改为精确格式/故障清理与6MiB真实锁页解析分列，无未锁页降级。
+- [LIMIT] 最终重建两次Chaquopy源站失败；原四缓存wheel经SHA/ZIP核验，临时Gradle init显式no-index/find-links后最终全量通过。未变的fixture main/test Java与test DEX/打包复用，peer/lint report执行；无Android运行。
+- [OPEN] Java/JNI实际manifest编排及整库累计预算、CONFIG/Include引用边/全分支政策、身份/凭据/证书/信任语义provider、恢复/最终计划connector与父AC。仅本地未提交，无设备/真实库账号/发布。
+
+[完整验证](../../../../../design/verification.md#20261023-detached-config)。证据`/tmp/ctos-ssh-detached-config-20261023.mUF8aSF0`保留各轮源码/二进制/log/core、最终XML/APK/audit/hash；独立checker复核实现与最终证据无具体遗留finding。
+
+## 2026-10-23 TOTP mutation（本地检查通过）
+
+- [OK] 上轮8source/266protected/732artifacts一致，保存615文件baseline；本轮source7/protected268一致。
+- [OK] 原origin/context/预算/注册、独占候选/loan、锁外验证和唯一effect claim；精确跨Request交接。
+- [OK] 修复取消可见性、共享64回收、BUSY错误清理、迟到prepare/旧epoch/foreigncore/旧revision和pin安全发布。
+- [OK] 定向196/11reports与全量483/28reports，失败/错误/跳过均0；14新测试方法。
+- [OK] normal92全重跑1m39s/fixture114 26s/fixed77 9s；lint0errors3/4warnings，三APK签名/包名/隔离/共同库审计通过。
+- [OPEN] 真实Android相机/图片/Activity/AtomicFile运行、完整SSH语义provider/恢复/最终计划connector与父AC。
+
+Evidence:`/tmp/ctos-totp-mutation-20261022.envakycq`。首次编译失败及第二轮194/1fail的
+修正原因、第三轮195pass和最终结果均保留；[完整验证](../../../../../design/verification.md#20261023-totp-mutation)。本地未提交，无设备/真实库账号。
+
+
+## 2026-10-22 trust CAS（本地检查通过）
+
+- [OK] 上轮4source/269protected/684artifacts与本轮before基线匹配；冻结trust CAS合同。
+- [OK] 独立源码复核：原审批预算、锁外校验/可取消provider、唯一claim与原view延续；最终role fence与cleanup缺口已修。
+- [OK] 定向202/全量469零失败错误跳过；normal92全重跑/fixture114/fixed77、lint0errors3/4warnings与三APK审计通过。source8/protected266一致。首轮199/4fail及修正依据保存在原始证据。
+- [OPEN] TOTP mutation、完整语义/恢复/connector及父AC；本地未提交，无设备/真实库账号。
+
+Evidence:`/tmp/ctos-ssh-trust-cas-20261022.3koy1mha`。
+
+## 2026-10-22 普通SSH凭据保存/删除
+
+- [OK] 原metadata context在host gate前固定，实际source/candidate锁外校验，candidate全数组独占、input先clone，一次精确消费。
+- [OK] 首个/最后SSH candidate始终校验；source纯TOTP跳过SSH source校验，错误绑定/BUSY不消费，注册/期限/取消贯穿。
+- [OK] Store事务前raw equality/quickMaterial，事务guard不重读；effect.beforeCommit唯一claim，wrapper/uncertain/unlockIfEpoch保持。
+- [OK] 定向152/8reports、fresh全量455/26reports零失败错误跳过；新增11测试。normal92全重跑、fixture114、fixed77、lint0errors3/4warnings和三APK签名隔离/库一致性通过。
+- [OPEN] trust CAS与TOTP mutation、全语义/恢复/connector及父AC；实际AtomicFile/设备/native未运行。本地未提交。
+
+Evidence:`/tmp/ctos-ssh-mutation-20261022.3u9ri93v`；source4/protected269。
+[完整结果](../../../../../design/verification.md#20261022-ssh-entry-mutation)。
+
+## 2026-10-22 SSH typed秘密读取
+
+- [OK] 原context/role预算/注册与selected host/KEX/selection贯穿admission及effect，真实source/独立loan锁外校验，一次精确消费。
+- [OK] 最终有界复制保留原publish，callback/request/pub/session/op/role/view排序；cleanup锁外。
+- [OK] 修复public role反向锁序、shared64容量竞争与bundle注册锁序；首轮195/1fail捕获public取消回退，原测试保留且修复后通过。
+- [OK] 最终focused196/10reports与fresh全量444/25reports零失败错误跳过；新增13个测试方法。normal92全重跑、fixture114、lint0错误3/4warnings、三APK审计与源码8/protected264通过；独立checker最终批准。
+- [OPEN] mutation/trust CAS、完整语义/恢复/connector及父AC；Android/native运行/真实库账号未执行，本地未提交。
+
+Evidence:`/tmp/ctos-ssh-secret-read-20261022.umpy0yd0`。
+[完整结果](../../../../../design/verification.md#20261022-ssh-secret-read)。
+
+## 2026-10-22 SSH public文件读取
+
+- [OK] 原context/期限/取消/注册与一次操作、真实认证source/独立loan/closure锁外；纯TOTP和其他secret/mutation/trust实现保持。
+- [OK] 同步loan once claim/全锁外receiver/返回前复查；native独立prepare/create/final attach与exact ownership，不替换active view。role原deadline/view及新helper路径ownCAS保持。
+- [OK] 修复未接受参数误revoke、重入/重放owner及foreground/getter竞态；原guard、capture和所有权接收的session边界已独立审阅。
+- [OK] 最终focused178/11reports零失败错误跳过；19新public测试方法和2provider方法，失效/擦除/once/attach/revision-gap/role/ownCAS矩阵通过。
+- [OK] 全量JVM431、normal92全重跑/fixture114与三APK审计通过。[完整验证](../../../../../design/verification.md#20261022-ssh-public-read)。
+- [OPEN] 实际JNI/Android AtomicFile/view生命周期、其他secret读/mutation/trust/全语义/恢复/最终计划connector与父AC。仅本地未提交，无设备/真实库账号/安装/commit/archive/push/dist。
+
+Evidence: `/tmp/ctos-ssh-public-read-20261022.mjbo7874`。first172/1fail新fixture replay已修，旧passing178/full431/normal92/fixture114与最后capture窄修后的重新验证明确分开保留。
+
+## 2026-10-22 TOTP typed read与最终披露
+
+- [OK] 冻结原context/锁外认证loan校验/生成、一次effect/opaque read receipt及最终代码披露合同；mixed绑定原注册，pure无provider依赖。管理preview与其他SSH typed保持独立。
+- [OK] 原Bridge deadline/epoch/phase在排队前绑定；phase→pub→session短metadata与pub→session实际效果分开，当前窗口/最终metadata检查、精确cancel/provisional撤销及锁外cleanup。
+- [OK] final focused140/8reports、fresh full JVM410/23reports零失败错误跳过；19项新增方法含失效矩阵、第二次store变化、completion后抛错、clock supplier失效、loan/key/cipher擦除及BUSY/重放。
+- [OK] normal92全执行2m16s、fixture114/40s、lint0errors/3与4warnings、固定native输入normal77/11s；三APK v2/相同signer/独立target、normal无peer和SSH库字节相同。normal41ce54cc…/fixture96bb6c86…/test3c431f96…未安装。
+- [OK] 独立checker源码/spec/raw XML/log/ZIP/signatures/manifest/hash复核通过；7changed/55protected一致，无具体遗留finding。[完整验证](../../../../../design/verification.md#20261022-totp-read-validation)。
+- [LIMIT] 实际Android Bridge/生命周期/AtomicFile/Binder/剪贴板未运行；native/Flutter未运行。transport有界且不重入core、Binder延迟session锁、worker Error即刻UI完成未保证等继承边界明确保留。
+- [OPEN] SSH public snapshot/sessionManifest与secret typed reads、mutation/trust CAS、全语义/恢复/最终计划/connector/父AC。仅本地未提交，无设备/真实库账号/commit/archive/push/dist。
+
+Evidence: `/tmp/ctos-totp-read-20261022.CbgSljcf`。两轮focused均通过；独立native重建不同的first APK保留，固定输入再打包才声明库字节相同。fixtureJava编译、test DEX/打包和lint report渲染复用已注明。
+
+## 2026-10-22 bundle admission/effect生命周期
+
+- [OK] 冻结原context/独占owner/一次消费及final storage合同；无生产validator/reviewer注册。
+- [OK] 原BundleContext在审批前创建，期限/cancel/epoch/注册与精确proposal身份贯穿；锁外source/candidate贷款与加密准备、loan修改拒绝/Throwable擦除及cleanup后释放槽。
+- [OK] candidate独占全部Entry/FileObject；保留原精确审批/最后SSH删除/wrapper/claim/uncertain/unlockIfEpoch。修复AtomicFile事务内重读与publication后审批撤销的provisional清理。
+- [OK] 最终focused81/6reports、fresh full JVM391/22reports零失败错误跳过；normal92全执行3m33s、fixture114/50s、lint0errors/3与4warnings。
+- [OK] 固定native输入normal77/22s后，三APK v2/同一单signer/独立target、normal无peer及两包SSH库字节相同。final normal633499a5…/fixture3d25f1af…/test3c431f96…未安装。
+- [OK] 独立checker源码/spec和raw XML/日志/工件/hash复核，无具体遗留finding；6changed/52protected输入一致。完整命令/初轮失败/修正/工件见[验证](../../../../../design/verification.md#20261022-bundle-validation)。
+- [OPEN] 实际Android AtomicFile/runtime、native/Flutter运行未执行；其他typed/trust/sessionManifest、全语义/生产恢复/最终计划/connector与完整父AC未完成。本地未提交，不设备/真实库账号/archive/push/dist。
+
+Evidence: `/tmp/ctos-ssh-bundle-20261022.S0t9zPRZ`。首轮80中3fail/第二轮80pass/最终81pass分别保留；独立native重建字节不同的first APK/审计也保留，固定输入再打包后才声明最终库相同。
+
+## 2026-10-21 恢复预览校验生命周期
+
+- [OK] 先冻结全图语义义务与preview-only生命周期；无生产validator/reviewer注册，恢复门保持。
+- [OK] 实际source/target认证loan、修改拒绝/擦除、core外validator/reviewer/canonical bind、cleanup后释放在途槽。
+- [OK] 原deadline/直接取消/不可变注册与last-store-read/final commit复查；独立review窗口publication起算。
+- [OK] Bridge私有UUID owner隔离同名请求；boundGuard传递parent publication，phase→session一次delivery claim，外部callback/cleanup锁外；foreground-first阻止lazy revoke进入phase。
+- [OK] focused66/4reports、新增21测试含12组paused-stage动作，fresh全量379/21reports零失败错误跳过；normal92全执行2m18s/fixture114、lint0errors/3与4warnings及三APK签名隔离通过。
+- [OK] 4changed源码与7protected hash通过；native/VaultSession/VaultOperation/Dart不变。独立checker源码修复与主会话证据复核，详见[验证](../../../../../design/verification.md#20261021-preview-validation)。
+- [LIMIT] fixture lint analysis运行/report渲染up-to-date；instrumentationJava编译/相同DEX打包up-to-date。多Bridge实际Android路由只源码/编译；native/Flutter/设备未运行，旧/tmp材料证据不存在。
+- [OPEN] 其他typed/bundle/sessionManifest迁移与全图语义/生产恢复/最终计划connector及完整AC。仅本地未提交，不设备/真实库账号/归档/push/dist。
+
+## 2026-10-19 实际manifest离线材料检查
+
+- [OK] supplied manifest字节副本/精确口令身份；native共享key policy、实际parser、严格CSMI及一个material JNI；原文件和caller loan不变，副本全路径wipe。
+- [OK] strict native12tasks18s/修正矩阵7tasks14s；材料ARM7784/effects0/safe_logs4/streams34，原目录71923/eval3736/handle5201实际重跑。
+- [OK] focused JVM31；normal95全部重跑1m37s，fresh JVM358/20reports/零失败；fixture114/27s、新exact方法含于DEX，normal固定输入77tasks10s。
+- [OK] normal/fixture生产库字节一致、22分配节对应生成库；三v2/单signer/独立target、config8/session19/material1/archive83/forbidden0。
+- [AUTH] **1741410 checks/exit0，synthetic**；原测试1037条CHECK不变，五个握手准备窗口修正为5s，原实际过期断言与生产60s期限不变；47条固定进度日志仅在忽略副本。
+- [LIMIT] CONFIG与身份/目标/引用/证书信任仍pending；传统加密PEM解密后DER完整消费未证明、未宣称该suffix运行用例；JNI真实VM和setup-OOM未注入，平台方法仅编译，动态ARM未运行，Flutter未改未重跑。
+- [SCOPE] 恒contentOnly=true/admissionComplete=false；不挂validator/不开放SSH恢复，父task仍in_progress/implementation_complete=false；本地未提交，无设备/真实库账号/发布。
+
+[验证、失败轮与完整工件](../../../../../design/verification.md#20261019-manifest-inspection)。
+
+## 2026-10-19 无上下文声明catalog（本地关卡通过）
+
+- [OK] 同一readconf lexer/full Host argv、literal来源/去重顺序、静态managed Include、动态延后定位；声明only，不虚构上下文，模式getter隔离，八config JNI及CSCD/Java不可变codec。
+- [OK] strict11tasks19s；目录ARM71923/effects0、原求值3736/handle5201/effects0；最终冻结archive对应目录ARM71923再通过。
+- [OK] focused56tasks24s/JVM39；normal95全部重新执行/1m30s，fresh JVM327/19reports/零失败；fixture114tasks25s，new method在test DEX。
+- [OK] normal77tasks9s固定输入再打包，normal/fixture生产库字节相同，22 allocated sections与生成库一致；三v2/单signer/独立target、config8/session19/archive83/无forbidden符号通过。
+- [OK] 正式源码review补齐late revoke/cancel发布测试并实际运行；最终证据review无差异。65源码/16保护/17工件hash、ShellCheck/shfmt/bash -n、diff与链接/任务检查通过。
+- [LIMIT] Match/其他已知指令仅词法发现，不验证参数值；IgnoreUnknown不隐藏未知指令。动态ARM和Android平台方法只构建未执行；JNI VM异常/独立destroy压力与系统OOM限制保留，Flutter未改未重跑。
+- [SCOPE] 不挂生产manifest validator、不放开SSH恢复；最终计划/精确凭据选择/connector与产品AC后续。父task仍in_progress/implementation_complete=false；未提交，无设备/真实库账号/发布。
+
+证据与精确命令/hash：[本轮验证](../../../../../design/verification.md#20261019-config-catalog)。
+
+## 2026-10-19 JNI/Java配置求值边界（本地关卡通过）
+
+- [OK] caller lease仅borrow、完整Options留native，64槽signed-positive opaque registry、短锁pin/atomic cancel及失败open cleanup handle；六config JNI与Java facade已实现。
+- [OK] strict9tasks17s；最终独立静态ARM5201checks/effects0/exit0，SHA1291cead…，原eval/parser/view/IO/session/KEX/JNI 12项hash保持。
+- [OK] focused56tasks25s/JVM20；normal95全部重新执行/1m36s，fresh JVM308/18reports/0failure/error/skip；fixture114tasks28s，新平台fixture含于test DEX。
+- [OK] 固定最终编译输入后normal77tasks9s再打包；normal/fixture生产库字节一致、22 ELF allocated sections与生成库一致。初始all-rerun APK与首次ARM hash独立保留，避免临时构建路径混用。
+- [OK] 三APK v2/同一单signer、独立target、normal无peer、configJNI6/sessionJNI19/archive83、无test seed/wrap；lint normal0errors3warnings/fixture0errors4warnings。
+- [OK] 正式checker全量当前增量源码复核，无具体finding/无编辑；ShellCheck/shfmt/bash -n、source/baseline SHA与diff检查通过。
+- [LIMIT] 独立Android方法只编译未执行；动态ARM只构建；JNI VM异常路径与cancel/destroy独立压力竞争未动态注入，xalloc系统OOM限制保留。Flutter未改未重跑。
+- [SCOPE] catalog/validator/最终计划/connector未接，原SSH恢复拒绝门保留；父任务in_progress/implementation_complete=false，本地未提交，无设备/真实库账号/发布。
+
+证据与精确命令/hash：[本轮验证](../../../../../design/verification.md#20261019-config-jni)。
+
+## 2026-10-19 native受管配置求值器（本地关卡通过）
+
+- [OK] 固定readconf独立patch/runner、完整Options和managed Include；无全库wrap或原session/KEX/JNI源修改。
+- [OK] 最终strict focused9tasks17s；不可变静态ARM3736checks/effects0/exit0。
+- [OK] 新对象共同链接原完整认证/PTY合成回归1725125checks/exit0。
+- [OK] normal95项全部重新执行/1m36s、fresh JVM288/17reports/0failure/error/skip；fixture114tasks23s。
+- [OK] 三APK v2/同一单signer、独立target、normal无peer类/库、19JNI/archive83、namespaced parser exports；normal lint0errors3warnings/fixture0errors4warnings。
+- [OK] 正式全量源码review后聚焦delta复核，无遗留具体finding；ShellCheck/shfmt/bash -n/source和baseline SHA检查通过。
+- [LIMIT] has_raw_fields=1，非最终计划；动态ARM仅构建未运行，Android/JNI/设备未测；xalloc系统OOM仍终止，PID/UID/borrow释放失败未动态注入。
+- [SCOPE] JNI/catalog/validator/connector/产品AC后续，父task仍in_progress/implementation_complete=false，本地未提交、无设备/真实库账号。
+
+证据`/tmp/ctos-ssh-config-evaluator-20261019.DNFND9Yx`；最终hash/失败轮/命令与覆盖见
+[验证](../../../../../design/verification.md#20261019-config-evaluator)。
+
+## 2026-10-19 actual offered-host 续做（完整本地包装门通过）
+
+- [OK] normal94任务全部重新执行/1m30s；fresh Gradle JVM288/17reports/0failure/error/skip。
+- [OK] fixture113tasks/16s，21executed/92up-to-date；两APK重建，normal/fixture lint均0错误。
+- [OK] 三APK v2/同一单signer；fixture/test独立ID与target；normal只含生产SSHlib，19JNI/archive83/forbidden0，peer依赖生产库。
+- [OK] 独立静态NDK/Bionic ARM测试SHA6520ff35…：专项87300/完整1724636 checks/exit0。
+- [OK] 再次独立源码/spec/fixture复核无具体缺陷；本轮无生产源码修改。
+- [LIMIT] 旧/tmp证据与设备动态运行库已失；新动态test重建但未运行。静态测试compat/TLS适配及失败轮详见验证文档，不能外推Android JNI/设备通过。Flutter未变未重跑。
+- [SCOPE] 本地未提交、不设备/账号、不归档/push/dist；产品readconf/catalog/connector仍开放。
+
+证据`/tmp/ctos-ssh-managed-host-resume-20261019.ruWFiwIc`；normal APK84e98c04…，
+fixture9009448d…/test17c47f1b…；完整hash/实际命令与边界见design/verification.md#20261019-managed-host。
+
+## 2026-10-19 初次actual offered-host / exact NEW review（历史：最终包装门待执行）
+
+- [OK] 冻结design/ssh-launcher.md；MANAGED无caller key、pending guard仅cycle1一次pin、
+  actual issuer/exact KNOWN或approvedCAS后复查，upstream签名/NEWKEYS仍必需；旧PINNED保留。
+- [OK] Native strict第三轮6tasks13s；focused ARM87305/full1724409 exit0，native-third SHA
+  00b689663e927d7deda4edb76d4cb0ad7f136e0da19ab9f57c6f8be7e17e95a4。
+- [OK] focused Gradle55tasks23s：session51/mailbox8及JNI/lint；最终宿主JDK重新编译全部17个
+  test类与三份变更mainJava，288tests/39.199s全通过，含mailbox最终10方法。
+- [OK] 新syntheticManagedHostChain源码编译；exact独立thread NEW approve/reject/cancel与真实CAS，
+  KNOWN/NEW×密码/加密Ed25519至shell；尚非APK构建/Android运行。
+- [OK] generated lib sessionJNI19/openManaged、archive83/forbidden0；正式核心及最终delta源码review无finding。
+- [OK] 最终normal全量、fixture assembly/lint、APK验签/隔离审计：三次自动审核容量错误，命令未执行。
+- [LIMIT] JNI global sessions_lock仍在审批callback中持有；Sink必须非阻塞，不能宣称同时pump多hop。
+  allocation/opaqueproof/arbitrary sink阻塞未动态注入。Flutter沿用本轮前227/analyze证据，未重跑。
+- [SCOPE] 不提交、不设备/账号操作；父task in_progress/implementation_complete=false，不archive/push。
+
+证据`/tmp/ctos-ssh-managed-host-20261019.j484FN3T`；完整事实、失败轮、host编译限制和恢复命令见
+`design/verification.md#20261019-managed-host`。原先source-final38项仅属于PTY旧切片，不作为新增代码hash。
+
+## 2026-10-19 session channel / PTY / shell（本地关卡通过）
+
+合同：design/ssh-session-channel.md。首轮隔离fixture编译/lint113tasks25s通过；
+session focused JVM最终43/0/0/0、controller11、normal lint通过；最终normal94tasks全重跑、
+fresh JVM270/0/0/0、Flutter227/analyze、fixture113tasks43s、最终ARM1,651,641/exit0通过。
+host-only真实会话终端接入已实现，typed代次/UTF8/SSH箭头回归通过；无设备JNI运行或产品
+launcher验收推定。证据暂存
+`/tmp/ctos-ssh-shell-20261019.8nfypcZH`。
+
+受限宿主QEMU的新binary与旧认证基线均在既有socket admission errno断言失败，
+不是认证回退的证据；获准宿主shell专项407797/full1652108通过。最终重建archive后
+新binary bbf14ab4…再次完整ARM1651641通过。完整hash、失败轮与覆盖限制见
+design/verification.md#20261019-ssh-shell。正式checker已复核owner/cancel/ack/Error/
+shutdown竞争修复，无剩余已确认缺陷；部分native分支仅共享守卫/源码审阅。
+
+用户收尾选择：保留工作区、暂不提交；本轮仅保留本地结果，不操作设备。
+父任务继续进行中，不归档或push。当前source-final38项/runtime-final9项已逐份哈希校验。
+
 ## 2026-10-19 本连续阶段已完成：Android/JNI + 私钥认证
 
 已完成密码与未加密/有界加密私钥的生产Java/JNI编排及独立Android实测，不再把两项列为
@@ -945,7 +1273,7 @@ host **24项通过**；Android独立夹具15秒构建/lint通过（0错误/3既�
 
 ## G1 输入准备
 
-main 已从官方地址实际取得 OpenSSH10.6p1 与 OpenSSL3.5.9 发布归档，独立计算 payload SHA256，与官方发布/实际 OpenSSL `.sha256` 附件一致；核对归档内 version.h / VERSION.dat 及完整 LICENCE / LICENSE.txt。版本、来源和许可证 hash 见 [依赖记录](../../../design/dependencies.md)。未验证 PGP 签名，不能称验签。
+main 已从官方地址实际取得 OpenSSH10.6p1 与 OpenSSL3.5.9 发布归档，独立计算 payload SHA256，与官方发布/实际 OpenSSL `.sha256` 附件一致；核对归档内 version.h / VERSION.dat 及完整 LICENCE / LICENSE.txt。版本、来源和许可证 hash 见 [依赖记录](../../../../../design/dependencies.md)。未验证 PGP 签名，不能称验签。
 
 工具只读检查实际通过：hako Perl5.38.2、make4.3、NDK27/API28 clang18.0.1、llvm-ar/ranlib/readelf 及 NDK API28 公开 zlib header/stub。stock runner `455bb5…` 实际run `build/ssh-native-g1/stock-run.zPRULpSC/`：OpenSSL Configure/build_libs/install_dev通过，OpenSSH configure通过/WITH_ZLIB=1，但make在bsd-closefrom.c失败；defines.h空对象宏 `__sentinel__` 先于Bionic unistd.h的带参数属性声明引发编译冲突。失败配置/日志未改动。
 
