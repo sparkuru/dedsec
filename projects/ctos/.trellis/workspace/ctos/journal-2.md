@@ -904,3 +904,24 @@ Installed the accepted formal APK on the named board, documented usable features
 ### Next Steps
 
 - 真实DocumentsUI专项、复杂配置/跳板/转发、其他认证及前台服务/后台/完整恢复仍按父规划独立推进，不自动标全范围完成。
+
+
+## Session 76: SSH service and screen-lock reconnect delivery
+
+**Date**: 2026-10-30
+**Task**: SSH service and screen-lock reconnect delivery
+**Branch**: `antitrust`
+
+### Summary
+
+Delivered service-owned SSH with screen-lock disconnection and explicit fresh reconnect. Existing checks: 293 Flutter and 775 JVM passed; selected AIO board real lock/reconnect passed in 70.244s. Formal APK 7c38 was installed preserving data, then the user accepted the experience and requested commit. Full-scope review and cleanup passed. Keep the SSH parent in progress; unrelated app-detail task and neighboring project changes remain excluded. Evidence and behavior contract are indexed under design/.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `1b57fb9` | (see git log) |
+
+### Status
+
+[OK] **Completed**
