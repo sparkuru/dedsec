@@ -15,11 +15,16 @@ public final class SshKeyMaterialTest {
         long now = 1000;
         @Override public long now() { return now; }
     }
-    private static final class Binding implements SshKeyMaterial.NativeBinding {
+    private static final class Binding implements SshKeyMaterial.NativeBinding, SshKeyMaterial.PassphraseNativeBinding {
         byte[] response;
         final List<byte[]> inputs = new ArrayList<>(), outputs = new ArrayList<>();
+        final List<byte[]> passphrases = new ArrayList<>();
         Runnable during;
         Throwable failure;
+        @Override public byte[] inspect(byte[] input, byte[] passphrase, long deadline) throws IOException {
+            passphrases.add(passphrase);
+            return inspect(input, deadline);
+        }
         @Override public byte[] inspect(byte[] input, long deadline) throws IOException {
             assertEquals(2000, deadline); inputs.add(input);
             if (during != null) during.run();
@@ -32,6 +37,7 @@ public final class SshKeyMaterialTest {
         void clean() {
             for (byte[] input : inputs) assertArrayEquals(new byte[input.length], input);
             for (byte[] output : outputs) if (output != null) assertArrayEquals(new byte[output.length], output);
+            for (byte[] phrase : passphrases) assertArrayEquals(new byte[phrase.length], phrase);
         }
     }
     private static byte[] blob(String algorithm) {
@@ -56,6 +62,7 @@ public final class SshKeyMaterialTest {
         assertArrayEquals(new byte[] {1, 2, 3}, caller);
         assertNotSame(caller, binding.inputs.get(0));
         assertEquals(SshKeyMaterial.Status.PARSED, result.status); assertEquals("ssh-ed25519", result.algorithm);
+        assertFalse(result.encrypted);
         assertTrue(result.fingerprint.matches("SHA256:[A-Za-z0-9+/]{43}"));
         assertArrayEquals(publicBlob, result.publicBlob());
         byte[] clone = result.publicBlob(); Arrays.fill(clone, (byte)0);
@@ -64,10 +71,11 @@ public final class SshKeyMaterialTest {
         binding.clean();
     }
     @Test public void completeOutcomeMatrixRejectsBlobOrProofOnFailure() throws Exception {
-        for (int status = 1; status <= 3; status++) {
-            Binding binding = new Binding(); binding.response = wire(status, 0, status == 3 ? 2 : 0, new byte[0]);
+        for (int status = 1; status <= 4; status++) {
+            Binding binding = new Binding(); binding.response = wire(status, 0, status >= 3 ? 2 : 0, new byte[0]);
             SshKeyMaterial.Result result = SshKeyMaterial.inspect(new byte[] {1}, 2000, new Clock(), binding);
             assertEquals(status, result.status.ordinal()); assertEquals("", result.algorithm);
+            assertEquals(status >= 3, result.encrypted);
             assertEquals("", result.fingerprint); assertEquals(0, result.publicBlob().length);
             assertEquals(0, result.publicLine().length); binding.clean();
             binding.response = wire(status, 1, 1, blob("ssh-ed25519"));
@@ -77,7 +85,7 @@ public final class SshKeyMaterialTest {
     @Test public void malformedHeadersAlgorithmDigestBoundsAndTrailingDataRejectAndWipe() throws Exception {
         byte[] good = wire(0, 1, 1, blob("ssh-ed25519"));
         List<byte[]> bad = new ArrayList<>();
-        for (int[] change : new int[][] {{0, 0}, {4, 2}, {8, 4}, {12, 0}, {12, 6}, {16, 0}, {16, 3}, {20, 0}}) {
+        for (int[] change : new int[][] {{0, 0}, {4, 2}, {8, 5}, {12, 0}, {12, 6}, {16, 0}, {16, 2}, {16, 4}, {20, 0}}) {
             byte[] value = good.clone(); ByteBuffer.wrap(value).putInt(change[0], change[1]); bad.add(value);
         }
         byte[] digest = good.clone(); digest[24] ^= 1; bad.add(digest);
@@ -107,5 +115,59 @@ public final class SshKeyMaterialTest {
         rejected(() -> SshKeyMaterial.inspect(new byte[SshKeyMaterial.MAX_BYTES + 1], 2000, new Clock(), binding));
         rejected(() -> SshKeyMaterial.inspect(caller, 1000, new Clock(), binding));
         rejected(() -> SshKeyMaterial.inspect(caller, 61001, new Clock(), binding));
+    }
+    @Test public void encryptedPublicProofUsesAnOwnedPassphraseAndRetainsOnlyPublicMetadata() throws Exception {
+        byte[] caller = {1, 2, 3}, phrase = "密钥口令".getBytes(StandardCharsets.UTF_8);
+        byte[] beforePhrase = phrase.clone(), publicBlob = blob("ecdsa-sha2-nistp256");
+        Binding binding = new Binding(); binding.response = wire(0, 2, 3, publicBlob);
+        SshKeyMaterial.Result result = SshKeyMaterial.inspect(caller, phrase, 2000, new Clock(), binding);
+        assertEquals(SshKeyMaterial.Status.PARSED, result.status); assertTrue(result.encrypted);
+        assertEquals("ecdsa-sha2-nistp256", result.algorithm); assertArrayEquals(publicBlob, result.publicBlob());
+        assertNotSame(caller, binding.inputs.get(0)); assertNotSame(phrase, binding.passphrases.get(0));
+        assertArrayEquals(new byte[] {1, 2, 3}, caller); assertArrayEquals(beforePhrase, phrase);
+        binding.clean();
+        Binding absent = new Binding(); absent.response = wire(3, 0, 2, new byte[0]);
+        assertEquals(SshKeyMaterial.Status.NEEDS_PASSPHRASE,
+                SshKeyMaterial.inspect(caller, null, 2000, new Clock(), absent).status);
+        assertEquals(0, absent.passphrases.get(0).length); absent.clean();
+    }
+    @Test public void encryptedFailuresCannotClaimProofOrPublishAnyKey() throws Exception {
+        for (int status = 1; status <= 4; status++) {
+            Binding binding = new Binding(); binding.response = wire(status, 0, 2, new byte[0]);
+            SshKeyMaterial.Result result = SshKeyMaterial.inspect(new byte[] {1}, new byte[] {2}, 2000, new Clock(), binding);
+            assertEquals(status, result.status.ordinal()); assertTrue(result.encrypted);
+            assertEquals("", result.algorithm); assertEquals("", result.fingerprint);
+            assertEquals(0, result.publicBlob().length); assertEquals(0, result.publicLine().length); binding.clean();
+            binding.response = wire(status, 0, 3, new byte[0]);
+            rejected(() -> SshKeyMaterial.inspect(new byte[] {1}, new byte[] {2}, 2000, new Clock(), binding));
+            binding.clean();
+        }
+        for (int status : new int[] {3, 4}) {
+            Binding binding = new Binding(); binding.response = wire(status, 0, 0, new byte[0]);
+            rejected(() -> SshKeyMaterial.inspect(new byte[] {1}, new byte[] {2}, 2000, new Clock(), binding));
+            binding.clean();
+        }
+    }
+    @Test public void passphraseBoundsAndAllThrowablePathsWipeBothOwnedInputs() throws Exception {
+        byte[] caller = {1, 2, 3}, phrase = {4, 5, 6};
+        for (Throwable failure : new Throwable[] {new IOException("fixed"), new IllegalStateException("fixed"), new AssertionError("fixed")}) {
+            Binding binding = new Binding(); binding.failure = failure;
+            try { SshKeyMaterial.inspect(caller, phrase, 2000, new Clock(), binding); fail("Expected original exception"); }
+            catch (Throwable actual) { assertSame(failure, actual); }
+            binding.clean(); assertArrayEquals(new byte[] {1, 2, 3}, caller); assertArrayEquals(new byte[] {4, 5, 6}, phrase);
+        }
+        Clock clock = new Clock(); Binding expired = new Binding(); expired.response = wire(0, 1, 3, blob("ssh-ed25519"));
+        expired.during = () -> clock.now = 2000;
+        rejected(() -> SshKeyMaterial.inspect(caller, phrase, 2000, clock, expired)); expired.clean();
+        Binding binding = new Binding(); binding.response = wire(0, 1, 3, blob("ssh-ed25519"));
+        byte[] maximum = new byte[SshKeyMaterial.MAX_PASSPHRASE_BYTES]; Arrays.fill(maximum, (byte)'p');
+        assertTrue(SshKeyMaterial.inspect(caller, maximum, 2000, new Clock(), binding).encrypted);
+        binding.clean(); assertEquals('p', maximum[0]);
+        int calls = binding.inputs.size();
+        rejected(() -> SshKeyMaterial.inspect(caller, new byte[8193], 2000, new Clock(), binding));
+        rejected(() -> SshKeyMaterial.inspect(caller, new byte[] {1, 0, 2}, 2000, new Clock(), binding));
+        rejected(() -> SshKeyMaterial.inspect(caller, phrase, 1000, new Clock(), binding));
+        rejected(() -> SshKeyMaterial.inspect(caller, phrase, 61001, new Clock(), binding));
+        assertEquals(calls, binding.inputs.size());
     }
 }

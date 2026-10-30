@@ -1,5 +1,28 @@
 # Terminal interaction contract
 
+Private-key card actions use content-width controls in a wrapping action group, with at least
+8 dp between runs and 48 dp touch targets. Use the current 12 dp control corner shape for
+local forget/delete text buttons as well as the outlined use action, including hover/focus.
+Do not stretch each card action into full-width banners. Keep destructive error color and
+the existing exact impact confirmation; layout must support clear and saved-phrase keys.
+
+2026-10-30: [private-key deletion](../backend/ssh-key-deletion.md) adds a public impact preview,
+explicit destructive confirmation and exact ticket commit/cancel. Keep the sensitive window
+until terminal mutation outcome is acknowledged. Show missing effective identity paths and
+disable affected config rows; retain external originals and distinguish forgetting a phrase.
+Disabled host rows must keep recovery instructions readable with explicit theme onSurface /
+onSurfaceVariant colors and error icon; disabled semantics must not dim essential missing-key
+paths below readable contrast. The row remains noninteractive and cannot choose another key.
+
+2026-10-30: [encrypted private-key flows](../backend/ssh-encrypted-key-connect.md) extend the
+protected library/connection route. Library exposes only encrypted/saved-state flags; locked
+imports unlock the original ticket before fingerprint confirmation. Mask phrase inputs, disable
+suggestions/autocorrect, default to one-use, and send saved reuse with empty plaintext. Reset
+controllers/choices on source/target/lifecycle changes. Encrypted reconnect requires the fresh
+form. Forget single/all phrases has explicit confirmation and awaited terminal receipt before
+protection release; it preserves the key and other secrets. Widget tests need a pumped frame
+after onChanged before reading rebuilt checkbox state.
+
 ## 1. Scope / Trigger
 
 Use this contract when changing the Flutter terminal page, its IME input, PTY shortcuts, output selection, or the `ctos/native` terminal method calls. App and Root PTYs remain separate from the persistent Root collector. ctOS no longer has a Vector bridge.

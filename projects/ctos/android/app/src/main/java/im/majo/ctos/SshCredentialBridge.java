@@ -56,6 +56,7 @@ final class SshCredentialBridge {
     private final SshHostKeyAuthority hostAuthority;
     private final SshRoleContext.Clock clock;
     private final SshTransientPassword transientPassword;
+    private final SshTransientKey transientKey;
 
     SshCredentialBridge(AppSecrets vault, SshHostKeyAuthority hostAuthority, SshRoleContext.Clock clock) {
         this(vault, hostAuthority, clock, null);
@@ -63,13 +64,28 @@ final class SshCredentialBridge {
 
     SshCredentialBridge(AppSecrets vault, SshHostKeyAuthority hostAuthority, SshRoleContext.Clock clock,
             SshTransientPassword transientPassword) {
+        this(vault, hostAuthority, clock, transientPassword, null);
+    }
+
+    SshCredentialBridge(AppSecrets vault, SshHostKeyAuthority hostAuthority, SshRoleContext.Clock clock,
+            SshTransientPassword transientPassword, SshTransientKey transientKey) {
         this.vault = java.util.Objects.requireNonNull(vault);
         this.hostAuthority = java.util.Objects.requireNonNull(hostAuthority);
         this.clock = java.util.Objects.requireNonNull(clock);
         this.transientPassword = transientPassword;
+        this.transientKey = transientKey;
     }
 
     boolean hasTransientPassword() { return transientPassword != null; }
+    boolean hasTransientKey() { return transientKey != null; }
+
+    byte[] transientKeyBytes(SshRoleContext role, SshHostKeyAuthority.Proof hostKey,
+            SshKexProof kex, SshAuthenticationSelection selection, AppSecrets.EffectGuard guard)
+            throws VaultException {
+        if (transientKey == null || selection == null || selection.kind != Kind.PRIVATE_KEY)
+            throw SshAuthenticationSelection.invalid();
+        return transientKey.take(role, hostKey, kex, selection, guard);
+    }
 
     byte[] transientPasswordBytes(SshRoleContext role, SshHostKeyAuthority.Proof hostKey,
             SshKexProof kex, SshAuthenticationSelection selection, AppSecrets.EffectGuard guard)

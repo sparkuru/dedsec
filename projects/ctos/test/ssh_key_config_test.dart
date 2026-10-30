@@ -101,6 +101,366 @@ void main() {
     },
   );
 
+  test('deletion preview is a bounded exact metadata-only impact review', () {
+    final preview = SshKeyDeletePreview.parse(_deletePreview(saved: true));
+    expect(preview.keyId, 'key_a');
+    expect(preview.publicPath, '.ssh/id_ed25519.pub');
+    expect(preview.hasSavedPassphrase, isTrue);
+    expect(preview.accountCount, 2);
+    expect(preview.configPaths, ['.ssh/config', '.ssh/conf.d/production']);
+    expect(() => preview.configPaths.add('.ssh/other'), throwsUnsupportedError);
+    for (final bad in [
+      {..._deletePreview(), 'privateKey': 'secret'},
+      {..._deletePreview()}..remove('hasSavedPassphrase'),
+      {..._deletePreview(), 'hasSavedPassphrase': 'true'},
+      {..._deletePreview(), 'removesManualConfig': 1},
+      {..._deletePreview(), 'accountCount': -1},
+      {..._deletePreview(), 'accountCount': 1025},
+      {..._deletePreview(), 'accountCount': 1.5},
+      {..._deletePreview(), 'publicPath': '.ssh/another.pub'},
+      {..._deletePreview(), 'path': '.ssh/../outside'},
+      {..._deletePreview(), 'binding': 'trusted-by-ui'},
+      {..._deletePreview(), 'fingerprint': 'not-a-fingerprint'},
+      {
+        ..._deletePreview(),
+        'configPaths': ['.ssh/config', '.ssh/config'],
+      },
+      {
+        ..._deletePreview(),
+        'configPaths': ['.ssh/ctos-manual'],
+      },
+      {
+        ..._deletePreview(),
+        'configPaths': ['/outside'],
+      },
+      {
+        ..._deletePreview(),
+        'configPaths': List.generate(129, (index) => '.ssh/config_$index'),
+      },
+    ]) {
+      expect(() => SshKeyDeletePreview.parse(bad), throwsFormatException);
+    }
+  });
+
+  test(
+    'missing effective identities are bounded and tied to the host error',
+    () {
+      expect(SshConfigHost.parse(_host()).missingIdentityPaths, isEmpty);
+      final missing = {
+        ..._host(),
+        'error': 'SSH_KEY_MISSING',
+        'missingIdentityPaths': ['.ssh/id_missing'],
+      };
+      expect(SshConfigHost.parse(missing).missingIdentityPaths, [
+        '.ssh/id_missing',
+      ]);
+      for (final bad in [
+        {...missing}..remove('error'),
+        {...missing, 'error': 'SSH_CONFIG_UNSUPPORTED'},
+        {
+          ...missing,
+          'missingIdentityPaths': ['.ssh/id_missing', '.ssh/id_missing'],
+        },
+        {
+          ...missing,
+          'missingIdentityPaths': ['.ssh/../outside'],
+        },
+        {
+          ...missing,
+          'missingIdentityPaths': List.generate(
+            129,
+            (index) => '.ssh/key_$index',
+          ),
+        },
+      ]) {
+        expect(() => SshConfigHost.parse(bad), throwsFormatException);
+      }
+    },
+  );
+
+  testWidgets(
+    'deletion reviews exact impact and commits only its opaque ticket',
+    (tester) async {
+      final ui = _Ui(tester)
+        ..libraryValue = _encryptedLibrary(saved: true)
+        ..deletePreviewValue = _deletePreview(saved: true);
+      await ui.open();
+      await ui.tap('ssh-key-delete-key_a');
+      final previewRequest = ui.arguments('ssh.keyDeletePreview').single;
+      expect(previewRequest, {
+        'requestId': previewRequest['requestId'],
+        'keyId': 'key_a',
+      });
+      expect(find.text('同时删除此私钥的已保存口令。'), findsOneWidget);
+      expect(find.text('同时删除 2 条连接关联。'), findsOneWidget);
+      expect(find.text('.ssh/conf.d/production'), findsOneWidget);
+      expect(find.text('同时移除应用为此私钥生成的连接配置。'), findsOneWidget);
+      expect(ui.arguments('ssh.keyDeleteCommit'), isEmpty);
+      ui.libraryValue = {
+        'keys': <Object>[],
+        'hosts': [
+          {
+            ..._host(),
+            'keyIds': <String>[],
+            'error': 'SSH_KEY_MISSING',
+            'missingIdentityPaths': ['.ssh/id_ed25519'],
+          },
+        ],
+        'hasConfig': true,
+      };
+      await ui.tap('ssh-key-delete-confirm');
+      final commitRequest = ui.arguments('ssh.keyDeleteCommit').single;
+      expect(commitRequest, {
+        'requestId': commitRequest['requestId'],
+        'ticketId': 'delete_a',
+        'binding': List.filled(64, 'd').join(),
+      });
+      expect(commitRequest['requestId'], isNot(previewRequest['requestId']));
+      expect(ui.arguments('ssh.importCommit'), isEmpty);
+      expect(ui.arguments('ssh.forgetKeyPassphrase'), isEmpty);
+      expect(ui.releases, isEmpty);
+      expect(find.text('私钥及所列关联资料已从秘密库删除。外部原文件保留。'), findsOneWidget);
+      await ui.tap('ssh-import-acknowledge');
+      expect(find.byKey(const Key('ssh-key-key_a')), findsNothing);
+      await ui.reveal('ssh-config-host-demo');
+      final row = tester.widget<ListTile>(
+        find.byKey(const Key('ssh-config-host-demo')),
+      );
+      expect(row.enabled, isFalse);
+      expect(row.onTap, isNull);
+      final hintColor = (row.subtitle! as Text).style?.color;
+      expect(hintColor, isNotNull);
+      final surfaceColor = Theme.of(
+        tester.element(find.byKey(const Key('ssh-config-host-demo'))),
+      ).colorScheme.surface;
+      expect(
+        (hintColor!.computeLuminance() + 0.05) /
+            (surfaceColor.computeLuminance() + 0.05),
+        greaterThanOrEqualTo(4.5),
+        reason:
+            'Missing-key recovery text must stay readable on a disabled row',
+      );
+      expect(
+        find.textContaining('缺少配置引用的私钥：\n.ssh/id_ed25519'),
+        findsOneWidget,
+      );
+      await ui.tap('ssh-library-cancel');
+      expect(ui.releases, hasLength(1));
+      await ui.remove();
+    },
+  );
+
+  testWidgets('declining deletion cancels its preview without any write', (
+    tester,
+  ) async {
+    final ui = _Ui(tester);
+    await ui.open();
+    await ui.tap('ssh-key-delete-key_a');
+    await ui.tap('ssh-key-delete-decline');
+    expect(ui.arguments('ssh.keyDeleteCommit'), isEmpty);
+    expect(ui.arguments('ssh.keyDeleteCancel'), [
+      {'ticketId': 'delete_a'},
+    ]);
+    expect(ui.arguments('ssh.importCancel'), isEmpty);
+    expect(find.byKey(const Key('ssh-key-key_a')), findsOneWidget);
+    expect(ui.arguments('ssh.library'), hasLength(2));
+    await ui.remove();
+  });
+
+  testWidgets('repeated deletion clicks share one preview admission', (
+    tester,
+  ) async {
+    final ui = _Ui(tester);
+    await ui.open();
+    await ui.reveal('ssh-key-delete-key_a');
+    final press = tester
+        .widget<TextButton>(find.byKey(const Key('ssh-key-delete-key_a')))
+        .onPressed!;
+    press();
+    press();
+    await ui.pump();
+    expect(ui.arguments('ssh.keyDeletePreview'), hasLength(1));
+    await ui.tap('ssh-key-delete-decline');
+    await ui.remove();
+  });
+
+  testWidgets(
+    'a known deletion failure reloads actual data and keeps its retry reason',
+    (tester) async {
+      final ui = _Ui(tester)
+        ..deleteFailure = PlatformException(code: 'SSH_KEY_DELETE_FAILED');
+      await ui.open();
+      await ui.tap('ssh-key-delete-key_a');
+      await ui.tap('ssh-key-delete-confirm');
+      expect(ui.arguments('ssh.library'), hasLength(2));
+      expect(find.byKey(const Key('ssh-key-key_a')), findsOneWidget);
+      expect(find.text('删除私钥失败，请重新读取资料后重试。'), findsOneWidget);
+      expect(find.byKey(const Key('ssh-import-acknowledge')), findsNothing);
+      await ui.remove();
+    },
+  );
+
+  testWidgets('malformed deletion preview cancels its original request', (
+    tester,
+  ) async {
+    final ui = _Ui(tester)
+      ..deletePreviewValue = {..._deletePreview(), 'passphrase': 'untrusted'};
+    await ui.open();
+    await ui.tap('ssh-key-delete-key_a');
+    final request = ui.arguments('ssh.keyDeletePreview').single;
+    expect(ui.cancelled, contains(request['requestId']));
+    expect(find.byKey(const Key('ssh-key-delete-confirm')), findsNothing);
+    expect(ui.arguments('ssh.keyDeleteCommit'), isEmpty);
+    await ui.remove();
+  });
+
+  testWidgets('a foreign deletion preview is cancelled before confirmation', (
+    tester,
+  ) async {
+    final ui = _Ui(tester)
+      ..deletePreviewValue = {..._deletePreview(), 'keyId': 'foreign_key'};
+    await ui.open();
+    await ui.tap('ssh-key-delete-key_a');
+    expect(find.byKey(const Key('ssh-key-delete-confirm')), findsNothing);
+    expect(ui.arguments('ssh.keyDeleteCommit'), isEmpty);
+    expect(ui.arguments('ssh.keyDeleteCancel'), [
+      {'ticketId': 'delete_a'},
+    ]);
+    await ui.remove();
+  });
+
+  testWidgets(
+    'late deletion preview after route cancellation cannot be confirmed',
+    (tester) async {
+      final ui = _Ui(tester)
+        ..pendingDeletePreview = Completer<Map<String, Object>>();
+      await ui.open();
+      await ui.tap('ssh-key-delete-key_a');
+      final id = ui.arguments('ssh.keyDeletePreview').single['requestId'];
+      await ui.tap('ssh-library-cancel');
+      expect(ui.cancelled, contains(id));
+      expect(ui.releases, hasLength(1));
+      ui.pendingDeletePreview!.complete(_deletePreview());
+      await ui.pump();
+      expect(find.byKey(const Key('ssh-key-delete-confirm')), findsNothing);
+      expect(ui.arguments('ssh.keyDeleteCommit'), isEmpty);
+      expect(ui.arguments('ssh.keyDeleteCancel'), [
+        {'ticketId': 'delete_a'},
+      ]);
+      expect(tester.takeException(), isNull);
+      await ui.remove();
+    },
+  );
+
+  testWidgets('background invalidation fences an old deletion confirmation', (
+    tester,
+  ) async {
+    final ui = _Ui(tester);
+    await ui.open();
+    await ui.tap('ssh-key-delete-key_a');
+    final stale = tester
+        .widget<FilledButton>(find.byKey(const Key('ssh-key-delete-confirm')))
+        .onPressed!;
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    await ui.pump();
+    _resume(tester);
+    await ui.pump();
+    stale();
+    await ui.pump();
+    expect(find.byKey(const Key('ssh-key-delete-confirm')), findsNothing);
+    expect(ui.arguments('ssh.keyDeleteCommit'), isEmpty);
+    expect(ui.arguments('ssh.keyDeleteCancel'), isNotEmpty);
+    expect(tester.takeException(), isNull);
+    await ui.remove();
+  });
+
+  testWidgets(
+    'pending deletion retains protection through confirmed and uncertain receipts',
+    (tester) async {
+      for (final uncertain in [false, true]) {
+        final ui = _Ui(tester)
+          ..pendingDeleteCommit = Completer<Map<String, Object>>();
+        await ui.open();
+        await ui.tap('ssh-key-delete-key_a');
+        await ui.tap('ssh-key-delete-confirm');
+        await ui.tap('ssh-library-cancel');
+        expect(ui.releases, isEmpty);
+        expect(find.byType(SshLibraryPage), findsOneWidget);
+        if (uncertain) {
+          ui.pendingDeleteCommit!.completeError(
+            PlatformException(code: 'VAULT_COMMIT_UNCERTAIN'),
+          );
+        } else {
+          ui.pendingDeleteCommit!.complete({'deleted': true});
+        }
+        await ui.pump();
+        expect(find.byKey(const Key('ssh-import-acknowledge')), findsOneWidget);
+        expect(ui.releases, isEmpty);
+        await ui.tap('ssh-import-acknowledge');
+        expect(ui.releases, hasLength(1));
+        expect(find.byType(SshLibraryPage), findsNothing);
+        expect(tester.takeException(), isNull);
+        await ui.remove();
+      }
+    },
+  );
+
+  testWidgets(
+    'a missing identity disables its config even when another key is present',
+    (tester) async {
+      final ui = _Ui(tester)
+        ..libraryValue = {
+          ..._library(),
+          'hosts': [
+            {
+              ..._host(),
+              'error': 'SSH_KEY_MISSING',
+              'missingIdentityPaths': ['.ssh/id_missing'],
+            },
+          ],
+        };
+      await ui.open(manual: true);
+      await ui.tap('ssh-manage-identities');
+      await ui.reveal('ssh-config-host-demo');
+      final row = tester.widget<ListTile>(
+        find.byKey(const Key('ssh-config-host-demo')),
+      );
+      expect(row.enabled, isFalse);
+      expect(row.onTap, isNull);
+      expect(find.textContaining('.ssh/id_missing'), findsOneWidget);
+      await tester.tap(find.byKey(const Key('ssh-config-host-demo')));
+      await ui.pump();
+      expect(find.byType(SshLibraryPage), findsOneWidget);
+      expect(ui.arguments('ssh.configConnect'), isEmpty);
+      expect(ui.arguments('ssh.passwordConnect'), isEmpty);
+      await ui.remove();
+    },
+  );
+
+  testWidgets(
+    'deletion actions and impact review fit narrow and large text layouts',
+    (tester) async {
+      for (final size in [
+        const Size(320, 568),
+        const Size(568, 320),
+        const Size(1200, 800),
+      ]) {
+        await tester.binding.setSurfaceSize(size);
+        final ui = _Ui(tester)..libraryValue = _encryptedLibrary(saved: true);
+        await ui.open(scale: 2, keyboard: size.width == 320 ? 200 : 0);
+        await ui.tap('ssh-key-delete-key_a');
+        await ui.reveal('ssh-key-delete-confirm');
+        await ui.reveal('ssh-key-delete-decline');
+        expect(tester.takeException(), isNull);
+        await ui.tap('ssh-key-delete-decline');
+        await ui.reveal('ssh-forget-passphrase-key_a');
+        expect(tester.takeException(), isNull);
+        await ui.remove();
+      }
+      await tester.binding.setSurfaceSize(null);
+    },
+  );
+
   testWidgets(
     'manual private-key selection preserves draft tuple and sends no password',
     (tester) async {
@@ -129,6 +489,399 @@ void main() {
       await ui.pump();
       expect(find.text('私钥登录被拒绝，请核对用户名、公钥授权和所选私钥。'), findsOneWidget);
       await ui.remove();
+    },
+  );
+
+  test(
+    'encrypted-key metadata remains public, strict and internally consistent',
+    () {
+      final key = SshIdentity.parse(_encryptedKey(saved: true));
+      expect(key.encrypted, isTrue);
+      expect(key.hasSavedPassphrase, isTrue);
+      expect(SshIdentity.parse(_key()).encrypted, isFalse);
+      for (final bad in [
+        {..._key(), 'encrypted': 'true'},
+        {..._key(), 'hasSavedPassphrase': 1},
+        {..._key(), 'encrypted': false, 'hasSavedPassphrase': true},
+        {..._encryptedKey(), 'passphrase': 'never-return-a-secret'},
+      ]) {
+        expect(() => SshIdentity.parse(bad), throwsFormatException);
+      }
+      expect(SshImportPreview.parse(_lockedPreview()).needsPassphrase, isTrue);
+      for (final bad in [
+        {..._lockedPreview(), 'needsPassphrase': 'true'},
+        {..._lockedPreview(), 'canCommit': true},
+        {..._lockedPreview(), 'algorithm': 'ssh-ed25519'},
+        {..._lockedPreview(), 'fingerprint': _fingerprint},
+        {..._lockedPreview(), 'kind': 'config'},
+      ]) {
+        expect(() => SshImportPreview.parse(bad), throwsFormatException);
+      }
+      expect(sshPassphraseError(''), isNotNull);
+      expect(sshPassphraseError('a\u0000b'), isNotNull);
+      expect(sshPassphraseError(List.filled(4097, '口').join()), isNotNull);
+      expect(sshPassphraseError('合成口令'), isNull);
+    },
+  );
+
+  testWidgets(
+    'encrypted import retries original ticket with fresh requests and clears input',
+    (tester) async {
+      final ui = _Ui(tester)
+        ..previewValue = _lockedPreview()
+        ..unlockFailure = PlatformException(code: 'SSH_KEY_BAD_PASSPHRASE');
+      await ui.open();
+      await ui.beginImport();
+      final field = ui.field('ssh-import-passphrase');
+      final widget = tester.widget<EditableText>(
+        find.descendant(
+          of: find.byKey(const Key('ssh-import-passphrase')),
+          matching: find.byType(EditableText),
+        ),
+      );
+      expect(widget.obscureText, isTrue);
+      expect(widget.autocorrect, isFalse);
+      expect(widget.enableSuggestions, isFalse);
+      expect(find.byKey(const Key('ssh-import-confirm')), findsNothing);
+      await tester.enterText(
+        find.byKey(const Key('ssh-import-passphrase')),
+        'wrong-synthetic',
+      );
+      await ui.tap('ssh-import-unlock');
+      expect(field.text, isEmpty);
+      expect(find.text('私钥口令错误或文件损坏，请重新输入口令。'), findsOneWidget);
+      expect(ui.arguments('ssh.importFile'), hasLength(1));
+      expect(ui.arguments('ssh.importCommit'), isEmpty);
+      ui.unlockFailure = null;
+      ui.pendingUnlock = Completer<Map<String, Object>>();
+      await tester.enterText(
+        find.byKey(const Key('ssh-import-passphrase')),
+        'correct-synthetic',
+      );
+      await ui.tap('ssh-import-unlock');
+      expect(field.text, isEmpty);
+      final requests = ui.arguments('ssh.importUnlock');
+      expect(requests, hasLength(2));
+      expect(requests.first['requestId'], isNot(requests.last['requestId']));
+      expect(requests.last, {
+        'requestId': requests.last['requestId'],
+        'ticketId': 'ticket_a',
+        'binding': List.filled(64, 'a').join(),
+        'passphrase': 'correct-synthetic',
+      });
+      ui.pendingUnlock!.complete(_preview());
+      await ui.pump();
+      expect(find.text(_fingerprint), findsOneWidget);
+      expect(find.byKey(const Key('ssh-import-passphrase')), findsNothing);
+      await ui.tap('ssh-import-confirm');
+      expect(
+        ui.arguments('ssh.importCommit').single.containsKey('passphrase'),
+        isFalse,
+      );
+      await ui.tap('ssh-import-acknowledge');
+      await ui.remove();
+    },
+  );
+
+  testWidgets(
+    'cancelled encrypted import cannot publish a late verified preview',
+    (tester) async {
+      final ui = _Ui(tester)
+        ..previewValue = _lockedPreview()
+        ..pendingUnlock = Completer<Map<String, Object>>();
+      await ui.open();
+      await ui.beginImport();
+      await tester.enterText(
+        find.byKey(const Key('ssh-import-passphrase')),
+        'synthetic',
+      );
+      await ui.tap('ssh-import-unlock');
+      final unlockId = ui.arguments('ssh.importUnlock').single['requestId'];
+      await ui.tap('ssh-import-unlock-cancel');
+      expect(ui.cancelled, contains(unlockId));
+      ui.pendingUnlock!.complete({..._preview(), 'ticketId': 'verified_late'});
+      await ui.pump();
+      expect(find.byKey(const Key('ssh-import-confirm')), findsNothing);
+      expect(ui.arguments('ssh.importCommit'), isEmpty);
+      expect(
+        ui.arguments('ssh.importCancel').map((args) => args['ticketId']),
+        contains('verified_late'),
+      );
+      expect(tester.takeException(), isNull);
+      await ui.remove();
+    },
+  );
+
+  testWidgets(
+    'background clears import phrase and rejects late unlock completion',
+    (tester) async {
+      final ui = _Ui(tester)
+        ..previewValue = _lockedPreview()
+        ..pendingUnlock = Completer<Map<String, Object>>();
+      await ui.open();
+      await ui.beginImport();
+      await tester.enterText(
+        find.byKey(const Key('ssh-import-passphrase')),
+        'synthetic',
+      );
+      await ui.tap('ssh-import-unlock');
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      await ui.pump();
+      ui.pendingUnlock!.completeError(
+        PlatformException(code: 'SSH_KEY_BAD_PASSPHRASE'),
+      );
+      await ui.pump();
+      _resume(tester);
+      await ui.pump();
+      expect(find.byKey(const Key('ssh-import-confirm')), findsNothing);
+      expect(find.byKey(const Key('ssh-import-passphrase')), findsNothing);
+      expect(ui.arguments('ssh.importCommit'), isEmpty);
+      expect(tester.takeException(), isNull);
+      await ui.remove();
+    },
+  );
+
+  testWidgets(
+    'encrypted manual key defaults to one-time phrase and clears after failed attempt',
+    (tester) async {
+      final ui = _Ui(tester)..libraryValue = _encryptedLibrary();
+      await ui.open(manual: true);
+      await ui.fillTuple();
+      await ui.tap('ssh-manage-identities');
+      await ui.tap('ssh-key-key_a');
+      expect(
+        tester
+            .widget<CheckboxListTile>(
+              find.byKey(const Key('ssh-save-passphrase')),
+            )
+            .value,
+        isFalse,
+      );
+      expect(find.byKey(const Key('ssh-password')), findsNothing);
+      await ui.reveal('ssh-key-passphrase');
+      final controller = ui.field('ssh-key-passphrase');
+      await tester.enterText(
+        find.byKey(const Key('ssh-key-passphrase')),
+        'one-time-synthetic',
+      );
+      await ui.tap('ssh-connect');
+      final request = ui.arguments('ssh.keyConnect').single;
+      expect(request['passphrase'], 'one-time-synthetic');
+      expect(request['useSavedPassphrase'], isFalse);
+      expect(request['savePassphrase'], isFalse);
+      expect(controller.text, isEmpty);
+      expect(ui.arguments('ssh.passwordConnect'), isEmpty);
+      ui.connect!.completeError(
+        PlatformException(code: 'SSH_KEY_BAD_PASSPHRASE'),
+      );
+      await ui.pump();
+      expect(controller.text, isEmpty);
+      expect(find.text('私钥口令错误或文件损坏，请重新输入口令。'), findsOneWidget);
+      await ui.remove();
+    },
+  );
+
+  testWidgets(
+    'explicit phrase save is sent with exact selected key and reset on target edits',
+    (tester) async {
+      final ui = _Ui(tester)..libraryValue = _encryptedLibrary();
+      await ui.open(manual: true);
+      await ui.fillTuple();
+      await ui.tap('ssh-manage-identities');
+      await ui.tap('ssh-key-key_a');
+      await ui.tap('ssh-save-passphrase');
+      await ui.reveal('ssh-key-passphrase');
+      await tester.enterText(
+        find.byKey(const Key('ssh-key-passphrase')),
+        'cleared-on-edit',
+      );
+      await ui.reveal('ssh-username');
+      await tester.enterText(
+        find.byKey(const Key('ssh-username')),
+        'another-user',
+      );
+      await ui.pump();
+      expect(ui.field('ssh-key-passphrase').text, isEmpty);
+      expect(
+        tester
+            .widget<CheckboxListTile>(
+              find.byKey(const Key('ssh-save-passphrase')),
+            )
+            .value,
+        isFalse,
+      );
+      await ui.reveal('ssh-key-passphrase');
+      await tester.enterText(
+        find.byKey(const Key('ssh-key-passphrase')),
+        'save-synthetic',
+      );
+      await ui.tap('ssh-save-passphrase');
+      await ui.tap('ssh-connect');
+      final request = ui.arguments('ssh.keyConnect').single;
+      expect(request['keyId'], 'key_a');
+      expect(request['username'], 'another-user');
+      expect(request['passphrase'], 'save-synthetic');
+      expect(request['savePassphrase'], isTrue);
+      ui.connect!.completeError(PlatformException(code: 'SSH_CONNECT'));
+      await ui.pump();
+      await ui.remove();
+    },
+  );
+
+  testWidgets(
+    'background clears draft key phrase and fences an old connect callback',
+    (tester) async {
+      final ui = _Ui(tester)..libraryValue = _encryptedLibrary(saved: true);
+      await ui.open(manual: true);
+      await ui.fillTuple();
+      await ui.tap('ssh-manage-identities');
+      await ui.tap('ssh-key-key_a');
+      await ui.reveal('ssh-key-passphrase');
+      final controller = ui.field('ssh-key-passphrase');
+      await tester.enterText(
+        find.byKey(const Key('ssh-key-passphrase')),
+        'draft-synthetic',
+      );
+      await ui.reveal('ssh-connect');
+      final stale = tester
+          .widget<FilledButton>(find.byKey(const Key('ssh-connect')))
+          .onPressed!;
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      await ui.pump();
+      expect(controller.text, isEmpty);
+      _resume(tester);
+      await ui.pump();
+      stale();
+      await ui.pump();
+      expect(ui.arguments('ssh.keyConnect'), isEmpty);
+      expect(find.byKey(const Key('ssh-key-passphrase')), findsNothing);
+      await ui.remove();
+    },
+  );
+
+  testWidgets(
+    'config encrypted key uses saved phrase only by explicit choice',
+    (tester) async {
+      final ui = _Ui(tester)..libraryValue = _encryptedLibrary(saved: true);
+      await ui.open(manual: true);
+      await ui.tap('ssh-manage-identities');
+      await ui.tap('ssh-config-host-demo');
+      expect(
+        tester
+            .widget<CheckboxListTile>(
+              find.byKey(const Key('ssh-use-saved-passphrase')),
+            )
+            .value,
+        isFalse,
+      );
+      await ui.tap('ssh-use-saved-passphrase');
+      expect(ui.field('ssh-key-passphrase').text, isEmpty);
+      await ui.tap('ssh-connect');
+      final request = ui.arguments('ssh.configConnect').single;
+      expect(request['alias'], 'demo');
+      expect(request['binding'], List.filled(64, 'b').join());
+      expect(request['passphrase'], '');
+      expect(request['useSavedPassphrase'], isTrue);
+      expect(request['savePassphrase'], isFalse);
+      expect(request.containsKey('host'), isFalse);
+      ui.connect!.completeError(
+        PlatformException(code: 'SSH_KEY_PASSPHRASE_MISSING'),
+      );
+      await ui.pump();
+      expect(find.text('此私钥没有已保存口令，请重新输入。'), findsOneWidget);
+      await ui.remove();
+    },
+  );
+
+  testWidgets(
+    'single and all key phrase forgetting use scoped requests and protected receipts',
+    (tester) async {
+      for (final all in [false, true]) {
+        final ui = _Ui(tester)..libraryValue = _encryptedLibrary(saved: true);
+        await ui.open();
+        await ui.tap(
+          all ? 'ssh-forget-all-passphrases' : 'ssh-forget-passphrase-key_a',
+        );
+        expect(ui.arguments('ssh.forgetKeyPassphrase'), isEmpty);
+        await ui.tap('ssh-forget-passphrase-confirm');
+        final request = ui.arguments('ssh.forgetKeyPassphrase').single;
+        expect(request, {
+          'requestId': request['requestId'],
+          'keyId': all ? '' : 'key_a',
+          'all': all,
+        });
+        expect(ui.arguments('ssh.forgetPassword'), isEmpty);
+        expect(ui.releases, isEmpty);
+        expect(find.text('已忘记保存的私钥口令。'), findsOneWidget);
+        await ui.tap('ssh-import-acknowledge');
+        await ui.tap('ssh-library-cancel');
+        expect(ui.releases, hasLength(1));
+        await ui.remove();
+      }
+    },
+  );
+
+  testWidgets(
+    'cancelled pending phrase forget waits for uncertain receipt before leaving',
+    (tester) async {
+      final ui = _Ui(tester)
+        ..libraryValue = _encryptedLibrary(saved: true)
+        ..pendingForget = Completer<Map<String, Object>>();
+      await ui.open();
+      await ui.tap('ssh-forget-passphrase-key_a');
+      await ui.tap('ssh-forget-passphrase-confirm');
+      await ui.tap('ssh-library-cancel');
+      expect(ui.releases, isEmpty);
+      expect(find.byType(SshLibraryPage), findsOneWidget);
+      ui.pendingForget!.completeError(
+        PlatformException(code: 'VAULT_COMMIT_UNCERTAIN'),
+      );
+      await ui.pump();
+      expect(find.byKey(const Key('ssh-import-acknowledge')), findsOneWidget);
+      expect(ui.releases, isEmpty);
+      await ui.tap('ssh-import-acknowledge');
+      expect(ui.releases, hasLength(1));
+      await ui.remove();
+    },
+  );
+
+  testWidgets(
+    'encrypted import and connection controls fit narrow keyboard and large text',
+    (tester) async {
+      for (final size in [const Size(320, 568), const Size(568, 320)]) {
+        await tester.binding.setSurfaceSize(size);
+        final ui = _Ui(tester)
+          ..libraryValue = _encryptedLibrary(saved: true)
+          ..previewValue = _lockedPreview();
+        await ui.open(scale: 2, keyboard: size.width == 320 ? 200 : 0);
+        await ui.beginImport();
+        await ui.reveal('ssh-import-passphrase');
+        await ui.reveal('ssh-import-unlock');
+        await ui.tap('ssh-import-unlock-cancel');
+        await ui.reveal('ssh-forget-passphrase-key_a');
+        expect(tester.takeException(), isNull);
+        await ui.remove();
+        final connection = _Ui(tester)
+          ..libraryValue = _encryptedLibrary(saved: true);
+        await connection.open(
+          manual: true,
+          scale: 2,
+          keyboard: size.width == 320 ? 200 : 0,
+        );
+        await connection.tap('ssh-manage-identities');
+        await connection.tap('ssh-key-key_a');
+        for (final key in [
+          'ssh-key-passphrase',
+          'ssh-use-saved-passphrase',
+          'ssh-save-passphrase',
+          'ssh-connect',
+        ]) {
+          await connection.reveal(key);
+        }
+        expect(tester.takeException(), isNull);
+        await connection.remove();
+      }
+      await tester.binding.setSurfaceSize(null);
     },
   );
 
@@ -487,6 +1240,22 @@ Map<String, Object> _library() => {
   'hosts': [_host()],
   'hasConfig': true,
 };
+Map<String, Object> _encryptedKey({bool saved = false}) => {
+  ..._key(),
+  'encrypted': true,
+  'hasSavedPassphrase': saved,
+};
+Map<String, Object> _encryptedLibrary({bool saved = false}) => {
+  ..._library(),
+  'keys': [_encryptedKey(saved: saved)],
+};
+Map<String, Object> _lockedPreview() => {
+  ..._preview(),
+  'algorithm': '',
+  'fingerprint': '',
+  'canCommit': false,
+  'needsPassphrase': true,
+};
 Map<String, Object> _preview({bool config = false}) => {
   'ticketId': 'ticket_a',
   'binding': List.filled(64, 'a').join(),
@@ -498,6 +1267,20 @@ Map<String, Object> _preview({bool config = false}) => {
   'replacing': false,
   'issues': <Object>[],
   'canCommit': true,
+};
+Map<String, Object> _deletePreview({bool saved = false}) => {
+  'ticketId': 'delete_a',
+  'binding': List.filled(64, 'd').join(),
+  'keyId': 'key_a',
+  'label': 'id_ed25519',
+  'path': '.ssh/id_ed25519',
+  'algorithm': 'ssh-ed25519',
+  'fingerprint': _fingerprint,
+  'publicPath': '.ssh/id_ed25519.pub',
+  'hasSavedPassphrase': saved,
+  'accountCount': 2,
+  'configPaths': ['.ssh/config', '.ssh/conf.d/production'],
+  'removesManualConfig': true,
 };
 
 void _resume(WidgetTester tester) {
@@ -515,11 +1298,18 @@ class _Ui {
   final messenger =
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
   final calls = <MethodCall>[];
-  Map<String, Object> libraryValue = _library(), previewValue = _preview();
+  Map<String, Object> libraryValue = _library(),
+      previewValue = _preview(),
+      deletePreviewValue = _deletePreview();
   Completer<Map<String, Object>>? pendingImport,
       pendingCommit,
       pendingRead,
+      pendingUnlock,
+      pendingForget,
+      pendingDeletePreview,
+      pendingDeleteCommit,
       connect;
+  Object? unlockFailure, deleteFailure;
   late SshPasswordApi api;
   int _id = 0, _owner = 0;
   List<Map<dynamic, dynamic>> arguments(String method) => calls
@@ -558,10 +1348,22 @@ class _Ui {
         return {'saved': false};
       case 'ssh.library':
         return libraryValue;
+      case 'ssh.keyDeletePreview':
+        return pendingDeletePreview?.future ?? deletePreviewValue;
+      case 'ssh.keyDeleteCommit':
+        if (deleteFailure != null) throw deleteFailure!;
+        return pendingDeleteCommit?.future ?? {'deleted': true};
+      case 'ssh.keyDeleteCancel':
+        return {'cancelled': true};
       case 'ssh.importFile':
         return pendingImport?.future ?? previewValue;
       case 'ssh.importCommit':
         return pendingCommit?.future ?? {'committed': true};
+      case 'ssh.importUnlock':
+        if (unlockFailure != null) throw unlockFailure!;
+        return pendingUnlock?.future ?? _preview();
+      case 'ssh.forgetKeyPassphrase':
+        return pendingForget?.future ?? {'forgotten': true};
       case 'ssh.importCancel':
         return {'cancelled': true};
       case 'ssh.configRead':

@@ -20,6 +20,16 @@ final class SshImportProposal implements AutoCloseable {
 
     static SshImportProposal create(VaultManifest source, String kind, String path, byte[] body,
             long deadline) throws IOException, VaultException {
+        return create(source, kind, path, body, null, deadline);
+    }
+
+    static SshImportProposal create(VaultManifest source, String kind, String path, byte[] body,
+            byte[] passphrase, long deadline) throws IOException, VaultException {
+        return create(source, kind, path, body, passphrase, deadline, null);
+    }
+
+    static SshImportProposal create(VaultManifest source, String kind, String path, byte[] body,
+            byte[] passphrase, long deadline, AppSecrets.EffectGuard guard) throws IOException, VaultException {
         VaultManifest.path(path);
         if (!path.startsWith(".ssh/") || path.equals(SshConnectionMaterial.HOSTS)
                 || path.equals(SshConnectionMaterial.MANUAL) || body.length == 0
@@ -30,6 +40,7 @@ final class SshImportProposal implements AutoCloseable {
         VaultManifest.FileObject previous = SshConnectionMaterial.file(source, path);
         String algorithm = "", fingerprint = "";
         boolean relationsChanged = false;
+        java.util.Set<String> removedPhrases = new java.util.HashSet<>();
         try {
             if (SshConnectionMaterial.file(source, SshConnectionMaterial.HOSTS) == null)
                 changed.add(SshConnectionMaterial.emptyHosts());
@@ -37,12 +48,13 @@ final class SshImportProposal implements AutoCloseable {
                 if (path.contains("${")) throw new VaultException("SSH_IMPORT_PATH", "Choose a literal managed key filename");
                 if (path.endsWith(".pub") || path.equals(SshConnectionMaterial.ROOT)
                         || previous != null && previous.type != VaultManifest.FileType.PRIVATE_KEY) throw parameters();
-                SshKeyMaterial.Result material = SshKeyMaterial.inspect(body, deadline);
+                SshKeyMaterial.Result material = SshKeyMaterial.inspect(body, passphrase, deadline);
                 if (material.status != SshKeyMaterial.Status.PARSED) {
                     String code = material.status == SshKeyMaterial.Status.NEEDS_PASSPHRASE
-                            ? "SSH_KEY_PASSPHRASE_REQUIRED" : material.status == SshKeyMaterial.Status.UNSUPPORTED
+                            ? "SSH_KEY_PASSPHRASE_REQUIRED" : material.status == SshKeyMaterial.Status.BAD_PASSPHRASE
+                            ? "SSH_KEY_BAD_PASSPHRASE" : material.status == SshKeyMaterial.Status.UNSUPPORTED
                             ? "SSH_KEY_UNSUPPORTED" : "SSH_KEY_INVALID";
-                    throw new VaultException(code, "Choose a supported unencrypted private key");
+                    throw new VaultException(code, "The private key could not be unlocked");
                 }
                 algorithm = material.algorithm; fingerprint = material.fingerprint;
                 byte[] blob = material.publicBlob(), line = material.publicLine();
@@ -57,7 +69,10 @@ final class SshImportProposal implements AutoCloseable {
                 String bindingId = SshConnectionMaterial.bindingId(path, identity);
                 java.util.Set<String> oldBindings = new java.util.HashSet<>();
                 for (VaultSshMetadata.KeyBinding old : keys)
-                    if (old.privateFileId.equals(SshConnectionMaterial.id("private", path))) oldBindings.add(old.id);
+                    if (old.privateFileId.equals(SshConnectionMaterial.id("private", path))) {
+                        oldBindings.add(old.id);
+                        if (old.passphraseEntryId != null) removedPhrases.add(old.passphraseEntryId);
+                    }
                 keys.removeIf(key -> oldBindings.contains(key.id));
                 keys.add(new VaultSshMetadata.KeyBinding(bindingId, SshConnectionMaterial.id("private", path),
                         SshConnectionMaterial.id("public", path), List.of(), null));
@@ -79,19 +94,30 @@ final class SshImportProposal implements AutoCloseable {
                             SshConnectionMaterial.id("config-owner", path), body, references));
                 }
             } else throw parameters();
-            List<SshBundleProposal.Change> edits = new ArrayList<>();
-            try {
-                for (VaultManifest.FileObject file : changed) {
-                    VaultManifest.FileObject old = SshConnectionMaterial.file(source, file.path);
-                    if (old != null && old.type != file.type) throw parameters();
-                    edits.add(old == null ? SshBundleProposal.Change.add(file) : SshBundleProposal.Change.replace(old, file));
+            SshBundleProposal.Relations relations = relationsChanged
+                    ? new SshBundleProposal.Relations(source, keys, accounts) : null;
+            if (kind.equals("privateKey")) {
+                try (SshBundleProposal initial = proposal(source, changed, relations, removedPhrases);
+                        VaultManifest temporary = initial.applyTo(source)) {
+                    changed.addAll(SshConnectionMaterial.refreshedConfigReferences(temporary, deadline, guard));
                 }
-                SshBundleProposal.Relations relations = relationsChanged
-                        ? new SshBundleProposal.Relations(source, keys, accounts) : null;
-                return new SshImportProposal(kind, path, basename(path), algorithm, fingerprint,
-                        previous != null, new SshBundleProposal(edits, relations));
-            } finally { for (SshBundleProposal.Change edit : edits) edit.close(); }
+            }
+            return new SshImportProposal(kind, path, basename(path), algorithm, fingerprint,
+                    previous != null, proposal(source, changed, relations, removedPhrases));
         } finally { for (VaultManifest.FileObject file : changed) VaultCodec.wipe(file.content); }
+    }
+
+    private static SshBundleProposal proposal(VaultManifest source, List<VaultManifest.FileObject> changed,
+            SshBundleProposal.Relations relations, java.util.Set<String> removedPhrases) throws VaultException {
+        List<SshBundleProposal.Change> edits = new ArrayList<>();
+        try {
+            for (VaultManifest.FileObject file : changed) {
+                VaultManifest.FileObject old = SshConnectionMaterial.file(source, file.path);
+                if (old != null && old.type != file.type) throw parameters();
+                edits.add(old == null ? SshBundleProposal.Change.add(file) : SshBundleProposal.Change.replace(old, file));
+            }
+            return new SshBundleProposal(edits, relations, removedPhrases);
+        } finally { for (SshBundleProposal.Change edit : edits) edit.close(); }
     }
 
     private static VaultManifest candidate(VaultManifest source, List<VaultManifest.FileObject> changes,

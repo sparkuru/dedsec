@@ -39,6 +39,8 @@ import org.junit.Test;
  * permitted only for the explicitly supplied complete SHA256 fingerprint and exact endpoint.
  * The separate ctosSshKeyRequestFile opt-in uses the same public fields plus base64 privateKey
  * (no password), at /data/local/tmp/ctos-ssh-key-NAME.json, for a publickey-only server.
+ * ctosSshEncryptedKeyRequestFile uses that exact path/ownership boundary and adds passphrase;
+ * it exercises the actual encrypted-key import, one-use/save/reuse/forget product bridges.
  */
 public final class SshPasswordConnectPlatformTest {
     private final Instrumentation instrumentation = InstrumentationRegistry.getInstrumentation();
@@ -46,6 +48,7 @@ public final class SshPasswordConnectPlatformTest {
     private Method dispatch;
     private String activeRequest, connectedRequest, protection;
     private String pendingImportTicket;
+    private String pendingDeleteTicket;
     private Object oldSshSink, oldTerminalSink;
     private SshPasswordConnectBridge ssh;
     private final AtomicBoolean running = new AtomicBoolean();
@@ -244,15 +247,40 @@ public final class SshPasswordConnectPlatformTest {
      * This does not exercise DocumentsUI, external SAF grants or human Flutter interaction.
      */
     @Test public void actualSafKeyImportManualThenConfigAndStaleBinding() throws Exception {
-        String path = InstrumentationRegistry.getArguments().getString("ctosSshKeyRequestFile");
+        actualSafKeyFixture(false);
+    }
+
+    @Test public void actualSafEncryptedKeyImportTransientSavedAndForget() throws Exception {
+        actualSafKeyFixture(true);
+    }
+
+    /** Same-public clear/encrypted siblings are independent managed objects, not fallbacks. */
+    @Test public void actualSafEncryptedKeyDeletionAndReimport() throws Exception {
+        actualSafKeyFixture(true, true);
+    }
+
+    private void actualSafKeyFixture(boolean encrypted) throws Exception {
+        actualSafKeyFixture(encrypted, false);
+    }
+
+    private void actualSafKeyFixture(boolean encrypted, boolean deletion) throws Exception {
+        String path = InstrumentationRegistry.getArguments().getString(
+                encrypted ? "ctosSshEncryptedKeyRequestFile" : "ctosSshKeyRequestFile");
         Assume.assumeTrue("Explicit independent key-only TCP fixture request was not provided", path != null);
         assertTrue("Invalid key fixture request path", path.matches("/data/local/tmp/ctos-ssh-key-[A-Za-z0-9_-]{1,64}\\.json"));
         Context context = instrumentation.getTargetContext();
         assertEquals("im.majo.ctos.secretsfixture", context.getPackageName());
         assertTrue(context.getApplicationContext() instanceof SecretsFixtureApplication);
         assertFalse(context.getSharedPreferences("root_access", Context.MODE_PRIVATE).getBoolean("auto_start", true));
-        validateNotificationDeniedOptIn(context);
-        validatePhysicalLockOptIns();
+        if (encrypted) {
+            for (String option : new String[] {"ctosSshBackground", "ctosSshPhysicalLock", "ctosSshNotificationsDenied",
+                    "ctosSshNotificationChannelDenied", "ctosSshManualDeviceUnlock", "ctosSshScreenOffDiagnostics"})
+                assertFalse("Encrypted-key fixture has a separate bounded foreground scope", "true".equals(
+                        InstrumentationRegistry.getArguments().getString(option)));
+        } else {
+            validateNotificationDeniedOptIn(context);
+            validatePhysicalLockOptIns();
+        }
         try {
             assertNotEquals("Fixture must use an isolated UID", context.getApplicationInfo().uid,
                     context.getPackageManager().getApplicationInfo("im.majo.ctos", 0).uid);
@@ -262,8 +290,8 @@ public final class SshPasswordConnectPlatformTest {
         assertFalse("Fresh isolated fixture app data is required", vaultFile.exists());
         assertFalse("A previous backup requires explicit reconciliation", new File(vaultFile.getPath() + ".bak").exists());
         assertFalse("A previous pending write requires explicit reconciliation", new File(vaultFile.getPath() + ".new").exists());
-        JSONObject request = readKeyRequest(path);
-        byte[] privateKey = null;
+        JSONObject request = readKeyRequest(path, encrypted);
+        byte[] privateKey = null, passphrase = null;
         boolean created = false, observed = false;
         Throwable primaryFailure = null;
         try {
@@ -276,12 +304,17 @@ public final class SshPasswordConnectPlatformTest {
             catch (IllegalArgumentException invalid) { throw new AssertionError("Invalid synthetic private-key encoding"); }
             finally { request.remove("privateKey"); }
             assertTrue("Synthetic private key exceeds the bounded input", privateKey.length > 0 && privateKey.length <= SshKeyMaterial.MAX_BYTES);
-            SshKeyMaterial.Result material = SshKeyMaterial.inspect(privateKey, SystemClock.elapsedRealtime() + 60_000);
+            if (encrypted) {
+                passphrase = SshKeyPassphrase.bytes(request.getString("passphrase"), false);
+                request.remove("passphrase");
+            }
+            SshKeyMaterial.Result material = SshKeyMaterial.inspect(privateKey, passphrase, SystemClock.elapsedRealtime() + 60_000);
             assertEquals(SshKeyMaterial.Status.PARSED, material.status);
+            assertEquals("The supplied synthetic key must match the selected encrypted mode", encrypted, material.encrypted);
             assertTrue("Actual native public fingerprint is required", material.fingerprint.matches("SHA256:[A-Za-z0-9+/]{43}"));
             activity = (MainActivity)instrumentation.startActivitySync(new Intent(context, MainActivity.class)
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
-            preparePhysicalLockEntry();
+            if (!encrypted) preparePhysicalLockEntry();
             dispatch = MainActivity.class.getDeclaredMethod("call", MethodCall.class, MethodChannel.Result.class);
             dispatch.setAccessible(true);
             ssh = (SshPasswordConnectBridge)field(activity, "sshPasswordConnect");
@@ -295,6 +328,7 @@ public final class SshPasswordConnectPlatformTest {
             assertTrue(vaultFile.exists());
             installObservers(host, port, fingerprint); observed = true;
             Map<String, Object> keyPreview = pickImport("privateKey", ".ssh/id_fixture", "id_fixture", privateKey);
+            if (encrypted) keyPreview = unlockEncryptedImport(keyPreview, passphrase, vaultFile, true);
             assertPreview(keyPreview, "privateKey", ".ssh/id_fixture", "id_fixture", false);
             assertEquals(material.algorithm, keyPreview.get("algorithm"));
             assertEquals(material.fingerprint, keyPreview.get("fingerprint"));
@@ -315,11 +349,18 @@ public final class SshPasswordConnectPlatformTest {
             Map<String, Object> key = map(keys.get(0));
             assertEquals("id_fixture", key.get("label")); assertEquals(".ssh/id_fixture", key.get("path"));
             assertEquals(material.algorithm, key.get("algorithm")); assertEquals(material.fingerprint, key.get("fingerprint"));
+            assertEquals(encrypted, key.get("encrypted")); assertEquals(false, key.get("hasSavedPassphrase"));
             String keyId = (String)key.get("id");
             checkedHost(library, keyId, host, port, username);
             assertPersistedKey(secrets.sshVault(), privateKey, material, keyId, host, port, username, false);
 
-            connectKey(request, keyId, null);
+            if (deletion) {
+                assertEncryptedKeyDeletion(request, privateKey, passphrase, material, keyId,
+                        secrets.sshVault(), vaultFile, config);
+                return;
+            }
+
+            connectKey(request, keyId, null, passphrase, false, false);
             assertEquals("First actual offered host must require exact approval", 1, reviews.get());
             releaseProtection(); assertShellRoundTrip();
             if ("true".equals(InstrumentationRegistry.getArguments().getString("ctosSshBackground")))
@@ -330,7 +371,7 @@ public final class SshPasswordConnectPlatformTest {
             library = map(call("ssh.library", VaultCollections.map("requestId", id())));
             Map<String, Object> selected = checkedHost(library, keyId, host, port, username);
             assertPersistedKey(secrets.sshVault(), privateKey, material, keyId, host, port, username, true);
-            connectKey(request, keyId, selected);
+            connectKey(request, keyId, selected, passphrase, false, encrypted);
             assertEquals("The matching persisted host must use native KNOWN without new approval", 1, reviews.get());
             releaseProtection(); assertShellRoundTrip();
             if (backgroundStaleStop != null) {
@@ -342,6 +383,7 @@ public final class SshPasswordConnectPlatformTest {
             }
             stopTerminal(); waitReleased();
             protection = (String)map(call("secrets.protect", VaultCollections.map("action", "acquire"))).get("owner");
+            if (encrypted) assertEncryptedKeyPersistence(request, privateKey, passphrase, material, keyId, secrets.sshVault(), vaultFile);
             selected = checkedHost(map(call("ssh.library", VaultCollections.map("requestId", id()))), keyId, host, port, username);
             Map<String, Object> original = map(call("ssh.configRead", VaultCollections.map("requestId", id(), "path", ".ssh/config")));
             assertEquals(config, original.get("content"));
@@ -364,6 +406,7 @@ public final class SshPasswordConnectPlatformTest {
             catch (Exception | Error diagnosticFailure) { failure.addSuppressed(diagnosticFailure); }
             throw failure;
         } finally {
+            request.remove("passphrase"); VaultCodec.wipe(passphrase);
             try { cleanupKeyFixture(request, privateKey, vaultFile, created, observed); }
             catch (Exception | Error cleanupFailure) {
                 if (primaryFailure != null) {
@@ -423,6 +466,8 @@ public final class SshPasswordConnectPlatformTest {
                         () -> call("ssh.cancel", VaultCollections.map("requestId", activeRequest)));
                 if (pendingImportTicket != null) keyFixtureCleanup(failure,
                         () -> call("ssh.importCancel", VaultCollections.map("ticketId", pendingImportTicket)));
+                if (pendingDeleteTicket != null) keyFixtureCleanup(failure,
+                        () -> call("ssh.keyDeleteCancel", VaultCollections.map("ticketId", pendingDeleteTicket)));
                 keyFixtureCleanup(failure, this::stopTerminal);
                 keyFixtureCleanup(failure, this::waitReleased);
                 keyFixtureCleanup(failure, this::releaseProtection);
@@ -482,12 +527,67 @@ public final class SshPasswordConnectPlatformTest {
 
     private void assertPreview(Map<String, Object> preview, String kind, String path, String name, boolean replacing) {
         assertEquals(java.util.Set.of("ticketId", "binding", "kind", "path", "label", "algorithm", "fingerprint",
-                "replacing", "issues", "canCommit"), preview.keySet());
+                "replacing", "issues", "canCommit", "needsPassphrase"), preview.keySet());
         assertEquals(kind, preview.get("kind")); assertEquals(path, preview.get("path")); assertEquals(name, preview.get("label"));
         assertEquals(replacing, preview.get("replacing")); assertEquals(true, preview.get("canCommit"));
+        assertEquals(false, preview.get("needsPassphrase"));
         assertTrue("Import must have a real bound candidate", preview.get("binding") instanceof String
                 && ((String)preview.get("binding")).matches("[0-9a-f]{64}"));
-        assertFalse(((String)preview.get("ticketId")).isEmpty()); assertTrue(((List<?>)preview.get("issues")).isEmpty());
+        assertFalse(((String)preview.get("ticketId")).isEmpty());
+        List<?> issues = (List<?>)preview.get("issues");
+        if (replacing && kind.equals("privateKey")) {
+            assertEquals(1, issues.size()); assertEquals("SSH_KEY_REPLACED", map(issues.get(0)).get("code"));
+        } else assertTrue(issues.isEmpty());
+    }
+
+    private Map<String, Object> unlockEncryptedImport(Map<String, Object> preview, byte[] passphrase,
+            File vaultFile, boolean verifyWrongPassphrase) throws Exception {
+        return unlockEncryptedImport(preview, passphrase, vaultFile, verifyWrongPassphrase, ".ssh/id_fixture");
+    }
+
+    private Map<String, Object> unlockEncryptedImport(Map<String, Object> preview, byte[] passphrase,
+            File vaultFile, boolean verifyWrongPassphrase, String path) throws Exception {
+        assertEquals(java.util.Set.of("ticketId", "binding", "kind", "path", "label", "algorithm", "fingerprint",
+                "replacing", "issues", "canCommit", "needsPassphrase"), preview.keySet());
+        assertEquals("privateKey", preview.get("kind")); assertEquals(path, preview.get("path"));
+        assertEquals("", preview.get("algorithm")); assertEquals("", preview.get("fingerprint"));
+        assertEquals(false, preview.get("canCommit")); assertEquals(true, preview.get("needsPassphrase"));
+        assertTrue(((List<?>)preview.get("issues")).isEmpty());
+        assertTrue(preview.get("binding") instanceof String && ((String)preview.get("binding")).matches("[0-9a-f]{64}"));
+        byte[] before = java.nio.file.Files.readAllBytes(vaultFile.toPath());
+        try {
+            if (verifyWrongPassphrase) {
+                String wrong = "ctos-fixture-intentionally-wrong-" + UUID.randomUUID();
+                byte[] wrongBytes = wrong.getBytes(StandardCharsets.UTF_8);
+                try { assertFalse("The negative fixture phrase must differ", java.util.Arrays.equals(wrongBytes, passphrase)); }
+                finally { VaultCodec.wipe(wrongBytes); }
+                assertFixedHostFailure("SSH_KEY_BAD_PASSPHRASE", "ssh.importUnlock", VaultCollections.map(
+                        "requestId", id(), "ticketId", preview.get("ticketId"), "binding", preview.get("binding"), "passphrase", wrong));
+                assertCiphertextUnchanged(vaultFile, before);
+            }
+            Map<String, Object> unlocked = map(call("ssh.importUnlock", VaultCollections.map("requestId", id(),
+                    "ticketId", preview.get("ticketId"), "binding", preview.get("binding"),
+                    "passphrase", new String(passphrase, StandardCharsets.UTF_8))));
+            pendingImportTicket = (String)unlocked.get("ticketId");
+            assertNotEquals("Unlock must publish a fresh exact commit ticket", preview.get("ticketId"), unlocked.get("ticketId"));
+            assertEquals(false, unlocked.get("needsPassphrase")); assertEquals(true, unlocked.get("canCommit"));
+            assertCiphertextUnchanged(vaultFile, before);
+            return unlocked;
+        } finally { VaultCodec.wipe(before); }
+    }
+
+    private static void assertCiphertextUnchanged(File vaultFile, byte[] expected) throws Exception {
+        byte[] actual = java.nio.file.Files.readAllBytes(vaultFile.toPath());
+        try { assertTrue("Rejected or preview-only work must preserve the original vault ciphertext",
+                java.util.Arrays.equals(expected, actual)); }
+        finally { VaultCodec.wipe(actual); }
+    }
+
+    private void assertFixedHostFailure(String code, String method, Map<String, Object> arguments) throws Exception {
+        try { call(method, arguments); fail("The synthetic rejected operation must not succeed"); }
+        catch (java.util.concurrent.ExecutionException rejected) {
+            assertEquals("Fixed host failure: " + code, rejected.getCause().getMessage());
+        }
     }
 
     private void commitImport(Map<String, Object> preview) throws Exception {
@@ -509,26 +609,383 @@ public final class SshPasswordConnectPlatformTest {
     }
 
     private void connectKey(JSONObject request, String keyId, Map<String, Object> configured) throws Exception {
+        connectKey(request, keyId, configured, null, false, false);
+    }
+
+    private void connectKey(JSONObject request, String keyId, Map<String, Object> configured,
+            byte[] passphrase, boolean useSavedPassphrase, boolean savePassphrase) throws Exception {
         running.set(false); activeRequest = id();
-        Map<String, Object> arguments = configured == null
+        Map<String, Object> arguments = new java.util.HashMap<>(configured == null
                 ? VaultCollections.map("requestId", activeRequest, "host", request.getString("host"), "port", request.getInt("port"),
                         "username", request.getString("username"), "keyId", keyId, "columns", 80, "rows", 24)
                 : VaultCollections.map("requestId", activeRequest, "alias", configured.get("alias"), "binding", configured.get("binding"),
-                        "username", "", "keyId", keyId, "columns", 80, "rows", 24);
-        Map<String, Object> reply = map(call(configured == null ? "ssh.keyConnect" : "ssh.configConnect", arguments));
-        assertEquals(activeRequest, reply.get("requestId")); assertEquals("connected", reply.get("status"));
-        assertTrue("Actual authenticated PTY must be running before completion", running.get());
-        connectedRequest = activeRequest; activeRequest = null;
+                        "username", "", "keyId", keyId, "columns", 80, "rows", 24));
+        if (passphrase != null || useSavedPassphrase || savePassphrase) {
+            arguments.put("passphrase", passphrase == null ? "" : new String(passphrase, StandardCharsets.UTF_8));
+            arguments.put("useSavedPassphrase", useSavedPassphrase); arguments.put("savePassphrase", savePassphrase);
+        }
+        try {
+            Map<String, Object> reply = map(call(configured == null ? "ssh.keyConnect" : "ssh.configConnect", arguments));
+            assertEquals(activeRequest, reply.get("requestId")); assertEquals("connected", reply.get("status"));
+            assertTrue("Actual authenticated PTY must be running before completion", running.get());
+            connectedRequest = activeRequest; activeRequest = null;
+        } finally { arguments.remove("passphrase"); }
+    }
+
+    private void assertEncryptedKeyPersistence(JSONObject request, byte[] privateKey, byte[] passphrase,
+            SshKeyMaterial.Result material, String keyId, AppSecrets vault, File vaultFile) throws Exception {
+        String host = request.getString("host"), username = request.getString("username"); int port = request.getInt("port");
+        assertPersistedKey(vault, privateKey, material, keyId, host, port, username, true, passphrase);
+        Map<String, Object> library = map(call("ssh.library", VaultCollections.map("requestId", id())));
+        assertEquals(true, map(((List<?>)library.get("keys")).get(0)).get("hasSavedPassphrase"));
+        Map<String, Object> selected = checkedHost(library, keyId, host, port, username);
+        connectKey(request, keyId, selected, null, true, false);
+        assertEquals("Saved phrase reconnect must still use the actual KNOWN host", 1, reviews.get());
+        releaseProtection(); assertShellRoundTrip(); stopTerminal(); waitReleased();
+        protection = (String)map(call("secrets.protect", VaultCollections.map("action", "acquire"))).get("owner");
+
+        Map<String, Object> forgotten = map(call("ssh.forgetKeyPassphrase", VaultCollections.map(
+                "requestId", id(), "keyId", keyId, "all", false)));
+        assertEquals(java.util.Set.of("forgotten"), forgotten.keySet()); assertEquals(true, forgotten.get("forgotten"));
+        assertPersistedKey(vault, privateKey, material, keyId, host, port, username, true);
+        library = map(call("ssh.library", VaultCollections.map("requestId", id())));
+        assertEquals(false, map(((List<?>)library.get("keys")).get(0)).get("hasSavedPassphrase"));
+        selected = checkedHost(library, keyId, host, port, username);
+        byte[] beforeMissing = java.nio.file.Files.readAllBytes(vaultFile.toPath());
+        try {
+            try { connectKey(request, keyId, selected, null, true, false); fail("Forgotten phrase must not authenticate"); }
+            catch (java.util.concurrent.ExecutionException rejected) {
+                assertEquals("Fixed host failure: SSH_KEY_PASSPHRASE_MISSING", rejected.getCause().getMessage());
+                activeRequest = null;
+            }
+            assertFalse("Missing saved phrase must not establish a terminal", running.get()); waitReleased();
+            assertEquals("Missing phrase must fail before new host approval", 1, reviews.get());
+            assertCiphertextUnchanged(vaultFile, beforeMissing);
+        } finally { VaultCodec.wipe(beforeMissing); }
+
+        selected = checkedHost(map(call("ssh.library", VaultCollections.map("requestId", id()))), keyId, host, port, username);
+        connectKey(request, keyId, selected, passphrase, false, false);
+        assertEquals(1, reviews.get()); releaseProtection(); assertShellRoundTrip(); stopTerminal(); waitReleased();
+        protection = (String)map(call("secrets.protect", VaultCollections.map("action", "acquire"))).get("owner");
+        assertPersistedKey(vault, privateKey, material, keyId, host, port, username, true);
+
+        // Save again, then replace the container with the same actual public identity. The old
+        // phrase link must disappear even when the public-key-based selection ID stays identical.
+        selected = checkedHost(map(call("ssh.library", VaultCollections.map("requestId", id()))), keyId, host, port, username);
+        connectKey(request, keyId, selected, passphrase, false, true);
+        releaseProtection(); assertShellRoundTrip(); stopTerminal(); waitReleased();
+        protection = (String)map(call("secrets.protect", VaultCollections.map("action", "acquire"))).get("owner");
+        assertPersistedKey(vault, privateKey, material, keyId, host, port, username, true, passphrase);
+        Map<String, Object> replacement = pickImport("privateKey", ".ssh/id_fixture", "id_fixture", privateKey);
+        replacement = unlockEncryptedImport(replacement, passphrase, vaultFile, false);
+        assertPreview(replacement, "privateKey", ".ssh/id_fixture", "id_fixture", true);
+        assertEquals(material.algorithm, replacement.get("algorithm")); assertEquals(material.fingerprint, replacement.get("fingerprint"));
+        commitImport(replacement);
+        assertPersistedKey(vault, privateKey, material, keyId, host, port, username, true);
+        library = map(call("ssh.library", VaultCollections.map("requestId", id())));
+        Map<String, Object> replacementKey = map(((List<?>)library.get("keys")).get(0));
+        assertEquals(keyId, replacementKey.get("id")); assertEquals(false, replacementKey.get("hasSavedPassphrase"));
+        checkedHost(library, keyId, host, port, username); assertEquals(1, reviews.get());
+    }
+
+    private void assertEncryptedKeyDeletion(JSONObject request, byte[] privateKey, byte[] passphrase,
+            SshKeyMaterial.Result material, String keyId, AppSecrets vault, File vaultFile,
+            String originalConfig) throws Exception {
+        String clearPath = InstrumentationRegistry.getArguments().getString("ctosSshKeyRequestFile");
+        assertNotNull("Deletion regression also requires an explicitly supplied clear sibling request", clearPath);
+        assertTrue("Invalid clear sibling request path", clearPath.matches("/data/local/tmp/ctos-ssh-key-[A-Za-z0-9_-]{1,64}\\.json"));
+        JSONObject clearRequest = readKeyRequest(clearPath);
+        byte[] clearKey = null, trust = null;
+        try {
+            for (String field : new String[] {"host", "port", "username", "fingerprint"})
+                assertEquals("Sibling requests must name the same explicit synthetic endpoint", request.get(field), clearRequest.get(field));
+            try { clearKey = java.util.Base64.getDecoder().decode(clearRequest.getString("privateKey")); }
+            catch (IllegalArgumentException invalid) { throw new AssertionError("Invalid clear sibling private-key encoding"); }
+            finally { clearRequest.remove("privateKey"); }
+            assertTrue("Clear sibling exceeds the bounded input", clearKey.length > 0 && clearKey.length <= SshKeyMaterial.MAX_BYTES);
+            SshKeyMaterial.Result clearMaterial = SshKeyMaterial.inspect(clearKey, SystemClock.elapsedRealtime() + 60_000);
+            assertEquals(SshKeyMaterial.Status.PARSED, clearMaterial.status); assertFalse(clearMaterial.encrypted);
+            assertEquals("Sibling must carry the same actual public identity", material.fingerprint, clearMaterial.fingerprint);
+
+            // This real login creates the phrase, exact KEY Account, trust and generated manual CONFIG.
+            connectKey(request, keyId, null, passphrase, false, true);
+            assertEquals(1, reviews.get()); releaseProtection(); assertShellRoundTrip(); stopTerminal(); waitReleased();
+            protection = (String)map(call("secrets.protect", VaultCollections.map("action", "acquire"))).get("owner");
+            assertPersistedKey(vault, privateKey, material, keyId, request.getString("host"), request.getInt("port"),
+                    request.getString("username"), true, passphrase);
+            trust = deletionTrust(vault);
+
+            Map<String, Object> sibling = pickImport("privateKey", ".ssh/id_other", "id_other", clearKey);
+            assertPreview(sibling, "privateKey", ".ssh/id_other", "id_other", false); commitImport(sibling);
+            sibling = pickImport("privateKey", ".ssh/id_other_encrypted", "id_other_encrypted", privateKey);
+            sibling = unlockEncryptedImport(sibling, passphrase, vaultFile, false, ".ssh/id_other_encrypted");
+            assertPreview(sibling, "privateKey", ".ssh/id_other_encrypted", "id_other_encrypted", false); commitImport(sibling);
+            Map<String, Object> library = map(call("ssh.library", VaultCollections.map("requestId", id())));
+            String clearId = (String)deletionKey(library, ".ssh/id_other").get("id");
+            String encryptedId = (String)deletionKey(library, ".ssh/id_other_encrypted").get("id");
+            assertNotEquals(keyId, clearId); assertNotEquals(keyId, encryptedId); assertNotEquals(clearId, encryptedId);
+
+            String target = "    HostName " + request.getString("host") + "\n    Port " + request.getInt("port")
+                    + "\n    User \"" + request.getString("username").replace("\\", "\\\\").replace("\"", "\\\"")
+                    + "\"\n    IdentitiesOnly yes\n    UserKnownHostsFile ~/.ssh/known_hosts\n";
+            String included = "Host deletionmixed\n" + target + "    IdentityFile ~/.ssh/id_fixture\n"
+                    + "    IdentityFile ~/.ssh/id_other\n    IdentityFile ~/.ssh/id_other_encrypted\n"
+                    + "Host deletionunaffected\n" + target + "    IdentityFile ~/.ssh/id_other\n";
+            deletionImportConfig(".ssh/includes/deletion.conf", included);
+            String root = "Include ~/.ssh/includes/deletion.conf\n" + originalConfig;
+            deletionImportConfig(".ssh/config", root);
+            Map<String, String> configs = new java.util.LinkedHashMap<>();
+            configs.put(".ssh/config", root); configs.put(".ssh/includes/deletion.conf", included);
+            library = map(call("ssh.library", VaultCollections.map("requestId", id())));
+            Map<String, Object> oldMixed = deletionHost(library, "deletionmixed");
+            assertFalse(oldMixed.containsKey("error"));
+            assertEquals(java.util.Set.of(keyId, clearId, encryptedId), new java.util.HashSet<>((List<?>)oldMixed.get("keyIds")));
+
+            byte[] before = java.nio.file.Files.readAllBytes(vaultFile.toPath());
+            Map<String, Object> preview;
+            try {
+                preview = deletionPreview(keyId, material, true, true);
+                assertCiphertextUnchanged(vaultFile, before);
+                assertEquals(false, map(call("ssh.importCancel", VaultCollections.map("ticketId", preview.get("ticketId")))).get("cancelled"));
+                assertFixedHostFailure("VAULT_CHANGED", "ssh.importCommit", VaultCollections.map("requestId", id(),
+                        "ticketId", preview.get("ticketId"), "binding", preview.get("binding"), "replace", false));
+                assertFixedHostFailure("VAULT_CHANGED", "ssh.keyDeleteCommit", VaultCollections.map("requestId", id(),
+                        "ticketId", preview.get("ticketId"), "binding", "0000000000000000000000000000000000000000000000000000000000000000"));
+                assertCiphertextUnchanged(vaultFile, before);
+                assertEquals(true, map(call("ssh.keyDeleteCancel", VaultCollections.map("ticketId", preview.get("ticketId")))).get("cancelled"));
+                pendingDeleteTicket = null;
+                assertFixedHostFailure("VAULT_CHANGED", "ssh.keyDeleteCommit", VaultCollections.map("requestId", id(),
+                        "ticketId", preview.get("ticketId"), "binding", preview.get("binding")));
+                assertCiphertextUnchanged(vaultFile, before);
+            } finally { VaultCodec.wipe(before); }
+
+            preview = deletionPreview(keyId, material, true, true); commitDeletion(preview);
+            assertFixedHostFailure("VAULT_CHANGED", "ssh.keyDeleteCommit", VaultCollections.map("requestId", id(),
+                    "ticketId", preview.get("ticketId"), "binding", preview.get("binding")));
+            assertDeletionGraph(vault, privateKey, clearKey, keyId, clearId, encryptedId, configs, true, false, trust);
+            assertDeletionNativeResourcePolicy(vault);
+            library = map(call("ssh.library", VaultCollections.map("requestId", id())));
+            Map<String, Object> mixed = assertDeletionMissing(library, "deletionmixed");
+            assertDeletionMissing(library, "fixturekey");
+            Map<String, Object> unaffected = deletionHost(library, "deletionunaffected");
+            assertFalse(unaffected.containsKey("error")); assertEquals(List.of(clearId), unaffected.get("keyIds"));
+            assertEquals(List.of(), unaffected.get("missingIdentityPaths"));
+            before = java.nio.file.Files.readAllBytes(vaultFile.toPath());
+            try {
+                assertDeletionConnectRefused(request, clearId, mixed, null, false, "SSH_KEY_MISSING");
+                assertDeletionConnectRefused(request, encryptedId, mixed, passphrase, true, "SSH_KEY_MISSING");
+                assertDeletionConnectRefused(request, keyId, null, passphrase, false, "SSH_KEY_MISSING");
+                assertDeletionConnectRefused(request, clearId, oldMixed, null, false, "VAULT_CHANGED");
+                assertCiphertextUnchanged(vaultFile, before);
+                // A stored incomplete identity declaration does not permit importing/editing one.
+                for (String invalidConfig : List.of(root, "Include ~/.ssh/includes/deletion.conf\n")) {
+                    // The second edit has no direct missing identity: strictness must cover the child.
+                    call("ssh.configRead", VaultCollections.map("requestId", id(), "path", ".ssh/config"));
+                    Map<String, Object> rejected = map(call("ssh.configPreview", VaultCollections.map("requestId", id(),
+                            "path", ".ssh/config", "content", invalidConfig)));
+                    pendingImportTicket = (String)rejected.get("ticketId");
+                    assertEquals(false, rejected.get("canCommit"));
+                    assertTrue(((List<?>)rejected.get("issues")).stream()
+                            .anyMatch(issue -> "SSH_CONFIG_DEPENDENCY".equals(map(issue).get("code"))));
+                    call("ssh.importCancel", VaultCollections.map("ticketId", pendingImportTicket)); pendingImportTicket = null;
+                }
+                assertCiphertextUnchanged(vaultFile, before);
+            } finally { VaultCodec.wipe(before); }
+
+            Map<String, Object> restored = pickImport("privateKey", ".ssh/id_fixture", "id_fixture", privateKey);
+            assertFixedHostFailure("VAULT_CHANGED", "ssh.keyDeleteCommit", VaultCollections.map("requestId", id(),
+                    "ticketId", restored.get("ticketId"), "binding", restored.get("binding")));
+            restored = unlockEncryptedImport(restored, passphrase, vaultFile, false);
+            assertPreview(restored, "privateKey", ".ssh/id_fixture", "id_fixture", false); commitImport(restored);
+            assertDeletionGraph(vault, privateKey, clearKey, keyId, clearId, encryptedId, configs, false, false, trust);
+            library = map(call("ssh.library", VaultCollections.map("requestId", id())));
+            assertFalse(deletionHost(library, "deletionmixed").containsKey("error"));
+            assertEquals(false, deletionKey(library, ".ssh/id_fixture").get("hasSavedPassphrase"));
+
+            // Recreate only the Account/manual CONFIG by real transient authentication, then
+            // make the generated CONFIG an actual user Include dependency before deletion.
+            connectKey(request, keyId, null, passphrase, false, false);
+            assertEquals(1, reviews.get()); releaseProtection(); assertShellRoundTrip(); stopTerminal(); waitReleased();
+            protection = (String)map(call("secrets.protect", VaultCollections.map("action", "acquire"))).get("owner");
+            String withManual = "Include ~/.ssh/ctos-manual\n" + root;
+            deletionImportConfig(".ssh/config", withManual); configs.put(".ssh/config", withManual);
+            byte[] manual = deletionConfigBytes(vault, SshConnectionMaterial.MANUAL);
+            try {
+                preview = deletionPreview(keyId, material, false, false); commitDeletion(preview);
+                assertDeletionGraph(vault, privateKey, clearKey, keyId, clearId, encryptedId, configs, true, true, trust);
+                byte[] retained = deletionConfigBytes(vault, SshConnectionMaterial.MANUAL);
+                try { assertArrayEquals("Inbound Include must preserve the generated CONFIG bytes", manual, retained); }
+                finally { VaultCodec.wipe(retained); }
+            } finally { VaultCodec.wipe(manual); }
+            assertEquals("Only the first real offered host requires review", 1, reviews.get());
+        } finally { clearRequest.remove("privateKey"); VaultCodec.wipe(clearKey); VaultCodec.wipe(trust); }
+    }
+
+    private void deletionImportConfig(String path, String content) throws Exception {
+        byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
+        try {
+            Map<String, Object> preview = pickImport("config", path, SshImportProposal.basename(path), bytes);
+            assertEquals(true, preview.get("canCommit")); commitImport(preview);
+        } finally { VaultCodec.wipe(bytes); }
+    }
+
+    private Map<String, Object> deletionPreview(String keyId, SshKeyMaterial.Result material,
+            boolean phrase, boolean removesManual) throws Exception {
+        Map<String, Object> preview = map(call("ssh.keyDeletePreview", VaultCollections.map("requestId", id(), "keyId", keyId)));
+        pendingDeleteTicket = (String)preview.get("ticketId");
+        assertEquals(java.util.Set.of("ticketId", "binding", "keyId", "label", "path", "algorithm", "fingerprint",
+                "publicPath", "hasSavedPassphrase", "accountCount", "configPaths", "removesManualConfig"), preview.keySet());
+        assertEquals(keyId, preview.get("keyId")); assertEquals("id_fixture", preview.get("label"));
+        assertEquals(".ssh/id_fixture", preview.get("path")); assertEquals(".ssh/id_fixture.pub", preview.get("publicPath"));
+        assertEquals(material.algorithm, preview.get("algorithm")); assertEquals(material.fingerprint, preview.get("fingerprint"));
+        assertEquals(phrase, preview.get("hasSavedPassphrase")); assertEquals(1, ((Number)preview.get("accountCount")).intValue());
+        assertEquals(removesManual, preview.get("removesManualConfig"));
+        assertEquals(java.util.Set.of(".ssh/config", ".ssh/includes/deletion.conf"), new java.util.HashSet<>((List<?>)preview.get("configPaths")));
+        assertTrue(((String)preview.get("binding")).matches("[0-9a-f]{64}")); return preview;
+    }
+
+    private void commitDeletion(Map<String, Object> preview) throws Exception {
+        Map<String, Object> reply = map(call("ssh.keyDeleteCommit", VaultCollections.map("requestId", id(),
+                "ticketId", preview.get("ticketId"), "binding", preview.get("binding"))));
+        assertEquals(java.util.Set.of("deleted"), reply.keySet()); assertEquals(true, reply.get("deleted")); pendingDeleteTicket = null;
+    }
+
+    private static Map<String, Object> deletionKey(Map<String, Object> library, String path) {
+        for (Object value : (List<?>)library.get("keys")) {
+            Map<String, Object> key = map(value); if (path.equals(key.get("path"))) return key;
+        }
+        throw new AssertionError("Required synthetic managed key row is missing");
+    }
+
+    private static Map<String, Object> deletionHost(Map<String, Object> library, String alias) {
+        for (Object value : (List<?>)library.get("hosts")) {
+            Map<String, Object> host = map(value); if (alias.equals(host.get("alias"))) return host;
+        }
+        throw new AssertionError("Required synthetic Host alias is missing");
+    }
+
+    private static Map<String, Object> assertDeletionMissing(Map<String, Object> library, String alias) {
+        Map<String, Object> host = deletionHost(library, alias);
+        assertEquals("SSH_KEY_MISSING", host.get("error")); assertEquals(List.of(), host.get("keyIds"));
+        assertEquals(List.of(".ssh/id_fixture"), host.get("missingIdentityPaths")); return host;
+    }
+
+    private void assertDeletionConnectRefused(JSONObject request, String keyId, Map<String, Object> configured,
+            byte[] phrase, boolean save, String code) throws Exception {
+        try { connectKey(request, keyId, configured, phrase, false, save); fail("Missing identity must not reach authentication"); }
+        catch (java.util.concurrent.ExecutionException rejected) {
+            assertEquals("Fixed host failure: " + code, rejected.getCause().getMessage()); activeRequest = null;
+        }
+        assertFalse("Rejected selection must not publish a running terminal", running.get());
+        assertEquals("Rejected selection must fail before offered host review", 1, reviews.get()); waitReleased();
+    }
+
+    private byte[] deletionTrust(AppSecrets vault) throws Exception { return deletionConfigBytes(vault, SshConnectionMaterial.HOSTS); }
+
+    private byte[] deletionConfigBytes(AppSecrets vault, String path) throws Exception {
+        long deadline = SystemClock.elapsedRealtime() + 60_000;
+        AppSecrets.BundleContext context = vault.newBundleContext(deadline, () -> { });
+        try (SshConnectionMaterial.Snapshot source = SshPasswordManifestValidator.within(deadline, () -> vault.sshLibrarySnapshot(context))) {
+            VaultManifest.FileObject file = SshConnectionMaterial.file(source.manifest, path); assertNotNull(file);
+            return file.content.clone();
+        } finally { vault.cancelBundleContext(context); vault.retryPasswordValidationCleanup(); }
+    }
+
+    private void assertDeletionGraph(AppSecrets vault, byte[] encryptedKey, byte[] clearKey, String deletedId,
+            String clearId, String encryptedId, Map<String, String> configs, boolean deleted,
+            boolean manualPresent, byte[] trust) throws Exception {
+        long deadline = SystemClock.elapsedRealtime() + 60_000;
+        AppSecrets.BundleContext context = vault.newBundleContext(deadline, () -> { });
+        try (SshConnectionMaterial.Snapshot source = SshPasswordManifestValidator.within(deadline, () -> vault.sshLibrarySnapshot(context))) {
+            VaultManifest manifest = source.manifest;
+            assertEquals(deleted ? 2 : 3, manifest.keyBindings.size());
+            assertTrue("Deleted phrase and reimport must not resurrect saved entries", manifest.entries.isEmpty());
+            assertTrue("Deleted KEY Accounts and reimport must not resurrect runtime associations", manifest.accounts.isEmpty());
+            assertEquals(!deleted, SshConnectionMaterial.file(manifest, ".ssh/id_fixture") != null);
+            assertEquals(!deleted, SshConnectionMaterial.file(manifest, ".ssh/id_fixture.pub") != null);
+            assertEquals(!deleted, manifest.keyBindings.stream().anyMatch(binding -> deletedId.equals(binding.id)));
+            for (String path : new String[] {".ssh/id_other", ".ssh/id_other_encrypted"}) {
+                VaultManifest.FileObject file = SshConnectionMaterial.file(manifest, path); assertNotNull(file);
+                assertArrayEquals("Deleting one path must preserve its same-public sibling's exact container",
+                        path.equals(".ssh/id_other") ? clearKey : encryptedKey, file.content);
+                assertNotNull(SshConnectionMaterial.file(manifest, path + ".pub"));
+                SshConnectionMaterial.Key key = SshConnectionMaterial.key(manifest, path.equals(".ssh/id_other") ? clearId : encryptedId);
+                assertEquals(path, key.path); assertFalse(key.hasSavedPassphrase);
+            }
+            for (Map.Entry<String, String> config : configs.entrySet()) {
+                VaultManifest.FileObject file = SshConnectionMaterial.file(manifest, config.getKey()); assertNotNull(file);
+                assertArrayEquals("Deletion/reimport must preserve every user CONFIG byte",
+                        config.getValue().getBytes(StandardCharsets.UTF_8), file.content);
+                assertEquals("Reimport must refresh all actual direct identity references", !deleted, file.references.contains(".ssh/id_fixture"));
+                assertFalse(file.references.contains(".ssh/id_fixture.pub"));
+            }
+            assertEquals(manualPresent, SshConnectionMaterial.file(manifest, SshConnectionMaterial.MANUAL) != null);
+            if (manualPresent) assertFalse(SshConnectionMaterial.file(manifest, SshConnectionMaterial.MANUAL).references.contains(".ssh/id_fixture"));
+            assertArrayEquals("Deletion must preserve actual approved host trust", trust,
+                    SshConnectionMaterial.file(manifest, SshConnectionMaterial.HOSTS).content);
+            if (!deleted) assertArrayEquals(encryptedKey, SshConnectionMaterial.file(manifest, ".ssh/id_fixture").content);
+        } finally { vault.cancelBundleContext(context); vault.retryPasswordValidationCleanup(); }
+    }
+
+    private void assertDeletionNativeResourcePolicy(AppSecrets vault) throws Exception {
+        long deadline = SystemClock.elapsedRealtime() + 60_000;
+        AppSecrets.BundleContext context = vault.newBundleContext(deadline, () -> { });
+        SshPasswordManifestValidator validator = new SshPasswordManifestValidator();
+        try (SshConnectionMaterial.Snapshot source = SshPasswordManifestValidator.within(deadline, () -> vault.sshLibrarySnapshot(context))) {
+            deletionNativeResourceCase(source.manifest, validator, deadline, "IdentityFile ~/.ssh/deletion-absent", true);
+            deletionNativeResourceCase(source.manifest, validator, deadline, "CertificateFile ~/.ssh/deletion-absent", false);
+            deletionNativeResourceCase(source.manifest, validator, deadline, "IdentityFile %h", false);
+            deletionNativeResourceCase(source.manifest, validator, deadline, "IdentityFile relative-key", false);
+            deletionNativeResourceCase(source.manifest, validator, deadline, "IdentityFile ~/.ssh/known_hosts", false);
+            deletionNativeResourceCase(source.manifest, validator, deadline, "UserKnownHostsFile ~/.ssh/deletion-absent", false);
+            deletionNativeResourceCase(source.manifest, validator, deadline, "Include ~/.ssh/deletion-absent", false);
+        } finally {
+            try { validator.retryCleanup(); }
+            finally { vault.cancelBundleContext(context); vault.retryPasswordValidationCleanup(); }
+        }
+    }
+
+    private void deletionNativeResourceCase(VaultManifest source, SshPasswordManifestValidator validator,
+            long deadline, String declaration, boolean allowed) throws Exception {
+        String path = ".ssh/deletion-policy";
+        byte[] content = ("Host deletionpolicy\n    " + declaration + "\n").getBytes(StandardCharsets.UTF_8);
+        VaultManifest.FileObject config = new VaultManifest.FileObject(VaultManifest.FileType.CONFIG,
+                SshConnectionMaterial.id("config", path), path, SshConnectionMaterial.id("config-owner", path),
+                content, List.of(SshConnectionMaterial.HOSTS));
+        try (SshBundleProposal.Change change = SshBundleProposal.Change.add(config);
+                SshBundleProposal proposal = new SshBundleProposal(List.of(change));
+                VaultManifest candidate = proposal.applyTo(source)) {
+            boolean accepted = false;
+            try { SshPasswordManifestValidator.within(deadline, () -> { validator.validate(candidate); return null; }); accepted = true; }
+            catch (VaultException rejected) {
+                if (allowed) throw new AssertionError("Bounded absent static IdentityFile must remain representable: "
+                        + fixedKeyValidationFailure(rejected));
+            }
+            assertEquals("Only an absent static IdentityFile may use the stored missing-identity policy: " + declaration, allowed, accepted);
+        } finally { VaultCodec.wipe(content); VaultCodec.wipe(config.content); }
     }
 
     private void assertPersistedKey(AppSecrets vault, byte[] privateKey, SshKeyMaterial.Result material,
             String keyId, String host, int port, String username, boolean connected) throws Exception {
+        assertPersistedKey(vault, privateKey, material, keyId, host, port, username, connected, null);
+    }
+
+    private void assertPersistedKey(AppSecrets vault, byte[] privateKey, SshKeyMaterial.Result material,
+            String keyId, String host, int port, String username, boolean connected, byte[] savedPassphrase) throws Exception {
         long deadline = SystemClock.elapsedRealtime() + 60_000;
         AppSecrets.BundleContext context = vault.newBundleContext(deadline, () -> { });
         try (SshConnectionMaterial.Snapshot source = SshPasswordManifestValidator.within(deadline, () -> vault.sshLibrarySnapshot(context))) {
             assertEquals(1, source.manifest.keyBindings.size());
             VaultSshMetadata.KeyBinding binding = source.manifest.keyBindings.get(0); assertEquals(keyId, binding.id);
-            assertNull(binding.passphraseEntryId); assertTrue(binding.certificateFileIds.isEmpty());
+            if (savedPassphrase == null) {
+                assertNull(binding.passphraseEntryId); assertTrue(source.manifest.entries.isEmpty());
+            } else {
+                assertEquals(1, source.manifest.entries.size());
+                VaultManifest.Entry phrase = SshKeyPassphrase.entry(source.manifest, binding);
+                assertNotNull(phrase); assertTrue("Only the explicitly saved synthetic phrase may persist",
+                        java.util.Arrays.equals(savedPassphrase, phrase.secret));
+            }
+            assertTrue(binding.certificateFileIds.isEmpty());
             VaultManifest.FileObject actualPrivate = SshConnectionMaterial.file(source.manifest, ".ssh/id_fixture");
             VaultManifest.FileObject actualPublic = SshConnectionMaterial.file(source.manifest, ".ssh/id_fixture.pub");
             assertEquals(VaultManifest.FileType.PRIVATE_KEY, actualPrivate.type);
@@ -539,6 +996,7 @@ public final class SshPasswordConnectPlatformTest {
             finally { VaultCodec.wipe(line); }
             SshConnectionMaterial.Key key = new SshConnectionMaterial.Key(source.manifest, binding);
             assertEquals(material.fingerprint, key.fingerprint); assertEquals(material.algorithm, key.algorithm);
+            assertEquals(material.encrypted, key.encrypted); assertEquals(savedPassphrase != null, key.hasSavedPassphrase);
             assertEquals(connected ? 1 : 0, source.manifest.accounts.size());
             VaultManifest.FileObject trust = SshConnectionMaterial.file(source.manifest, ".ssh/known_hosts");
             assertNotNull(trust); assertEquals(connected, trust.content.length > 0);
@@ -553,6 +1011,10 @@ public final class SshPasswordConnectPlatformTest {
     }
 
     private JSONObject readKeyRequest(String path) throws Exception {
+        return readKeyRequest(path, false);
+    }
+
+    private JSONObject readKeyRequest(String path, boolean encrypted) throws Exception {
         byte[] ownership = keyShellBytes("stat -c %a:%u:%F " + path, 128);
         try { assertEquals("Fixture request must be a shell-owned 0600 regular file", "600:2000:regular file",
                 new String(ownership, StandardCharsets.US_ASCII).trim()); }
@@ -564,7 +1026,8 @@ public final class SshPasswordConnectPlatformTest {
             assertTrue("Required public fixture metadata is missing", request.opt("host") instanceof String
                     && request.opt("username") instanceof String && request.opt("fingerprint") instanceof String
                     && request.opt("port") instanceof Integer);
-            assertEquals("Only the exact key fixture fields are accepted", 5, request.length()); return request;
+            if (encrypted) assertTrue("Required synthetic key passphrase is missing", request.opt("passphrase") instanceof String);
+            assertEquals("Only the exact key fixture fields are accepted", encrypted ? 6 : 5, request.length()); return request;
         } catch (org.json.JSONException invalid) { throw new AssertionError("Invalid synthetic key fixture request"); }
         finally { VaultCodec.wipe(bytes); }
     }

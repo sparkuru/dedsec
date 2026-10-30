@@ -1,6 +1,29 @@
 # ctOS 信息入口
 
-2026-10-30 最新：[正式APK已保留数据更新开发板](verification.md#20261030-ssh-formal-install)，
+2026-10-30 人工验收：用户反馈“功能通过；可以提交并继续”，当前正式fc98的加密私钥／
+口令管理／删除及卡片调整验收通过并授权提交。[验收范围](verification.md#20261030-ssh-keys-human-acceptance)。
+1008父任务保持进行中，提交后继续原规划下一项。
+
+2026-10-30 界面反馈：[私钥卡片操作区](verification.md#20261030-ssh-key-card-actions)改为
+内容宽度按钮与自动换行、统一圆角和间距，删除hover不再铺满卡片。317 Flutter及24张
+真实字体渲染／APK审计通过；正式fc98已保留数据更新指定板并启动，待实际体验。
+
+2026-10-30 接续：[私钥删除](ssh-key-deletion.md)已获用户继续指示，沿1008父任务补齐。
+已实现精确影响确认、库内原子清理、保留外部原文件及 CONFIG、缺失身份拒绝和重导入恢复；
+799 JVM／317 Flutter及指定板隔离42.572秒通过，资源已清。
+随后用户允许保留数据更新，正式0e8e已安装并启动，UID／数据目录／首次安装时间保持；
+[安装记录](verification.md#20261030-ssh-key-delete-formal-install)与
+[隔离验证及限制](verification.md#20261030-ssh-key-deletion)分列，待用户实际体验。
+
+2026-10-30 最新：[加密私钥正式APK已保留数据更新开发板](verification.md#20261030-ssh-encrypted-formal-install)，
+实际f26a哈希匹配，UID／数据目录／首次安装时间保持，已启动应用；等待用户实际体验。
+
+2026-10-30 接续：[加密私钥与可选口令保存](ssh-encrypted-key-connect.md)已沿1008父任务
+实现；304 Flutter／786 JVM、原生矩阵及五类互通通过。指定开发板实际加密导入／
+当次连接／保存复用／忘记／重导入回归40.512秒通过，资源已清，隔离阶段正式7c38保持。
+[隔离证据及范围](verification.md#20261030-ssh-encrypted-key)与上方正式安装分别记录。
+
+2026-10-30 前序交付：[正式APK已保留数据更新开发板](verification.md#20261030-ssh-formal-install)，
 新7c38哈希匹配，UID/数据目录/首次安装时间保持；用户已反馈“效果可以；提交”，本轮交付验收通过。
 
 2026-10-30 当前：[锁屏锁库并断开SSH、实际一键重连](verification.md#20261030-ssh-lock-disconnect-board)

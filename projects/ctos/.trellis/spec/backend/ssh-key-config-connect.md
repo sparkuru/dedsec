@@ -1,4 +1,13 @@
-# Config and unencrypted private-key connections
+# Config and private-key connections
+
+[Private-key deletion](ssh-key-deletion.md) extends this contract: safe absent static
+IdentityFile declarations are representable in stored CONFIG after metadata refresh; config
+import/edit stays strict and every effective missing identity blocks actual connection.
+
+The original clear-key product contract below is extended by
+[encrypted private keys](ssh-encrypted-key-connect.md). Use that contract for phrase-aware
+public extraction, encrypted import/unlock, optional persistence and selected CSKB delivery;
+do not apply the earlier encrypted refusal to that approved production path.
 
 ## 1. Scope / Trigger
 
@@ -25,8 +34,9 @@ Public extraction parses the supplied actual private container, applies existing
 policy and a fixed-domain local signing/verification proof, then returns the real raw public
 blob. Digest/fingerprint/test peer are not replacements. CSKE v1 header56 binds status/kind/
 flags/blob length/public SHA256 to the full blob. Input<=1MiB, original BOOTTIME deadline<=60s;
-encrypted, unsupported and malformed outcomes carry no key/proof fields. No passphrase retry,
-returned signature or arbitrary signing payload. Wipe all private and JNI scratch on every exit.
+unsupported and malformed outcomes carry no key/proof fields. The no-phrase NEEDS outcome has
+no public proof; phrase-aware extraction and retry follow the extension. No returned signature
+or arbitrary signing payload. Wipe all private and JNI scratch on every exit.
 
 Direct mode adds strict active-declaration policy to the same lexer; old effective/catalog/
 audit/resource modes remain unchanged. Keep actual Host/Match/Include/first-value/identity-list
@@ -73,7 +83,8 @@ NEW/KNOWN/changed/revoked classification and Android import->approval->authentic
 
 ## 4. Validation & Error Matrix
 
-Malformed/unsupported/encrypted key -> explicit fixed refusal before import or authentication.
+Malformed/unsupported key -> explicit fixed refusal before import or authentication; encrypted
+key without a phrase -> original-ticket protected unlock per the extension.
 Missing Include/identity -> supplement/edit/cancel, no half graph commit. Changed source/role/
 selected identity or lost protection -> fail before secret copy. Late write cancellation ->
 shared uncertain result and lock, not a false no-effect receipt. Config auth disabled/unsupported

@@ -62,16 +62,27 @@ final class SshPasswordManifestValidator implements AppSecrets.SshContentValidat
                     if (entry.status != SshManifestInspector.Status.PARSED) throw SshPasswordProfile.unsupported();
                 } else if (entry.type == VaultManifest.FileType.CONFIG) {
                     if (entry.status != SshManifestInspector.Status.CONFIG_DEFERRED) throw SshPasswordProfile.unsupported();
-                } else if ((entry.type != VaultManifest.FileType.PRIVATE_KEY && entry.type != VaultManifest.FileType.PUBLIC_KEY)
-                        || entry.status != SshManifestInspector.Status.PARSED) throw SshPasswordProfile.unsupported();
+                } else if (entry.type == VaultManifest.FileType.PUBLIC_KEY) {
+                    if (entry.status != SshManifestInspector.Status.PARSED) throw SshPasswordProfile.unsupported();
+                } else if (entry.type != VaultManifest.FileType.PRIVATE_KEY) throw SshPasswordProfile.unsupported();
             }
             if (hosts == 0 || material.entries.size() != manifest.files.size()) throw SshPasswordProfile.unsupported();
             if (SshConnectionMaterial.extended(manifest)) {
                 for (VaultSshMetadata.KeyBinding binding : manifest.keyBindings) {
                     VaultManifest.FileObject privateFile = SshConnectionMaterial.fileId(manifest, binding.privateFileId);
                     VaultManifest.FileObject publicFile = SshConnectionMaterial.fileId(manifest, binding.publicFileId);
-                    SshKeyMaterial.Result derived = SshKeyMaterial.inspect(privateFile.content, deadline);
-                    if (derived.status != SshKeyMaterial.Status.PARSED) throw SshConnectionMaterial.unsupported();
+                    SshConnectionMaterial.Key key = new SshConnectionMaterial.Key(manifest, binding);
+                    VaultManifest.Entry phrase = SshKeyPassphrase.entry(manifest, binding);
+                    SshKeyMaterial.Result derived = SshKeyMaterial.inspect(privateFile.content,
+                            phrase == null ? null : phrase.secret, deadline);
+                    if (derived.status == SshKeyMaterial.Status.NEEDS_PASSPHRASE && phrase == null) {
+                        // Native has checked the bounded encrypted envelope/policy. The exact public
+                        // graph is checked above; decrypt/public equality is required on selected use.
+                        if (!derived.encrypted || !key.encrypted) throw SshConnectionMaterial.unsupported();
+                        continue;
+                    }
+                    if (derived.status != SshKeyMaterial.Status.PARSED || derived.encrypted != key.encrypted)
+                        throw SshConnectionMaterial.unsupported();
                     byte[] line = derived.publicLine(), blob = derived.publicBlob();
                     try {
                         if (!java.util.Arrays.equals(line, publicFile.content)
@@ -85,7 +96,7 @@ final class SshPasswordManifestValidator implements AppSecrets.SshContentValidat
                     SshManifestConfigInspector.Report report = configs.inspectResourceAudit(manifest, deadline,
                             new SshManifestConfigInspector.Cancellation());
                     for (SshManifestConfigInspector.Root root : report.roots) if (root.path.startsWith(".ssh/")) {
-                        java.util.List<String> expected = SshConnectionMaterial.references(manifest, root.object, root.resourceAudit);
+                        java.util.List<String> expected = SshConnectionMaterial.storedReferences(manifest, root.object, root.resourceAudit);
                         VaultManifest.FileObject file = manifest.files.get(root.object - 1);
                         if (!new java.util.HashSet<>(expected).equals(new java.util.HashSet<>(file.references)))
                             throw SshConnectionMaterial.unsupported();

@@ -13,22 +13,34 @@ static void fail(JNIEnv *env) {
     if ((*env)->ExceptionCheck(env)) return;
     if (error != NULL) (*env)->ThrowNew(env, error, "SSH material inspection failed");
 }
-JNIEXPORT jbyteArray JNICALL Java_im_majo_ctos_SshKeyMaterial_00024Native_inspect(
-    JNIEnv *env, jclass owner, jbyteArray input, jlong deadline) {
-    (void)owner;
-    unsigned char *body = NULL, *wire = NULL;
+static jbyteArray export_public(JNIEnv *env, jbyteArray input, jbyteArray secret,
+    jlong deadline, int product) {
+    unsigned char *body = NULL, *passphrase = NULL, *wire = NULL;
     size_t wire_length = 0;
     jbyteArray result = NULL;
-    jsize length = 0;
+    jsize length = 0, secret_length = 0;
     if (input == NULL || deadline <= 0 || ctos_ssh_material_deadline((uint64_t)deadline) != 0) { fail(env); goto done; }
     length = (*env)->GetArrayLength(env, input);
     if ((*env)->ExceptionCheck(env)) goto done;
-    if (length <= 0 || (size_t)length > CTOS_SSH_MATERIAL_BYTES) { fail(env); goto done; }
+    if (secret != NULL) {
+        secret_length = (*env)->GetArrayLength(env, secret);
+        if ((*env)->ExceptionCheck(env)) goto done;
+    }
+    if (length <= 0 || (size_t)length > CTOS_SSH_MATERIAL_BYTES
+        || (size_t)secret_length > CTOS_SSH_MATERIAL_PASSPHRASE_BYTES) { fail(env); goto done; }
     body = calloc((size_t)length + 1U, 1U);
-    if (body == NULL) { fail(env); goto done; }
+    passphrase = calloc((size_t)secret_length + 1U, 1U);
+    if (body == NULL || passphrase == NULL) { fail(env); goto done; }
     (*env)->GetByteArrayRegion(env, input, 0, length, (jbyte *)body);
     if ((*env)->ExceptionCheck(env)) goto done;
-    if (ctos_ssh_material_export_public(body, (size_t)length, (uint64_t)deadline, &wire, &wire_length) != 0) {
+    if (secret_length != 0) {
+        (*env)->GetByteArrayRegion(env, secret, 0, secret_length, (jbyte *)passphrase);
+        if ((*env)->ExceptionCheck(env)) goto done;
+    }
+    int status = product ? ctos_ssh_material_export_public_with_passphrase(body, (size_t)length,
+        passphrase, (size_t)secret_length, (uint64_t)deadline, &wire, &wire_length)
+        : ctos_ssh_material_export_public(body, (size_t)length, (uint64_t)deadline, &wire, &wire_length);
+    if (status != 0) {
         fail(env); goto done;
     }
     result = (*env)->NewByteArray(env, (jsize)wire_length);
@@ -39,8 +51,19 @@ JNIEXPORT jbyteArray JNICALL Java_im_majo_ctos_SshKeyMaterial_00024Native_inspec
     if (ctos_ssh_material_deadline((uint64_t)deadline) != 0) { fail(env); result = NULL; }
 done:
     if (body != NULL) { wipe(body, (size_t)length + 1U); free(body); }
+    if (passphrase != NULL) { wipe(passphrase, (size_t)secret_length + 1U); free(passphrase); }
     if (wire != NULL) { wipe(wire, wire_length); free(wire); }
     return result;
+}
+JNIEXPORT jbyteArray JNICALL Java_im_majo_ctos_SshKeyMaterial_00024Native_inspect(
+    JNIEnv *env, jclass owner, jbyteArray input, jlong deadline) {
+    (void)owner;
+    return export_public(env, input, NULL, deadline, 0);
+}
+JNIEXPORT jbyteArray JNICALL Java_im_majo_ctos_SshKeyMaterial_00024Native_inspectWithPassphrase(
+    JNIEnv *env, jclass owner, jbyteArray input, jbyteArray secret, jlong deadline) {
+    (void)owner;
+    return export_public(env, input, secret, deadline, 1);
 }
 JNIEXPORT jbyteArray JNICALL Java_im_majo_ctos_SshManifestInspector_00024Native_inspect(
     JNIEnv *env, jclass owner, jint type, jbyteArray input, jbyteArray secret, jlong deadline) {

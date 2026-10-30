@@ -1,5 +1,27 @@
 # ctOS 产品与实施规划
 
+2026-10-30 当前交付获用户“功能通过；可以提交并继续”：正式fc98的SSH密钥管理与
+视觉修正人工验收通过，提交当前增量后继续原1008父任务的已确认需求；完整父AC开放，
+不归档或切到应用细节旁任务。[验收](verification.md#20261030-ssh-keys-human-acceptance)。
+
+2026-10-30 体验反馈：修正私钥卡片整行按钮及胶囊hover突兀，仅局部布局／圆角变化。
+317 Flutter、24张真实字体渲染及正常构建lint／APK审计通过；正式fc98已沿当前同功能
+保留数据更新流程安装指定板并启动。[视觉与安装证据](verification.md#20261030-ssh-key-card-actions)。
+
+2026-10-30 接续：用户指出缺少删除私钥并要求继续；沿原1008任务实施
+[私钥删除](ssh-key-deletion.md)，保留上轮加密私钥改动。799 JVM／317 Flutter及
+指定板隔离42.572秒已通过并清理，[验证](verification.md#20261030-ssh-key-deletion)；
+精确预览后原子删除配对资料，保留 CONFIG 与外部原文件，受影响连接拒绝，重导入修复。
+用户随后回复“可以”，新正式0e8e已保留数据安装同板并启动，待人工体验；
+[安装记录](verification.md#20261030-ssh-key-delete-formal-install)。
+
+2026-10-30 接续：用户已选择 [加密私钥与可选口令保存](ssh-encrypted-key-connect.md)。
+沿原1008父任务实施，不新建；已完成实际导入／手动与config连接／精确保存忘记，
+304 Flutter／786 JVM及原生／独立互通通过，指定板隔离产品链路40.512秒通过并清理。
+[本轮证据](verification.md#20261030-ssh-encrypted-key)与人工／真实picker／复杂恢复边界
+分列；随后用户允许保留数据更新正式应用，f26a已安装并启动，待人工体验。
+[正式安装](verification.md#20261030-ssh-encrypted-formal-install)不等于人工验收／提交，父完整范围继续。
+
 2026-10-30 当前：[统一锁屏断开SSH/实际一键重连](verification.md#20261030-ssh-lock-disconnect-board)
 已在用户指定开发板70.244秒通过，原Home/重建/通知回归保持；临时资源已清，正式包未更新。
 手机或逐版本补验不作为当前前置，不从未测推断不支持，不扩展版本矩阵。

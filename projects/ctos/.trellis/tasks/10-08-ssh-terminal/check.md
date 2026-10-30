@@ -1,5 +1,79 @@
 # 初步规划检查
 
+## 2026-10-30 人工体验通过／授权提交
+
+用户明确“功能通过；可以提交并继续”，当前正式fc98的密钥功能与视觉调整人工验收通过。
+此前检查／设备证据不变，不假称重跑；提交本轮完整已验收增量，父完整AC开放，继续原task。
+提交前独立full-scope复核覆盖全部C/JNI、Java、Flutter及测试／spec／design差异，PASS，
+无新增发现；31项来源仍匹配已审阅fc98。精确暂存排除旁任务README插入和下一增量研究。
+
+## 2026-10-30 私钥卡片视觉反馈修正
+
+仅library_page.dart局部操作组变化，其他30项来源匹配前序快照。317 Flutter／analyze0、
+24张实际字体／hover／大字／窄横屏展示、正常arm64构建lint／v2与APK审计通过；
+独立视觉复核PASS，无新增发现。正式fc98已保留数据更新同板并启动，旧0e8e公开APK备份
+验hash，UID／dataDir／首次安装时间保持，最后更新17:14:54，专用ADB已停。安装独立复核
+PASS（review-final.json）；人工体验／提交仍待。证据 `design/verification.md#20261030-ssh-key-card-actions`。
+
+## 2026-10-30 私钥删除正式安装核对通过
+
+用户回复“可以”后，重新核对31项来源及审阅APK，备份原公开f26a并保留数据install-r。
+指定板实际新0e8e哈希匹配，UID10131、dataDir与首次安装时间保持；最后更新17:01:16，
+MainActivity Status ok／实际resumed且进程存在。专用ADB已停，证据
+`/tmp/ctos-ssh-key-delete-install-20261030.qC0iJ64T`及
+`design/verification.md#20261030-ssh-key-delete-formal-install`。review-install.json独立PASS；
+用户人工体验仍待，未推定提交／归档／dist授权，下方未安装说法仅为前序隔离阶段。
+
+## 2026-10-30 私钥删除：本地／指定板隔离／独立复核通过
+
+合同 `design/ssh-key-deletion.md`，证据 `design/verification.md#20261030-ssh-key-deletion`。
+799 JVM／53套零失败／错误／跳过；317 Flutter、analyze及真实CJK字体20张展示通过。
+正常／fixture构建lint与三APK官方v2／min28／target36审计通过，正常0e8e63e0…、
+fixture7ac3c57b…、teste9e04db9…。31项来源及原生输入9／23／25行逐项一致。
+
+实际隔离方法42.572秒／status0／OK1，两次公钥登录／shell，覆盖删除取消和精确提交、
+关联清理与无关资料保留、CONFIG／Include正文保持、全有效身份缺失拒绝、严格导入闭包、
+重导入修复／不复活口令账号，以及生成MANUAL有无入边。清理全部true且errors为空，
+正式前后f26a／UID10131／dataDir及首次和最后安装时间保持，专用ADB也已停。
+
+独立复核三处已修复发现：严格导入漏查Include子文件、禁用行恢复说明对比度、不可变map
+追加error导致实际library刷新异常。前两次环境预检及第三次实际失败分别保留，不混入通过。
+最终 `/tmp/ctos-ssh-key-delete-20261030.0YEUnyyV/review-final.json` PASS，无剩余发现。
+不代替真实DocumentsUI／人工Flutter体验、其他设备／格式或迟到写入设备故障注入；
+新增正式包尚未安装，未提交／归档／替换dist，父完整AC开放。
+
+## 2026-10-30 加密私钥正式安装核对通过，待人工体验
+
+用户明确“允许”保留数据更新正式应用。安装前核对同一板AIO-3568J/API30/arm64、
+原7c38／UID10131及26项审阅来源；保存原公开APK后install-r成功。设备新f26a hash与
+已验收产物匹配，UID／dataDir／firstInstallTime保持，MainActivity启动成功并resumed。
+证据 `/tmp/ctos-ssh-encrypted-formal-20261030.49lEUMZ5`，权威记录
+`design/verification.md#20261030-ssh-encrypted-formal-install`。未卸载／清数据／访问真实
+秘密或账号，当前安装不代表新增Flutter交互人工验收；用户体验反馈及提交仍待。
+
+## 2026-10-30 加密私钥／可选口令：本地与开发板隔离通过
+
+用户选择继续本轮切片，随后明确允许开发板独立UID／合成账号实测。完整合同在
+`design/ssh-encrypted-key-connect.md`，权威记录在
+`design/verification.md#20261030-ssh-encrypted-key`。
+
+- 实现：原始加密文件／原ticket解锁、实际公钥证明、当次或显式保存／复用口令、原子
+  单条／全部忘记、同公钥重新导入失效及精确CSASv2／host／KEX最终交付。
+- 本地：304 Flutter／786 JVM／51 suites无失败、normal与fixture构建/lint/v2通过；
+  ARM材料21005及完整客户端1759380，五类独立SSH key-only互通通过并清理。
+- 产物：正式arm64 f26a0da9…／fixture2a204b30…／testa81d6448…；同一生产原生库，
+  新JNI及20sessionJNI、22分配节、26项来源及23／25／9原生输入核对一致。
+- 实机：AIO-3568J/API30 `.14`，精确方法status0／OK1／40.512秒；实际加密导入、错误
+  口令、当次／保存／复用／忘记和重导入通过，服务端5次公钥／shell；正式7c38／UID10131
+  及数据目录／安装时间前后保持，测试包／请求／映射／relay／容器／网络全清。
+- 独立Trellis源码／原始证据／产物／设备清理复核通过，无剩余缺陷。首轮JVM新增断言
+  位置与Flutter pump、临时服务与字体夹具问题按原日志保留，未放宽产品规则。
+
+review classification：human-required，新增敏感页面／口令交互还需用户实际体验。
+独立provider方法不冒充真实DocumentsUI／grant或Flutter人工操作；其他设备、个人私钥／
+账号、Android逐格式及复杂恢复和父完整AC仍分列。后续正式更新另按上方当前授权完成；
+无提交／归档／dist授权，父任务保持in_progress，旁任务与邻项目修改保留。
+
 ## 2026-10-30 正式安装与人工验收门通过
 
 主会话install-r更新正式7c38并核对设备哈希；UID10131/数据目录/首次安装时间前后一致。

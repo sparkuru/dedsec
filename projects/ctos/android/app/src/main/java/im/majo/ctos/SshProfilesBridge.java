@@ -58,6 +58,7 @@ final class SshProfilesBridge implements AutoCloseable {
         int picker;
         String kind, path;
         Request originalEdit;
+        Ticket unlocking;
         Request(String id, MethodChannel.Result result, long deadline) throws VaultException {
             this.id = id; this.result = result; this.deadline = deadline;
             epoch = vault.session.epoch(); revision = vault.contentRevision;
@@ -84,11 +85,18 @@ final class SshProfilesBridge implements AutoCloseable {
         final String kind, path, label, algorithm, fingerprint, binding;
         final boolean replacing;
         final SshImportProposal imported;
+        final SshKeyDeletion deleting;
         final List<Map<String, Object>> issues;
+        private byte[] lockedBody;
         volatile boolean cancelled;
         Ticket(Object owner, String kind, String path, SshImportProposal imported,
                 List<Map<String, Object>> issues) {
+            this(owner, kind, path, imported, issues, null);
+        }
+        Ticket(Object owner, String kind, String path, SshImportProposal imported,
+                List<Map<String, Object>> issues, byte[] lockedBody) {
             this.owner = owner; this.kind = kind; this.path = path; this.imported = imported;
+            deleting = null;
             label = imported == null ? SshImportProposal.basename(path) : imported.label;
             algorithm = imported == null ? "" : imported.algorithm;
             fingerprint = imported == null ? "" : imported.fingerprint;
@@ -96,13 +104,30 @@ final class SshProfilesBridge implements AutoCloseable {
             binding = imported == null ? SshConnectionMaterial.hex(VaultCodec.digest(
                     ("blocked-import\0" + id).getBytes(StandardCharsets.UTF_8))) : imported.proposal.binding;
             this.issues = issues;
+            this.lockedBody = lockedBody == null ? null : lockedBody.clone();
         }
+        Ticket(Object owner, SshKeyDeletion deleting) {
+            this.owner = owner; this.deleting = deleting; imported = null; kind = "keyDelete";
+            path = deleting.key.path; label = SshImportProposal.basename(path);
+            algorithm = deleting.key.algorithm; fingerprint = deleting.key.fingerprint;
+            binding = deleting.proposal.binding; replacing = false; issues = List.of();
+        }
+        SshBundleProposal proposal() { return deleting == null ? imported.proposal : deleting.proposal; }
         Map<String, Object> metadata() {
+            if (deleting != null) return deleting.metadata(id);
             return VaultCollections.map("ticketId", id, "binding", binding, "kind", kind, "path", path,
                     "label", label, "algorithm", algorithm, "fingerprint", fingerprint,
-                    "replacing", replacing, "issues", issues, "canCommit", imported != null);
+                    "replacing", replacing, "issues", issues, "canCommit", imported != null,
+                    "needsPassphrase", lockedBody != null);
         }
-        void close() { if (imported != null) imported.close(); }
+        synchronized byte[] encryptedInput() throws VaultException {
+            if (cancelled || lockedBody == null) throw failure("SSH_IMPORT_EXPIRED");
+            return lockedBody.clone();
+        }
+        synchronized void close() {
+            if (imported != null) imported.close(); VaultCodec.wipe(lockedBody); lockedBody = null;
+            if (deleting != null) deleting.close();
+        }
     }
 
     SshProfilesBridge(Activity activity, AppSecretsBridge secrets, BooleanSupplier connecting,
@@ -116,7 +141,8 @@ final class SshProfilesBridge implements AutoCloseable {
     boolean handle(MethodCall call, MethodChannel.Result result) {
         switch (call.method) {
             case "ssh.library": case "ssh.importFile": case "ssh.importCommit":
-            case "ssh.importCancel": case "ssh.configRead": case "ssh.configPreview": break;
+            case "ssh.importCancel": case "ssh.configRead": case "ssh.configPreview": case "ssh.importUnlock":
+            case "ssh.keyDeletePreview": case "ssh.keyDeleteCommit": case "ssh.keyDeleteCancel": break;
             default: return false;
         }
         try {
@@ -125,19 +151,25 @@ final class SshProfilesBridge implements AutoCloseable {
                 case "ssh.library": read(call, result, false); break;
                 case "ssh.configRead": read(call, result, true); break;
                 case "ssh.importFile": pick(call, result); break;
+                case "ssh.importUnlock": unlock(call, result); break;
                 case "ssh.configPreview": editPreview(call, result); break;
-                case "ssh.importCommit": commit(call, result); break;
-                case "ssh.importCancel": {
+                case "ssh.importCommit": commit(call, result, false); break;
+                case "ssh.keyDeletePreview": deletePreview(call, result); break;
+                case "ssh.keyDeleteCommit": commit(call, result, true); break;
+                case "ssh.importCancel": case "ssh.keyDeleteCancel": {
                     exact(call, "ticketId"); String id = identifier(call, "ticketId");
                     Ticket current = ticket;
-                    boolean cancelled = current != null && current.id.equals(id);
+                    boolean cancelled = current != null && current.id.equals(id)
+                            && (current.deleting != null) == call.method.equals("ssh.keyDeleteCancel");
                     if (cancelled) cancelTicket(current);
                     result.success(VaultCollections.map("cancelled", cancelled)); break;
                 }
                 default: throw failure("PARAMETERS");
             }
         } catch (VaultException failure) { error(result, failure.code); }
-        catch (RuntimeException | LinkageError failure) { error(result, "SSH_IMPORT_FAILED"); }
+        catch (RuntimeException | LinkageError failure) {
+            error(result, call.method.startsWith("ssh.keyDelete") ? "SSH_KEY_DELETE_FAILED" : "SSH_IMPORT_FAILED");
+        }
         return true;
     }
 
@@ -195,7 +227,8 @@ final class SshProfilesBridge implements AutoCloseable {
             SshConnectionMaterial.Key key = new SshConnectionMaterial.Key(source.manifest, binding);
             material.add(key);
             keys.add(VaultCollections.map("id", key.id, "label", SshImportProposal.basename(key.path),
-                    "path", key.path, "algorithm", key.algorithm, "fingerprint", key.fingerprint));
+                    "path", key.path, "algorithm", key.algorithm, "fingerprint", key.fingerprint,
+                    "encrypted", key.encrypted, "hasSavedPassphrase", key.hasSavedPassphrase));
         }
         boolean configured = SshConnectionMaterial.file(source.manifest, SshConnectionMaterial.ROOT) != null;
         if (configured) {
@@ -213,15 +246,17 @@ final class SshProfilesBridge implements AutoCloseable {
                     SshConfigEvaluator.DirectPlan plan = SshConnectionMaterial.plan(source.manifest,
                             SshConnectionMaterial.ROOT, alias.alias, "", deadline, request::check, share);
                     List<String> eligible = new ArrayList<>();
-                    if (plan.pubkeyAuthentication)
+                    List<String> missing = SshConnectionMaterial.missingIdentityPaths(source.manifest, plan);
+                    if (plan.pubkeyAuthentication && missing.isEmpty())
                         for (String path : plan.identityFiles)
                             for (SshConnectionMaterial.Key key : material)
                                 if (key.path.equals(path) && !eligible.contains(key.id)) eligible.add(key.id);
-                    Map<String, Object> row = VaultCollections.map("alias", alias.alias, "host", plan.hostname,
-                            "port", plan.port, "username", plan.user, "keyIds", eligible,
-                            "binding", SshConnectionMaterial.configBinding(source, alias.alias));
+                    Map<String, Object> row = new HashMap<>(VaultCollections.map("alias", alias.alias, "host", plan.hostname,
+                            "port", plan.port, "username", plan.user, "keyIds", VaultCollections.copyList(eligible),
+                            "missingIdentityPaths", VaultCollections.copyList(missing),
+                            "binding", SshConnectionMaterial.configBinding(source, alias.alias)));
                     if (eligible.isEmpty()) row.put("error", "SSH_KEY_MISSING");
-                    hosts.add(row);
+                    hosts.add(java.util.Collections.unmodifiableMap(row));
                 } catch (IOException | VaultException failure) {
                     hosts.add(VaultCollections.map("alias", alias.alias, "host", "", "port", 22,
                             "username", "", "keyIds", List.of(), "error", configCode(failure),
@@ -230,6 +265,34 @@ final class SshProfilesBridge implements AutoCloseable {
             }
         }
         return VaultCollections.map("keys", keys, "hosts", hosts, "hasConfig", configured);
+    }
+
+    private void deletePreview(MethodCall call, MethodChannel.Result result) throws VaultException {
+        exact(call, "requestId", "keyId");
+        String keyId = identifier(call, "keyId");
+        if (connecting.getAsBoolean() || busy()) throw failure("BUSY");
+        Request request = request(call, result); request.kind = "keyDelete"; input = request;
+        worker.execute(() -> {
+            SshKeyDeletion deletion = null;
+            try {
+                request.check();
+                deletion = SshPasswordManifestValidator.within(request.deadline, () -> {
+                    try (SshConnectionMaterial.Snapshot source = vault.sshLibrarySnapshot(request.context)) {
+                        SshKeyDeletion prepared = SshKeyDeletion.create(source.manifest, keyId);
+                        try (VaultManifest candidate = prepared.proposal.applyTo(source.manifest)) {
+                            vault.validateSshCandidate(request.context, candidate);
+                        } catch (Throwable failure) { prepared.close(); throw failure; }
+                        return prepared;
+                    }
+                });
+                request.check();
+                Ticket prepared = new Ticket(request, deletion); deletion = null;
+                main.post(() -> publish(request, prepared));
+            } catch (Throwable failure) {
+                String reason = deletionCode(failure);
+                main.post(() -> { if (input == request) input = null; finish(request, null, reason); });
+            } finally { if (deletion != null) deletion.close(); cleanup(); }
+        });
     }
 
     private void pick(MethodCall call, MethodChannel.Result result) throws VaultException {
@@ -323,6 +386,10 @@ final class SshProfilesBridge implements AutoCloseable {
     }
 
     private void prepare(Request request, byte[] body) throws Exception {
+        prepare(request, body, null);
+    }
+
+    private void prepare(Request request, byte[] body, byte[] passphrase) throws Exception {
         request.check();
         if (request.originalEdit != null) request.originalEdit.check();
         SshImportProposal proposal = null;
@@ -336,7 +403,8 @@ final class SshProfilesBridge implements AutoCloseable {
                         original.check();
                     }
                     SshImportProposal imported = SshImportProposal.create(source.manifest, request.kind,
-                            request.path, body, Math.min(request.deadline, SystemClock.elapsedRealtime() + 60_000));
+                            request.path, body, passphrase, Math.min(request.deadline, SystemClock.elapsedRealtime() + 60_000),
+                            request::check);
                     try (VaultManifest candidate = imported.proposal.applyTo(source.manifest)) {
                         vault.validateSshCandidate(request.context, candidate);
                     } catch (Throwable failure) { imported.close(); throw failure; }
@@ -350,7 +418,54 @@ final class SshProfilesBridge implements AutoCloseable {
             Ticket prepared = new Ticket(request, request.kind, request.path, proposal, issues);
             proposal = null;
             main.post(() -> publish(request, prepared));
+        } catch (VaultException failure) {
+            if (passphrase == null && failure.code.equals("SSH_KEY_PASSPHRASE_REQUIRED")) {
+                request.check();
+                Ticket locked = new Ticket(request, request.kind, request.path, null, List.of(), body);
+                main.post(() -> publish(request, locked));
+            } else throw failure;
         } finally { if (proposal != null) proposal.close(); }
+    }
+
+    private void unlock(MethodCall call, MethodChannel.Result result) throws VaultException {
+        exact(call, "requestId", "ticketId", "binding", "passphrase");
+        String id = identifier(call, "requestId"), selectedId = identifier(call, "ticketId");
+        Ticket selected = ticket;
+        if (selected == null || selected.cancelled || !selected.id.equals(selectedId)
+                || !selected.binding.equals(text(call, "binding")) || selected.lockedBody == null)
+            throw failure("SSH_IMPORT_EXPIRED");
+        if (connecting.getAsBoolean() || committing != null || input != null) throw failure("BUSY");
+        Request original = (Request)selected.owner; original.check(); admission.admit(id);
+        byte[] phrase = SshKeyPassphrase.bytes(text(call, "passphrase"), false);
+        Request request;
+        try {
+            request = new Request(id, result, original.deadline);
+            vault.inheritSshEditContext(original.context, request.context);
+            request.originalEdit = original; request.unlocking = selected;
+            request.kind = selected.kind; request.path = selected.path;
+            requests.put(id, request); input = request;
+        } catch (Throwable failure) { VaultCodec.wipe(phrase); throw failure; }
+        try {
+            worker.execute(() -> {
+                byte[] body = null;
+                try { request.check(); body = selected.encryptedInput(); prepare(request, body, phrase); }
+                catch (Throwable failure) {
+                    String reason = code(failure);
+                    main.post(() -> {
+                        if (input == request) input = null;
+                        request.cancelled = true;
+                        vault.cancelBundleContext(request.context);
+                        // Wrong input is retryable against the same bounded original ticket.
+                        if (!reason.equals("SSH_KEY_BAD_PASSPHRASE") && !reason.equals("PARAMETERS")) {
+                            if (ticket == selected) cancelTicket(selected);
+                        }
+                        finish(request, null, reason);
+                    });
+                } finally { VaultCodec.wipe(body); VaultCodec.wipe(phrase); cleanup(); }
+            });
+        } catch (RuntimeException | Error failure) {
+            VaultCodec.wipe(phrase); request.cancel(); if (input == request) input = null; throw failure;
+        }
     }
 
     private void publishBlocked(Request request, Throwable failure) {
@@ -370,7 +485,12 @@ final class SshProfilesBridge implements AutoCloseable {
     private void publish(Request request, Ticket prepared) {
         try {
             request.check();
-            if (input != request || ticket != null || request.finished) throw failure("SSH_CANCELLED");
+            if (input != request || ticket != null && ticket != request.unlocking || request.finished)
+                throw failure("SSH_CANCELLED");
+            if (request.unlocking != null) {
+                request.unlocking.cancelled = true;
+                request.unlocking.close();
+            }
             request.finished = request.delivered = true; request.handedOff = true;
             input = null; ticket = prepared;
             request.result.success(prepared.metadata());
@@ -382,14 +502,16 @@ final class SshProfilesBridge implements AutoCloseable {
         }
     }
 
-    private void commit(MethodCall call, MethodChannel.Result result) throws VaultException {
-        exact(call, "requestId", "ticketId", "binding", "replace");
+    private void commit(MethodCall call, MethodChannel.Result result, boolean deletion) throws VaultException {
+        if (deletion) exact(call, "requestId", "ticketId", "binding");
+        else exact(call, "requestId", "ticketId", "binding", "replace");
         String id = identifier(call, "requestId"), ticketId = identifier(call, "ticketId"), binding = text(call, "binding");
         Object replace = call.argument("replace");
         Ticket selected = ticket;
         if (selected == null || selected.cancelled || !selected.id.equals(ticketId)
-                || !selected.binding.equals(binding) || !(replace instanceof Boolean)
-                || (Boolean)replace != selected.replacing || selected.imported == null) throw failure("VAULT_CHANGED");
+                || !selected.binding.equals(binding) || (selected.deleting != null) != deletion
+                || !deletion && (!(replace instanceof Boolean)
+                || (Boolean)replace != selected.replacing || selected.imported == null)) throw failure("VAULT_CHANGED");
         if (connecting.getAsBoolean() || committing != null) throw failure("BUSY");
         Request origin = (Request)selected.owner; origin.check(); admission.admit(id);
         Request request = new Request(id, result, origin.deadline);
@@ -409,16 +531,16 @@ final class SshProfilesBridge implements AutoCloseable {
             try {
                 SshVaultAdapter adapter = new SshVaultAdapter(vault, (c, t) -> { throw failure("VAULT_OPERATION"); },
                         p -> { throw failure("VAULT_OPERATION"); }, exact -> {
-                            effect.check(); if (exact != selected.imported.proposal) throw failure("VAULT_OPERATION");
+                            effect.check(); if (exact != selected.proposal()) throw failure("VAULT_OPERATION");
                         });
                 operation = SshPasswordManifestValidator.within(origin.deadline,
-                        () -> adapter.bundleRequest(selected.imported.proposal, origin.context));
+                        () -> adapter.bundleRequest(selected.proposal(), origin.context));
                 VaultOperation exact = operation;
                 SshPasswordManifestValidator.within(origin.deadline, () -> {
-                    adapter.commitBundle(exact, selected.imported.proposal, effect); return null;
+                    adapter.commitBundle(exact, selected.proposal(), effect); return null;
                 });
                 written = true;
-            } catch (Throwable failure) { failed = code(failure); }
+            } catch (Throwable failure) { failed = deletion ? deletionCode(failure) : code(failure); }
             finally {
                 vault.cancelOperation(operation); origin.cancel(); vault.cancelBundleContext(request.context); selected.close();
             }
@@ -437,7 +559,7 @@ final class SshProfilesBridge implements AutoCloseable {
                     } catch (VaultException failure) { reason = failure.code; }
                 }
                 if (reason != null && committed) { vault.session.lock(); reason = "VAULT_COMMIT_UNCERTAIN"; }
-                finish(request, reason == null ? VaultCollections.map("committed", true) : null, reason);
+                finish(request, reason == null ? VaultCollections.map(deletion ? "deleted" : "committed", true) : null, reason);
             });
             cleanup();
         });
@@ -557,6 +679,10 @@ final class SshProfilesBridge implements AutoCloseable {
         for (int depth = 0; depth < 5 && error != null; depth++, error = error.getCause())
             if (error instanceof VaultException) return ((VaultException)error).code;
         return "SSH_IMPORT_FAILED";
+    }
+    private static String deletionCode(Throwable error) {
+        String code = code(error);
+        return code.equals("SSH_IMPORT_FAILED") ? "SSH_KEY_DELETE_FAILED" : code;
     }
     private static String identifier(MethodCall call, String key) throws VaultException {
         String value = text(call, key); VaultManifest.identifier(value); return value;

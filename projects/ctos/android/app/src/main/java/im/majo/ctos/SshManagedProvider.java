@@ -193,6 +193,10 @@ final class SshManagedProvider {
             if (kind != SshCredentialBridge.Kind.PASSWORD) throw SshAuthenticationSelection.invalid();
             return credentialBridge.transientPasswordBytes(role, hostKey, kex, selection, effectGuard);
         }
+        if (credentialBridge.hasTransientKey()) {
+            if (kind != SshCredentialBridge.Kind.PRIVATE_KEY) throw SshAuthenticationSelection.invalid();
+            return credentialBridge.transientKeyBytes(role, hostKey, kex, selection, effectGuard);
+        }
         return releaseBytes(credentialBridge.openSelection(role, hostKey, selection, kex, effectGuard), kex, kind,
                 selection, effectGuard);
     }

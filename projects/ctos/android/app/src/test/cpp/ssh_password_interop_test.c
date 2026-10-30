@@ -10,7 +10,7 @@
 #ifdef CTOS_INTEROP_PRIVATE_KEY
 #include "ssh_material_inspect.h"
 #define INTEROP_LABEL "SSH_KEY_INTEROP"
-#define INTEROP_INPUT_BYTES CTOS_SSH_MATERIAL_BYTES
+#define INTEROP_INPUT_BYTES (CTOS_SSH_MATERIAL_BYTES + CTOS_SSH_MATERIAL_PASSPHRASE_BYTES + 16U)
 #else
 #define INTEROP_LABEL "SSH_PASSWORD_INTEROP"
 #define INTEROP_INPUT_BYTES CTOS_SSH_NATIVE_CLIENT_MAX_PASSWORD_BYTES
@@ -43,7 +43,7 @@ static int interop_host_evidence(void *context, void *environment,
     return host_evidence(context, environment, evidence, result);
 }
 
-static int interop_password(unsigned char *password, size_t *length) {
+static int interop_password(unsigned char *password, size_t *length, int binary_bundle) {
     unsigned char input[1024];
     uint64_t deadline = deadline_after(30000U);
     *length = 0;
@@ -56,7 +56,7 @@ static int interop_password(unsigned char *password, size_t *length) {
         if (count < 0) { if (errno == EINTR) continue; break; }
         if (count == 0) { interop_wipe(input, sizeof(input)); return 0; }
         if ((size_t)count > INTEROP_INPUT_BYTES - *length
-            || memchr(input, 0, (size_t)count) != NULL) { errno = EINVAL; break; }
+            || (!binary_bundle && memchr(input, 0, (size_t)count) != NULL)) { errno = EINVAL; break; }
         memcpy(password + *length, input, (size_t)count);
         *length += (size_t)count;
         interop_wipe(input, sizeof(input));
@@ -241,12 +241,14 @@ int main(int argc, char **argv) {
 #ifdef CTOS_INTEROP_PRIVATE_KEY
     unsigned char *public_wire = NULL;
     size_t public_wire_length = 0;
+    const unsigned char *private_body = password, *passphrase = NULL;
+    size_t private_length = 0, passphrase_length = 0;
 #endif
     size_t password_length = 0;
     unsigned long port = 0, hold_seconds = 0;
     struct sockaddr_in address = {.sin_family = AF_INET};
     const char *phase = "arguments";
-    int descriptor = -1, opened = 0, result = 1, saved_error = 0;
+    int descriptor = -1, opened = 0, result = 1, saved_error = 0, binary_bundle = 0;
     FILE *known_stream = NULL;
     fixture.callback.release_fd = -1;
     setvbuf(stdout, NULL, _IOLBF, 0);
@@ -256,25 +258,51 @@ int main(int argc, char **argv) {
     /* Isolated test driver only: diagnose negotiation without packet payload dumps. */
     log_init(INTEROP_LABEL, SYSLOG_LEVEL_DEBUG3, SYSLOG_FACILITY_AUTH, 1);
 #define INTEROP_REQUIRE(condition) do { if (!(condition)) goto done; } while (0)
+#ifdef CTOS_INTEROP_PRIVATE_KEY
+    if ((argc == 6 || argc == 8) && strcmp(argv[5], "--key-bundle") == 0) {
+        binary_bundle = 1;
+        for (int index = 5; index + 1 < argc; index++) argv[index] = argv[index + 1];
+        argc--;
+    }
+#endif
     if ((argc != 5 && argc != 7) || interop_number(argv[2], 65535U, &port) != 0 || port == 0
         || (argc == 7 && (strcmp(argv[5], "--hold-seconds") != 0
             || interop_number(argv[6], 120U, &hold_seconds) != 0))
         || inet_pton(AF_INET, argv[1], &address.sin_addr) != 1
         || (ntohl(address.sin_addr.s_addr) >> 24) != 127U
         || strlen(argv[3]) == 0 || strlen(argv[3]) > 255U) {
-        fprintf(stderr, "Usage: %s <loopback-ipv4> <port> <username> <server-public-key> [--hold-seconds 0..120]\nAuthentication input: exact bytes on stdin followed by EOF.\n", argv[0]);
+        fprintf(stderr, "Usage: %s <loopback-ipv4> <port> <username> <server-public-key> [--key-bundle] [--hold-seconds 0..120]\nAuthentication input: exact bytes on stdin followed by EOF; --key-bundle accepts bounded CSKBv1, never argv secrets.\n", argv[0]);
         errno = EINVAL;
         goto done;
     }
     address.sin_port = htons((uint16_t)port);
     phase = "password-input";
-    INTEROP_REQUIRE(interop_password(password, &password_length) == 0);
+    INTEROP_REQUIRE(interop_password(password, &password_length, binary_bundle) == 0);
 #ifdef CTOS_INTEROP_PRIVATE_KEY
+    private_length = password_length;
+    if (binary_bundle) {
+        uint32_t magic, version, length;
+        phase = "bounded-key-bundle";
+        INTEROP_REQUIRE(password_length >= 16U);
+        memcpy(&magic, password, 4U); memcpy(&version, password + 4U, 4U);
+        memcpy(&length, password + 8U, 4U); private_length = ntohl(length);
+        INTEROP_REQUIRE(ntohl(magic) == 0x43534b42U && ntohl(version) == 1U
+            && private_length != 0U && private_length <= CTOS_SSH_MATERIAL_BYTES
+            && private_length <= password_length - 16U);
+        private_body = password + 12U;
+        memcpy(&length, private_body + private_length, 4U); passphrase_length = ntohl(length);
+        INTEROP_REQUIRE(passphrase_length != 0U && passphrase_length <= CTOS_SSH_MATERIAL_PASSPHRASE_BYTES
+            && password_length - 16U - private_length == passphrase_length);
+        passphrase = private_body + private_length + 4U;
+        INTEROP_REQUIRE(memchr(private_body, 0, private_length) == NULL
+            && memchr(passphrase, 0, passphrase_length) == NULL);
+    }
     phase = "actual-private-public-proof";
-    INTEROP_REQUIRE(ctos_ssh_material_export_public(password, password_length,
-        deadline_after(30000U), &public_wire, &public_wire_length) == 0);
+    INTEROP_REQUIRE(ctos_ssh_material_export_public_with_passphrase(private_body, private_length,
+        passphrase, passphrase_length, deadline_after(30000U), &public_wire, &public_wire_length) == 0);
     INTEROP_REQUIRE(public_wire != NULL && public_wire_length > CTOS_SSH_KEY_EXPORT_HEADER_BYTES
         && public_wire[8] == 0 && public_wire[9] == 0 && public_wire[10] == 0 && public_wire[11] == 0);
+    INTEROP_REQUIRE(!binary_bundle || public_wire[19] == 3U);
 #endif
     phase = "public-key";
     fixture.host_key = interop_public_key(argv[4]);
@@ -339,6 +367,11 @@ int main(int argc, char **argv) {
     };
 #ifdef CTOS_INTEROP_PRIVATE_KEY
     make_selection_wire(&fixture.selection_wire, &snapshot, 4U, fields);
+    if (binary_bundle) {
+        fields[1] = (struct ctos_ssh_slice){(const unsigned char *)"interop-once-phrase", 19U};
+        make_selection_wire(&fixture.selection_wire, &snapshot, 4U, fields);
+        fixture.selection_wire.bytes[5] = 2U;
+    }
 #else
     make_selection_wire(&fixture.selection_wire, &snapshot, 1U, fields);
 #endif

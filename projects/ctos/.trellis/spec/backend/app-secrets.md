@@ -304,6 +304,13 @@ CSKBv1 total <=1MiB. Final host/KEX/role guards run after the last store read an
 immediately before any credential, key or bundle receiver. Generic passphrase
 target identity is never substituted for the actual remote target.
 
+2026-10-30 production extension: [encrypted-key connection](ssh-encrypted-key-connect.md)
+adds exact entry+KeyBinding save/forget candidates on the same entry-mutation pipeline. Default
+one-use phrases use an opaque SshTransientKey-backed typed PRIVATE context with the same
+CSASv2 selection and final host/KEX proof, followed by one guarded CSKB assembly; synthetic
+phrase IDs never authorize persistent bundles. Unsaved encrypted source admission is explicitly
+structural and does not establish decrypted pair proof; import/selected use must prove it.
+
 The SSH public file loan now has a native-only SshPublicFileLease: no private
 body in its explicit bounded wire, opaque singleton native ownership, and
 revocation bound to both the exact VaultSession epoch and originating

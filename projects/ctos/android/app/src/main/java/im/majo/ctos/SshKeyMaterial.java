@@ -11,17 +11,21 @@ import java.util.Base64;
 /** Public-only result derived and self-verified from an actual supplied private key. */
 final class SshKeyMaterial {
     static final int MAX_BYTES = 1024 * 1024;
+    static final int MAX_PASSPHRASE_BYTES = 8192;
     private static final int HEADER_BYTES = 56;
-    enum Status { PARSED, MALFORMED, UNSUPPORTED, NEEDS_PASSPHRASE }
+    enum Status { PARSED, MALFORMED, UNSUPPORTED, NEEDS_PASSPHRASE, BAD_PASSPHRASE }
     interface Clock { long now(); }
     interface NativeBinding { byte[] inspect(byte[] input, long deadline) throws IOException; }
+    interface PassphraseNativeBinding { byte[] inspect(byte[] input, byte[] passphrase, long deadline) throws IOException; }
     private static final class Native {
         static { System.loadLibrary("ctos_ssh_files"); }
         static native byte[] inspect(byte[] input, long deadline) throws IOException;
+        static native byte[] inspectWithPassphrase(byte[] input, byte[] passphrase, long deadline) throws IOException;
     }
     static final class Result {
         final Status status;
         final int kind;
+        final boolean encrypted;
         final String algorithm, fingerprint;
         private final byte[] blob;
         private Result(byte[] wire) throws IOException {
@@ -36,13 +40,15 @@ final class SshKeyMaterial {
             try {
                 if (statusCode < 0 || statusCode >= Status.values().length || length != frame.remaining()) throw invalid();
                 status = Status.values()[statusCode];
+                encrypted = (flags & 2) != 0;
                 if (status != Status.PARSED) {
                     if (kind != 0 || length != 0 || (flags != 0 && flags != 2)
-                            || status == Status.NEEDS_PASSPHRASE && flags != 2 || !zero(digest)) throw invalid();
+                            || (status == Status.NEEDS_PASSPHRASE || status == Status.BAD_PASSPHRASE)
+                            && flags != 2 || !zero(digest)) throw invalid();
                     algorithm = ""; fingerprint = ""; blob = new byte[0];
                     return;
                 }
-                if (kind < 1 || kind > 5 || flags != 1 || length < 8) throw invalid();
+                if (kind < 1 || kind > 5 || (flags != 1 && flags != 3) || length < 8) throw invalid();
                 algorithm = new String[] {"ssh-ed25519", "ecdsa-sha2-nistp256", "ecdsa-sha2-nistp384",
                         "ecdsa-sha2-nistp521", "ssh-rsa"}[kind - 1];
                 byte[] name = algorithm.getBytes(StandardCharsets.US_ASCII);
@@ -61,19 +67,34 @@ final class SshKeyMaterial {
         }
     }
     static Result inspect(byte[] input, long deadline) throws IOException {
-        return inspect(input, deadline, SystemClock::elapsedRealtime, Native::inspect);
+        return inspect(input, null, deadline);
+    }
+    static Result inspect(byte[] input, byte[] passphrase, long deadline) throws IOException {
+        return inspect(input, passphrase, deadline, SystemClock::elapsedRealtime, Native::inspectWithPassphrase);
     }
     static Result inspect(byte[] input, long deadline, Clock clock, NativeBinding binding) throws IOException {
+        if (binding == null) throw invalid();
+        return inspect(input, null, deadline, clock, (body, phrase, budget) -> binding.inspect(body, budget));
+    }
+    static Result inspect(byte[] input, byte[] passphrase, long deadline, Clock clock,
+            PassphraseNativeBinding binding) throws IOException {
         if (input == null || input.length == 0 || input.length > MAX_BYTES || clock == null || binding == null) throw invalid();
+        if (passphrase != null) {
+            if (passphrase.length > MAX_PASSPHRASE_BYTES) throw invalid();
+            for (byte value : passphrase) if (value == 0) throw invalid();
+        }
         check(deadline, clock);
-        byte[] owned = input.clone(), wire = null;
+        byte[] owned = null, phrase = null, wire = null;
         try {
-            wire = binding.inspect(owned, deadline);
+            owned = input.clone();
+            phrase = passphrase == null ? new byte[0] : passphrase.clone();
+            check(deadline, clock);
+            wire = binding.inspect(owned, phrase, deadline);
             check(deadline, clock);
             Result result = new Result(wire);
             check(deadline, clock);
             return result;
-        } finally { VaultCodec.wipe(owned); VaultCodec.wipe(wire); }
+        } finally { VaultCodec.wipe(owned); VaultCodec.wipe(phrase); VaultCodec.wipe(wire); }
     }
     private static void check(long deadline, Clock clock) throws IOException {
         long now = clock.now();

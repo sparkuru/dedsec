@@ -133,6 +133,7 @@ final class SshBundleProposal implements AutoCloseable {
     final Object requestIdentity = new Object();
     private final List<Change> changes;
     private final Relations relations;
+    private final Set<String> removedPassphrases;
     private volatile boolean closed;
 
     SshBundleProposal(List<Change> input) throws VaultException {
@@ -140,8 +141,16 @@ final class SshBundleProposal implements AutoCloseable {
     }
 
     SshBundleProposal(List<Change> input, Relations relations) throws VaultException {
+        this(input, relations, java.util.Collections.emptySet());
+    }
+
+    SshBundleProposal(List<Change> input, Relations relations, Set<String> removedPassphrases) throws VaultException {
         if (input == null || input.isEmpty() && relations == null || input.size() > VaultManifest.MAX_FILES)
             throw VaultException.invalid();
+        if (removedPassphrases == null || removedPassphrases.size() > VaultManifest.MAX_KEY_BINDINGS
+                || !removedPassphrases.isEmpty() && relations == null) throw VaultException.invalid();
+        for (String id : removedPassphrases) VaultManifest.identifier(id);
+        this.removedPassphrases = java.util.Collections.unmodifiableSet(new HashSet<>(removedPassphrases));
         List<Change> owned = new ArrayList<>();
         try {
             Set<String> paths = new HashSet<>();
@@ -157,8 +166,9 @@ final class SshBundleProposal implements AutoCloseable {
             owned.sort((left, right) -> left.path.compareTo(right.path));
             changes = VaultCollections.copyList(owned);
             this.relations = relations;
-            binding = relations == null ? proposalBinding(changes)
+            String fileBinding = relations == null ? proposalBinding(changes)
                     : proposalRelationsBinding(proposalBinding(changes), relations);
+            binding = this.removedPassphrases.isEmpty() ? fileBinding : removalBinding(fileBinding, this.removedPassphrases);
         } catch (VaultException failure) {
             for (Change change : owned) change.close();
             throw failure;
@@ -203,6 +213,10 @@ final class SshBundleProposal implements AutoCloseable {
         List<VaultManifest.Entry> entries = new ArrayList<>();
         try {
             for (VaultManifest.Entry entry : previous.entries) {
+                if (removedPassphrases.contains(entry.id)) {
+                    if (entry.type != VaultManifest.EntryType.SSH_KEY_PASSPHRASE) throw VaultException.invalid();
+                    continue;
+                }
                 entries.add(new VaultManifest.Entry(entry.type, entry.id, entry.identity, entry.label,
                         entry.algorithm, entry.digits, entry.period, entry.secret));
             }
@@ -305,6 +319,15 @@ final class SshBundleProposal implements AutoCloseable {
                 VaultCodec.writeText(out, account.username); out.writeInt(account.authKind.ordinal());
                 VaultCodec.writeText(out, account.credentialId);
             }
+            return digestBuffer(buffer);
+        } catch (IOException error) { throw new AssertionError(error); }
+    }
+
+    private static String removalBinding(String files, Set<String> removed) {
+        try (VaultCodec.SecretBuffer buffer = new VaultCodec.SecretBuffer(); DataOutputStream out = new DataOutputStream(buffer)) {
+            VaultCodec.writeText(out, "ctos-ssh-phrase-removal-v1"); VaultCodec.writeText(out, files);
+            List<String> ids = new ArrayList<>(removed); java.util.Collections.sort(ids);
+            out.writeInt(ids.size()); for (String id : ids) VaultCodec.writeText(out, id);
             return digestBuffer(buffer);
         } catch (IOException error) { throw new AssertionError(error); }
     }

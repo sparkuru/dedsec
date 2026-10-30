@@ -19,6 +19,7 @@ final class SshConnectionMaterial {
     static final String MANUAL_ALIAS = "ctos-key";
     static final String KEY_TARGET_PREFIX = "target:ctos-key-";
     private static final java.util.Map<Thread, SshConfigEvaluator> PENDING = new java.util.HashMap<>();
+    private static final java.util.Map<Thread, SshManifestConfigInspector> PENDING_CONFIGS = new java.util.HashMap<>();
     static final class CatalogScan {
         final SshConfigEvaluator.Catalog catalog;
         final SshConfigEvaluator.Usage usage;
@@ -44,12 +45,15 @@ final class SshConnectionMaterial {
     static final class Key {
         final String id, path, identity, algorithm, fingerprint;
         final VaultSshMetadata.KeyBinding binding;
+        final boolean encrypted, hasSavedPassphrase;
         private final byte[] publicBlob;
         Key(VaultManifest manifest, VaultSshMetadata.KeyBinding binding) throws VaultException {
             this.binding = binding; id = binding.id;
             VaultManifest.FileObject privateFile = fileId(manifest, binding.privateFileId);
             VaultManifest.FileObject publicFile = fileId(manifest, binding.publicFileId);
             path = privateFile.path; identity = privateFile.identity;
+            encrypted = SshKeyPassphrase.encrypted(privateFile.content);
+            hasSavedPassphrase = binding.passphraseEntryId != null;
             String line = new String(publicFile.content, StandardCharsets.US_ASCII);
             int separator = line.indexOf(' ');
             if (separator < 1 || !line.endsWith("\n") || line.indexOf(' ', separator + 1) >= 0) throw unsupported();
@@ -57,8 +61,19 @@ final class SshConnectionMaterial {
             try { publicBlob = Base64.getDecoder().decode(line.substring(separator + 1, line.length() - 1)); }
             catch (IllegalArgumentException invalid) { throw unsupported(); }
             if (publicBlob.length == 0 || publicBlob.length > VaultManifest.MAX_FILE_BYTES) throw unsupported();
+            ByteBuffer encoded = ByteBuffer.wrap(publicBlob);
+            if (encoded.remaining() < 4) throw unsupported();
+            int nameLength = encoded.getInt();
+            byte[] name = algorithm.getBytes(StandardCharsets.US_ASCII);
+            if (nameLength != name.length || encoded.remaining() < nameLength) throw unsupported();
+            for (byte value : name) if (encoded.get() != value) throw unsupported();
+            if (!List.of("ssh-ed25519", "ecdsa-sha2-nistp256", "ecdsa-sha2-nistp384",
+                    "ecdsa-sha2-nistp521", "ssh-rsa").contains(algorithm)) throw unsupported();
             byte[] digest = VaultCodec.digest(publicBlob);
-            try { fingerprint = "SHA256:" + Base64.getEncoder().withoutPadding().encodeToString(digest); }
+            try {
+                fingerprint = "SHA256:" + Base64.getEncoder().withoutPadding().encodeToString(digest);
+                if (!identity.equals("ctos-key-" + hex(digest))) throw unsupported();
+            }
             finally { VaultCodec.wipe(digest); }
         }
         byte[] publicBlob() { return publicBlob.clone(); }
@@ -110,13 +125,14 @@ final class SshConnectionMaterial {
         for (VaultSshMetadata.KeyBinding binding : manifest.keyBindings) {
             VaultManifest.FileObject key = fileId(manifest, binding.privateFileId);
             VaultManifest.FileObject pub = fileId(manifest, binding.publicFileId);
-            if (binding.passphraseEntryId != null || !binding.certificateFileIds.isEmpty()
+            if (!binding.certificateFileIds.isEmpty()
                     || !binding.id.equals(bindingId(key.path, key.identity))
                     || key.type != VaultManifest.FileType.PRIVATE_KEY || pub.type != VaultManifest.FileType.PUBLIC_KEY
                     || !key.path.startsWith(".ssh/") || key.path.contains("${") || !pub.path.equals(key.path + ".pub")
                     || !key.id.equals(id("private", key.path)) || !pub.id.equals(id("public", key.path))
                     || !pub.identity.equals(key.identity) || !keyFiles.add(key.id) || !publicFiles.add(pub.id)) throw unsupported();
         }
+        SshKeyPassphrase.check(manifest);
         for (VaultManifest.FileObject file : manifest.files) {
             if (file.path.equals(SshPasswordProfile.CONFIG_PATH) || file.path.equals(SshPasswordProfile.HOSTS_PATH)) continue;
             if (!file.path.startsWith(".ssh/")) throw unsupported();
@@ -158,6 +174,14 @@ final class SshConnectionMaterial {
             if (!declared || !account.target.equals(selection.role.targetIdentity)
                     || !MessageDigest.isEqual(expected, actual)) throw SshAuthenticationSelection.invalid();
         } finally { VaultCodec.wipe(expected); VaultCodec.wipe(actual); }
+    }
+
+    static Key selectedKey(VaultManifest manifest, SshAuthenticationSelection selection) throws VaultException {
+        for (VaultSshMetadata.KeyBinding binding : manifest.keyBindings) {
+            Key key = new Key(manifest, binding);
+            if (key.path.equals(selection.path) && key.identity.equals(selection.keyIdentity)) return key;
+        }
+        throw SshAuthenticationSelection.invalid();
     }
 
     static Key key(VaultManifest manifest, String bindingId) throws VaultException {
@@ -243,6 +267,53 @@ final class SshConnectionMaterial {
         } finally { VaultCodec.wipe(source); if (evaluator != null) closeEvaluator(evaluator); }
     }
 
+    static List<String> missingIdentityPaths(VaultManifest manifest, SshConfigEvaluator.DirectPlan plan)
+            throws VaultException {
+        Set<String> present = new HashSet<>();
+        for (VaultSshMetadata.KeyBinding binding : manifest.keyBindings)
+            present.add(fileId(manifest, binding.privateFileId).path);
+        Set<String> missing = new java.util.LinkedHashSet<>();
+        for (String path : plan.identityFiles) if (!present.contains(path)) {
+            if (!path.startsWith(".ssh/"))
+                throw new VaultException("SSH_CONFIG_UNSUPPORTED", "Choose a managed SSH identity path");
+            missing.add(path);
+            if (missing.size() > VaultManifest.MAX_FILES)
+                throw new VaultException("SSH_CONFIG_LIMIT", "The SSH identity list exceeds the library limit");
+        }
+        return new ArrayList<>(missing);
+    }
+
+    static void requireIdentities(VaultManifest manifest, SshConfigEvaluator.DirectPlan plan) throws VaultException {
+        if (!missingIdentityPaths(manifest, plan).isEmpty())
+            throw new VaultException("SSH_KEY_MISSING", "Import every private key referenced by this SSH configuration");
+    }
+
+    static List<VaultManifest.FileObject> refreshedConfigReferences(VaultManifest manifest, long deadline,
+            AppSecrets.EffectGuard guard)
+            throws IOException, VaultException {
+        retryCleanup();
+        SshManifestConfigInspector inspector = new SshManifestConfigInspector(SystemClock::elapsedRealtime, null, guard);
+        synchronized (PENDING_CONFIGS) { PENDING_CONFIGS.put(Thread.currentThread(), inspector); }
+        List<VaultManifest.FileObject> changed = new ArrayList<>();
+        try {
+            SshManifestConfigInspector.Report report = inspector.inspectResourceDeclarationsForReferenceRefresh(
+                    manifest, deadline, new SshManifestConfigInspector.Cancellation());
+            for (SshManifestConfigInspector.Root root : report.roots) {
+                if (!root.path.startsWith(".ssh/")) continue;
+                VaultManifest.FileObject file = manifest.files.get(root.object - 1);
+                List<String> references = storedReferences(manifest, root.object, root.resourceAudit);
+                if (!new HashSet<>(references).equals(new HashSet<>(file.references)))
+                    changed.add(new VaultManifest.FileObject(file.type, file.id, file.path,
+                            file.identity, file.content, references));
+            }
+            retryCleanup();
+            return changed;
+        } catch (Throwable failure) {
+            for (VaultManifest.FileObject file : changed) VaultCodec.wipe(file.content);
+            throw failure;
+        } finally { retryCleanup(); }
+    }
+
     static List<String> references(VaultManifest manifest, String root, long deadline) throws IOException, VaultException {
         retryCleanup();
         byte[] source = detached(manifest);
@@ -277,6 +348,21 @@ final class SshConnectionMaterial {
 
     static List<String> references(VaultManifest manifest, int parent, SshConfigEvaluator.ResourceAudit audit)
             throws VaultException {
+        // Strict import covers the entire traversed Include closure; references remain direct edges.
+        for (SshConfigEvaluator.Resource resource : audit.resources)
+            if (resource.state != SshConfigEvaluator.Resource.STATIC
+                    && resource.state != SshConfigEvaluator.Resource.DISABLED)
+                throw new VaultException("SSH_CONFIG_DEPENDENCY", "Import the referenced SSH file or edit its managed path");
+        return references(manifest, parent, audit, false);
+    }
+
+    static List<String> storedReferences(VaultManifest manifest, int parent, SshConfigEvaluator.ResourceAudit audit)
+            throws VaultException {
+        return references(manifest, parent, audit, true);
+    }
+
+    private static List<String> references(VaultManifest manifest, int parent, SshConfigEvaluator.ResourceAudit audit,
+            boolean allowMissingIdentity) throws VaultException {
         Set<String> references = new java.util.LinkedHashSet<>();
         if (file(manifest, HOSTS) != null) references.add(HOSTS);
         for (SshConfigEvaluator.Edge edge : audit.audit.edges)
@@ -284,13 +370,21 @@ final class SshConnectionMaterial {
         for (SshConfigEvaluator.Resource resource : audit.resources) if (resource.parent == parent) {
             if (resource.state == SshConfigEvaluator.Resource.STATIC)
                 references.add(manifest.files.get(resource.target - 1).path);
-            else if (resource.state != SshConfigEvaluator.Resource.DISABLED)
+            else if (resource.state != SshConfigEvaluator.Resource.DISABLED
+                    && !(allowMissingIdentity && resource.kind == 1
+                    && resource.state == SshConfigEvaluator.Resource.DEFERRED_KEY_RESOLUTION))
                 throw new VaultException("SSH_CONFIG_DEPENDENCY", "Import the referenced SSH file or edit its managed path");
         }
         return new ArrayList<>(references);
     }
 
     static void retryCleanup() throws IOException {
+        SshManifestConfigInspector inspector;
+        synchronized (PENDING_CONFIGS) { inspector = PENDING_CONFIGS.get(Thread.currentThread()); }
+        if (inspector != null) {
+            inspector.close();
+            synchronized (PENDING_CONFIGS) { PENDING_CONFIGS.remove(Thread.currentThread(), inspector); }
+        }
         SshConfigEvaluator evaluator;
         synchronized (PENDING) { evaluator = PENDING.get(Thread.currentThread()); }
         if (evaluator != null) closeEvaluator(evaluator);

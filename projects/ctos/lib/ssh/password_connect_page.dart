@@ -78,6 +78,7 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
   final _port = TextEditingController(text: '22');
   final _username = TextEditingController();
   final _password = TextEditingController();
+  final _passphrase = TextEditingController();
   final _scroll = ScrollController();
   final _cancelledIds = <String>{};
   StreamSubscription<SshEvent>? _events;
@@ -93,6 +94,7 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
   bool _foreground = true, _streamHealthy = true;
   bool _leaving = false, _established = false;
   bool _savedPassword = false, _useSavedPassword = false, _savePassword = false;
+  bool _useSavedPassphrase = false, _savePassphrase = false;
   bool _statusLoading = false, _forgetting = false;
   bool _closing = false;
   Completer<void>? _forgetCompletion;
@@ -145,6 +147,7 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
     _foreground = state == AppLifecycleState.resumed;
     if (!_foreground && _managing) {
       _password.clear();
+      _clearPassphrase();
       if (mounted) setState(() {});
     } else if (!_foreground && !_leaving && !_established) {
       _invalidate('已清除登录密码，请回到前台后重新读取连接信息。');
@@ -180,6 +183,7 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
     _statusDebounce?.cancel();
     _statusRevision++;
     _password.clear();
+    _clearPassphrase();
     setState(() {
       _loading = true;
       _ready = false;
@@ -256,6 +260,7 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
           reconnect != null &&
           _identityMode &&
           _identity != null &&
+          !_identity!.encrypted &&
           _error == null) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (!mounted ||
@@ -275,6 +280,7 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
     } catch (error) {
       if (!mounted || revision != _revision || _leaving) return;
       _password.clear();
+      _clearPassphrase();
       setState(() {
         _loading = false;
         _ready = false;
@@ -292,6 +298,11 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
   String _connectionError(Object error) =>
       _identityMode ? sshMaterialError(error) : sshConnectionError(error);
 
+  void _clearPassphrase() {
+    _passphrase.clear();
+    _useSavedPassphrase = _savePassphrase = false;
+  }
+
   Future<void> _manageIdentities({bool keysOnly = false}) async {
     if (!_ready ||
         _busy ||
@@ -308,6 +319,7 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
     _statusRevision++;
     _statusDebounce?.cancel();
     _password.clear();
+    _clearPassphrase();
     _managing = true;
     setState(() {
       _ready = false;
@@ -354,6 +366,7 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
         (_saveCompletion != null && !_saveCompletion!.isCompleted))
       return;
     _password.clear();
+    _clearPassphrase();
     _statusDebounce?.cancel();
     _statusRevision++;
     setState(() {
@@ -369,6 +382,7 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
   void _tupleChanged(String _) {
     if (_identityMode) {
       _password.clear();
+      _clearPassphrase();
       setState(() {
         _useSavedPassword = _savePassword = false;
         _error = null;
@@ -380,6 +394,7 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
     final old = _defaultsId;
     _defaultsId = null;
     _password.clear();
+    _clearPassphrase();
     setState(() {
       _savedPassword = _useSavedPassword = _savePassword = false;
       _statusLoading = _validTuple;
@@ -500,6 +515,7 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
     final old = _defaultsId;
     _defaultsId = requestId;
     _password.clear();
+    _clearPassphrase();
     final completion = Completer<void>();
     _forgetCompletion = completion;
     _forgetReceipt = null;
@@ -602,6 +618,9 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
                     port: int.parse(_port.text),
                     username: _username.text,
                     keyId: _identity!.id,
+                    passphrase: _passphrase.text,
+                    useSavedPassphrase: _useSavedPassphrase,
+                    savePassphrase: _savePassphrase,
                     columns: widget.columns,
                     rows: widget.rows,
                   )
@@ -610,6 +629,9 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
                     alias: configHost.alias,
                     binding: configHost.binding,
                     keyId: _identity!.id,
+                    passphrase: _passphrase.text,
+                    useSavedPassphrase: _useSavedPassphrase,
+                    savePassphrase: _savePassphrase,
                     username: configHost.username.isEmpty ? _username.text : '',
                     columns: widget.columns,
                     rows: widget.rows,
@@ -626,6 +648,7 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
               rows: widget.rows,
             );
       _password.clear();
+      _clearPassphrase();
       await connected;
       if (saving) {
         _saveReceipt = _identityMode ? '本次私钥连接已完成。' : '密码已保存到秘密库。';
@@ -645,6 +668,7 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
       }
       if (!mounted || revision != _revision || _established || _leaving) return;
       _password.clear();
+      _clearPassphrase();
       _dismissReview();
       _attemptId = null;
       setState(() {
@@ -691,6 +715,7 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
         );
         _revision++;
         _password.clear();
+        _clearPassphrase();
         _dismissReview();
         _attemptId = null;
         setState(() {
@@ -789,6 +814,7 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
     _statusRevision++;
     _statusDebounce?.cancel();
     _password.clear();
+    _clearPassphrase();
     _dismissReview();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted && _route?.isCurrent != false) Navigator.of(context).pop();
@@ -812,6 +838,7 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
     _host.clear();
     _username.clear();
     _password.clear();
+    _clearPassphrase();
     _dismissReview();
     _dismissForget();
     setState(() {
@@ -831,6 +858,7 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
     if (_leaving || _established || _closing) return;
     _closing = true;
     _password.clear();
+    _clearPassphrase();
     _dismissReview();
     await _cancelId(_reconnectReadId);
     _reconnectReadId = null;
@@ -892,6 +920,7 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
     _statusRevision++;
     _statusDebounce?.cancel();
     _password.clear();
+    _clearPassphrase();
     _dismissReview();
     _dismissForget();
     await Future.wait([_cancelId(_attemptId), _cancelId(_defaultsId)]);
@@ -914,7 +943,9 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
     _port.dispose();
     _username.dispose();
     _password.clear();
+    _clearPassphrase();
     _password.dispose();
+    _passphrase.dispose();
     _scroll.dispose();
     super.dispose();
   }
@@ -996,7 +1027,10 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
                           key: const Key('ssh-config-manual'),
                           onPressed: _busy
                               ? null
-                              : () => setState(() => _configHost = null),
+                              : () => setState(() {
+                                  _configHost = null;
+                                  _clearPassphrase();
+                                }),
                           child: const Text('切换到手动连接'),
                         ),
                         const SizedBox(height: 12),
@@ -1073,6 +1107,57 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
                         ),
                         const SizedBox(height: 8),
                         const Text('服务端需要已授权此私钥对应的公钥。'),
+                        if (_identity?.encrypted == true) ...[
+                          const SizedBox(height: 16),
+                          TextFormField(
+                            key: const Key('ssh-key-passphrase'),
+                            controller: _passphrase,
+                            enabled: !_busy && !_useSavedPassphrase,
+                            obscureText: true,
+                            autocorrect: false,
+                            enableSuggestions: false,
+                            enableIMEPersonalizedLearning: false,
+                            keyboardType: TextInputType.visiblePassword,
+                            textInputAction: TextInputAction.done,
+                            decoration: const InputDecoration(
+                              labelText: '私钥口令',
+                            ),
+                            validator: (value) => _useSavedPassphrase
+                                ? null
+                                : sshPassphraseError(value ?? ''),
+                            onFieldSubmitted: (_) => unawaited(_connect()),
+                          ),
+                          if (_identity!.hasSavedPassphrase)
+                            CheckboxListTile(
+                              key: const Key('ssh-use-saved-passphrase'),
+                              contentPadding: EdgeInsets.zero,
+                              controlAffinity: ListTileControlAffinity.leading,
+                              title: const Text('使用已保存私钥口令'),
+                              value: _useSavedPassphrase,
+                              onChanged: _busy
+                                  ? null
+                                  : (value) {
+                                      _passphrase.clear();
+                                      setState(() {
+                                        _useSavedPassphrase = value == true;
+                                        _savePassphrase = false;
+                                      });
+                                    },
+                            ),
+                          CheckboxListTile(
+                            key: const Key('ssh-save-passphrase'),
+                            contentPadding: EdgeInsets.zero,
+                            controlAffinity: ListTileControlAffinity.leading,
+                            title: const Text('连接时保存私钥口令'),
+                            subtitle: const Text('加密保存到秘密库；连接失败也会保留。'),
+                            value: _savePassphrase,
+                            onChanged: _busy || _useSavedPassphrase
+                                ? null
+                                : (value) => setState(
+                                    () => _savePassphrase = value == true,
+                                  ),
+                          ),
+                        ],
                       ] else ...[
                         TextFormField(
                           key: const Key('ssh-password'),
@@ -1105,6 +1190,7 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
                                 ? null
                                 : (value) {
                                     _password.clear();
+                                    _clearPassphrase();
                                     setState(() {
                                       _useSavedPassword = value == true;
                                       _savePassword = false;

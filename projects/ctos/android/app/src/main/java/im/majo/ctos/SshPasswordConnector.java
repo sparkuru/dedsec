@@ -31,6 +31,11 @@ final class SshPasswordConnector implements MainActivity.AuthenticatedSshFactory
     private final AppSecrets.BundleContext origin;
     private final String privateKeyId, configAlias, usernameOverride, expectedConfigBinding;
     private SshConnectionMaterial.Key selectedKey;
+    private boolean useSavedKeyPassphrase, saveKeyPassphrase;
+    private byte[] pendingKeyPassphrase;
+    private SshTransientKey transientKey;
+    private AppSecrets.SshEntryMutationContext keyPassphraseMutation;
+    private long expectedKeyRevision;
     private String rootPath = SshPasswordProfile.CONFIG_PATH;
     private String hostsPath = SshPasswordProfile.HOSTS_PATH;
     private String hostsId = SshPasswordProfile.HOSTS_ID;
@@ -89,6 +94,14 @@ final class SshPasswordConnector implements MainActivity.AuthenticatedSshFactory
     SshPasswordConnector(AppSecrets vault, SshPasswordProfile manual, String privateKeyId,
             String configAlias, String configBinding, String usernameOverride, long deadline,
             AppSecrets.EffectGuard sensitive, Events events) throws VaultException {
+        this(vault, manual, privateKeyId, configAlias, configBinding, usernameOverride,
+                new byte[0], false, false, deadline, sensitive, events);
+    }
+
+    SshPasswordConnector(AppSecrets vault, SshPasswordProfile manual, String privateKeyId,
+            String configAlias, String configBinding, String usernameOverride, byte[] passphrase,
+            boolean useSavedPassphrase, boolean savePassphrase, long deadline,
+            AppSecrets.EffectGuard sensitive, Events events) throws VaultException {
         VaultManifest.identifier(privateKeyId);
         if (configAlias == null || usernameOverride == null || manual == null && configAlias.isEmpty())
             throw SshPasswordProfile.parameters();
@@ -99,6 +112,12 @@ final class SshPasswordConnector implements MainActivity.AuthenticatedSshFactory
         initialRevision = vault.contentRevision; tcp = new SshTcpConnector();
         origin = vault.newBundleContext(deadline, this::check);
         saved = null; useSaved = false; saveContext = null; password = null;
+        if (passphrase == null || useSavedPassphrase && (savePassphrase || passphrase.length != 0))
+            throw SshPasswordProfile.parameters();
+        if (passphrase.length != 0) SshSavedPassword.validateSecret(passphrase);
+        pendingKeyPassphrase = passphrase.clone();
+        useSavedKeyPassphrase = useSavedPassphrase; saveKeyPassphrase = savePassphrase;
+        expectedKeyRevision = initialRevision;
         transportDeadline = deadline;
         try { check(); } catch (VaultException | RuntimeException | Error failure) { cancel(); throw failure; }
     }
@@ -117,8 +136,13 @@ final class SshPasswordConnector implements MainActivity.AuthenticatedSshFactory
         cancelled.set(true);
         vault.cancelBundleContext(origin);
         if (password != null) password.close();
+        if (transientKey != null) transientKey.close();
+        if (keyPassphraseMutation != null) keyPassphraseMutation.cancel();
         if (saveContext != null) saveContext.cancel();
-        synchronized (this) { VaultCodec.wipe(pendingSave); pendingSave = null; }
+        synchronized (this) {
+            VaultCodec.wipe(pendingSave); pendingSave = null;
+            VaultCodec.wipe(pendingKeyPassphrase); pendingKeyPassphrase = null;
+        }
         SshHostKeyReviewMailbox current = mailbox;
         if (current != null) current.cancel();
         Runnable action = cancellationAction;
@@ -216,7 +240,7 @@ final class SshPasswordConnector implements MainActivity.AuthenticatedSshFactory
                     trusted, issued.role, clock, rootPath, hostsPath, hostsId, hostsIdentity);
             trust = SshManagedKnownHostsProvider.bindForNativeHandoff(trusted, receipt);
             handoff = trust.nativeCandidateHandoff();
-            SshCredentialBridge credential = new SshCredentialBridge(vault, authority, clock, password);
+            SshCredentialBridge credential = new SshCredentialBridge(vault, authority, clock, password, transientKey);
             SshManagedProvider provider = new SshManagedProvider(credential, clock, trust, trust,
                     (b, r, proof, kind) -> { throw denied(); });
             callback = SshNativeCallbackAdapter.bind(issued, registry, authority, clock, provider, handoff);
@@ -226,10 +250,13 @@ final class SshPasswordConnector implements MainActivity.AuthenticatedSshFactory
             else {
                 byte[] blob = selectedKey.publicBlob();
                 try { selection = SshAuthenticationSelection.privateKey(issued.role, profile.username,
-                        selectedKey.path, selectedKey.identity, blob, clock); }
+                        selectedKey.path, selectedKey.identity, blob,
+                        transientKey != null ? transientKey.entryId
+                                : useSavedKeyPassphrase ? selectedKey.binding.passphraseEntryId : "", clock); }
                 finally { VaultCodec.wipe(blob); }
             }
             if (password != null) password.bind(issued.role, selection);
+            if (transientKey != null) transientKey.bind(issued.role, selection);
             callback.selectAuthentication(selection);
             SshSocketOwnership socket = tcp.connect(profile, transportDeadline, this::check);
             session = SshNativeSession.openManaged(callback, view, socket, hostsPath,
@@ -281,11 +308,10 @@ final class SshPasswordConnector implements MainActivity.AuthenticatedSshFactory
     }
 
     private void prepareKey() throws Exception {
+        prepareKeyPhrase();
         AppSecrets.BundleContext context = vault.newBundleContext(deadline, this::check);
         try (SshConnectionMaterial.Snapshot snapshot = vault.sshLibrarySnapshot(context)) {
-            if (snapshot.epoch != expectedEpoch || snapshot.revision != initialRevision) throw changed();
-            if (!configAlias.isEmpty() && !SshConnectionMaterial.configBinding(snapshot, configAlias).equals(expectedConfigBinding))
-                throw changed();
+            if (snapshot.epoch != expectedEpoch || snapshot.revision != expectedKeyRevision) throw changed();
             selectedKey = SshConnectionMaterial.key(snapshot.manifest, privateKeyId);
             if (configAlias.isEmpty()) {
                 rootPath = SshConnectionMaterial.MANUAL;
@@ -294,6 +320,7 @@ final class SshPasswordConnector implements MainActivity.AuthenticatedSshFactory
                 rootPath = SshConnectionMaterial.ROOT;
                 SshConfigEvaluator.DirectPlan plan = SshConnectionMaterial.plan(snapshot.manifest, rootPath,
                         configAlias, usernameOverride, deadline, this::check);
+                SshConnectionMaterial.requireIdentities(snapshot.manifest, plan);
                 if (plan.userRequired) throw new VaultException("SSH_USER_REQUIRED", "Enter an SSH username");
                 if (!plan.pubkeyAuthentication || !plan.identityFiles.contains(selectedKey.path))
                     throw new VaultException("SSH_KEY_SELECTION", "Choose an identity allowed by this SSH configuration");
@@ -322,7 +349,8 @@ final class SshPasswordConnector implements MainActivity.AuthenticatedSshFactory
                     finally { adapter.cancel(operation); }
                     expectedEpoch++;
                     check();
-                    if (vault.contentRevision != initialRevision + 1) throw changed();
+                    expectedKeyRevision++;
+                    if (vault.contentRevision != expectedKeyRevision) throw changed();
                 }
             }
             if (hostsPath.equals(SshConnectionMaterial.HOSTS)) {
@@ -334,6 +362,65 @@ final class SshPasswordConnector implements MainActivity.AuthenticatedSshFactory
                 hostsId = hosts.id; hostsIdentity = hosts.identity;
             }
         } finally { vault.cancelBundleContext(context); }
+    }
+
+    private void prepareKeyPhrase() throws Exception {
+        AppSecrets.BundleContext context = vault.newBundleContext(deadline, this::check);
+        byte[] phrase = null;
+        try (SshConnectionMaterial.Snapshot snapshot = vault.sshLibrarySnapshot(context)) {
+            if (snapshot.epoch != expectedEpoch || snapshot.revision != initialRevision) throw changed();
+            if (!configAlias.isEmpty() && !SshConnectionMaterial.configBinding(snapshot, configAlias).equals(expectedConfigBinding))
+                throw changed();
+            SshConnectionMaterial.Key key = SshConnectionMaterial.key(snapshot.manifest, privateKeyId);
+            SshPasswordProfile actualProfile = profile;
+            if (!configAlias.isEmpty()) {
+                SshConfigEvaluator.DirectPlan plan = SshConnectionMaterial.plan(snapshot.manifest, SshConnectionMaterial.ROOT,
+                        configAlias, usernameOverride, deadline, this::check);
+                SshConnectionMaterial.requireIdentities(snapshot.manifest, plan);
+                if (plan.userRequired) throw new VaultException("SSH_USER_REQUIRED", "Enter an SSH username");
+                if (!plan.pubkeyAuthentication || !plan.identityFiles.contains(key.path))
+                    throw new VaultException("SSH_KEY_SELECTION", "Choose an identity allowed by this SSH configuration");
+                actualProfile = new SshPasswordProfile(plan.hostname, plan.port, plan.user);
+            }
+            VaultManifest.FileObject privateFile = SshConnectionMaterial.fileId(snapshot.manifest, key.binding.privateFileId);
+            synchronized (this) {
+                if (pendingKeyPassphrase == null) throw changed();
+                phrase = pendingKeyPassphrase; pendingKeyPassphrase = null;
+            }
+            if (!key.encrypted) {
+                if (phrase.length != 0 || useSavedKeyPassphrase || saveKeyPassphrase) throw SshPasswordProfile.parameters();
+                return;
+            }
+            if (useSavedKeyPassphrase) {
+                VaultManifest.Entry stored = SshKeyPassphrase.entry(snapshot.manifest, key.binding);
+                if (stored == null) throw new VaultException("SSH_KEY_PASSPHRASE_MISSING", "No saved passphrase matches this private key");
+                VaultCodec.wipe(phrase); phrase = stored.secret.clone();
+            }
+            if (phrase.length == 0) throw new VaultException("SSH_KEY_PASSPHRASE_REQUIRED", "Enter the private-key passphrase");
+            SshKeyMaterial.Result derived = SshKeyMaterial.inspect(privateFile.content, phrase, deadline);
+            if (derived.status != SshKeyMaterial.Status.PARSED)
+                throw new VaultException(derived.status == SshKeyMaterial.Status.UNSUPPORTED ? "SSH_KEY_UNSUPPORTED"
+                        : derived.status == SshKeyMaterial.Status.BAD_PASSPHRASE ? "SSH_KEY_BAD_PASSPHRASE" : "SSH_KEY_INVALID",
+                        "The private key could not be unlocked");
+            byte[] expected = key.publicBlob(), actual = derived.publicBlob();
+            try { if (!derived.encrypted || !MessageDigest.isEqual(expected, actual)) throw changed(); }
+            finally { VaultCodec.wipe(expected); VaultCodec.wipe(actual); }
+            check();
+            if (saveKeyPassphrase) {
+                keyPassphraseMutation = vault.newKeyPassphraseMutationContext(expectedEpoch, deadline, this::check, key, false);
+                VaultOperation operation = null;
+                try {
+                    operation = vault.beginKeyPassphraseMutation(keyPassphraseMutation, connectionId, true);
+                    vault.saveKeyPassphrase(operation, phrase, this::check); durableWrite = true;
+                    expectedEpoch++; expectedKeyRevision++;
+                } finally { vault.cancelOperation(operation); keyPassphraseMutation.cancel(); }
+                check(); if (vault.contentRevision != expectedKeyRevision) throw changed();
+                useSavedKeyPassphrase = true;
+            } else if (!useSavedKeyPassphrase) {
+                transientKey = new SshTransientKey(vault, actualProfile, key, privateFile.content, phrase,
+                        deadline, this::check, clock);
+            }
+        } finally { VaultCodec.wipe(phrase); vault.cancelBundleContext(context); }
     }
 
     private void requireApprovedProposal(SshTrustProposal proposal) throws VaultException {
@@ -382,8 +469,13 @@ final class SshPasswordConnector implements MainActivity.AuthenticatedSshFactory
             throw new VaultException("SSH_CANCELLED", "The SSH connection was cancelled");
         vault.cancelBundleContext(origin);
         if (password != null) password.close();
+        if (transientKey != null) { transientKey.close(); transientKey = null; }
+        if (keyPassphraseMutation != null) keyPassphraseMutation.cancel();
         if (saveContext != null) saveContext.cancel();
-        synchronized (this) { VaultCodec.wipe(pendingSave); pendingSave = null; }
+        synchronized (this) {
+            VaultCodec.wipe(pendingSave); pendingSave = null;
+            VaultCodec.wipe(pendingKeyPassphrase); pendingKeyPassphrase = null;
+        }
         if (handoff != null) { handoff.close(); handoff = null; }
         if (trust != null) { trust.close(); trust = null; }
         if (view != null) { view.close(); view = null; }

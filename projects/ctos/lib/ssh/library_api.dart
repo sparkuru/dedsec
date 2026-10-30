@@ -7,19 +7,31 @@ class SshIdentity {
     required this.path,
     required this.algorithm,
     required this.fingerprint,
+    this.encrypted = false,
+    this.hasSavedPassphrase = false,
   });
   factory SshIdentity.parse(Object? raw) {
     final value = _map(raw);
-    _keys(value, {'id', 'label', 'path', 'algorithm', 'fingerprint'});
+    _keys(
+      value,
+      {'id', 'label', 'path', 'algorithm', 'fingerprint'},
+      {'encrypted', 'hasSavedPassphrase'},
+    );
+    final encrypted = _sshOptionalBoolean(value, 'encrypted');
+    final saved = _sshOptionalBoolean(value, 'hasSavedPassphrase');
+    if (saved && !encrypted) throw _invalid();
     return SshIdentity(
       id: _identifier(value['id']),
       label: _sshPublicText(value['label'], 512),
       path: _sshManagedPath(value['path']),
       algorithm: _sshAlgorithm(value['algorithm']),
       fingerprint: _sshFingerprint(value['fingerprint']),
+      encrypted: encrypted,
+      hasSavedPassphrase: saved,
     );
   }
   final String id, label, path, algorithm, fingerprint;
+  final bool encrypted, hasSavedPassphrase;
 }
 
 class SshConfigHost {
@@ -31,13 +43,14 @@ class SshConfigHost {
     required this.username,
     required this.keyIds,
     this.error,
+    this.missingIdentityPaths = const [],
   });
   factory SshConfigHost.parse(Object? raw) {
     final value = _map(raw);
     _keys(
       value,
       {'alias', 'binding', 'host', 'port', 'username', 'keyIds'},
-      {'error'},
+      {'error', 'missingIdentityPaths'},
     );
     final error = value.containsKey('error')
         ? _sshErrorCode(value['error'])
@@ -52,6 +65,11 @@ class SshConfigHost {
       128,
     ).map(_identifier).toList(growable: false);
     if (keyIds.toSet().length != keyIds.length) throw _invalid();
+    final missingIdentityPaths = value.containsKey('missingIdentityPaths')
+        ? _sshManagedPaths(value['missingIdentityPaths'])
+        : const <String>[];
+    if (missingIdentityPaths.isNotEmpty && error != 'SSH_KEY_MISSING')
+      throw _invalid();
     return SshConfigHost(
       alias: _sshAlias(value['alias']),
       binding: _sshBinding(value['binding']),
@@ -60,12 +78,85 @@ class SshConfigHost {
       username: user,
       keyIds: List.unmodifiable(keyIds),
       error: error,
+      missingIdentityPaths: missingIdentityPaths,
     );
   }
   final String alias, binding, host, username;
   final int port;
   final List<String> keyIds;
+  final List<String> missingIdentityPaths;
   final String? error;
+}
+
+class SshKeyDeletePreview {
+  const SshKeyDeletePreview({
+    required this.ticketId,
+    required this.binding,
+    required this.keyId,
+    required this.label,
+    required this.path,
+    required this.algorithm,
+    required this.fingerprint,
+    required this.publicPath,
+    required this.hasSavedPassphrase,
+    required this.accountCount,
+    required this.configPaths,
+    required this.removesManualConfig,
+  });
+  factory SshKeyDeletePreview.parse(Object? raw) {
+    final value = _map(raw);
+    _keys(value, {
+      'ticketId',
+      'binding',
+      'keyId',
+      'label',
+      'path',
+      'algorithm',
+      'fingerprint',
+      'publicPath',
+      'hasSavedPassphrase',
+      'accountCount',
+      'configPaths',
+      'removesManualConfig',
+    });
+    final path = _sshManagedPath(value['path']);
+    final publicPath = _sshManagedPath(value['publicPath']);
+    final accountCount = value['accountCount'];
+    if (publicPath != '$path.pub' ||
+        value['hasSavedPassphrase'] is! bool ||
+        value['removesManualConfig'] is! bool ||
+        accountCount is! int ||
+        accountCount < 0 ||
+        accountCount > 1024)
+      throw _invalid();
+    final configPaths = _sshManagedPaths(value['configPaths']);
+    if (configPaths.contains('.ssh/ctos-manual')) throw _invalid();
+    return SshKeyDeletePreview(
+      ticketId: _identifier(value['ticketId']),
+      binding: _sshBinding(value['binding']),
+      keyId: _identifier(value['keyId']),
+      label: _sshPublicText(value['label'], 512),
+      path: path,
+      algorithm: _sshAlgorithm(value['algorithm']),
+      fingerprint: _sshFingerprint(value['fingerprint']),
+      publicPath: publicPath,
+      hasSavedPassphrase: value['hasSavedPassphrase'] as bool,
+      accountCount: accountCount,
+      configPaths: configPaths,
+      removesManualConfig: value['removesManualConfig'] as bool,
+    );
+  }
+  final String ticketId,
+      binding,
+      keyId,
+      label,
+      path,
+      algorithm,
+      fingerprint,
+      publicPath;
+  final bool hasSavedPassphrase, removesManualConfig;
+  final int accountCount;
+  final List<String> configPaths;
 }
 
 class SshLibrarySnapshot {
@@ -146,21 +237,26 @@ class SshImportPreview {
     required this.replacing,
     required this.issues,
     required this.canCommit,
+    this.needsPassphrase = false,
   });
   factory SshImportPreview.parse(Object? raw) {
     final value = _map(raw);
-    _keys(value, {
-      'ticketId',
-      'binding',
-      'kind',
-      'path',
-      'label',
-      'algorithm',
-      'fingerprint',
-      'replacing',
-      'issues',
-      'canCommit',
-    });
+    _keys(
+      value,
+      {
+        'ticketId',
+        'binding',
+        'kind',
+        'path',
+        'label',
+        'algorithm',
+        'fingerprint',
+        'replacing',
+        'issues',
+        'canCommit',
+      },
+      {'needsPassphrase'},
+    );
     final kind = switch (value['kind']) {
       'privateKey' => SshImportKind.privateKey,
       'config' => SshImportKind.config,
@@ -175,6 +271,13 @@ class SshImportPreview {
     final fingerprint = _sshPublicText(value['fingerprint'], 80, empty: true);
     if (algorithm.isNotEmpty) _sshAlgorithm(algorithm);
     if (fingerprint.isNotEmpty) _sshFingerprint(fingerprint);
+    final needsPassphrase = _sshOptionalBoolean(value, 'needsPassphrase');
+    if (needsPassphrase &&
+        (kind != SshImportKind.privateKey ||
+            value['canCommit'] == true ||
+            algorithm.isNotEmpty ||
+            fingerprint.isNotEmpty))
+      throw _invalid();
     if (kind == SshImportKind.privateKey &&
         value['canCommit'] == true &&
         (algorithm.isEmpty || fingerprint.isEmpty))
@@ -192,11 +295,12 @@ class SshImportPreview {
         _sshRows(value['issues'], 256).map(SshImportIssue.parse),
       ),
       canCommit: value['canCommit'] as bool,
+      needsPassphrase: needsPassphrase,
     );
   }
   final String ticketId, binding, path, label, algorithm, fingerprint;
   final SshImportKind kind;
-  final bool replacing, canCommit;
+  final bool replacing, canCommit, needsPassphrase;
   final List<SshImportIssue> issues;
 }
 
@@ -219,6 +323,34 @@ extension SshLibraryApi on SshPasswordApi {
         'requestId': _identifier(requestId),
       })
       .then(SshLibrarySnapshot.parse);
+
+  Future<SshKeyDeletePreview> keyDeletePreview({
+    required String requestId,
+    required String keyId,
+  }) => channel
+      .invokeMethod<Object?>('ssh.keyDeletePreview', {
+        'requestId': _identifier(requestId),
+        'keyId': _identifier(keyId),
+      })
+      .then(SshKeyDeletePreview.parse);
+
+  Future<bool> keyDeleteCommit({
+    required String requestId,
+    required String ticketId,
+    required String binding,
+  }) => channel
+      .invokeMethod<Object?>('ssh.keyDeleteCommit', {
+        'requestId': _identifier(requestId),
+        'ticketId': _identifier(ticketId),
+        'binding': _sshBinding(binding),
+      })
+      .then((raw) => _booleanReply(raw, 'deleted'));
+
+  Future<bool> keyDeleteCancel(String ticketId) => channel
+      .invokeMethod<Object?>('ssh.keyDeleteCancel', {
+        'ticketId': _identifier(ticketId),
+      })
+      .then((raw) => _booleanReply(raw, 'cancelled'));
 
   Future<SshImportPreview> importFile({
     required String requestId,
@@ -254,6 +386,35 @@ extension SshLibraryApi on SshPasswordApi {
       })
       .then((raw) => _booleanReply(raw, 'cancelled'));
 
+  Future<SshImportPreview> importUnlock({
+    required String requestId,
+    required String ticketId,
+    required String binding,
+    required String passphrase,
+  }) {
+    if (sshPassphraseError(passphrase) != null) throw _invalid();
+    return channel
+        .invokeMethod<Object?>('ssh.importUnlock', {
+          'requestId': _identifier(requestId),
+          'ticketId': _identifier(ticketId),
+          'binding': _sshBinding(binding),
+          'passphrase': passphrase,
+        })
+        .then(SshImportPreview.parse);
+  }
+
+  Future<bool> forgetKeyPassphrase({
+    required String requestId,
+    required String keyId,
+    bool all = false,
+  }) => channel
+      .invokeMethod<Object?>('ssh.forgetKeyPassphrase', {
+        'requestId': _identifier(requestId),
+        'keyId': all ? '' : _identifier(keyId),
+        'all': all,
+      })
+      .then((raw) => _booleanReply(raw, 'forgotten'));
+
   Future<SshConfigDocument> configRead({
     required String requestId,
     String path = '.ssh/config',
@@ -284,9 +445,13 @@ extension SshLibraryApi on SshPasswordApi {
     required String keyId,
     required int columns,
     required int rows,
+    String passphrase = '',
+    bool useSavedPassphrase = false,
+    bool savePassphrase = false,
   }) => _connectIdentity(this, requestId, 'ssh.keyConnect', {
     ..._tuple(requestId, host, port, username),
     'keyId': _identifier(keyId),
+    ..._sshPassphraseArguments(passphrase, useSavedPassphrase, savePassphrase),
     ..._sshSize(columns, rows),
   });
 
@@ -298,6 +463,9 @@ extension SshLibraryApi on SshPasswordApi {
     String username = '',
     required int columns,
     required int rows,
+    String passphrase = '',
+    bool useSavedPassphrase = false,
+    bool savePassphrase = false,
   }) {
     if (username.isNotEmpty && sshUsernameError(username) != null)
       throw _invalid();
@@ -307,10 +475,40 @@ extension SshLibraryApi on SshPasswordApi {
       'binding': _sshBinding(binding),
       'keyId': _identifier(keyId),
       'username': username,
+      ..._sshPassphraseArguments(
+        passphrase,
+        useSavedPassphrase,
+        savePassphrase,
+      ),
       ..._sshSize(columns, rows),
     });
   }
 }
+
+bool _sshOptionalBoolean(Map<String, Object?> value, String key) {
+  if (!value.containsKey(key)) return false;
+  if (value[key] case final bool result) return result;
+  throw _invalid();
+}
+
+Map<String, Object> _sshPassphraseArguments(
+  String passphrase,
+  bool useSaved,
+  bool save,
+) {
+  if (useSaved ? passphrase.isNotEmpty || save : passphrase.isEmpty && save)
+    throw _invalid();
+  if (passphrase.isEmpty && !useSaved && !save) return const {};
+  if (!useSaved && sshPassphraseError(passphrase) != null) throw _invalid();
+  return {
+    'passphrase': passphrase,
+    'useSavedPassphrase': useSaved,
+    'savePassphrase': save,
+  };
+}
+
+String? sshPassphraseError(String value) =>
+    sshPasswordError(value) == null ? null : '请输入有效私钥口令（不超过 8192 字节）';
 
 Future<void> _connectIdentity(
   SshPasswordApi api,
@@ -333,6 +531,12 @@ Map<String, int> _sshSize(int columns, int rows) {
 List<Object?> _sshRows(Object? raw, int maximum) {
   if (raw is! List || raw.length > maximum) throw _invalid();
   return List<Object?>.of(raw);
+}
+
+List<String> _sshManagedPaths(Object? raw) {
+  final paths = _sshRows(raw, 128).map(_sshManagedPath).toList(growable: false);
+  if (paths.toSet().length != paths.length) throw _invalid();
+  return List.unmodifiable(paths);
 }
 
 String _sshPublicText(Object? raw, int maximum, {bool empty = false}) {
@@ -405,12 +609,14 @@ String _sshBinding(Object? raw) {
 String sshMaterialError(Object error) {
   final code = error is PlatformException ? error.code : null;
   return switch (code) {
+    'SSH_KEY_DELETE_FAILED' => '删除私钥失败，请重新读取资料后重试。',
     'SSH_KEY_REPLACED' => '替换私钥会清除该身份的旧连接关联；其他凭据保留。',
     'SSH_AUTHENTICATION' ||
     'SSH_AUTH_REJECTED' ||
     'SSH_KEY_REJECTED' => '私钥登录被拒绝，请核对用户名、公钥授权和所选私钥。',
-    'SSH_KEY_ENCRYPTED' ||
-    'SSH_KEY_PASSPHRASE_REQUIRED' => '此私钥需要口令，请选择无口令的 OpenSSH 私钥。',
+    'SSH_KEY_ENCRYPTED' || 'SSH_KEY_PASSPHRASE_REQUIRED' => '请输入此私钥的口令后重试。',
+    'SSH_KEY_BAD_PASSPHRASE' || 'SSH_BAD_PASSPHRASE' => '私钥口令错误或文件损坏，请重新输入口令。',
+    'SSH_KEY_PASSPHRASE_MISSING' => '此私钥没有已保存口令，请重新输入。',
     'SSH_KEY_MISSING' || 'SSH_IDENTITY_MISSING' => '所选私钥未导入或已变化，请重新导入并选择。',
     'SSH_CONFIG_MISSING' => '尚未导入根配置 .ssh/config。',
     'SSH_CONFIG_UNSUPPORTED' ||
@@ -420,7 +626,7 @@ String sshMaterialError(Object error) {
     'SSH_CONFIG_PATH' => '配置引用的文件缺失或路径不可用，请先导入对应私钥或 Include 文件。',
     'SSH_KEY_UNSUPPORTED' ||
     'SSH_KEY_INVALID' ||
-    'SSH_MATERIAL_INVALID' => '所选文件不是受支持的无口令 SSH 私钥。',
+    'SSH_MATERIAL_INVALID' => '所选文件不是受支持的 SSH 私钥格式。',
     'SSH_IMPORT_EXPIRED' || 'SSH_IMPORT_CHANGED' => '导入预览已失效，请重新选择文件并检查。',
     'SSH_IMPORT_INVALID' || 'SSH_IMPORT_REJECTED' => 'SSH 文件未通过检查，请核对类型、路径和内容。',
     'SSH_IMPORT_CANCELLED' => '已取消导入。',

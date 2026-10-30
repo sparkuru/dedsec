@@ -1,5 +1,17 @@
 # Architecture
 
+2026-10-30 接续：[私钥删除](ssh-key-deletion.md)复用原 source-bound bundle 及 ticket
+生命周期，原子移除精确身份／配对对象／口令／KEY Accounts。存储允许窄静态缺失身份，
+实际连接仍校验全部有效身份；重导入以原生审计刷新元数据，保留用户 CONFIG 内容。
+799 JVM／317 Flutter及指定板实际链路42.572秒通过；[证据](verification.md#20261030-ssh-key-deletion)。
+
+2026-10-30：[加密私钥／口令](ssh-encrypted-key-connect.md)扩展同一原生导出、导入 ticket
+与 connector。`SshTransientKey` 只拥有原请求的一次口令／精确密钥 digest，保留实际
+CSASv2 selection，经 host/KEX 与最终 typed PRIVATE guard 形成 CSKB；认证后擦除。
+`SshKeyPassphrase` 将持久 Entry／KeyBinding 保存及忘记交给已有 AppSecrets guarded
+mutation，同次提交。无口令加密图准入不冒充解密数学证明；实际导入／使用另验，复杂
+恢复门保持。[本地及指定板产品链路验证](verification.md#20261030-ssh-encrypted-key)通过。
+
 2026-10-30：统一锁屏断开/实际一键重连在用户指定开发板通过，未新增分版本业务逻辑；
 手机或逐版本补验不作为当前前置，[实测范围](verification.md#20261030-ssh-lock-disconnect-board)单列。
 

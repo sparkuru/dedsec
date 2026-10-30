@@ -1,5 +1,19 @@
 # Compatibility
 
+2026-10-30 接续：[私钥删除](ssh-key-deletion.md)不改变库格式、依赖或原生 wire。
+窄 stored kind1/state5 可代表缺失静态身份；CONFIG 导入／编辑仍严格，实际连接任一有效
+身份缺失即拒绝。用户配置正文和外部原文件保持，重新导入修复元数据；799 JVM／317
+Flutter及指定板隔离42.572秒通过，见[验证](verification.md#20261030-ssh-key-deletion)。
+
+2026-10-30 本地扩展：[加密私钥与口令](ssh-encrypted-key-connect.md)沿现有唯一模型，
+保留旧无口令 API，新增口令公钥导出和公开 encrypted/saved 状态。原始加密 OpenSSH
+（Ed25519/RSA/ECDSA）及适用传统 RSA/EC PEM 已完成原生材料与独立 SSH 服务互通；
+加密 PKCS8 等仍明确拒绝，未改变旧独立严格检查器。无已存口令的普通图准入不冒充
+解密关联证明，实际导入／使用另验，复杂恢复门保持。指定Android11板新产品链路已独立
+40.512秒通过并清理，隔离阶段正式7c38保持；随后允许保留数据安装正式f26a并启动，
+人工体验待反馈。其他设备／Android逐格式与真实DocumentsUI仍分列。
+详见[本轮验证](verification.md#20261030-ssh-encrypted-key)。
+
 2026-10-26 Android16 PLR110实测限制：App硬锁页64KiB，匿名memfd可创建/截断而
 fchmod0600返回EACCES。修正detached索引固定开销及内部FD的600假设，仍先锁页/
 DONTDUMP后复制、严格anonymous/current-UID/zero-link/exact-size/CLOEXEC且不导出。

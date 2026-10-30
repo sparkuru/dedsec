@@ -159,9 +159,38 @@ out:
     if (text != NULL) { wipe(text, capacity); free(text); }
     return result;
 }
-/* OpenSSL's key decoder may ignore bytes after its DER object. Validate the
- * complete decoded single SEQUENCE separately for unencrypted PEM. */
-static int pem_complete(const unsigned char *body, size_t length) {
+/* OpenSSL's key decoder may ignore bytes after its DER object. */
+static int der_complete(const unsigned char *der, long decoded_length) {
+    if (decoded_length < 2 || der[0] != 0x30U) return 0;
+    size_t content = der[1], offset = 2U, available = (size_t)decoded_length;
+    if ((content & 0x80U) != 0) {
+        size_t octets = content & 0x7fU;
+        if (octets == 0 || octets > sizeof(size_t) || octets > available - offset || der[offset] == 0) return 0;
+        content = 0;
+        for (size_t i = 0; i < octets; i++) {
+            if (content > (SIZE_MAX >> 8)) return 0;
+            content = (content << 8) | der[offset++];
+        }
+        if (content < 128U) return 0;
+    }
+    return content == available - offset;
+}
+struct pem_passphrase {
+    const unsigned char *bytes;
+    size_t length;
+};
+static int pem_passphrase_copy(char *buffer, int size, int writing, void *context) {
+    const struct pem_passphrase *passphrase = context;
+    (void)writing;
+    if (size <= 0 || passphrase == NULL || passphrase->length > (size_t)size) return 0;
+    memcpy(buffer, passphrase->bytes, passphrase->length);
+    return (int)passphrase->length;
+}
+/* Decrypt only policy-approved legacy PEM into owned scratch so the product
+ * proof also certifies complete DER consumption. Historical inspectors keep
+ * their existing encrypted-PEM refusal/partial-content behavior. */
+static int pem_complete(const unsigned char *body, size_t length,
+    const unsigned char *secret, size_t secret_length, struct material_result *material) {
     static const char openssh[] = "-----BEGIN OPENSSH PRIVATE KEY-----";
     if (length >= sizeof(openssh) - 1U && memcmp(body, openssh, sizeof(openssh) - 1U) == 0) return 1;
     BIO *bio = BIO_new_mem_buf(body, (int)length);
@@ -172,19 +201,17 @@ static int pem_complete(const unsigned char *body, size_t length) {
     int result = 0;
     if (PEM_read_bio(bio, &name, &header, &der, &decoded_length) != 1) goto out;
     allocation_length = decoded_length;
-    if (decoded_length < 2 || der[0] != 0x30U) goto out;
-    size_t content = der[1], offset = 2U, available = (size_t)decoded_length;
-    if ((content & 0x80U) != 0) {
-        size_t octets = content & 0x7fU;
-        if (octets == 0 || octets > sizeof(size_t) || octets > available - offset || der[offset] == 0) goto out;
-        content = 0;
-        for (size_t i = 0; i < octets; i++) {
-            if (content > (SIZE_MAX >> 8)) goto out;
-            content = (content << 8) | der[offset++];
+    if (secret_length != 0) {
+        EVP_CIPHER_INFO cipher;
+        memset(&cipher, 0, sizeof(cipher));
+        struct pem_passphrase passphrase = {secret, secret_length};
+        if (PEM_get_EVP_CIPHER_INFO(header, &cipher) != 1 || cipher.cipher == NULL) goto out;
+        if (PEM_do_header(&cipher, der, &decoded_length, pem_passphrase_copy, &passphrase) != 1) {
+            material->status = CTOS_MATERIAL_BAD_PASSPHRASE;
+            goto out;
         }
-        if (content < 128U) goto out;
     }
-    result = content == available - offset;
+    result = der_complete(der, decoded_length);
 out:
     if (der != NULL) { wipe(der, (size_t)allocation_length); OPENSSL_free(der); }
     OPENSSL_free(name); OPENSSL_free(header); BIO_free(bio);
@@ -201,7 +228,7 @@ static int parse_private(const unsigned char *body, size_t length,
     if (private_envelope(body, length, &encrypted) != 0) return 0;
     if (openssh_encryption(body, length, &encrypted) != 0) return -1;
     static const char openssh[] = "-----BEGIN OPENSSH PRIVATE KEY-----";
-    if (strict && ((encrypted && (length < sizeof(openssh) - 1U
+    if (strict && ((strict == 1 && encrypted && (length < sizeof(openssh) - 1U
             || memcmp(body, openssh, sizeof(openssh) - 1U) != 0))
             || (!encrypted && secret_length != 0))) {
         r->flags |= encrypted ? 1U : 0U;
@@ -209,7 +236,7 @@ static int parse_private(const unsigned char *body, size_t length,
         return 0;
     }
     /* Legacy encrypted PEM retains upstream decoded-DER consumption limits. */
-    int complete = encrypted ? 1 : pem_complete(body, length);
+    int complete = encrypted ? 1 : pem_complete(body, length, NULL, 0, r);
     if (complete < 0) return -1;
     if (!complete) return 0;
     file = sshbuf_from(body, length);
@@ -222,6 +249,11 @@ static int parse_private(const unsigned char *body, size_t length,
             result = 0; goto out;
         }
         if (secret_length == 0) { r->status = CTOS_MATERIAL_NEEDS_PASSPHRASE; result = 0; goto out; }
+        if (strict == 2) {
+            complete = pem_complete(body, length, secret, secret_length, r);
+            if (complete < 0) goto out;
+            if (!complete) { result = 0; goto out; }
+        }
         passphrase = calloc(secret_length + 1U, 1U);
         if (passphrase == NULL) { errno = ENOMEM; goto out; }
         memcpy(passphrase, secret, secret_length);
@@ -502,12 +534,15 @@ done:
     }
     return 0;
 }
-int ctos_ssh_material_export_public(const unsigned char *body, size_t length,
+static int export_public(const unsigned char *body, size_t length,
+    const unsigned char *passphrase, size_t passphrase_length, int strict,
     uint64_t deadline, unsigned char **output, size_t *output_length) {
     if (output != NULL) *output = NULL;
     if (output_length != NULL) *output_length = 0;
-    if (output == NULL || output_length == NULL || (body == NULL && length != 0)) { errno = EINVAL; return -1; }
-    if (length > CTOS_SSH_MATERIAL_BYTES) { errno = E2BIG; return -1; }
+    if (length > CTOS_SSH_MATERIAL_BYTES || passphrase_length > CTOS_SSH_MATERIAL_PASSPHRASE_BYTES) { errno = E2BIG; return -1; }
+    if (output == NULL || output_length == NULL || (body == NULL && length != 0)
+        || (passphrase == NULL && passphrase_length != 0)
+        || (passphrase_length != 0 && memchr(passphrase, 0, passphrase_length) != NULL)) { errno = EINVAL; return -1; }
     if (ctos_ssh_material_deadline(deadline) != 0) return -1;
     struct material_result material = {.status = CTOS_MATERIAL_MALFORMED};
     struct sshkey *private_key = NULL, *subject = NULL;
@@ -519,7 +554,7 @@ int ctos_ssh_material_export_public(const unsigned char *body, size_t length,
     if (result < 0) goto done;
     if (result != 0) { result = 0; goto encode; }
     if (OPENSSL_init_crypto(OPENSSL_INIT_NO_LOAD_CONFIG, NULL) != 1) { errno = EIO; result = -1; goto done; }
-    result = parse_private(body, length, NULL, 0, 1, &material, &private_key);
+    result = parse_private(body, length, passphrase, passphrase_length, strict, &material, &private_key);
     flags = (material.flags & 1U) ? 2U : 0U;
     if (result < 0) goto done;
     if (ctos_ssh_material_deadline(deadline) != 0) { result = -1; goto done; }
@@ -533,7 +568,7 @@ int ctos_ssh_material_export_public(const unsigned char *body, size_t length,
     error = sshkey_to_blob(subject, &blob, &blob_length);
     if (error != 0) { result = parse_system_error(error); if (result < 0) goto done; goto encode; }
     if (blob_length == 0 || blob_length > CTOS_SSH_MATERIAL_BYTES) { errno = E2BIG; result = -1; goto done; }
-    status = CTOS_MATERIAL_PARSED; kind = key_kind(subject); flags = 1U;
+    status = CTOS_MATERIAL_PARSED; kind = key_kind(subject); flags |= 1U;
     wire_length += blob_length;
 encode:
     if (ctos_ssh_material_deadline(deadline) != 0) { result = -1; goto done; }
@@ -556,6 +591,15 @@ done:
     wipe(&material, sizeof(material)); wipe(digest, sizeof(digest));
     errno = saved;
     return result;
+}
+int ctos_ssh_material_export_public(const unsigned char *body, size_t length,
+    uint64_t deadline, unsigned char **output, size_t *output_length) {
+    return export_public(body, length, NULL, 0, 1, deadline, output, output_length);
+}
+int ctos_ssh_material_export_public_with_passphrase(const unsigned char *body, size_t length,
+    const unsigned char *passphrase, size_t passphrase_length, uint64_t deadline,
+    unsigned char **output, size_t *output_length) {
+    return export_public(body, length, passphrase, passphrase_length, 2, deadline, output, output_length);
 }
 int ctos_ssh_material_verify_private(const unsigned char *body, size_t length,
     const unsigned char *passphrase, size_t passphrase_length, uint64_t deadline,

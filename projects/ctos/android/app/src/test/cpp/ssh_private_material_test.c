@@ -215,10 +215,151 @@ static void public_exports(void) {
         sshbuf_free(clear); sshbuf_free(encrypted); sshkey_free(key);
     }
 }
+static void product_export_expect(const struct sshbuf *file, const char *phrase,
+    unsigned int status, unsigned int kind, int encrypted, const struct sshkey *subject) {
+    size_t body_length = sshbuf_len(file), phrase_length = phrase == NULL ? 0 : strlen(phrase);
+    unsigned char *body_before = malloc(body_length + 1U), *phrase_before = malloc(phrase_length + 1U);
+    CHECK(body_before != NULL && phrase_before != NULL);
+    memcpy(body_before, sshbuf_ptr(file), body_length);
+    if (phrase_length != 0) memcpy(phrase_before, phrase, phrase_length);
+    unsigned char *wire = NULL, *blob = NULL;
+    size_t length = 0, blob_length = 0;
+    unsigned int before_effects = effects, before_signs = pair_signs, before_verifies = pair_verifies;
+    unsigned int before_parses = private_parses, before_kdf = kdf_calls;
+    clock_calls = 0; observe = 1; public_export_observe = 1;
+    CHECK(ctos_ssh_material_export_public_with_passphrase(sshbuf_ptr(file), body_length,
+        (const unsigned char *)phrase, phrase_length, now_ms() + 60000U, &wire, &length) == 0);
+    observe = 0; public_export_observe = 0;
+    CHECK(effects == before_effects && memcmp(body_before, sshbuf_ptr(file), body_length) == 0);
+    CHECK(phrase_length == 0 || memcmp(phrase_before, phrase, phrase_length) == 0);
+    CHECK(wire != NULL && length >= CTOS_SSH_KEY_EXPORT_HEADER_BYTES);
+    CHECK(u32(wire) == 0x43534b45U && u32(wire + 4) == 1);
+    if (u32(wire + 8) != status) fprintf(stderr, "product export expected=%u actual=%u\n", status, u32(wire + 8));
+    CHECK(u32(wire + 8) == status && u32(wire + 12) == kind);
+    CHECK(u32(wire + 16) == ((encrypted ? 2U : 0U) | (status == CTOS_MATERIAL_PARSED ? 1U : 0U)));
+    if (status == CTOS_MATERIAL_PARSED) {
+        CHECK(subject != NULL && sshkey_to_blob(subject, &blob, &blob_length) == 0);
+        CHECK(length == CTOS_SSH_KEY_EXPORT_HEADER_BYTES + blob_length && u32(wire + 20) == blob_length);
+        CHECK(memcmp(wire + CTOS_SSH_KEY_EXPORT_HEADER_BYTES, blob, blob_length) == 0);
+        unsigned char digest[32];
+        CHECK(ssh_digest_memory(SSH_DIGEST_SHA256, blob, blob_length, digest, sizeof(digest)) == 0);
+        CHECK(memcmp(digest, wire + 24, sizeof(digest)) == 0);
+        CHECK(pair_signs == before_signs + 1U && pair_verifies == before_verifies + 1U);
+        memset(digest, 0, sizeof(digest)); free(blob);
+    } else {
+        CHECK(length == CTOS_SSH_KEY_EXPORT_HEADER_BYTES && u32(wire + 20) == 0 && zero(wire + 24, 32));
+        CHECK(pair_signs == before_signs && pair_verifies == before_verifies);
+        if (status == CTOS_MATERIAL_NEEDS_PASSPHRASE || status == CTOS_MATERIAL_UNSUPPORTED)
+            CHECK(private_parses == before_parses && kdf_calls == before_kdf);
+    }
+    memset(wire, 0, length); free(wire);
+    memset(body_before, 0, body_length + 1U); memset(phrase_before, 0, phrase_length + 1U);
+    free(body_before); free(phrase_before);
+}
+static void product_encrypted_exports(void) {
+    const int types[] = {KEY_ED25519, KEY_ECDSA, KEY_ECDSA, KEY_ECDSA, KEY_RSA};
+    const unsigned int bits[] = {0, 256, 384, 521, 2048};
+    for (unsigned int i = 0; i < 5; i++) {
+        struct sshkey *key = NULL; CHECK(sshkey_generate(types[i], bits[i], &key) == 0);
+        struct sshbuf *clear = private_file(key, SSHKEY_PRIVATE_OPENSSH, "");
+        struct sshbuf *encrypted = private_file(key, SSHKEY_PRIVATE_OPENSSH, "product-phrase");
+        product_export_expect(clear, NULL, CTOS_MATERIAL_PARSED, i + 1U, 0, key);
+        product_export_expect(clear, "must-not-ignore", CTOS_MATERIAL_UNSUPPORTED, 0, 0, NULL);
+        product_export_expect(encrypted, NULL, CTOS_MATERIAL_NEEDS_PASSPHRASE, 0, 1, NULL);
+        product_export_expect(encrypted, "wrong", CTOS_MATERIAL_BAD_PASSPHRASE, 0, 1, NULL);
+        product_export_expect(encrypted, "product-phrase", CTOS_MATERIAL_PARSED, i + 1U, 1, key);
+        if (i > 0) {
+            const EVP_CIPHER *ciphers[] = {EVP_aes_128_cbc(), EVP_aes_256_cbc()};
+            for (unsigned int j = 0; j < 2; j++) {
+                BIO *bio = BIO_new(BIO_s_mem()); CHECK(bio != NULL);
+                CHECK(PEM_write_bio_PrivateKey_traditional(bio, key->pkey, ciphers[j],
+                    (const unsigned char *)"product-phrase", 14, NULL, NULL) == 1);
+                char *bytes = NULL; long length = BIO_get_mem_data(bio, &bytes); CHECK(length > 0);
+                struct sshbuf *pem = sshbuf_from(bytes, (size_t)length); CHECK(pem != NULL);
+                product_export_expect(pem, NULL, CTOS_MATERIAL_NEEDS_PASSPHRASE, 0, 1, NULL);
+                product_export_expect(pem, "wrong", CTOS_MATERIAL_BAD_PASSPHRASE, 0, 1, NULL);
+                product_export_expect(pem, "product-phrase", CTOS_MATERIAL_PARSED, i + 1U, 1, key);
+                sshbuf_free(pem); BIO_free(bio);
+            }
+        }
+        sshbuf_free(clear); sshbuf_free(encrypted); sshkey_free(key);
+    }
+}
+static int supplied_der(const void *value, unsigned char **output) {
+    const struct sshbuf *der = value;
+    int length = (int)sshbuf_len(der);
+    if (output != NULL && *output != NULL) { memcpy(*output, sshbuf_ptr(der), (size_t)length); *output += length; }
+    return length;
+}
+static void product_pem_consumption(void) {
+    struct sshkey *key = NULL; CHECK(sshkey_generate(KEY_RSA, 2048, &key) == 0);
+    struct sshbuf *clear = private_file(key, SSHKEY_PRIVATE_PEM, "");
+    BIO *input = BIO_new_mem_buf(sshbuf_ptr(clear), (int)sshbuf_len(clear)); CHECK(input != NULL);
+    char *name = NULL, *header = NULL; unsigned char *der = NULL; long length = 0;
+    CHECK(PEM_read_bio(input, &name, &header, &der, &length) == 1);
+    struct sshbuf *extra = sshbuf_new(); CHECK(extra != NULL && sshbuf_put(extra, der, (size_t)length) == 0);
+    CHECK(sshbuf_put(extra, "junk", 4) == 0);
+    BIO *output = BIO_new(BIO_s_mem()); CHECK(output != NULL);
+    CHECK(PEM_ASN1_write_bio(supplied_der, name, output, extra, EVP_aes_256_cbc(),
+        (const unsigned char *)"product-phrase", 14, NULL, NULL) == 1);
+    char *bytes = NULL; long size = BIO_get_mem_data(output, &bytes); CHECK(size > 0);
+    struct sshbuf *suffixed = sshbuf_from(bytes, (size_t)size); CHECK(suffixed != NULL);
+    product_export_expect(suffixed, "product-phrase", CTOS_MATERIAL_MALFORMED, 0, 1, NULL);
+    BIO_free(output); output = BIO_new(BIO_s_mem()); CHECK(output != NULL);
+    CHECK(PEM_write_bio_PKCS8PrivateKey(output, key->pkey, EVP_aes_256_cbc(), "product-phrase", 14, NULL, NULL) == 1);
+    size = BIO_get_mem_data(output, &bytes); CHECK(size > 0);
+    struct sshbuf *pkcs8 = sshbuf_from(bytes, (size_t)size); CHECK(pkcs8 != NULL);
+    product_export_expect(pkcs8, NULL, CTOS_MATERIAL_UNSUPPORTED, 0, 1, NULL);
+    product_export_expect(pkcs8, "product-phrase", CTOS_MATERIAL_UNSUPPORTED, 0, 1, NULL);
+    BIO_free(input); BIO_free(output); OPENSSL_free(name); OPENSSL_free(header); OPENSSL_clear_free(der, (size_t)length);
+    sshbuf_free(extra); sshbuf_free(suffixed); sshbuf_free(pkcs8); sshbuf_free(clear); sshkey_free(key);
+}
+static void product_export_bounds(void) {
+    struct sshkey *key = NULL; CHECK(sshkey_generate(KEY_ED25519, 0, &key) == 0);
+    char maximum[CTOS_SSH_MATERIAL_PASSPHRASE_BYTES + 1U];
+    memset(maximum, 'p', sizeof(maximum)); maximum[sizeof(maximum) - 1U] = '\0';
+    struct sshbuf *encrypted = private_file(key, SSHKEY_PRIVATE_OPENSSH, maximum);
+    product_export_expect(encrypted, maximum, CTOS_MATERIAL_PARSED, 1, 1, key);
+    unsigned int boundaries_count = clock_calls;
+    unsigned char *wire = NULL; size_t length = 0;
+    for (unsigned int i = 1; i <= boundaries_count; i++) {
+        clock_calls = 0; expire_at = i; observe = 1; public_export_observe = 1;
+        CHECK(ctos_ssh_material_export_public_with_passphrase(sshbuf_ptr(encrypted), sshbuf_len(encrypted),
+            (const unsigned char *)maximum, strlen(maximum), now_ms() + 60000U, &wire, &length) == -1
+            && errno == ETIMEDOUT && wire == NULL && length == 0);
+        observe = 0; public_export_observe = 0;
+    }
+    expire_at = 0;
+    uint64_t deadline = now_ms() + 60000U;
+    CHECK(ctos_ssh_material_export_public_with_passphrase(NULL, CTOS_SSH_MATERIAL_BYTES + 1U,
+        NULL, 0, deadline, &wire, &length) == -1 && errno == E2BIG && wire == NULL && length == 0);
+    CHECK(ctos_ssh_material_export_public_with_passphrase(NULL, 1, NULL, 0, deadline,
+        &wire, &length) == -1 && errno == EINVAL && wire == NULL && length == 0);
+    CHECK(ctos_ssh_material_export_public_with_passphrase(NULL, 0, NULL, 1, deadline,
+        &wire, &length) == -1 && errno == EINVAL && wire == NULL && length == 0);
+    CHECK(ctos_ssh_material_export_public_with_passphrase(NULL, 0, (const unsigned char *)"a",
+        CTOS_SSH_MATERIAL_PASSPHRASE_BYTES + 1U, deadline, &wire, &length) == -1
+        && errno == E2BIG && wire == NULL && length == 0);
+    CHECK(ctos_ssh_material_export_public_with_passphrase(NULL, 0, (const unsigned char *)"a\0b", 3,
+        deadline, &wire, &length) == -1 && errno == EINVAL && wire == NULL && length == 0);
+    CHECK(ctos_ssh_material_export_public_with_passphrase(NULL, 0, NULL, 0, deadline,
+        NULL, &length) == -1 && errno == EINVAL && length == 0);
+    CHECK(ctos_ssh_material_export_public_with_passphrase(NULL, 0, NULL, 0, now_ms(),
+        &wire, &length) == -1 && errno == ETIMEDOUT && wire == NULL && length == 0);
+    CHECK(ctos_ssh_material_export_public_with_passphrase(NULL, 0, NULL, 0, now_ms() + 61000U,
+        &wire, &length) == -1 && errno == EINVAL && wire == NULL && length == 0);
+    for (unsigned int rounds = 0; rounds <= 65; rounds += 65) {
+        struct sshbuf *policy = policy_file(rounds, 1, 1, "aes256-ctr", "bcrypt");
+        product_export_expect(policy, "never-derived", CTOS_MATERIAL_UNSUPPORTED, 0, 1, NULL);
+        sshbuf_free(policy);
+    }
+    memset(maximum, 0, sizeof(maximum)); sshbuf_free(encrypted); sshkey_free(key);
+}
 static int private_baseline_main(void) {
     CHECK(pair_baseline_main() == 0);
     unsigned int baseline = checks, before = fd_count();
     private_algorithms(); private_signer_failures(); private_policy_and_bounds(); public_exports();
+    product_encrypted_exports(); product_pem_consumption(); product_export_bounds();
     CHECK(fd_count() == before && effects == 0 && streams == closed_streams);
     printf("SSH_PRIVATE_MATERIAL checks=%u baseline=%u signs=%u verifies=%u effects=%u cleanup=pass\n",
         checks, baseline, pair_signs, pair_verifies, effects);

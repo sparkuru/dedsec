@@ -82,6 +82,7 @@ final class SshPasswordConnectBridge implements AutoCloseable {
                 case "ssh.defaults": defaults(call, result); break;
                 case "ssh.passwordStatus": passwordStatus(call, result); break;
                 case "ssh.forgetPassword": forgetPassword(call, result); break;
+                case "ssh.forgetKeyPassphrase": forgetKeyPassphrase(call, result); break;
                 case "ssh.passwordConnect": connect(call, result); break;
                 case "ssh.keyConnect": connectKey(call, result, false); break;
                 case "ssh.configConnect": connectKey(call, result, true); break;
@@ -249,6 +250,61 @@ final class SshPasswordConnectBridge implements AutoCloseable {
         return new SshPasswordProfile(text(call, "host"), integer(call, "port", 1, 65535), text(call, "username"));
     }
 
+    private void forgetKeyPassphrase(MethodCall call, MethodChannel.Result result) throws VaultException {
+        exact(call, "requestId", "keyId", "all");
+        String id = id(call), keyId = text(call, "keyId"); boolean all = bool(call, "all");
+        if (all ? !keyId.isEmpty() : keyId.isEmpty()) throw parameters();
+        if (!all) VaultManifest.identifier(keyId);
+        secrets.requireSshConsumer();
+        if (active != null || mutating != null || profiles.busy()) throw failure("BUSY");
+        admit(id); retireIdle(); profiles.cancelReads();
+        Defaults request = new Defaults(id, vault); idle = mutating = request;
+        AppSecrets.BundleContext source = vault.newBundleContext(request.deadline, () -> checkIdle(request, true));
+        defaultsWorker.execute(() -> {
+            String failed = null; boolean committed = false; VaultOperation operation = null;
+            try {
+                SshPasswordManifestValidator.within(request.deadline, () -> {
+                    checkIdle(request, true);
+                    try (SshConnectionMaterial.Snapshot snapshot = vault.sshLibrarySnapshot(source)) {
+                        SshConnectionMaterial.Key key = all ? null : SshConnectionMaterial.key(snapshot.manifest, keyId);
+                        request.mutation = vault.newKeyPassphraseMutationContext(request.epoch, request.deadline,
+                                () -> checkIdle(request, true), key, all);
+                    }
+                    return null;
+                });
+                operation = SshPasswordManifestValidator.within(request.deadline,
+                        () -> vault.beginKeyPassphraseMutation(request.mutation, "", false));
+                VaultOperation exact = operation;
+                SshPasswordManifestValidator.within(request.deadline, () -> {
+                    vault.forgetKeyPassphrase(exact, () -> checkIdle(request, true)); return null;
+                });
+                committed = true;
+            } catch (Throwable failure) { failed = code(failure); }
+            finally {
+                vault.cancelOperation(operation); vault.cancelBundleContext(source);
+                if (request.mutation != null) request.mutation.cancel();
+            }
+            boolean wrote = committed; String code = failed;
+            main.post(() -> {
+                request.loading = false; if (mutating == request) mutating = null;
+                String reason = code;
+                if (reason == null) {
+                    try {
+                        if (closed || idle != request || request.cancelled.get()) throw failure("SSH_CANCELLED");
+                        secrets.requireSshConsumer();
+                        if (SystemClock.elapsedRealtime() >= request.deadline) throw failure("SSH_TIMED_OUT");
+                        vault.session.assertEpoch(request.epoch + 1);
+                        if (vault.contentRevision != request.revision + 1) throw failure("VAULT_CHANGED");
+                    } catch (VaultException invalidated) { reason = invalidated.code; }
+                }
+                if (idle == request) retireIdle();
+                if (reason == null) result.success(VaultCollections.map("forgotten", true));
+                else { if (wrote) { vault.session.lock(); reason = "VAULT_COMMIT_UNCERTAIN"; } error(result, reason); }
+            });
+            finishDefaultsCleanup();
+        });
+    }
+
     private void connect(MethodCall call, MethodChannel.Result result) throws VaultException {
         boolean extended = call.arguments instanceof Map && ((Map<?, ?>)call.arguments).containsKey("useSavedPassword");
         if (extended) exact(call, "requestId", "host", "port", "username", "password", "columns", "rows",
@@ -284,8 +340,18 @@ final class SshPasswordConnectBridge implements AutoCloseable {
     }
 
     private void connectKey(MethodCall call, MethodChannel.Result result, boolean configured) throws VaultException {
-        if (configured) exact(call, "requestId", "alias", "binding", "keyId", "username", "columns", "rows");
+        boolean extended = call.arguments instanceof Map && ((Map<?, ?>)call.arguments).containsKey("passphrase");
+        if (extended) {
+            if (configured) exact(call, "requestId", "alias", "binding", "keyId", "username", "columns", "rows",
+                    "passphrase", "useSavedPassphrase", "savePassphrase");
+            else exact(call, "requestId", "host", "port", "username", "keyId", "columns", "rows",
+                    "passphrase", "useSavedPassphrase", "savePassphrase");
+        } else if (configured) exact(call, "requestId", "alias", "binding", "keyId", "username", "columns", "rows");
         else exact(call, "requestId", "host", "port", "username", "keyId", "columns", "rows");
+        boolean useSaved = extended && bool(call, "useSavedPassphrase"), save = extended && bool(call, "savePassphrase");
+        byte[] phrase = SshKeyPassphrase.bytes(extended ? text(call, "passphrase") : "", true);
+        try {
+        if (useSaved && (save || phrase.length != 0)) throw parameters();
         String id = id(call), keyId = text(call, "keyId"); VaultManifest.identifier(keyId);
         secrets.requireSshConsumer();
         if (active != null || mutating != null || profiles.busy() || idle != null && idle.loading) throw failure("BUSY");
@@ -299,10 +365,11 @@ final class SshPasswordConnectBridge implements AutoCloseable {
                 integer(call, "port", 1, 65535), username);
         int columns = integer(call, "columns", 1, 4096), rows = integer(call, "rows", 1, 4096);
         admit(id); retireIdle(); profiles.cancelReads();
-        SshPasswordConnector connector = new SshPasswordConnector(vault, manual, keyId, alias, binding, username,
+        SshPasswordConnector connector = new SshPasswordConnector(vault, manual, keyId, alias, binding, username, phrase, useSaved, save,
                 SystemClock.elapsedRealtime() + 60_000,
                 () -> { if (closed) throw failure("SSH_CANCELLED"); secrets.requireSshConsumer(); }, events(id));
         attach(id, connector, columns, rows, result);
+        } finally { VaultCodec.wipe(phrase); }
     }
 
     boolean onActivityResult(int requestCode, int resultCode, android.content.Intent data) {

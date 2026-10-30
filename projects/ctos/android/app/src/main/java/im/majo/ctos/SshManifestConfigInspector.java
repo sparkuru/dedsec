@@ -101,14 +101,15 @@ final class SshManifestConfigInspector implements AutoCloseable {
         final SshConfigEvaluator.Usage usage;
 
         private Report(List<Root> roots, int configFiles, int catalogBytes,
-                int opens, int readBytes, int lines, boolean audited, boolean resourcesAudited) {
+                int opens, int readBytes, int lines, boolean audited, boolean resourcesAudited,
+                boolean referencesVerified) {
             this.roots = Collections.unmodifiableList(new ArrayList<>(roots));
             this.configFiles = configFiles;
             processedRootCount = roots.size();
             this.catalogBytes = catalogBytes;
-            staticIncludeReferencesVerified = audited;
+            staticIncludeReferencesVerified = audited && referencesVerified;
             localEffectsPolicyChecked = audited;
-            staticResourceReferencesVerified = resourcesAudited;
+            staticResourceReferencesVerified = resourcesAudited && referencesVerified;
             boolean incomplete = false;
             for (Root root : roots)
                 incomplete |= root.resourceAudit != null && root.resourceAudit.hasDeferred;
@@ -166,34 +167,46 @@ final class SshManifestConfigInspector implements AutoCloseable {
     private final Thread owner = Thread.currentThread();
     private final Clock clock;
     private final SshConfigEvaluator.NativeBinding binding;
+    private final AppSecrets.EffectGuard origin;
     private boolean attempted, inFlight, cleanupFailed;
     private long deadline;
     private Cancellation cancellation;
     private SshConfigEvaluator active;
 
-    SshManifestConfigInspector() { this(SystemClock::elapsedRealtime, null); }
+    SshManifestConfigInspector() { this(SystemClock::elapsedRealtime, null, null); }
 
     SshManifestConfigInspector(Clock clock, SshConfigEvaluator.NativeBinding binding) {
+        this(clock, binding, null);
+    }
+
+    SshManifestConfigInspector(Clock clock, SshConfigEvaluator.NativeBinding binding, AppSecrets.EffectGuard origin) {
         if (clock == null) throw new IllegalArgumentException("Inspection clock required");
         this.clock = clock;
         this.binding = binding;
+        this.origin = origin;
     }
 
     Report inspect(VaultManifest manifest, long deadline, Cancellation cancellation) throws IOException {
-        return inspectMode(manifest, deadline, cancellation, false, false);
+        return inspectMode(manifest, deadline, cancellation, false, false, true);
     }
 
     Report inspectAudit(VaultManifest manifest, long deadline, Cancellation cancellation) throws IOException {
-        return inspectMode(manifest, deadline, cancellation, true, false);
+        return inspectMode(manifest, deadline, cancellation, true, false, true);
     }
 
     Report inspectResourceAudit(VaultManifest manifest, long deadline, Cancellation cancellation)
             throws IOException {
-        return inspectMode(manifest, deadline, cancellation, true, true);
+        return inspectMode(manifest, deadline, cancellation, true, true, true);
+    }
+
+    /** Prospective metadata derivation only; the final candidate still requires exact reference validation. */
+    Report inspectResourceDeclarationsForReferenceRefresh(VaultManifest manifest, long deadline,
+            Cancellation cancellation) throws IOException {
+        return inspectMode(manifest, deadline, cancellation, true, true, false);
     }
 
     private Report inspectMode(VaultManifest manifest, long deadline, Cancellation cancellation,
-            boolean audited, boolean resourcesAudited) throws IOException {
+            boolean audited, boolean resourcesAudited, boolean verifyReferences) throws IOException {
         enter();
         Input input = null;
         Throwable primary = null;
@@ -244,8 +257,8 @@ final class SshManifestConfigInspector implements AutoCloseable {
                         ? active.catalog(MAX_OUTPUT - output, MAX_ROWS - rows) : audit.catalog;
                 check();
                 validateCatalog(catalog, input);
-                if (audit != null) validateReferences(audit, input, manifest);
-                if (resourceAudit != null) validateResources(resourceAudit, input, manifest);
+                if (audit != null) validateReferences(audit, input, manifest, verifyReferences);
+                if (resourceAudit != null) validateResources(resourceAudit, input, manifest, verifyReferences);
                 int encodedBytes = resourceAudit != null ? resourceAudit.encodedBytes
                         : audit == null ? catalog.encodedBytes : audit.encodedBytes;
                 int retainedRows = catalog.entries.size() + catalog.deferredSites.size()
@@ -261,7 +274,8 @@ final class SshManifestConfigInspector implements AutoCloseable {
                 cleanup();
                 check();
             }
-            report = new Report(roots, input.configs, output, opens, readBytes, lines, audited, resourcesAudited);
+            report = new Report(roots, input.configs, output, opens, readBytes, lines, audited, resourcesAudited,
+                    verifyReferences);
         } catch (IOException | RuntimeException | Error failure) {
             primary = failure;
             throw failure;
@@ -286,6 +300,10 @@ final class SshManifestConfigInspector implements AutoCloseable {
     private void checkGuard() throws IOException { check(); }
 
     private long check() throws IOException {
+        if (origin != null) {
+            try { origin.check(); }
+            catch (VaultException failure) { throw new IOException("SSH reference derivation expired", failure); }
+        }
         long now = clock.now();
         if (cancellation == null || cancellation.cancelled() || cancellation.failed()
                 || now < 0 || deadline <= now) throw invalid();
@@ -348,18 +366,18 @@ final class SshManifestConfigInspector implements AutoCloseable {
     }
 
     private static void validateReferences(SshConfigEvaluator.Audit audit, Input input,
-            VaultManifest manifest) throws IOException {
+            VaultManifest manifest, boolean verifyReferences) throws IOException {
         for (SshConfigEvaluator.Edge edge : audit.edges) {
             source(edge.parent, input);
             source(edge.child, input);
             VaultManifest.FileObject parent = manifest.files.get(edge.parent - 1);
             String childPath = manifest.files.get(edge.child - 1).path;
-            if (!parent.references.contains(childPath)) throw new ReferenceException(edge);
+            if (verifyReferences && !parent.references.contains(childPath)) throw new ReferenceException(edge);
         }
     }
 
     private static void validateResources(SshConfigEvaluator.ResourceAudit audit, Input input,
-            VaultManifest manifest) throws IOException {
+            VaultManifest manifest, boolean verifyReferences) throws IOException {
         for (SshConfigEvaluator.Resource resource : audit.resources) {
             source(resource.parent, input);
             if (resource.state != SshConfigEvaluator.Resource.STATIC) continue;
@@ -367,7 +385,7 @@ final class SshManifestConfigInspector implements AutoCloseable {
                     || !resource.acceptsType(input.types[resource.target - 1])) throw invalid();
             VaultManifest.FileObject parent = manifest.files.get(resource.parent - 1);
             String targetPath = manifest.files.get(resource.target - 1).path;
-            if (!parent.references.contains(targetPath)) throw new ResourceReferenceException(resource);
+            if (verifyReferences && !parent.references.contains(targetPath)) throw new ResourceReferenceException(resource);
         }
     }
 

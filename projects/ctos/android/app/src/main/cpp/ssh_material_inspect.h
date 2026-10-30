@@ -54,4 +54,10 @@ int ctos_ssh_material_inspect_certificate(const unsigned char *body, size_t leng
  * No persistent handle, signing payload or secret bytes are returned. */
 int ctos_ssh_material_export_public(const unsigned char *body, size_t length,
     uint64_t deadline, unsigned char **output, size_t *output_length);
+/* Product import/use path: supports bounded policy-approved encrypted software
+ * containers. CSKEv1 flags retain proof bit1 and add encrypted bit2; NEEDS/BAD
+ * carry only the encrypted bit and no public subject or proof. */
+int ctos_ssh_material_export_public_with_passphrase(const unsigned char *body, size_t length,
+    const unsigned char *passphrase, size_t passphrase_length, uint64_t deadline,
+    unsigned char **output, size_t *output_length);
 #endif

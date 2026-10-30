@@ -1,5 +1,13 @@
 # SSH Native Gates
 
+2026-10-30: [encrypted private-key production export](ssh-encrypted-key-connect.md) adds
+SshKeyMaterial.Native.inspectWithPassphrase and a phrase-aware public C export. Existing strict
+context-free exports/inspectors keep their behavior. CSKEv1 parsed flags1/3 distinguish clear/
+encrypted actual self-proved keys; BAD_PASSPHRASE appends status4, with empty proof fields.
+Eligible traditional PEM additionally requires complete decrypted DER consumption. Actual
+selected native authentication continues consuming the existing CSASv2/CSKBv1 and expected
+public match. Audit the new material JNI export separately from the unchanged session surface.
+
 2026-10-26: [established background session](ssh-background-session.md) separates only exact
 SUCCESS-promoted transport from authentication lease revocation. Native releases public-view borrow
 and selection; Java releases lease/auth providers before any I/O/publication. Preauth admission,

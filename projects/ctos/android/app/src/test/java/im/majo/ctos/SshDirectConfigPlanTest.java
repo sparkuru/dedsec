@@ -41,11 +41,12 @@ public final class SshDirectConfigPlanTest {
     private static void text(DataOutputStream output, String value) throws IOException {
         byte[] bytes = value.getBytes(StandardCharsets.UTF_8); output.writeInt(bytes.length); output.write(bytes);
     }
-    private static byte[] frame(String user, String path) throws IOException {
+    private static byte[] frame(String user, String... paths) throws IOException {
         ByteArrayOutputStream bytes = new ByteArrayOutputStream(); DataOutputStream out = new DataOutputStream(bytes);
-        for (int value : new int[] {0x43534350, 1, 2222, 1, 1, 0, 3000, 0, 3, user.isEmpty() ? 1 : 0, 1, 1}) out.writeInt(value);
+        for (int value : new int[] {0x43534350, 1, 2222, 1, 1, 0, 3000, 0, 3, user.isEmpty() ? 1 : 0, paths.length, 1}) out.writeInt(value);
         text(out, "actual-alias"); text(out, "actual.example"); text(out, user);
-        text(out, path); text(out, ".ssh/known_hosts"); return bytes.toByteArray();
+        for (String path : paths) text(out, path);
+        text(out, ".ssh/known_hosts"); return bytes.toByteArray();
     }
     private static byte[] source() {
         byte[] path = ".ssh/config".getBytes(StandardCharsets.US_ASCII);
@@ -127,6 +128,42 @@ public final class SshDirectConfigPlanTest {
         try (SshConfigEvaluator evaluator = prepare(cancelled)) {
             evaluator.loadDetached(source(), 0, 31000, request()); evaluator.run(); evaluator.cancel();
             rejected(evaluator::directPlan); assertEquals(0, cancelled.outputs.size());
+        }
+    }
+
+    @Test public void everyEffectiveIdentityMustExistEvenWhenAnotherAllowedKeyRemains() throws Exception {
+        VaultManifest.FileObject present = new VaultManifest.FileObject(VaultManifest.FileType.PRIVATE_KEY,
+                "present", ".ssh/present", "identity", new byte[]{1}, List.of());
+        VaultSshMetadata.KeyBinding key = new VaultSshMetadata.KeyBinding("binding", "present", null, List.of(), null);
+        try (VaultManifest manifest = new VaultManifest(List.of(), List.of(present), List.of(key), List.of())) {
+            for (String[] paths : new String[][]{{".ssh/present"}, {".ssh/missing", ".ssh/present", ".ssh/missing"},
+                    {".ssh/present.pub", ".ssh/present"}}) {
+                Binding binding = new Binding(); binding.response = frame("remote", paths);
+                try (SshConfigEvaluator evaluator = prepare(binding)) {
+                    evaluator.loadDetached(source(), 0, 31000, request()); evaluator.run();
+                    SshConfigEvaluator.DirectPlan plan = evaluator.directPlan();
+                    if (paths.length == 1) {
+                        assertTrue(SshConnectionMaterial.missingIdentityPaths(manifest, plan).isEmpty());
+                        SshConnectionMaterial.requireIdentities(manifest, plan);
+                    } else {
+                        assertEquals(List.of(paths[0]), SshConnectionMaterial.missingIdentityPaths(manifest, plan));
+                        try { SshConnectionMaterial.requireIdentities(manifest, plan); fail("Silent remaining-key fallback"); }
+                        catch (VaultException expected) { assertEquals("SSH_KEY_MISSING", expected.code); }
+                    }
+                }
+            }
+            for (boolean outside : List.of(false, true)) {
+                String[] paths = outside ? new String[]{"unmanaged-key"} : new String[129];
+                if (!outside) for (int i = 0; i < paths.length; i++) paths[i] = ".ssh/missing-" + i;
+                Binding binding = new Binding(); binding.response = frame("remote", paths);
+                try (SshConfigEvaluator evaluator = prepare(binding)) {
+                    evaluator.loadDetached(source(), 0, 31000, request()); evaluator.run();
+                    try { SshConnectionMaterial.missingIdentityPaths(manifest, evaluator.directPlan()); fail("Unbounded/unmanaged metadata"); }
+                    catch (VaultException expected) {
+                        assertEquals(outside ? "SSH_CONFIG_UNSUPPORTED" : "SSH_CONFIG_LIMIT", expected.code);
+                    }
+                }
+            }
         }
     }
 }

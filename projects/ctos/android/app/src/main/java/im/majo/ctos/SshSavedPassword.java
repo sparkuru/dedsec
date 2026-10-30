@@ -62,12 +62,13 @@ final class SshSavedPassword {
                     || !passwords.add(account.credentialId)) throw SshPasswordProfile.unsupported();
         }
         for (VaultManifest.Entry entry : manifest.entries) {
-            if (entry.type == VaultManifest.EntryType.TOTP) continue;
+            if (entry.type == VaultManifest.EntryType.TOTP || entry.type == VaultManifest.EntryType.SSH_KEY_PASSPHRASE) continue;
             if (entry.type != VaultManifest.EntryType.SSH_PASSWORD || !passwords.remove(entry.id))
                 throw SshPasswordProfile.unsupported();
             validateSecret(entry.secret);
         }
         if (!passwords.isEmpty()) throw SshPasswordProfile.unsupported();
+        SshKeyPassphrase.check(manifest);
     }
 
     boolean present(List<VaultSshMetadata.Account> accounts) {
