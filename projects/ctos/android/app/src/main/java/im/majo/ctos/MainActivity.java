@@ -14,11 +14,8 @@ import org.json.JSONObject;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.HashMap;
-import java.util.function.BooleanSupplier;
 import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -41,142 +38,24 @@ public final class MainActivity extends FlutterActivity {
     private EventChannel.EventSink terminalSink;
     private volatile int terminalFd = -1;
     private volatile int terminalGeneration;
-    private volatile SshTerminalSession sshTerminal;
-    private volatile AuthenticatedSshFactory sshFactory;
-    private boolean factoryCleanupReported;
-    private volatile AtomicBoolean sshCancellation;
-    private boolean terminalDestroyQueued;
+    private SshTerminalState.Listener sshListener;
+    private static final int SSH_NOTIFICATIONS = 87;
+    private MethodChannel.Result notificationPermissionResult;
     private String terminalMode;
 
-    /**
-     * Host-only entry: create runs on terminalWorker and returns its actual authenticated session.
-     * The factory owns every partial/extra resource until close confirms cleanup, including a
-     * failed create. close must be idempotent/retryable and must not close a returned session;
-     * the controller closes that session first. create must observe cancellation and existing
-     * proof/deadlines. No live session may be constructed on or moved from another executor.
-     */
-    interface AuthenticatedSshFactory extends AutoCloseable {
-        SshNativeSession create(BooleanSupplier cancelled) throws Exception;
-        default void cancellationAction(Runnable action) { }
-        @Override void close() throws Exception;
-    }
+    /** Kept as the host factory contract; the foreground service owns its executor. */
+    interface AuthenticatedSshFactory extends SshSessionOwner.Factory { }
 
-    // Ownership transfers to the host when create is invoked; a BUSY rejection leaves the
-    // uninvoked factory with its caller. The result completes only at RUNNING or failure.
     synchronized CompletableFuture<String> attachAuthenticatedSsh(AuthenticatedSshFactory factory, String mode,
             int columns, int rows) {
-        if (factory == null || mode == null || mode.isEmpty() || mode.length() > 128
-                || columns < 1 || columns > 4096 || rows < 1 || rows > 4096)
-            throw new IllegalArgumentException("Invalid SSH terminal attachment");
-        CompletableFuture<String> result = new CompletableFuture<>();
-        if (destroyed || terminalWorker.isShutdown() || sshCancellation != null || terminalFd >= 0) {
+        if (destroyed || terminalFd >= 0) {
+            CompletableFuture<String> result = new CompletableFuture<>();
             result.completeExceptionally(new IllegalStateException("Terminal owner is busy or closed"));
             return result;
         }
-        AtomicBoolean cancellation = new AtomicBoolean();
-        sshCancellation = cancellation;
-        factory.cancellationAction(() -> {
-            cancellation.set(true);
-            SshTerminalSession current = sshTerminal;
-            if (current != null && sshFactory == factory) current.requestCancel();
-        });
-        terminalWorker.execute(() -> {
-            if (destroyed || cancellation.get() || sshFactory != null || sshTerminal != null || terminalFd >= 0) {
-                sshCancellation = null;
-                result.completeExceptionally(new IllegalStateException("Terminal owner is busy or cancelled"));
-                if (terminalDestroyQueued) terminalWorker.shutdown();
-                return;
-            }
-            sshFactory = factory;
-            factoryCleanupReported = false;
-            int generation = ++terminalGeneration;
-            terminalMode = mode;
-            SshNativeSession session = null;
-            boolean transferred = false;
-            try {
-                session = factory.create(() -> cancellation.get() || destroyed);
-                if (session == null) throw new IllegalStateException("SSH session is required");
-                SshTerminalSession[] attached = new SshTerminalSession[1];
-                SshTerminalSession controller = new SshTerminalSession(session, factory, terminalWorker,
-                        new SshTerminalSession.Sink() {
-                            @Override public void data(byte[] bytes, Runnable consumed) {
-                                main.post(() -> {
-                                    try {
-                                        SshTerminalSession current = sshTerminal;
-                                        if (!destroyed && generation == terminalGeneration && current != null
-                                                && current.publicationLive() && terminalSink != null)
-                                            terminalSink.success(terminalData(generation, bytes));
-                                    } finally { consumed.run(); }
-                                });
-                            }
-                            @Override public void state(String state, Long exit, String reason) {
-                                publishTerminalState(generation, state, mode, true, exit, reason);
-                                if ("running".equals(state)) result.complete(mode);
-                                else result.completeExceptionally(new IllegalStateException(
-                                        reason == null ? "SSH terminal closed before running" : reason));
-                            }
-                        }, () -> {
-                            if (sshTerminal == attached[0] && sshFactory == factory
-                                    && sshCancellation == cancellation) {
-                                sshTerminal = null;
-                                sshFactory = null;
-                                sshCancellation = null;
-                                if (terminalDestroyQueued) terminalWorker.shutdown();
-                            }
-                        });
-                attached[0] = controller;
-                sshTerminal = controller;
-                transferred = true;
-                if (cancellation.get() || destroyed) controller.stop();
-                else controller.start(columns, rows);
-            } catch (Exception error) {
-                result.completeExceptionally(error instanceof VaultException ? error
-                        : new VaultException("SSH_FAILED", "SSH terminal could not start"));
-                publishTerminalState(generation, "failed", mode, true, null, "SSH_TERMINAL_START");
-                if (!transferred) closeUnattachedSsh(session, factory, cancellation, generation, mode);
-            } catch (Error error) {
-                result.completeExceptionally(error);
-                if (!transferred) closeUnattachedSsh(session, factory, cancellation, generation, mode);
-                throw error;
-            }
-        });
-        return result;
+        return SshSessionService.attach(this, factory, mode, columns, rows);
     }
 
-    private void closeUnattachedSsh(SshNativeSession session, AuthenticatedSshFactory factory,
-            AtomicBoolean cancellation, int generation, String mode) {
-        if (sshFactory != factory || sshCancellation != cancellation) return;
-        try { if (session != null) session.close(); }
-        catch (Error error) {
-            terminalWorker.schedule(() -> closeUnattachedSsh(session, factory, cancellation, generation, mode), 100, TimeUnit.MILLISECONDS);
-            throw error;
-        } catch (Exception error) {
-            terminalWorker.schedule(() -> closeUnattachedSsh(session, factory, cancellation, generation, mode), 100, TimeUnit.MILLISECONDS);
-            return;
-        }
-        closeSshFactory(factory, cancellation, generation, mode);
-    }
-
-    private void closeSshFactory(AuthenticatedSshFactory factory, AtomicBoolean cancellation,
-            int generation, String mode) {
-        if (sshFactory != factory || sshCancellation != cancellation) return;
-        try { factory.close(); }
-        catch (Error error) {
-            terminalWorker.schedule(() -> closeSshFactory(factory, cancellation, generation, mode), 100, TimeUnit.MILLISECONDS);
-            throw error;
-        }
-        catch (Exception error) {
-            if (!factoryCleanupReported) {
-                factoryCleanupReported = true;
-                publishTerminalState(generation, "failed", mode, true, null, "SSH_TERMINAL_CLEANUP_PENDING");
-            }
-            terminalWorker.schedule(() -> closeSshFactory(factory, cancellation, generation, mode), 100, TimeUnit.MILLISECONDS);
-            return;
-        }
-        sshFactory = null;
-        sshCancellation = null;
-        if (terminalDestroyQueued) terminalWorker.shutdown();
-    }
     private String exportText;
     private MethodChannel.Result exportResult;
     private volatile boolean destroyed;
@@ -194,14 +73,106 @@ public final class MainActivity extends FlutterActivity {
                 engine.getDartExecutor().getBinaryMessenger(), this::attachAuthenticatedSsh);
         new EventChannel(engine.getDartExecutor().getBinaryMessenger(), "ctos/terminal").setStreamHandler(
                 new EventChannel.StreamHandler() {
-                    @Override public void onListen(Object arguments, EventChannel.EventSink sink) { terminalSink = sink; }
-                    @Override public void onCancel(Object arguments) { terminalSink = null; }
+                    @Override public void onListen(Object arguments, EventChannel.EventSink sink) {
+                        if (destroyed) { sink.endOfStream(); return; }
+                        SshSessionService.reconcile(MainActivity.this);
+                        terminalSink = sink;
+                        if (sshListener != null) SshSessionService.unsubscribe(sshListener);
+                        sshListener = event -> {
+                            if (!destroyed && terminalSink != null) terminalSink.success(event);
+                        };
+                        SshSessionService.subscribe(sshListener);
+                        consumeSshIntent();
+                    }
+                    @Override public void onCancel(Object arguments) {
+                        terminalSink = null;
+                        if (sshListener != null) SshSessionService.unsubscribe(sshListener);
+                        sshListener = null;
+                    }
                 });
         new MethodChannel(engine.getDartExecutor().getBinaryMessenger(), "ctos/native").setMethodCallHandler(this::call);
     }
 
     private boolean autoRootEnabled() {
         return getSharedPreferences(ROOT_PREFERENCES, MODE_PRIVATE).getBoolean(AUTO_ROOT, true);
+    }
+
+    @Override protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        if (terminalSink != null) consumeSshIntent();
+    }
+
+    private void consumeSshIntent() {
+        Intent intent = getIntent();
+        if (intent != null && SshSessionService.SHOW.equals(intent.getAction())) {
+            SshSessionService.focus(intent);
+            intent.setAction(null);
+        }
+    }
+
+    private void handleSshNotifications(MethodCall call, MethodChannel.Result result) {
+        if (call.arguments != null && (!(call.arguments instanceof Map) || !((Map<?, ?>) call.arguments).isEmpty())) {
+            result.error("PARAMETERS", "No notification parameters are accepted", null);
+            return;
+        }
+        SshSessionService.createChannel(this);
+        if (call.method.equals("ssh.requestNotifications") && Build.VERSION.SDK_INT >= 33
+                && checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)
+                        != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            if (notificationPermissionResult != null) {
+                result.error("BUSY", "Notification permission request is pending", null);
+                return;
+            }
+            android.content.SharedPreferences preferences = getSharedPreferences("ssh_notifications", MODE_PRIVATE);
+            if (!preferences.getBoolean("requested", false)) {
+                preferences.edit().putBoolean("requested", true).apply();
+                notificationPermissionResult = result;
+                try { requestPermissions(new String[] {android.Manifest.permission.POST_NOTIFICATIONS}, SSH_NOTIFICATIONS); }
+                catch (RuntimeException failure) {
+                    notificationPermissionResult = null;
+                    result.error("SSH_NOTIFICATIONS", "Notification permission could not be requested", null);
+                }
+                return;
+            }
+        }
+        result.success(VaultCollections.map("enabled", SshSessionService.notificationsEnabled(this)));
+    }
+
+    private void handleSshTerminal(MethodCall call, MethodChannel.Result result) {
+        try {
+            Object value = call.argument("generation");
+            if (!(value instanceof Integer) && !(value instanceof Long))
+                throw new IllegalArgumentException("Terminal generation is required");
+            long expected = ((Number) value).longValue();
+            if (expected <= 0 || expected > Integer.MAX_VALUE)
+                throw new IllegalArgumentException("Invalid terminal generation");
+            CompletableFuture<Void> operation;
+            switch (call.method) {
+                case "terminalWrite": {
+                    Object text = call.argument("text");
+                    if (!(text instanceof String) || ((String) text).length() > SshTerminalSession.INPUT_LIMIT)
+                        throw new IllegalArgumentException("Invalid terminal input");
+                    byte[] bytes = ((String) text).getBytes(StandardCharsets.UTF_8);
+                    try {
+                        if (bytes.length > SshTerminalSession.INPUT_LIMIT)
+                            throw new IllegalArgumentException("Terminal input is too large");
+                        operation = SshSessionService.write((int) expected, bytes);
+                    } finally { java.util.Arrays.fill(bytes, (byte) 0); }
+                    break;
+                }
+                case "terminalResize":
+                    operation = SshSessionService.resize((int) expected, sshDimension(call.argument("columns")),
+                            sshDimension(call.argument("rows")));
+                    break;
+                case "terminalStop": operation = SshSessionService.stop((int) expected); break;
+                default: result.notImplemented(); return;
+            }
+            operation.whenComplete((ignored, failure) -> main.post(() -> {
+                if (failure == null) result.success(null);
+                else result.error("CTOS", "SSH terminal is stale or closed", null);
+            }));
+        } catch (RuntimeException failure) { result.error("PARAMETERS", "Invalid terminal request", null); }
     }
 
     private void setAutoRootEnabled(boolean enabled) {
@@ -227,6 +198,15 @@ public final class MainActivity extends FlutterActivity {
     }
 
     private void call(MethodCall call, MethodChannel.Result result) {
+        if (call.method.equals("ssh.notificationStatus") || call.method.equals("ssh.requestNotifications")) {
+            handleSshNotifications(call, result);
+            return;
+        }
+        if (call.method.startsWith("terminal") && !call.method.equals("terminalStart")
+                && SshSessionService.active()) {
+            handleSshTerminal(call, result);
+            return;
+        }
         if (sshPasswordConnect != null && sshPasswordConnect.handle(call, result)) return;
         if (appSecrets != null && appSecrets.handle(call, result)) return;
         if (hftpBridge.handle(call, result)) return;
@@ -313,18 +293,6 @@ public final class MainActivity extends FlutterActivity {
             });
             return;
         }
-        if (call.method.equals("terminalStop")) {
-            Object expected = call.argument("generation");
-            if (expected != null && (!(expected instanceof Number)
-                    || ((Number) expected).intValue() != terminalGeneration)) {
-                result.error("CTOS", "Terminal generation is stale", null);
-                return;
-            }
-            AtomicBoolean cancellation = sshCancellation;
-            if (cancellation != null) cancellation.set(true);
-            SshTerminalSession current = sshTerminal;
-            if (current != null) current.requestCancel();
-        }
         ExecutorService executor = call.method.startsWith("terminal") ? terminalWorker : worker;
         executor.execute(() -> {
             try {
@@ -382,26 +350,16 @@ public final class MainActivity extends FlutterActivity {
                         synchronized (this) {
                             String input = call.argument("text");
                             if (input == null) throw new IllegalArgumentException("Terminal input is required");
-                            if (sshTerminal != null && input.length() > SshTerminalSession.INPUT_LIMIT)
-                                throw new IllegalStateException("Terminal input queue is full");
                             byte[] bytes = input.getBytes(StandardCharsets.UTF_8);
-                            if (sshTerminal != null) {
-                                try { sshTerminal.write(bytes); }
-                                finally { java.util.Arrays.fill(bytes, (byte) 0); }
-                            }
-                            else {
-                                if (terminalFd < 0) throw new IllegalStateException("Terminal is closed");
-                                Pty.write(terminalFd, bytes);
-                            }
+                            if (terminalFd < 0) throw new IllegalStateException("Terminal is closed");
+                            Pty.write(terminalFd, bytes);
                         }
                         value = null;
                         break;
                     }
                     case "terminalResize": {
                         synchronized (this) {
-                            if (sshTerminal != null) sshTerminal.resize(
-                                    sshDimension(call.argument("columns")), sshDimension(call.argument("rows")));
-                            else if (terminalFd >= 0) Pty.resize(terminalFd,
+                            if (terminalFd >= 0) Pty.resize(terminalFd,
                                     dimension(call.argument("columns"), 80), dimension(call.argument("rows"), 24));
                         }
                         value = null;
@@ -474,9 +432,8 @@ public final class MainActivity extends FlutterActivity {
     }
 
     private synchronized String startTerminal(boolean privileged, int columns, int rows) throws Exception {
+        if (SshSessionService.active()) throw new IllegalStateException("SSH terminal is active or cleanup is pending");
         stopTerminal();
-        if (sshTerminal != null || sshFactory != null || sshCancellation != null)
-            throw new IllegalStateException("SSH terminal cleanup is pending");
         if (destroyed) throw new IllegalStateException("Activity is closed");
         if (privileged && !root) throw new SecurityException("Root has not been authorized");
         String shellRc = "";
@@ -484,7 +441,8 @@ public final class MainActivity extends FlutterActivity {
         try { shellRc = portablePackages.shellRc(); }
         catch (Exception error) { portableProblem = error.toString(); }
         int[] process = Pty.start(privileged, columns, rows, getFilesDir().getAbsolutePath(), shellRc);
-        int fd = process[0], pid = process[1], generation = ++terminalGeneration;
+        int fd = process[0], pid = process[1], generation = SshTerminalState.nextGeneration();
+        terminalGeneration = generation;
         String mode = privileged ? "root · PTY" : "app · PTY";
         terminalMode = mode;
         terminalFd = fd;
@@ -515,9 +473,6 @@ public final class MainActivity extends FlutterActivity {
     }
 
     private synchronized void stopTerminal() {
-        AtomicBoolean cancellation = sshCancellation;
-        if (cancellation != null) cancellation.set(true);
-        if (sshTerminal != null) { sshTerminal.stop(); return; }
         if (terminalFd >= 0) {
             terminalFd = -1;
             publishTerminalState(terminalGeneration, "closed", terminalMode, false, null, null);
@@ -551,6 +506,7 @@ public final class MainActivity extends FlutterActivity {
 
     @Override protected void onResume() {
         super.onResume();
+        SshSessionService.reconcile(this);
         if (appSecrets != null) appSecrets.onResume();
     }
 
@@ -561,6 +517,11 @@ public final class MainActivity extends FlutterActivity {
 
     @Override public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == SSH_NOTIFICATIONS && notificationPermissionResult != null) {
+            MethodChannel.Result result = notificationPermissionResult;
+            notificationPermissionResult = null;
+            result.success(VaultCollections.map("enabled", SshSessionService.notificationsEnabled(this)));
+        }
         if (hftpBridge != null) hftpBridge.onRequestPermissionsResult(requestCode, grantResults);
     }
 
@@ -568,16 +529,17 @@ public final class MainActivity extends FlutterActivity {
         destroyed = true;
         if (sshPasswordConnect != null) sshPasswordConnect.close();
         if (appSecrets != null) appSecrets.close();
-        AtomicBoolean cancellation = sshCancellation;
-        if (cancellation != null) cancellation.set(true);
-        SshTerminalSession current = sshTerminal;
-        if (current != null) current.requestCancel();
+        if (sshListener != null) SshSessionService.unsubscribe(sshListener);
+        sshListener = null;
+        terminalSink = null;
         terminalWorker.execute(() -> {
-            // This owner barrier is the first point where release may shut down the executor.
-            terminalDestroyQueued = true;
             stopTerminal();
-            if (sshTerminal == null && sshFactory == null) terminalWorker.shutdown();
+            terminalWorker.shutdown();
         });
+        if (notificationPermissionResult != null) {
+            notificationPermissionResult.error("SSH_CANCELLED", "Activity closed", null);
+            notificationPermissionResult = null;
+        }
         worker.shutdownNow();
         pythonRunner.close();
         toolFiles.close();

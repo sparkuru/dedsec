@@ -16,8 +16,8 @@ final class SshPasswordConnector implements MainActivity.AuthenticatedSshFactory
     }
     private final AppSecrets vault;
     private SshPasswordProfile profile;
-    private final AppSecrets.EffectGuard sensitive;
-    private final Events events;
+    private AppSecrets.EffectGuard sensitive;
+    private Events events;
     private final SshRoleContext.Clock clock;
     private final long deadline;
     private final long requestStarted;
@@ -58,6 +58,7 @@ final class SshPasswordConnector implements MainActivity.AuthenticatedSshFactory
     private SshHostKeyAuthority.Review approved;
     private SshNativeSession session;
     private boolean returned;
+    private SshReconnectTarget reconnectTarget;
 
     SshPasswordConnector(AppSecrets vault, SshPasswordProfile profile, byte[] bytes,
             long deadline, AppSecrets.EffectGuard sensitive, Events events) throws VaultException {
@@ -104,8 +105,9 @@ final class SshPasswordConnector implements MainActivity.AuthenticatedSshFactory
 
     boolean started() { return started; }
     boolean durableWrite() { return durableWrite; }
+    @Override public SshReconnectTarget reconnectTarget() { return reconnectTarget; }
     boolean handoffLive() {
-        return !cancelled.get() && view != null && view.active() && session != null && !session.closed();
+        return !cancelled.get() && session != null && session.shellOutputPublicationLive();
     }
     @Override public void cancellationAction(Runnable action) {
         cancellationAction = action;
@@ -256,7 +258,10 @@ final class SshPasswordConnector implements MainActivity.AuthenticatedSshFactory
                 if (result != SshNativeSession.PrivateKeyAuthResult.SUCCESS)
                     throw new VaultException("SSH_AUTHENTICATION", "SSH private key authentication failed");
             }
-            check(); returned = true;
+            check();
+            reconnectTarget = new SshReconnectTarget(profile, privateKeyId, configAlias);
+            session.retireAuthenticationWith(this::retireAuthentication);
+            returned = true;
             return session;
         });
     }
@@ -359,7 +364,9 @@ final class SshPasswordConnector implements MainActivity.AuthenticatedSshFactory
     private void check() throws VaultException {
         if (cancelled.get() || hostCancelled.getAsBoolean())
             throw new VaultException("SSH_CANCELLED", "The SSH connection was cancelled");
-        sensitive.check();
+        AppSecrets.EffectGuard guard = sensitive;
+        if (guard == null) throw new VaultException("SSH_CANCELLED", "SSH authentication has finished");
+        guard.check();
         vault.requirePasswordValidationOrigin(origin);
         if (clock.now() >= deadline) throw new VaultException("SSH_TIMED_OUT", "The SSH connection timed out");
         if (view == null) vault.session.assertEpoch(expectedEpoch);
@@ -368,6 +375,25 @@ final class SshPasswordConnector implements MainActivity.AuthenticatedSshFactory
     private boolean profileTarget(String target) { return targetIdentity.equals(target); }
     private static VaultException changed() { return new VaultException("VAULT_CHANGED", "The vault changed; try again"); }
     private static VaultException denied() { return new VaultException("SSH_HOST_KEY_REVIEW", "The exact host approval is required"); }
+
+    private void retireAuthentication() throws VaultException {
+        if (Thread.currentThread() != owner) throw new VaultException("SSH_SESSION_THREAD", "SSH cleanup requires its owner");
+        if (cancelled.get() || hostCancelled.getAsBoolean())
+            throw new VaultException("SSH_CANCELLED", "The SSH connection was cancelled");
+        vault.cancelBundleContext(origin);
+        if (password != null) password.close();
+        if (saveContext != null) saveContext.cancel();
+        synchronized (this) { VaultCodec.wipe(pendingSave); pendingSave = null; }
+        if (handoff != null) { handoff.close(); handoff = null; }
+        if (trust != null) { trust.close(); trust = null; }
+        if (view != null) { view.close(); view = null; }
+        mailbox = null;
+        ticket = null;
+        approved = null;
+        selectedKey = null;
+        sensitive = null;
+        events = null;
+    }
 
     @Override public void close() throws Exception {
         cancel();

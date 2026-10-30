@@ -11,6 +11,15 @@ Use this contract when changing the Flutter terminal page, its IME input, PTY sh
 - `terminalOutputSnapshot(Terminal) -> String` copies the active xterm buffer into selectable plain text.
 - Native methods: `terminalStart({root: bool, columns: int, rows: int}) -> String`, `terminalWrite({generation: int, text: String})`, `terminalResize({generation: int, columns: int, rows: int})`, and `terminalStop({generation: int})` on `ctos/native`.
 - `ctos/terminal` uses typed data `{type:'data', generation:int, bytes:Uint8List}` and state `{type:'state', generation:int, state:'running'|'closed'|'failed', mode:String, remote:bool, exitStatus?:int, reason?:String}`. `TerminalEvent.parse` validates once; `TerminalEventDecoder` fences stale generations before incremental UTF-8 decode and flushes/resets each session. Only host running state establishes a live session; start's mode String cannot override an earlier exit.
+- Service reattachment adds exact `snapshot` and `focus` events per the
+  [background-session spec](../backend/ssh-background-session.md). Snapshot resets xterm/UTF-8,
+  clears draft and queued input revision; suppress renderer responses while replaying bytes.
+  Same-generation closed/retired sessions cannot resurrect. Focus selects tab2 only for the
+  current running remote generation, preserving any unfinished protected route above it.
+- `SshReconnectTarget.parse(Object?)` strictly parses the finite mode/endpoint/selection schema in
+  the [background-session spec](../backend/ssh-background-session.md). Only final remote
+  `closed/SSH_SCREEN_LOCKED` may expose it. Malformed optional reconnect metadata removes the
+  action, never suppresses an otherwise valid closure or leaves old input enabled.
 
 ## 3. Contracts
 
@@ -21,6 +30,18 @@ Use this contract when changing the Flutter terminal page, its IME input, PTY sh
 - App/Root Up and Down browse commands submitted through the current PTY's bottom field. Replace the editable line by sending the same Unicode diff/backspaces as an IME edit, and update the field. Keep the draft when browsing back down, cap history at 100, and reset it for a new session. This avoids Android App Shell's observed long-command horizontal history redraw on the target device. It does not read Shell history created outside this input path. While Tab completion is pending, do not navigate local history until the line settles. SSH (`remote:true`) sends raw `\x1b[A` / `\x1b[B` to the remote PTY and does not record/use local command history.
 - Ctrl-C forwards `\x03` and Esc forwards `\x1b`; both clear the canceled local editing span. Restore bottom-input focus after shortcut taps.
 - Serialize `terminalWrite` calls. Session generation prevents queued input from reaching a later session. Native exit while a start call is pending must not be overwritten by that call's completion.
+- A remote failed lock fence or cleanup-pending snapshot may finalize to same-generation
+  `closed/SSH_SCREEN_LOCKED`; this narrowly permits cleanup completion, never RUNNING resurrection.
+  Keep this state through interim cleanup failure, reject retired/stale generations, and enable
+  reconnect only from final close. Show “已因锁屏断开” and “重新连接”; button must still match the
+  exact current closed generation, foreground/not-busy/no-session state and prepared target.
+  Tapping reuses the protected connection route, loads current key/config metadata and fresh
+  binding, and leaves transient password/save/use blank or unselected. Do not auto-submit on
+  resume. Deleted/mismatched selections require explicit correction, not silent auth fallback.
+  Explicit root reconnect for key/config carries one-shot connect-on-open authorization: consume
+  it before initial reads, then invoke ordinary connect after Form mount only if original revision,
+  foreground/exposure, ready/not-busy/not-closing and originating closed-generation checks still
+  hold. Password mode never consumes this as submission. Reload/error/background cannot retry it.
 - Remote bytes, including the historical `[session exited:` marker, never change lifecycle. Duplicate running after a terminal state cannot resurrect that generation. Data for an unknown/not-running generation is dropped before decoding; pending UTF-8 suffix cannot leak into a later session. Host checks generation again on write/resize/Stop.
 - The authenticated SSH factory creates/retains the actual session on its original serial owner. Channel/PTY/shell must reach RUNNING before an SSH state event; input queue<=65536 and one acknowledged output<=32768 keep asynchronous UI work bounded. The production password entry uses the shared protected vault, actual TCP, explicit host-key review and a one-use password. See [password connection](../../../design/ssh-password-connect.md) and [channel contract](../../../design/ssh-session-channel.md).
 - Password input never goes through terminal input/history. Clear it on submit, failure, cancel, route coverage, background and disposal. Pending cancellation and exact host-key decisions use independent methods while the terminal owner waits. Only the matching host RUNNING event enables terminal input; successful form dismissal must not cancel the attached shell. Defaults and connection request IDs are distinct, and retired defaults events cannot cancel the connection.
@@ -73,6 +94,14 @@ Use this contract when changing the Flutter terminal page, its IME input, PTY sh
   defaults/status, immediate tuple-edit deselection, late reply isolation, forget cancel/confirm/
   one/all including empty defaults, lock/background/uncertain and pending-cancel receipt.
   Exercise saved controls and destructive confirmation with small/landscape/large-text layouts.
+- Screen-lock reconnect: running→failed-lock→optional-cleanup-pending→closed-lock (state and
+  snapshot), reattachment first seeing cleanup-pending, no running resurrection, malformed/secret
+  hint degradation, stale generations and App/Root replacement; no button before final close.
+  Assert tap opens protected flow only, cancelled unlock sends no connect, transient password empty,
+  and fresh key/config lookup rejects missing IDs, endpoint drift or key-membership mismatch.
+  A single explicit root tap for key/config must make exactly one fresh connect request and still
+  allow rejecting real host-key review. Background followed by delayed metadata/reload must never
+  reuse the one-shot; password/invalid selection never auto-submit.
 - Authorized Android UI test: use real controls to create the isolated vault, enter SSH fields, verify the complete offered endpoint/fingerprint, trust-and-save, submit a split-marker command and read its rendered output through the actual output snapshot page; return via its advertised AppBar control and close the session. Assert sensitive-window protection and release. Keep passwords out of shell arguments/logs/clipboard; a direct bridge fixture is separate evidence.
 - Device check with explicit serial: app requests ordinary text (`EditorInfo.inputType` text), output tap does not show IME, keyboard send executes once, Tab completes in the live Shell and the bottom input reflects its resulting command line, Up/Down restore a submitted command and draft in both places, Ctrl-C interrupts a foreground command, selection/copy works, Root behavior matches current authorization. Record device-specific IME appearance and untested input methods honestly.
 

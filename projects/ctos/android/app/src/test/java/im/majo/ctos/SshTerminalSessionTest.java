@@ -33,13 +33,15 @@ public final class SshTerminalSessionTest {
         boolean resizeAccepted = true;
         Long exitStatus;
         boolean stepError;
+        Exception stepException;
         boolean closeError;
         @Override public void begin(int columns, int rows) { begins++; }
         @Override public SshTerminalSession.Status status() {
             return new SshTerminalSession.Status(phase, output.isEmpty() ? 0 : output.peek().length, exitStatus);
         }
-        @Override public void step() {
+        @Override public void step() throws Exception {
             steps++;
+            if (stepException != null) throw stepException;
             if (stepError) throw new AssertionError("injected step error");
         }
         @Override public int write(byte[] bytes) {
@@ -64,6 +66,7 @@ public final class SshTerminalSessionTest {
 
     private static final class Events implements SshTerminalSession.Sink {
         final List<String> states = new ArrayList<>();
+        final List<String> reasons = new ArrayList<>();
         final List<byte[]> data = new ArrayList<>();
         final ArrayDeque<Runnable> acknowledgements = new ArrayDeque<>();
         Long exit;
@@ -74,6 +77,7 @@ public final class SshTerminalSessionTest {
         }
         @Override public void state(String state, Long status, String reason) {
             states.add(state);
+            reasons.add(reason);
             if (status != null) exit = status;
         }
     }
@@ -213,6 +217,98 @@ public final class SshTerminalSessionTest {
         catch (AssertionError expected) { assertEquals("injected step error", expected.getMessage()); }
         assertTrue(f.session.closed());
         assertEquals(1, f.releases);
+    }
+
+    @Test public void knownEstablishedFailurePreservesCodeAndReleasesResources() {
+        for (String code : new String[] {"SSH_ROLE_EXPIRED", "SSH_SESSION_EXPIRED", "SSH_SESSION_CANCELLED",
+                "SSH_SESSION_STEP", "SSH_SESSION_SHELL_READ", "SSH_SESSION_SHELL_WRITE", "SSH_SESSION_SHELL_RESIZE",
+                "SSH_CALLBACK_SESSION"}) {
+            Fixture f = new Fixture();
+            f.port.stepException = new VaultException(code, "private message /private/key password=fixture");
+            f.turns.next();
+            assertEquals(Arrays.asList("running", "failed"), f.events.states);
+            assertEquals(Arrays.asList(null, code), f.events.reasons);
+            assertTrue(f.session.closed());
+            assertTrue(f.port.cancelled);
+            assertFalse(f.port.live);
+            assertEquals(1, f.port.closes);
+            assertEquals(1, f.releases);
+        }
+    }
+
+    @Test public void unknownOrMaliciousTypedCodeCannotPublishPrivateDiagnosticText() {
+        for (String code : new String[] {null, "SSH_SESSION_FUTURE", "SSH_SESSION_STEP\npassword=fixture",
+                "/private/key"}) {
+            Fixture f = new Fixture();
+            f.port.stepException = new VaultException(code, "private message /private/key password=fixture");
+            f.turns.next();
+            assertEquals(Arrays.asList("running", "failed"), f.events.states);
+            assertEquals(Arrays.asList(null, "SSH_TERMINAL_IO"), f.events.reasons);
+            assertTrue(f.events.data.isEmpty());
+            assertTrue(f.session.closed());
+            assertEquals(1, f.port.closes);
+            assertEquals(1, f.releases);
+        }
+    }
+
+    @Test public void ordinaryIoFailureStillPublishesGenericReasonAndReleasesResources() {
+        Fixture f = new Fixture();
+        f.port.stepException = new IOException("private message /private/key password=fixture");
+        f.turns.next();
+        assertEquals(Arrays.asList("running", "failed"), f.events.states);
+        assertEquals(Arrays.asList(null, "SSH_TERMINAL_IO"), f.events.reasons);
+        assertTrue(f.events.data.isEmpty());
+        assertTrue(f.session.closed());
+        assertEquals(1, f.port.closes);
+        assertEquals(1, f.releases);
+    }
+
+    @Test public void lockCannotDowngradeFinalOutcomeWhileOutputAcknowledgementRetainsOwner() throws Exception {
+        for (int mode = 0; mode < 3; mode++) {
+            Port port = new Port();
+            Turns turns = new Turns();
+            SshTerminalState state = new SshTerminalState();
+            state.begin(1, "ssh");
+            SshReconnectTarget target = new SshReconnectTarget(new SshPasswordProfile("host.invalid", 22, "user"), "key_1", "");
+            state.reconnectTarget(1, target);
+            ArrayDeque<Runnable> acknowledgements = new ArrayDeque<>();
+            int[] releases = {0};
+            SshTerminalSession session = new SshTerminalSession(port, turns, new SshTerminalSession.Sink() {
+                @Override public void data(byte[] bytes, Runnable consumed) {
+                    state.data(1, bytes);
+                    acknowledgements.add(consumed);
+                }
+                @Override public void state(String value, Long exit, String reason) { state.state(1, value, exit, reason); }
+            }, () -> releases[0]++);
+            session.start(80, 24); turns.next();
+            port.output.add(new byte[] {7}); turns.next();
+            assertEquals(1, session.outputInFlightBytes());
+            if (mode == 0) {
+                assertTrue(session.markScreenLocked());
+                session.publishScreenLockPending(() -> state.state(1, "failed", null, "SSH_SCREEN_LOCKED"));
+                session.stop();
+            } else if (mode == 1) session.stop();
+            else {
+                port.stepException = new IOException("synthetic remote transport failure");
+                turns.next();
+            }
+            assertTrue(session.closed());
+            assertEquals(0, releases[0]);
+            assertEquals(mode == 2 ? "failed" : "closed", state.snapshot().get("state"));
+            assertEquals(mode == 0 ? "SSH_SCREEN_LOCKED" : mode == 2 ? "SSH_TERMINAL_IO" : null,
+                    state.snapshot().get("reason"));
+            assertEquals(mode == 0 ? target.wire() : null, state.snapshot().get("reconnect"));
+            assertFalse("Repeated or first late lock must not relabel a final outcome", session.markScreenLocked());
+            session.publishScreenLockPending(() -> state.state(1, "failed", null, "SSH_SCREEN_LOCKED"));
+            assertEquals(mode == 2 ? "failed" : "closed", state.snapshot().get("state"));
+            assertEquals(mode == 0 ? "SSH_SCREEN_LOCKED" : mode == 2 ? "SSH_TERMINAL_IO" : null,
+                    state.snapshot().get("reason"));
+            assertEquals(mode == 0 ? target.wire() : null, state.snapshot().get("reconnect"));
+            acknowledgements.remove().run();
+            for (int turn = 0; turn < 10 && releases[0] == 0; turn++) turns.next();
+            assertEquals(1, releases[0]);
+            assertEquals(1, port.closes);
+        }
     }
 
     @Test public void propagatedCleanupErrorRetainsRetryResponsibility() {

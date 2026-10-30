@@ -603,7 +603,7 @@ public final class SshNativeSessionTest {
                     assertEquals(0, setup.session.shellStatus().exitStatus);
                     binding.failClose = true;
                     assertCode("SSH_SESSION_CLEANUP", () -> setup.session.close());
-                    assertTrue(setup.view.active);
+                    assertFalse(setup.view.active);
                     assertEquals(0, setup.roleRelease.calls);
                     binding.failClose = false;
                     setup.session.close();
@@ -616,7 +616,7 @@ public final class SshNativeSessionTest {
         }
     }
 
-    @Test public void managedShellCancelAndRevokeBlockPublicationWhileExpiryRetainsOwnerCleanup()
+    @Test public void managedShellCancelBlocksPublicationWhileRetiredViewAndExpiryRetainTransport()
             throws Exception {
         for (int mode = 0; mode < 3; mode++) {
             ManagedShellNative binding = new ManagedShellNative();
@@ -643,14 +643,14 @@ public final class SshNativeSessionTest {
                     assertEquals(1, setup.callbackNative.cancelCalls);
                 } else if (mode == 1) setup.view.active = false;
                 else setup.clock.value = 31_000;
-                assertEquals(mode == 2, setup.session.shellOutputPublicationLive());
+                assertEquals(mode != 0, setup.session.shellOutputPublicationLive());
                 int calls = binding.shellCalls;
-                if (mode == 2) {
-                    assertCode("SSH_SESSION_EXPIRED", () -> setup.session.authenticationSelectionReceipt());
+                if (mode != 0) {
+                    assertCode("SSH_SESSION_PHASE", () -> setup.session.authenticationSelectionReceipt());
                     assertArrayEquals(binding.output, setup.session.readShell(32));
                     assertTrue(binding.shellCalls > calls);
                 } else {
-                    assertCode(mode == 0 ? "SSH_SESSION_CANCELLED" : "SSH_FILE_VIEW",
+                    assertCode("SSH_SESSION_CANCELLED",
                             () -> setup.session.readShell(32));
                     assertEquals(calls, binding.shellCalls);
                 }
@@ -1580,7 +1580,7 @@ public final class SshNativeSessionTest {
             assertEquals(8, status.bufferedBytes);
             setup.session.close();
             assertTrue(setup.session.closed());
-            assertEquals(Arrays.asList("close", "view", "destroy"),
+            assertEquals(Arrays.asList("view", "close", "destroy"),
                     binding.order.subList(binding.order.size() - 3, binding.order.size()));
         } finally { setup.session.close(); setup.closeRegistry(); }
     }
@@ -1666,7 +1666,7 @@ public final class SshNativeSessionTest {
                 int calls = binding.shellCalls;
                 Thread publish = new Thread(() -> live.set(setup.session.shellOutputPublicationLive()));
                 publish.start(); publish.join();
-                assertEquals(mode == 2, live.get());
+                assertEquals(mode == 2 || mode == 3, live.get());
                 assertEquals(calls, binding.shellCalls);
             } finally { setup.session.close(); setup.closeRegistry(); }
         }
@@ -1787,7 +1787,8 @@ public final class SshNativeSessionTest {
                     }
                     if (mode >= 8) binding.failOperation = new String[] {"shellBegin", "shellStatus",
                         "shellWrite", "shellRead", "shellResize", "shellEof"}[operation];
-                    if (lifecycle == 2 && (operation != 0 || (mode >= 4 && mode < 8))) {
+                    if (lifecycle >= 2 && operation != 0
+                            || lifecycle == 2 && mode >= 4 && mode < 8) {
                         if (mode >= 8) {
                             String[] errors = {"SSH_SESSION_SHELL", "SSH_SESSION_SHELL_STATUS",
                                 "SSH_SESSION_SHELL_WRITE", "SSH_SESSION_SHELL_READ",
@@ -1813,8 +1814,8 @@ public final class SshNativeSessionTest {
         try {
             shellRunning(setup, binding);
             setup.clock.value = setup.issued.role.deadline;
-            assertCode("SSH_SESSION_EXPIRED", () -> setup.session.authenticationSelectionReceipt());
-            assertCode("SSH_ROLE_EXPIRED", () -> setup.issued.role.requireActive(setup.clock));
+            assertCode("SSH_SESSION_PHASE", () -> setup.session.authenticationSelectionReceipt());
+            assertCode("SSH_FILE_VIEW", () -> setup.issued.role.requireActive(setup.clock));
             setup.session.step();
             setup.session.shellStatus();
             setup.session.writeShell(bytes("x"));
@@ -1826,6 +1827,68 @@ public final class SshNativeSessionTest {
             assertFalse(setup.session.shellOutputPublicationLive());
             assertCode("SSH_SESSION_CANCELLED", () -> setup.session.shellStatus());
         } finally { setup.session.close(); setup.closeRegistry(); }
+    }
+
+    @Test public void promotionRetiresAuthenticationBeforeOutputAndRejectsLaterSecretsWithoutCancelling() throws Exception {
+        for (boolean key : new boolean[] {false, true}) {
+            ShellNative binding = new ShellNative();
+            Setup setup = new Setup(true, binding);
+            int[] retired = {0};
+            try {
+                authenticated(setup, binding, key, 2);
+                setup.session.retireAuthenticationWith(() -> {
+                    assertFalse(setup.view.active());
+                    assertFalse(setup.session.shellOutputPublicationLive());
+                    retired[0]++;
+                });
+                setup.session.beginShell(80, 24);
+                assertEquals(1, retired[0]);
+                assertEquals(1, setup.view.closeCalls);
+                binding.status[0] = 4;
+                assertTrue(setup.session.shellOutputPublicationLive());
+                assertCode("SSH_SESSION_PHASE", () -> setup.session.authenticationSelectionReceipt());
+                assertCode("SSH_CALLBACK_TRANSPORT_ONLY", setup.callback::requireAuthenticationSelectionLive);
+                assertEquals(null, setup.callback.onNativeCredentialBytes(1));
+                assertFalse(setup.callback.onNativeCredential(1));
+                assertFalse(setup.issued.role.reclaimable(setup.clock));
+                assertArrayEquals(binding.output, setup.session.readShell(32));
+                assertTrue(setup.session.shellOutputPublicationLive());
+                setup.callback.cancel();
+                assertFalse(setup.session.shellOutputPublicationLive());
+                assertCode("SSH_SESSION_CANCELLED", () -> setup.session.shellStatus());
+            } finally { setup.session.close(); setup.closeRegistry(); }
+        }
+    }
+
+    @Test public void failedAuthenticationRetirementNeverPublishesAndCleanupRetriesOnOriginalOwner() throws Exception {
+        for (int mode = 0; mode < 3; mode++) {
+            final int scenario = mode;
+            ShellNative binding = new ShellNative();
+            Setup setup = new Setup(true, binding);
+            try {
+                authenticated(setup, binding, false, 2);
+                if (mode == 0) setup.view.failClose = true;
+                else setup.session.retireAuthenticationWith(() -> {
+                    if (scenario == 1) setup.session.cancel();
+                    else throw new VaultException("SSH_FILE_VIEW", "retirement failed");
+                });
+                assertCode(mode == 1 ? "SSH_SESSION_CANCELLED" : "SSH_FILE_VIEW",
+                        () -> setup.session.beginShell(80, 24));
+                assertFalse(setup.session.shellOutputPublicationLive());
+                int calls = binding.shellCalls;
+                int nativeCalls = binding.order.size();
+                String denied = mode == 1 ? "SSH_SESSION_CANCELLED" : "SSH_SESSION_PHASE";
+                assertCode(denied, () -> setup.session.step());
+                assertCode(denied, () -> setup.session.shellStatus());
+                assertCode(denied, () -> setup.session.writeShell(bytes("must not reach native")));
+                assertEquals(calls, binding.shellCalls);
+                assertEquals(nativeCalls, binding.order.size());
+                setup.view.failClose = false;
+                setup.session.close();
+                assertTrue(setup.session.closed());
+                assertEquals(1, setup.roleRelease.calls);
+            } finally { setup.view.failClose = false; setup.session.close(); setup.closeRegistry(); }
+        }
     }
 
     @Test public void socketOwnershipDistinguishesNativeTransferAndRetainsCleanupRetry() throws Exception {
@@ -1971,7 +2034,7 @@ public final class SshNativeSessionTest {
                 assertEquals(terminal, setup.session.shellStatus().phase.tag);
                 binding.failClose = true;
                 assertCode("SSH_SESSION_CLEANUP", () -> setup.session.close());
-                assertTrue(setup.view.active);
+                assertFalse(setup.view.active);
                 binding.failClose = false;
                 binding.failDestroy = true;
                 assertCode("SSH_SESSION_CLEANUP", () -> setup.session.close());
@@ -1984,7 +2047,7 @@ public final class SshNativeSessionTest {
         }
     }
 
-    @Test public void shellReadPostGuardWipesReturnedTemporaryOnCancelOrRevoke() throws Exception {
+    @Test public void shellReadPostGuardWipesTemporaryWhileRetiredViewDoesNotRevokeTransport() throws Exception {
         for (int mode = 0; mode < 2; mode++) {
             ShellNative binding = new ShellNative();
             Setup setup = new Setup(true, binding);
@@ -1999,8 +2062,8 @@ public final class SshNativeSessionTest {
                         } catch (VaultException failure) { throw new AssertionError(failure); }
                     }
                 };
-                assertCode(mode == 0 ? "SSH_SESSION_CANCELLED" : "SSH_FILE_VIEW",
-                        () -> setup.session.readShell(32));
+                if (mode == 0) assertCode("SSH_SESSION_CANCELLED", () -> setup.session.readShell(32));
+                else assertArrayEquals(binding.output, setup.session.readShell(32));
                 assertTrue(allZero(binding.readReference));
             } finally { binding.protocolHook = null; setup.session.close(); setup.closeRegistry(); }
         }

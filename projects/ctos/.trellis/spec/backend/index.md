@@ -21,6 +21,7 @@ general database. Use these guides for work below the Flutter presentation layer
 | [Certificate Facts](./ssh-certificate-facts.md) | AllCERT numeric/public facts, embedded-signature policy, strict CSCF/unsigned u64 and explicit trust/context limits |
 | [SSH Manifest](./ssh-manifest.md) | One latest model/writer, explicit key/account metadata, protected TOTP input and content-based restore review |
 | [Password SSH Connection](./ssh-password-connect.md) | Real managed trust, default transient/explicit saved Account password, atomic save/forget, proof-bound selected read, TCP/FD handoff and operable UI |
+| [SSH Background Session](./ssh-background-session.md) | Service owner, SUCCESS-only retirement, screen-lock cancellation and cleanup finalization, RAM reconnect hints, manual fresh connection, exact notification Stop and Activity reattachment |
 | [Config and Private-key Connection](./ssh-key-config-connect.md) | Real public derivation, strict native direct plan, SAF memory import, atomic file/identity metadata and actual key-only connection |
 | [Error Handling](./error-handling.md) | Typed snapshot states, channel errors, and runtime failures |
 | [Logging](./logging-guidelines.md) | Protocol stdout, bounded HFTP diagnostics, and secret-safe logs |

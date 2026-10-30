@@ -111,19 +111,7 @@ public final class SshPasswordUiPlatformTest {
             assertFalse("A plain command echo must not satisfy the output assertion", command.contains(marker));
             ui.setText("命令输入", command, false); ui.click("执行命令");
             stage("rendered_output");
-            boolean observed = false;
-            long outputDeadline = SystemClock.elapsedRealtime() + 15000;
-            for (int attempt = 0; attempt < 4 && SystemClock.elapsedRealtime() < outputDeadline; attempt++) {
-                stage("snapshot_open");
-                SystemClock.sleep(250); ui.click("选择输出"); ui.waitText("当前输出", 5000);
-                stage("snapshot_read");
-                observed = ui.waitPublicSubstring(marker, 1500);
-                stage("snapshot_back");
-                backToTerminal();
-                if (observed) break;
-            }
-            stage("marker_assert");
-            assertTrue("The real rendered SSH output did not contain the independently executed split marker", observed);
+            ui.assertRenderedOutput(marker);
             stage("close_own_session");
             ui.click("关闭会话"); ui.waitText("选择终端会话", 10000);
             stage("pass");
@@ -144,17 +132,6 @@ public final class SshPasswordUiPlatformTest {
         }
     }
 
-    private void backToTerminal() {
-        assertTrue("Back must start on the actual output snapshot route", ui.has("当前输出"));
-        assertTrue("The actual AppBar Back control must accept its advertised action",
-                ui.tryClick("Back") || ui.tryClick("返回"));
-        long deadline = SystemClock.elapsedRealtime() + 5000;
-        do {
-            if (!ui.has("当前输出") && ui.has("选择输出")) return;
-            SystemClock.sleep(100);
-        } while (SystemClock.elapsedRealtime() < deadline);
-        fail("The actual output route did not return to the terminal");
-    }
     private int secureFlags() {
         AtomicInteger result = new AtomicInteger();
         instrumentation.runOnMainSync(() -> result.set(activity.getWindow().getAttributes().flags & WindowManager.LayoutParams.FLAG_SECURE));
@@ -198,9 +175,31 @@ public final class SshPasswordUiPlatformTest {
     }
 
     private interface Match { boolean accepts(AccessibilityNodeInfo node); }
-    private static final class Ui {
+    static final class Ui {
         private final UiAutomation automation;
         Ui(UiAutomation automation) { this.automation = automation; }
+        void assertRenderedOutput(String marker) {
+            boolean observed = false;
+            long outputDeadline = SystemClock.elapsedRealtime() + 15000;
+            for (int attempt = 0; attempt < 4 && SystemClock.elapsedRealtime() < outputDeadline; attempt++) {
+                SystemClock.sleep(250); click("选择输出"); waitText("当前输出", 5000);
+                observed = waitPublicSubstring(marker, 1500);
+                backToTerminal();
+                if (observed) break;
+            }
+            assertTrue("The real rendered SSH output did not contain the independently executed split marker", observed);
+        }
+        private void backToTerminal() {
+            assertTrue("Back must start on the actual output snapshot route", has("当前输出"));
+            assertTrue("The actual AppBar Back control must accept its advertised action",
+                    tryClick("Back") || tryClick("返回"));
+            long deadline = SystemClock.elapsedRealtime() + 5000;
+            do {
+                if (!has("当前输出") && has("选择输出")) return;
+                SystemClock.sleep(100);
+            } while (SystemClock.elapsedRealtime() < deadline);
+            fail("The actual output route did not return to the terminal");
+        }
         private AccessibilityNodeInfo find(Match match, boolean unique) {
             AccessibilityNodeInfo root = automation.getRootInActiveWindow();
             if (root == null) return null;

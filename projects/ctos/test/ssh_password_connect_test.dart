@@ -12,6 +12,460 @@ import 'package:flutter_test/flutter_test.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
+  testWidgets(
+    'password retry prepares its exact endpoint with no retained password or automatic submit',
+    (tester) async {
+      final host = _SshHost(tester)..saved = true;
+      await host.mount(
+        connectOnOpen: true,
+        reconnect: const SshReconnectTarget(
+          mode: SshReconnectMode.password,
+          host: 'server.invalid',
+          port: 2222,
+          username: 'alice',
+        ),
+      );
+      await tester.tap(find.text('Open SSH'));
+      await host.advance();
+      expect(
+        tester
+            .widget<TextFormField>(find.byKey(const Key('ssh-host')))
+            .controller!
+            .text,
+        'server.invalid',
+      );
+      expect(host.passwordController.text, isEmpty);
+      expect(
+        tester
+            .widget<CheckboxListTile>(
+              find.byKey(const Key('ssh-use-saved-password')),
+            )
+            .value,
+        isFalse,
+      );
+      expect(
+        tester
+            .widget<CheckboxListTile>(
+              find.byKey(const Key('ssh-save-password')),
+            )
+            .value,
+        isFalse,
+      );
+      expect(host.statusCalls.single, containsPair('host', 'server.invalid'));
+      expect(host.connectResults, isEmpty);
+      await host.leave();
+      await host.remove();
+    },
+  );
+
+  testWidgets(
+    'root retry opens the protected prepared form only after an explicit tap',
+    (tester) async {
+      final host = _SshHost(tester);
+      await host.mount(root: true);
+      await host.messenger.handlePlatformMessage(
+        'ctos/terminal',
+        const StandardMethodCodec().encodeSuccessEnvelope({
+          'type': 'snapshot',
+          'generation': 7,
+          'state': 'closed',
+          'mode': 'ssh',
+          'remote': true,
+          'reason': 'SSH_SCREEN_LOCKED',
+          'bytes': Uint8List(0),
+          'truncated': false,
+          'reconnect': {
+            'mode': 'password',
+            'host': 'server.invalid',
+            'port': 2222,
+            'username': 'alice',
+          },
+        }),
+        null,
+      );
+      await tester.tap(find.text('终端').last);
+      await host.advance();
+      expect(find.byKey(const Key('ssh-reconnect')), findsOneWidget);
+      expect(host.defaultsCalls, isEmpty);
+      expect(host.connectResults, isEmpty);
+      await tester.tap(find.byKey(const Key('ssh-reconnect')));
+      await host.advance();
+      expect(
+        tester
+            .widget<TextFormField>(find.byKey(const Key('ssh-host')))
+            .controller!
+            .text,
+        'server.invalid',
+      );
+      expect(host.passwordController.text, isEmpty);
+      expect(host.connectResults, isEmpty);
+      expect(
+        host.calls
+            .map((call) => call.method)
+            .toList()
+            .indexOf('secrets.status'),
+        lessThan(
+          host.calls
+              .map((call) => call.method)
+              .toList()
+              .indexOf('ssh.defaults'),
+        ),
+      );
+      await host.leave();
+      await host.remove();
+    },
+  );
+
+  testWidgets(
+    'key retry reloads the exact identity and requires explicit connect',
+    (tester) async {
+      final host = _SshHost(tester)..libraryValues = _reconnectLibrary();
+      await host.mount(
+        reconnect: const SshReconnectTarget(
+          mode: SshReconnectMode.key,
+          host: 'server.invalid',
+          port: 2222,
+          username: 'alice',
+          keyId: 'key_a',
+        ),
+      );
+      await tester.tap(find.text('Open SSH'));
+      await host.advance();
+      expect(find.text('Current fixture key'), findsOneWidget);
+      expect(find.byKey(const Key('ssh-password')), findsNothing);
+      expect(
+        host.calls.where((call) => call.method == 'ssh.library'),
+        hasLength(1),
+      );
+      expect(host.connectResults, isEmpty);
+      await host.tapConnect();
+      expect(host.identityCalls.single, containsPair('keyId', 'key_a'));
+      expect(host.identityCalls.single, containsPair('host', 'server.invalid'));
+      host.completeConnect(error: PlatformException(code: 'SSH_AUTH_REJECTED'));
+      await host.advance();
+      await host.leave();
+      await host.remove();
+    },
+  );
+
+  for (final mode in [SshReconnectMode.key, SshReconnectMode.config]) {
+    testWidgets(
+      'one root reconnect tap submits one fresh ${mode.name} connection',
+      (tester) async {
+        final host = _SshHost(tester)..libraryValues = _reconnectLibrary();
+        await host.mount(root: true);
+        await host.messenger.handlePlatformMessage(
+          'ctos/terminal',
+          const StandardMethodCodec().encodeSuccessEnvelope({
+            'type': 'snapshot',
+            'generation': 7,
+            'state': 'closed',
+            'mode': 'ssh',
+            'remote': true,
+            'reason': 'SSH_SCREEN_LOCKED',
+            'bytes': Uint8List(0),
+            'truncated': false,
+            'reconnect': {
+              'mode': mode.name,
+              'host': 'server.invalid',
+              'port': 2222,
+              'username': 'alice',
+              'keyId': 'key_a',
+              if (mode == SshReconnectMode.config) 'configAlias': 'fixture',
+            },
+          }),
+          null,
+        );
+        await tester.tap(find.text('终端').last);
+        await host.advance();
+        expect(host.connectResults, isEmpty);
+        await tester.tap(find.byKey(const Key('ssh-reconnect')));
+        await host.advance();
+        expect(host.identityCalls, hasLength(1));
+        expect(host.identityCalls.single['keyId'], 'key_a');
+        expect(
+          host.calls.where((call) => call.method == 'ssh.library'),
+          hasLength(1),
+        );
+        if (mode == SshReconnectMode.config) {
+          expect(
+            host.identityCalls.single['binding'],
+            List.filled(64, 'b').join(),
+          );
+        }
+        final requestId = host.identityCalls.single['requestId'] as String;
+        await host.emit(_ticket(requestId));
+        expect(find.text('拒绝'), findsOneWidget);
+        expect(host.decisions, isEmpty);
+        await tester.tap(find.text('拒绝'));
+        await host.advance();
+        expect(host.decisions.single['accept'], isFalse);
+        host.completeConnect(error: PlatformException(code: 'VAULT_CHANGED'));
+        await host.advance();
+        await tester.ensureVisible(find.byKey(const Key('ssh-reload')));
+        await tester.tap(find.byKey(const Key('ssh-reload')));
+        await host.advance();
+        expect(find.text('Current fixture key'), findsOneWidget);
+        expect(host.identityCalls, hasLength(1));
+        await host.leave();
+        await host.remove();
+      },
+    );
+  }
+
+  testWidgets(
+    'background cancels a pending retry library read and discards its late metadata',
+    (tester) async {
+      final delayedLibrary = Completer<Map<String, Object>>();
+      final host = _SshHost(tester)..pendingLibrary = delayedLibrary;
+      await host.mount(
+        connectOnOpen: true,
+        reconnect: const SshReconnectTarget(
+          mode: SshReconnectMode.key,
+          host: 'server.invalid',
+          port: 2222,
+          username: 'alice',
+          keyId: 'key_a',
+        ),
+      );
+      await tester.tap(find.text('Open SSH'));
+      await host.advance();
+      final libraryCall = host.calls.singleWhere(
+        (call) => call.method == 'ssh.library',
+      );
+      final readId = (libraryCall.arguments as Map)['requestId'] as String;
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      await host.advance();
+      expect(host.cancelled, contains(readId));
+      _resumeApp(tester);
+      await host.advance();
+      delayedLibrary.complete(_reconnectLibrary());
+      await host.advance();
+      expect(find.text('Current fixture key'), findsNothing);
+      expect(find.byKey(const Key('ssh-host')), findsNothing);
+      expect(find.byKey(const Key('ssh-connect')), findsNothing);
+      expect(find.byKey(const Key('ssh-reload')), findsOneWidget);
+      expect(host.connectResults, isEmpty);
+      expect(
+        host.calls.where((call) => call.method == 'ssh.library'),
+        hasLength(1),
+      );
+      expect(tester.takeException(), isNull);
+      await tester.tap(find.byKey(const Key('ssh-reload')));
+      await host.advance();
+      expect(find.text('Current fixture key'), findsOneWidget);
+      expect(host.connectResults, isEmpty);
+      await host.leave();
+      await host.remove();
+    },
+  );
+
+  testWidgets('config retry resolves a fresh binding and exact key selection', (
+    tester,
+  ) async {
+    final host = _SshHost(tester)..libraryValues = _reconnectLibrary();
+    await host.mount(
+      reconnect: const SshReconnectTarget(
+        mode: SshReconnectMode.config,
+        host: 'server.invalid',
+        port: 2222,
+        username: 'alice',
+        keyId: 'key_a',
+        configAlias: 'fixture',
+      ),
+    );
+    await tester.tap(find.text('Open SSH'));
+    await host.advance();
+    expect(host.connectResults, isEmpty);
+    expect(find.text('fixture'), findsOneWidget);
+    await host.tapConnect();
+    final args = host.identityCalls.single;
+    expect(args['alias'], 'fixture');
+    expect(args['keyId'], 'key_a');
+    expect(args['binding'], List.filled(64, 'b').join());
+    expect(args.containsKey('password'), isFalse);
+    host.completeConnect(error: PlatformException(code: 'SSH_AUTH_REJECTED'));
+    await host.advance();
+    await host.leave();
+    await host.remove();
+  });
+
+  testWidgets(
+    'missing key or changed config target never falls back to a different login',
+    (tester) async {
+      for (final config in [false, true]) {
+        final host = _SshHost(tester)
+          ..libraryValues = _reconnectLibrary(
+            includeKey: config,
+            configHost: config ? 'changed.invalid' : 'server.invalid',
+          );
+        await host.mount(
+          connectOnOpen: true,
+          reconnect: SshReconnectTarget(
+            mode: config ? SshReconnectMode.config : SshReconnectMode.key,
+            host: 'server.invalid',
+            port: 2222,
+            username: 'alice',
+            keyId: 'key_a',
+            configAlias: config ? 'fixture' : null,
+          ),
+        );
+        await tester.tap(find.text('Open SSH'));
+        await host.advance();
+        expect(find.byKey(const Key('ssh-password')), findsNothing);
+        expect(
+          find.text(
+            config ? '上次的配置目标或私钥选择已变化，请在“私钥与配置”中重新选择。' : '上次使用的私钥已不可用，请重新选择私钥。',
+          ),
+          findsOneWidget,
+        );
+        await host.tapConnect();
+        expect(host.connectResults, isEmpty);
+        expect(host.connectCalls, isEmpty);
+        expect(host.identityCalls, isEmpty);
+        await host.leave();
+        await host.remove();
+      }
+    },
+  );
+
+  testWidgets(
+    'lock retry waits for shared unlock and cancelled unlock starts no SSH flow',
+    (tester) async {
+      final host = _SshHost(tester)..vaultLocked = true;
+      await host.mount(
+        reconnect: const SshReconnectTarget(
+          mode: SshReconnectMode.password,
+          host: 'server.invalid',
+          port: 2222,
+          username: 'alice',
+        ),
+      );
+      await tester.tap(find.text('Open SSH'));
+      await host.advance();
+      expect(find.text('解锁秘密库'), findsWidgets);
+      expect(find.byKey(const Key('ssh-password')), findsNothing);
+      expect(host.defaultsCalls, isEmpty);
+      await tester.tap(find.byTooltip('取消并返回'));
+      await host.advance();
+      expect(host.defaultsCalls, isEmpty);
+      expect(host.connectResults, isEmpty);
+      expect(find.text('Open SSH'), findsOneWidget);
+      await host.remove();
+    },
+  );
+
+  testWidgets('notification denial allows SSH and requests only once', (
+    tester,
+  ) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(412, 915);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetViewInsets);
+    addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+    final host = _SshHost(tester)..notificationsEnabled = false;
+    await host.mount(root: true);
+    await tester.tap(find.text('终端').last);
+    await host.advance();
+    await tester.ensureVisible(find.byKey(const Key('terminal-ssh-entry')));
+    await tester.tap(find.byKey(const Key('terminal-ssh-entry')));
+    await host.advance();
+    expect(find.byKey(const Key('ssh-password')), findsOneWidget);
+    final methods = host.calls.map((call) => call.method).toList();
+    expect(
+      methods.indexOf('ssh.requestNotifications'),
+      lessThan(methods.indexOf('secrets.status')),
+    );
+    await host.leave();
+    await tester.pumpAndSettle();
+    expect(
+      tester
+          .widget<ListTile>(find.byKey(const Key('terminal-ssh-entry')))
+          .onTap,
+      isNotNull,
+    );
+    await tester.tap(find.byKey(const Key('terminal-ssh-entry')));
+    await host.advance();
+    expect(find.byKey(const Key('ssh-password')), findsOneWidget);
+    expect(
+      host.calls.where((call) => call.method == 'ssh.requestNotifications'),
+      hasLength(1),
+    );
+    await host.leave();
+    await host.messenger.handlePlatformMessage(
+      'ctos/terminal',
+      const StandardMethodCodec().encodeSuccessEnvelope({
+        'type': 'state',
+        'generation': 1,
+        'state': 'running',
+        'mode': 'ssh',
+        'remote': true,
+      }),
+      null,
+    );
+    await host.advance();
+    expect(
+      find.byKey(const Key('ssh-notifications-unavailable')),
+      findsOneWidget,
+    );
+    tester.platformDispatcher.textScaleFactorTestValue = 1.5;
+    for (final scenario in [
+      (const Size(320, 700), 300.0),
+      (const Size(700, 400), 120.0),
+    ]) {
+      tester.view.physicalSize = scenario.$1;
+      tester.view.viewInsets = FakeViewPadding(bottom: scenario.$2);
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      final warning = find.byKey(const Key('ssh-notifications-unavailable'));
+      final stop = find.byTooltip('关闭会话');
+      expect(warning, findsOneWidget);
+      expect(stop, findsOneWidget);
+      expect(tester.getTopLeft(warning).dx, greaterThanOrEqualTo(0));
+      expect(
+        tester.getBottomRight(warning).dx,
+        lessThanOrEqualTo(scenario.$1.width),
+      );
+      expect(
+        tester.getBottomRight(stop).dx,
+        lessThanOrEqualTo(scenario.$1.width),
+      );
+      expect(
+        tester.getBottomRight(stop).dy,
+        lessThanOrEqualTo(scenario.$1.height - scenario.$2),
+      );
+    }
+    await host.remove();
+  });
+
+  testWidgets(
+    'permission result waits for resume before opening protected SSH',
+    (tester) async {
+      final host = _SshHost(tester)
+        ..notificationsEnabled = false
+        ..notificationPermission = Completer<Map<String, Object>>();
+      await host.mount(root: true);
+      await tester.tap(find.text('终端').last);
+      await host.advance();
+      await tester.ensureVisible(find.byKey(const Key('terminal-ssh-entry')));
+      await tester.tap(find.byKey(const Key('terminal-ssh-entry')));
+      await tester.pump();
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      host.notificationPermission!.complete({'enabled': false});
+      await tester.pump();
+      expect(
+        host.calls.where((call) => call.method == 'secrets.status'),
+        isEmpty,
+      );
+      _resumeApp(tester);
+      await host.advance();
+      expect(find.byKey(const Key('ssh-password')), findsOneWidget);
+      await host.leave();
+      await host.remove();
+    },
+  );
+
   test(
     'SSH field validators preserve exact text and reject malformed input',
     () {
@@ -1008,6 +1462,34 @@ Map<String, Object> _ticket(String id) => {
   'remainingMillis': 30000,
 };
 
+Map<String, Object> _reconnectLibrary({
+  bool includeKey = true,
+  String configHost = 'server.invalid',
+}) => {
+  'keys': [
+    if (includeKey)
+      {
+        'id': 'key_a',
+        'label': 'Current fixture key',
+        'path': '.ssh/id_fixture',
+        'algorithm': 'ssh-ed25519',
+        'fingerprint': 'SHA256:${List.filled(43, 'A').join()}',
+      },
+  ],
+  'hosts': [
+    if (includeKey)
+      {
+        'alias': 'fixture',
+        'binding': List.filled(64, 'b').join(),
+        'host': configHost,
+        'port': 2222,
+        'username': 'alice',
+        'keyIds': ['key_a'],
+      },
+  ],
+  'hasConfig': includeKey,
+};
+
 void _resumeApp(WidgetTester tester) {
   if (tester.binding.lifecycleState == AppLifecycleState.paused) {
     tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
@@ -1030,6 +1512,15 @@ class _SshHost {
   final statusResults = <Completer<Map<String, Object>>>[];
   Completer<Object?>? protection;
   bool saved = false, deferStatus = false;
+  bool vaultLocked = false;
+  Map<String, Object> libraryValues = {
+    'keys': <Object>[],
+    'hosts': <Object>[],
+    'hasConfig': false,
+  };
+  bool notificationsEnabled = true;
+  Completer<Map<String, Object>>? notificationPermission;
+  Completer<Map<String, Object>>? pendingLibrary;
   Object? forgetError;
   Completer<Map<String, Object>>? pendingForget;
   Map<String, Object> defaultValues = {'host': '', 'port': 22, 'username': ''};
@@ -1040,6 +1531,14 @@ class _SshHost {
   List<Map<dynamic, dynamic>> get defaultsCalls => _arguments('ssh.defaults');
   List<Map<dynamic, dynamic>> get connectCalls =>
       _arguments('ssh.passwordConnect');
+  List<Map<dynamic, dynamic>> get identityCalls => calls
+      .where(
+        (call) =>
+            call.method == 'ssh.keyConnect' ||
+            call.method == 'ssh.configConnect',
+      )
+      .map((call) => call.arguments as Map)
+      .toList();
   List<Map<dynamic, dynamic>> get statusCalls =>
       _arguments('ssh.passwordStatus');
   List<Map<dynamic, dynamic>> get forgetCalls =>
@@ -1067,9 +1566,14 @@ class _SshHost {
   Future<Object?> _handle(MethodCall call) async {
     calls.add(call);
     switch (call.method) {
+      case 'ssh.notificationStatus':
+        return {'enabled': notificationsEnabled};
+      case 'ssh.requestNotifications':
+        return notificationPermission?.future ??
+            {'enabled': notificationsEnabled};
       case 'secrets.status':
         return {
-          'state': 'unlocked',
+          'state': vaultLocked ? 'locked' : 'unlocked',
           'exists': true,
           'generation': 1,
           'quickUnlockEnabled': false,
@@ -1083,6 +1587,10 @@ class _SshHost {
             : protection?.future ?? {'owner': 'protected-ssh'};
       case 'ssh.defaults':
         return {...defaultValues, 'savedPassword': saved};
+      case 'ssh.library':
+        return pendingLibrary?.future ?? libraryValues;
+      case 'secrets.cancel':
+        return null;
       case 'ssh.passwordStatus':
         if (!deferStatus) return {'saved': saved};
         final pendingStatus = Completer<Map<String, Object>>();
@@ -1094,6 +1602,8 @@ class _SshHost {
         saved = false;
         return {'forgotten': true};
       case 'ssh.passwordConnect':
+      case 'ssh.keyConnect':
+      case 'ssh.configConnect':
         final pending = Completer<Map<String, Object>>();
         connectResults.add(pending);
         return pending.future;
@@ -1131,6 +1641,8 @@ class _SshHost {
     bool root = false,
     double scale = 1,
     double keyboard = 0,
+    SshReconnectTarget? reconnect,
+    bool connectOnOpen = false,
   }) async {
     _root = root;
     api = SshPasswordApi(requestIdFactory: () => 'request_${++_sequence}');
@@ -1178,6 +1690,8 @@ class _SshHost {
                       api: api,
                       columns: 81,
                       rows: 25,
+                      reconnect: reconnect,
+                      connectOnOpen: connectOnOpen,
                     ),
                     child: const Text('Open SSH'),
                   ),

@@ -1,5 +1,21 @@
 # Architecture
 
+2026-10-30：统一锁屏断开/实际一键重连在用户指定开发板通过，未新增分版本业务逻辑；
+手机或逐版本补验不作为当前前置，[实测范围](verification.md#20261030-ssh-lock-disconnect-board)单列。
+
+2026-10-28：[SSH锁屏断开/主动重连](ssh-background-session.md)新增服务绑定精确owner的
+screen-off取消与清理最终回执；原执行器、Home后台及Activity重建所有权保留。关闭快照
+只留RAM目标/选择标识，用户点击后经公共解锁和当前资料/新信任认证，私钥/config仅消费
+一次显式连接授权；密码仍输入。无唤醒自动重连、命令重放或新协议。当前本地检查通过，
+手机新版未安装/实机待入口，[验证](verification.md#20261028-ssh-lock-disconnect)另记。
+
+2026-10-26 后台接续：[SSH 会话服务](ssh-background-session.md)将原生创建/运行/关闭
+迁至 SshSessionService 的唯一 SshSessionOwner executor，MainActivity 仅订阅输出和发送
+代次绑定的操作。SshTerminalState 保存最多256KiB内存快照；重建恢复不重放输入。
+真实 SUCCESS 后原生释放文件视图借用，Java 释放认证来源/明文视图，保留精确运行权限；
+秘密库继续正常锁定。通知仅含通用状态与本次会话 Stop/返回，服务持有自身 CPU 锁。
+本轮本地检查、Android11板隔离实测及待验手机边界见[验证](verification.md#20261026-ssh-background)。
+
 2026-10-26：[私钥/config 直接连接](ssh-key-config-connect.md)沿唯一 AppSecrets 与
 VaultManifest 扩展受管文件及精确 KeyBinding/KEY Account，SshImportProposal 在一次
 受保护事务中提交文件和关系。SshProfilesBridge 直接从 SAF 有界读入独占内存，预览与

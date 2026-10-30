@@ -1,5 +1,44 @@
 # ctOS 信息入口
 
+2026-10-30 最新：[正式APK已保留数据更新开发板](verification.md#20261030-ssh-formal-install)，
+新7c38哈希匹配，UID/数据目录/首次安装时间保持；用户已反馈“效果可以；提交”，本轮交付验收通过。
+
+2026-10-30 当前：[锁屏锁库并断开SSH、实际一键重连](verification.md#20261030-ssh-lock-disconnect-board)
+在用户指定开发板70.244秒通过，含新代次PTY、后台/重建及通知Stop回归。统一业务规则，
+不将手机或逐版本补验设为当前前置；未测不等于不支持。临时资源已清，正式应用未更新。
+
+2026-10-28 当前：[锁屏结束SSH、用户主动重连](ssh-background-session.md)已实现，
+[本地检查](verification.md#20261028-ssh-lock-disconnect)293 Flutter/775 JVM及构建lint/v2通过；
+手机ADB离线，新版未安装、实机待当前入口，临时资源已清。
+停止锁屏保活/Doze及模板归因；导航/Home后台与Activity重建保留独立服务所有权，重新连接
+仍经秘密库解锁和新信任/认证。不自动重放命令，不接入Mosh或部署远端组件，正式包未更新。
+
+2026-10-28 当前：[手机真实锁屏调查](verification.md#20261028-ssh-phone-physical-investigation)
+尚未通过。亮屏15秒空闲及keepalive应答正常；已只读确认锁屏时整个测试UID的祖先cgroup
+被冻结，正常唤醒后解除。触发者尚未确认；用户改选锁屏断开，已停止该调查并清理隔离资源。
+20分钟自然Doze观察未开始，不再作为本切片目标；正式应用未更新。
+
+2026-10-28 最新：[Android16手机通知权限拒绝状态回归](verification.md#20261028-ssh-phone-runtime-denied)
+通过后台锁库、重建、真实Flutter输入输出/提示及应用内停止；修正夹具窄屏键盘导航前置步骤，
+初轮失败保留。隔离资源已清、正式应用未更新；手机物理锁屏/长时Doze仍待验。
+
+2026-10-28 最新：[Android11开发板通知通道关闭](verification.md#20261028-ssh-board-channel-denied)
+已实测通过：后台锁库、同代次恢复、真实Flutter输入输出/提示及应用内关闭。首轮系统恢复
+通道重要性的失败单列保留；测试资源已清、正式应用未更新。Android13+权限拒绝/手机仍待验。
+
+2026-10-28：[通知权限拒绝夹具准备](verification.md#20261028-ssh-notification-denied-preparation)
+沿原SSH父task完成，隔离测试构建/lint与独立复核通过；真实手机/API36仍待当前目标及授权，
+正式应用未更新。历史临时原始日志已不可用，现存旧APK哈希核对一致。
+
+2026-10-27：[SSH 真实熄屏与安全锁定回归](verification.md#20261027-ssh-physical-lock)
+在指定Android11板通过：熄屏15秒命令往返、正常系统解锁后库仍锁/原SSH继续，以及实际
+终端恢复与通知操作。测试资源全清、正式应用未更新；手机/API36/深度Doze仍待验。
+
+2026-10-26 当前：[SSH 后台会话与通知 Stop](ssh-background-session.md)已由用户选择，
+沿原 SSH 父 task 实现，279 Flutter/765 JVM/ARM矩阵及构建通过；指定Android11板
+[隔离服务与真实Flutter回归通过](verification.md#20261026-ssh-background)，正式应用未覆盖安装；
+下方已通过的手机验收指前一私钥/config切片。
+
 2026-10-26 最新：实际Android16手机SSH排查发现64KiB锁页额度及内部memfd chmod两处
 兼容缺陷，均已修复。按用户指定在开发板完成四项隔离回归，最终修复APK042c6b73…已
 保留数据更新手机并通过真实私钥登录与PTY命令验证，用户人工验收通过并授权提交。

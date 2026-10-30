@@ -48,7 +48,8 @@ No hidden Os.fcntlInt, broad suppression or minimum-SDK increase.
 Only fresh real selected SUCCESS at beginShell promotes that exact client to shell-only authority.
 It may outlive auth/view time budgets, retains owner/transport/KEX identity and explicit revocation/
 cancel checks, and grants no credential/file/trust/new-auth/rekey privileges. Old auth<=60s stays.
-Foreground-only first path is not completion of background service/jump/forward/rekey contracts.
+The [background session extension](ssh-background-session.md) retires the auth lease after real
+SUCCESS and moves the original owner into a service. Jump/forward/rekey remain separate.
 
 ## 4. Validation & Error Matrix
 

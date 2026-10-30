@@ -1,5 +1,25 @@
 # ctOS 产品与实施规划
 
+2026-10-30 当前：[统一锁屏断开SSH/实际一键重连](verification.md#20261030-ssh-lock-disconnect-board)
+已在用户指定开发板70.244秒通过，原Home/重建/通知回归保持；临时资源已清，正式包未更新。
+手机或逐版本补验不作为当前前置，不从未测推断不支持，不扩展版本矩阵。
+
+2026-10-28 当前R8选择：[锁屏结束SSH、用户主动重连](ssh-background-session.md)，替代
+锁屏保活/Doze目标。保留普通Home后台及重建；重连复用解锁库和新配置/身份/信任认证，
+不自动重连/重放命令，不引入Mosh或远端组件。已实现并过本地293 Flutter/775 JVM及构建
+lint/v2；手机ADB离线，新版未安装，[实机待验](verification.md#20261028-ssh-lock-disconnect)。
+
+2026-10-27补验：[指定Android11板真实熄屏/安全锁定](verification.md#20261027-ssh-physical-lock)
+及正常解锁后SSH/实际终端恢复通过；仅新增隔离测试，生产源码和正式安装保持，手机/
+API36/深度Doze不由此判通过。继续原SSH父task，不新建或归档。
+
+## 2026-10-26 当前选择：SSH 后台会话与通知 Stop
+
+用户选择沿原 SSH 父 task 实施 R8，不新建。独立服务拥有原生 owner，真实认证后释放
+材料，既有 shell 与库锁定分离，通知精确 Stop/返回与 Activity恢复；不自动重连。
+[合同](ssh-background-session.md)。本地检查完成情况及待实机项目见
+[验证](verification.md#20261026-ssh-background)，不沿用历史设备/账号授权，不标父完整 AC 完成。
+
 ## 2026-10-26 当前优先：config 与无口令私钥
 
 用户实际服务不允许密码登录，明确使用普通 OpenSSH 无口令私钥。当前改为优先补齐

@@ -14,6 +14,8 @@ Future<void> showPasswordSshConnect(
   required int columns,
   required int rows,
   bool Function()? canOpen,
+  SshReconnectTarget? reconnect,
+  bool connectOnOpen = false,
 }) async {
   final connectionApi = api ?? SshPasswordApi();
   try {
@@ -35,6 +37,9 @@ Future<void> showPasswordSshConnect(
         api: connectionApi,
         columns: columns,
         rows: rows,
+        reconnect: reconnect,
+        connectOnOpen: connectOnOpen,
+        canConnect: canOpen,
       ),
     );
   } catch (error) {
@@ -52,9 +57,15 @@ class SshPasswordConnectPage extends StatefulWidget {
     required this.api,
     this.columns = 80,
     this.rows = 24,
+    this.reconnect,
+    this.connectOnOpen = false,
+    this.canConnect,
   });
   final SshPasswordApi api;
   final int columns, rows;
+  final SshReconnectTarget? reconnect;
+  final bool connectOnOpen;
+  final bool Function()? canConnect;
 
   @override
   State<SshPasswordConnectPage> createState() => _SshPasswordConnectPageState();
@@ -75,7 +86,7 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
   DialogRoute<bool>? _forgetRoute;
   Timer? _statusDebounce;
   SshHostKeyEvent? _review;
-  String? _defaultsId, _attemptId, _error;
+  String? _defaultsId, _attemptId, _reconnectReadId, _error;
   int _revision = 0;
   int _statusRevision = 0;
   bool _loading = true, _ready = false, _busy = false;
@@ -91,6 +102,7 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
   SshIdentity? _identity;
   SshConfigHost? _configHost;
   bool _identityMode = false, _managing = false;
+  bool _connectOnOpenPending = false;
   SshAttemptState _state = SshAttemptState.connecting;
 
   bool get _exposed =>
@@ -107,6 +119,10 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
         WidgetsBinding.instance.lifecycleState == null ||
         WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
     WidgetsBinding.instance.addObserver(this);
+    _connectOnOpenPending =
+        widget.connectOnOpen &&
+        widget.reconnect != null &&
+        widget.reconnect!.mode != SshReconnectMode.password;
     _events = widget.api.events.listen(
       _onEvent,
       onError: (Object error) => _streamFailed(),
@@ -153,7 +169,9 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
     }
   }
 
-  Future<void> _loadDefaults() async {
+  Future<void> _loadDefaults({bool applyReconnect = true}) async {
+    final connectOnReady = _connectOnOpenPending;
+    _connectOnOpenPending = false;
     if (_leaving || _established || !_foreground || !_streamHealthy) return;
     final revision = ++_revision;
     final old = _defaultsId;
@@ -175,15 +193,85 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
     unawaited(_cancelId(old));
     try {
       final defaults = await widget.api.defaults(requestId);
-      if (!mounted || revision != _revision || !_exposed || _leaving) return;
-      _host.text = defaults.host;
-      _port.text = defaults.port.toString();
-      _username.text = defaults.username;
+      if (!mounted ||
+          revision != _revision ||
+          !_exposed ||
+          _leaving ||
+          _closing)
+        return;
+      final reconnect = applyReconnect ? widget.reconnect : null;
+      _host.text = reconnect?.host ?? defaults.host;
+      _port.text = (reconnect?.port ?? defaults.port).toString();
+      _username.text = reconnect?.username ?? defaults.username;
+      if (reconnect != null && reconnect.mode != SshReconnectMode.password) {
+        final readId = widget.api.newRequestId();
+        _reconnectReadId = readId;
+        late final SshLibrarySnapshot library;
+        try {
+          library = await widget.api.library(readId);
+        } finally {
+          if (_reconnectReadId == readId) _reconnectReadId = null;
+          unawaited(_cancelId(readId));
+        }
+        if (!mounted ||
+            revision != _revision ||
+            !_exposed ||
+            _leaving ||
+            _closing)
+          return;
+        _identityMode = true;
+        final keys = library.keys.where((key) => key.id == reconnect.keyId);
+        final identity = keys.isEmpty ? null : keys.single;
+        if (reconnect.mode == SshReconnectMode.key) {
+          _identity = identity;
+          if (identity == null) _error = '上次使用的私钥已不可用，请重新选择私钥。';
+        } else {
+          final hosts = library.hosts.where(
+            (host) => host.alias == reconnect.configAlias,
+          );
+          final config = hosts.isEmpty ? null : hosts.single;
+          if (identity == null ||
+              config == null ||
+              config.error != null ||
+              config.host != reconnect.host ||
+              config.port != reconnect.port ||
+              (config.username.isNotEmpty &&
+                  config.username != reconnect.username) ||
+              !config.keyIds.contains(reconnect.keyId)) {
+            _error = '上次的配置目标或私钥选择已变化，请在“私钥与配置”中重新选择。';
+          } else {
+            _identity = identity;
+            _configHost = config;
+          }
+        }
+      }
       setState(() {
         _loading = false;
         _ready = true;
-        _savedPassword = defaults.savedPassword;
+        _savedPassword = reconnect == null && defaults.savedPassword;
       });
+      if (reconnect?.mode == SshReconnectMode.password)
+        await _loadPasswordStatus();
+      if (connectOnReady &&
+          reconnect != null &&
+          _identityMode &&
+          _identity != null &&
+          _error == null) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted ||
+              revision != _revision ||
+              !_exposed ||
+              !_ready ||
+              _closing ||
+              _leaving ||
+              _established ||
+              _busy ||
+              _form.currentState == null ||
+              widget.canConnect?.call() == false)
+            return;
+          unawaited(_connect());
+        });
+      }
     } catch (error) {
       if (!mounted || revision != _revision || _leaving) return;
       _password.clear();
@@ -240,7 +328,7 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
     }
     if (!mounted || !_foreground || _leaving || _established || !_streamHealthy)
       return;
-    await _loadDefaults();
+    await _loadDefaults(applyReconnect: false);
     if (!mounted || !_ready || !_exposed || _leaving) return;
     _host.text = selection?.host?.host ?? host;
     _port.text = selection?.host?.port.toString() ?? port;
@@ -476,6 +564,10 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
         (_saveCompletion != null && !_saveCompletion!.isCompleted) ||
         !_streamHealthy)
       return;
+    if (widget.canConnect?.call() == false) {
+      _invalidate('原会话已变化，请返回后重新连接。');
+      return;
+    }
     if (!_form.currentState!.validate()) return;
     if (_identityMode && _identity == null) {
       setState(() => _error = '请选择或导入用于登录的私钥。');
@@ -731,6 +823,8 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
     _revealMessage();
     unawaited(_cancelId(attempt));
     unawaited(_cancelId(defaults));
+    unawaited(_cancelId(_reconnectReadId));
+    _reconnectReadId = null;
   }
 
   Future<void> _leave() async {
@@ -738,6 +832,8 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
     _closing = true;
     _password.clear();
     _dismissReview();
+    await _cancelId(_reconnectReadId);
+    _reconnectReadId = null;
     await _cancelId(_attemptId);
     final saveCompletion = _saveCompletion;
     if (saveCompletion != null) {
@@ -810,6 +906,7 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
       unawaited(_cancelId(_defaultsId));
     }
     _events?.cancel();
+    unawaited(_cancelId(_reconnectReadId));
     WidgetsBinding.instance.removeObserver(this);
     _dismissReview();
     _dismissForget();

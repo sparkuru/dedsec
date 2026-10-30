@@ -4296,9 +4296,10 @@ static void test_shell_after_auth_expiry(void) {
     fixture.view->deadline = fixture.deadline;
     wait_until_deadline_attempts(fixture.deadline, 5000U);
     CHECK(ctos_ssh_role_bootstrap_snapshot(fixture.role, &snapshot) != 0 && errno == ETIMEDOUT);
-    CHECK(ctos_ssh_view_borrow_live(fixture.view_borrow) != 0);
+    /* The client consumed/released its borrow at promotion; no auth view may be retained. */
+    fixture.view_borrow = NULL;
     CHECK(ctos_ssh_native_client_authentication_selection_receipt(fixture.client, receipt) != 0
-        && errno == ETIMEDOUT);
+        && errno == EACCES);
     CHECK(ctos_ssh_native_client_selected_credential_bytes(fixture.client,
         output, sizeof(output), &length) != 0 && length == 0);
     CHECK(ctos_ssh_native_client_shell_write(fixture.client,
@@ -4335,6 +4336,12 @@ static void test_shell_liveness_and_eof(void) {
             CHECK(ctos_ssh_callback_cancel(fixture.callback_token) == 0);
         } else if (mode == 2) {
             fixture.view->valid = 0;
+            CHECK(ctos_ssh_native_client_shell_read(fixture.client, output, sizeof(output), &length) == 0
+                && length == 4U && memcmp(output, "kept", 4U) == 0);
+            CHECK(ctos_ssh_callback_check_live(fixture.callback_token, &fixture.callback) != 0
+                && errno == EACCES);
+            CHECK(shell_status(&fixture).phase == CTOS_SSH_SHELL_RUNNING);
+            CHECK(ctos_ssh_callback_cancel(fixture.callback_token) == 0);
         } else if (mode == 3) {
             peer_channel_packet(&fixture, SSH2_MSG_CHANNEL_EOF);
             CHECK(sshpkt_send(fixture.server) == 0);

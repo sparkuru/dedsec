@@ -13,3 +13,6 @@
 {"file":".trellis/tasks/10-08-ssh-terminal/research/private-key-connection-path.md","reason":"真实 USERAUTH API、公钥 blob 缺口及私钥/账号最终消费要求。"}
 {"file":".trellis/tasks/10-08-ssh-terminal/research/config-key-import-connection.md","reason":"原生完整 Options、SAF 内存读取、逻辑路径与原子 KeyBinding/Account 事务缺口。"}
 {"file": ".trellis/spec/backend/ssh-detached-config-managed.md", "reason": "Android16实际64KiB MEMLOCK兼容修复；单份受保护源、实际数量公开索引和失败清理"}
+{"file":"design/ssh-background-session.md","reason":"2026-10-26 用户已选择的当前 R8 切片：服务 owner、精确通知 Stop、已认证运行权限与库锁定分离、输出恢复及验证边界。"}
+{"file":".trellis/tasks/10-08-ssh-terminal/research/ssh-background-lifetime.md","reason":"当前双重 Activity/vault/native 失效链及最小严格 SUCCESS 权限分离研究；是源码研究而非实测通过。"}
+{"file":".trellis/spec/backend/ssh-background-session.md","reason":"2026-10-28新目标：锁屏结束精确owner、清理最终回执和RAM重连提示；用户显式一键私钥/config连接仍经解锁/当前资料/新信任认证；短测真实锁屏/资源释放/无自动重连，不再追求锁屏保活。"}

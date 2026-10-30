@@ -106,6 +106,58 @@ final class SshHostKeyDismissed extends SshEvent {
   final String ticketId;
 }
 
+enum SshReconnectMode { password, key, config }
+
+/// Public selection hints only; every retry reads current vault metadata again.
+final class SshReconnectTarget {
+  const SshReconnectTarget({
+    required this.mode,
+    required this.host,
+    required this.port,
+    required this.username,
+    this.keyId,
+    this.configAlias,
+  });
+
+  factory SshReconnectTarget.parse(Object? raw) {
+    final value = _map(raw);
+    final mode = switch (value['mode']) {
+      'password' => SshReconnectMode.password,
+      'key' => SshReconnectMode.key,
+      'config' => SshReconnectMode.config,
+      _ => throw _invalid(),
+    };
+    _keys(value, {
+      'mode',
+      'host',
+      'port',
+      'username',
+      if (mode != SshReconnectMode.password) 'keyId',
+      if (mode == SshReconnectMode.config) 'configAlias',
+    });
+    final username = value['username'];
+    if (username is! String || sshUsernameError(username) != null)
+      throw _invalid();
+    return SshReconnectTarget(
+      mode: mode,
+      host: _host(value['host']),
+      port: _port(value['port']),
+      username: username,
+      keyId: mode == SshReconnectMode.password
+          ? null
+          : _identifier(value['keyId']),
+      configAlias: mode == SshReconnectMode.config
+          ? _sshAlias(value['configAlias'])
+          : null,
+    );
+  }
+
+  final SshReconnectMode mode;
+  final String host, username;
+  final int port;
+  final String? keyId, configAlias;
+}
+
 class SshConnectionDefaults {
   const SshConnectionDefaults({
     required this.host,
@@ -153,6 +205,14 @@ class SshPasswordApi {
       .receiveBroadcastStream()
       .map(SshEvent.parse);
   SecretVaultApi get vault => SecretVaultApi(channel: channel);
+
+  Future<bool> notificationsEnabled() => channel
+      .invokeMethod<Object?>('ssh.notificationStatus')
+      .then((raw) => _booleanReply(raw, 'enabled'));
+
+  Future<bool> requestNotifications() => channel
+      .invokeMethod<Object?>('ssh.requestNotifications')
+      .then((raw) => _booleanReply(raw, 'enabled'));
 
   String newRequestId() => _identifier(
     _requestIdFactory?.call() ??
@@ -319,6 +379,7 @@ String? sshPasswordError(String value) {
 String sshConnectionError(Object error) {
   final code = error is PlatformException ? error.code : null;
   return switch (code) {
+    'SSH_SCREEN_LOCKED' => '已因锁屏断开，请解锁秘密库后重新连接。',
     'VAULT_LOCKED' || 'VAULT_MISSING' => '请返回并解锁秘密库，再重新打开 SSH 连接。',
     'VAULT_CHANGED' || 'VAULT_EXPIRED' => '秘密库或连接请求已变化，请重新打开连接页面。',
     'VAULT_FOREGROUND_REQUIRED' => '请回到前台后重新打开 SSH 连接。',

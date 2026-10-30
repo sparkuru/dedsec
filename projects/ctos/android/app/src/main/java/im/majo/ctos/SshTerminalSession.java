@@ -9,6 +9,17 @@ import java.util.concurrent.TimeUnit;
 final class SshTerminalSession {
     static final int INPUT_LIMIT = 65536;
     static final int OUTPUT_LIMIT = 32768;
+    private static final java.util.Set<String> ESTABLISHED_FAILURE_CODES = java.util.Set.of(
+            "SSH_ROLE_EXPIRED", "SSH_SESSION_EXPIRED", "SSH_SESSION_CLOSED", "SSH_SESSION_CANCELLED",
+            "SSH_SESSION_COMPLETE", "SSH_SESSION_THREAD", "SSH_SESSION_REENTRANT", "SSH_SESSION_PHASE",
+            "SSH_SESSION_STEP", "SSH_SESSION_SHELL_STATUS", "SSH_SESSION_SHELL_READ", "SSH_SESSION_SHELL_WRITE",
+            "SSH_SESSION_SHELL_RESIZE", "SSH_SESSION_SHELL_EOF", "SSH_SESSION_REQUIRED",
+            "SSH_CALLBACK_CLOSED", "SSH_CALLBACK_CLOSING", "SSH_CALLBACK_CANCELLED", "SSH_CALLBACK_SESSION");
+
+    /** Fixed public codes only; exception messages and unrecognized codes never become terminal reasons. */
+    static boolean isEstablishedFailureCode(String code) {
+        return code != null && ESTABLISHED_FAILURE_CODES.contains(code);
+    }
 
     interface Sink {
         void data(byte[] bytes, Runnable consumed);
@@ -83,6 +94,7 @@ final class SshTerminalSession {
     private boolean scheduled;
     private boolean cleanupReported;
     private boolean releasedOnce;
+    private boolean screenLocked;
     private String failure;
     private Long exitStatus;
     private volatile byte[] inFlight;
@@ -148,6 +160,17 @@ final class SshTerminalSession {
 
     boolean publicationLive() { return !cancelled && !closed && port.publicationLive(); }
     boolean closed() { return closed; }
+    synchronized boolean markScreenLocked() {
+        if (closed || screenLocked) return false;
+        screenLocked = true;
+        return true;
+    }
+
+    /** Runs on the owner's serial UI dispatcher, outside the native-owner metadata monitor. */
+    void publishScreenLockPending(Runnable publication) {
+        synchronized (this) { if (!screenLocked || closed) return; }
+        publication.run();
+    }
     int queuedInputBytes() { return queuedInput; }
     int outputInFlightBytes() { byte[] bytes = inFlight; return bytes == null ? 0 : bytes.length; }
 
@@ -221,7 +244,10 @@ final class SshTerminalSession {
                 closing = true;
                 closeTurn();
             } else schedule(10);
-        } catch (Exception error) { fail("SSH_TERMINAL_IO"); }
+        } catch (Exception error) {
+            String code = error instanceof VaultException ? ((VaultException)error).code : null;
+            fail(isEstablishedFailureCode(code) ? code : "SSH_TERMINAL_IO");
+        }
         catch (Error error) { fail("SSH_TERMINAL_IO"); throw error; }
     }
 
@@ -251,8 +277,13 @@ final class SshTerminalSession {
             }
             return; // Retain the original owner and handle until every close stage confirms.
         }
-        closed = true;
-        try { sink.state(failure == null ? "closed" : "failed", exitStatus, failure); }
+        String finalState, finalReason;
+        synchronized (this) {
+            closed = true;
+            finalState = screenLocked || failure == null ? "closed" : "failed";
+            finalReason = screenLocked ? "SSH_SCREEN_LOCKED" : failure;
+        }
+        try { sink.state(finalState, exitStatus, finalReason); }
         finally { releaseAfterAcknowledgement(); }
     }
 

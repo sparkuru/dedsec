@@ -1299,8 +1299,8 @@ static int established_proof(const struct ctos_ssh_native_client *client) {
 
     if (ctos_ssh_callback_check_transport(client->callback,
             client->callback_environment, client) != 0) return -1;
-    if (ctos_ssh_view_borrow_bound(client->managed_view_borrow) != 0) return -1;
     if (!client->established || client->ssh == NULL || client->ssh != client->established_ssh
+        || !client->view_released || client->managed_view_borrow != NULL || client->managed_view != NULL
         || client->server_host_public_key == NULL
         || client->server_host_public_key != client->established_host_key
         || client->role != client->established_role.token
@@ -1427,6 +1427,15 @@ int ctos_ssh_native_client_begin_shell(struct ctos_ssh_native_client *client,
     client->established_host_key = client->server_host_public_key;
     client->established_cycle = client->completion_cycle;
     memcpy(client->established_session_digest, client->completion_session_digest, 32U);
+    /* All auth proofs were fresh above. Retire plaintext/config access before shell publication. */
+    if (view_borrow_is_live(client->managed_view_borrow) != 0)
+        return terminal_error(client, errno);
+    if (ctos_ssh_view_borrow_release(client->managed_view_borrow) != 0)
+        return terminal_error(client, errno);
+    client->managed_view_borrow = NULL;
+    client->managed_view = NULL;
+    client->view_released = 1;
+    clear_authentication_selection(client);
     client->established = 1;
     if (sshpkt_start(client->ssh, SSH2_MSG_CHANNEL_OPEN) != 0
         || sshpkt_put_cstring(client->ssh, "session") != 0

@@ -11,6 +11,179 @@ import 'package:xterm/xterm.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
+  testWidgets(
+    'lock snapshot offers explicit retry without running or replaying',
+    (tester) async {
+      final host = _TerminalHost(tester);
+      await host.mount();
+      await host.emit({
+        'type': 'snapshot',
+        'generation': 9,
+        'state': 'closed',
+        'mode': 'ssh',
+        'remote': true,
+        'reason': 'SSH_SCREEN_LOCKED',
+        'bytes': Uint8List(0),
+        'truncated': false,
+        'reconnect': {
+          'mode': 'password',
+          'host': 'server.invalid',
+          'port': 2222,
+          'username': 'alice',
+        },
+      });
+      await tester.tap(find.text('终端').last);
+      await tester.pumpAndSettle();
+      expect(find.text('已因锁屏断开'), findsOneWidget);
+      expect(find.byKey(const Key('ssh-reconnect')), findsOneWidget);
+      expect(find.byKey(const Key('terminal-command-input')), findsNothing);
+      expect(host.starts, isEmpty);
+      expect(host.writes, isEmpty);
+      tester.view.physicalSize = const Size(320, 568);
+      tester.platformDispatcher.textScaleFactorTestValue = 1.5;
+      addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      expect(
+        find.byKey(const Key('ssh-reconnect')).hitTestable(),
+        findsOneWidget,
+      );
+      await host.emitState(10, 'running', remote: true, mode: 'SSH · next');
+      await host.emit({
+        'type': 'state',
+        'generation': 10,
+        'state': 'failed',
+        'mode': 'ssh',
+        'remote': true,
+        'reason': 'SSH_SCREEN_LOCKED',
+      });
+      expect(find.byKey(const Key('ssh-reconnect')), findsNothing);
+      expect(find.byKey(const Key('terminal-command-input')), findsNothing);
+      await host.emit({
+        'type': 'state',
+        'generation': 10,
+        'state': 'closed',
+        'mode': 'ssh',
+        'remote': true,
+        'reason': 'SSH_SCREEN_LOCKED',
+        'reconnect': {
+          'mode': 'password',
+          'host': 'server.invalid',
+          'port': 2222,
+          'username': 'alice',
+        },
+      });
+      expect(find.byKey(const Key('ssh-reconnect')), findsOneWidget);
+      await host.emitState(11, 'running', remote: true, mode: 'SSH · next');
+      await host.emit({
+        'type': 'state',
+        'generation': 9,
+        'state': 'closed',
+        'mode': 'ssh',
+        'remote': true,
+        'reason': 'SSH_SCREEN_LOCKED',
+        'reconnect': {
+          'mode': 'password',
+          'host': 'old.invalid',
+          'port': 22,
+          'username': 'old',
+        },
+      });
+      expect(find.byKey(const Key('ssh-reconnect')), findsNothing);
+      expect(find.text('SSH · next'), findsOneWidget);
+      await tester.tap(find.byTooltip('关闭会话'));
+      await tester.pumpAndSettle();
+    },
+  );
+
+  testWidgets('service snapshot restores output without replaying input', (
+    tester,
+  ) async {
+    final host = _TerminalHost(tester);
+    await host.mount();
+    await host.emit({
+      'type': 'snapshot',
+      'generation': 9,
+      'state': 'running',
+      'mode': 'ssh',
+      'remote': true,
+      'bytes': Uint8List.fromList(utf8.encode('RESTORED\r\n\x1b[6n')),
+      'truncated': false,
+    });
+    await host.emit({'type': 'focus', 'generation': 9});
+    await tester.pumpAndSettle();
+    final renderer = tester.widget<TerminalView>(
+      find.byKey(const Key('terminal-output-view')),
+    );
+    expect(terminalOutputSnapshot(renderer.terminal), contains('RESTORED'));
+    expect(host.starts, isEmpty);
+    expect(host.writes, isEmpty);
+    expect(host.resizes, isNotEmpty);
+    expect(host.resizes.every((value) => value['generation'] == 9), isTrue);
+
+    final heldInput = Completer<void>();
+    host.holdNextWrite = heldInput;
+    await tester.enterText(
+      find.byKey(const Key('terminal-command-input')),
+      'draft',
+    );
+    await tester.pump();
+    await tester.tap(find.text('↑'));
+    await tester.pump();
+    final beforeReplay = host.writes.length;
+    await host.emit({
+      'type': 'snapshot',
+      'generation': 9,
+      'state': 'running',
+      'mode': 'ssh',
+      'remote': true,
+      'bytes': Uint8List.fromList(utf8.encode('REPLACED\r\n')),
+      'truncated': true,
+    });
+    heldInput.complete();
+    await tester.pumpAndSettle();
+    final restored = tester.widget<TerminalView>(
+      find.byKey(const Key('terminal-output-view')),
+    );
+    final output = terminalOutputSnapshot(restored.terminal);
+    expect(output, contains('REPLACED'));
+    expect(output, contains('较早输出已移出缓存'));
+    expect(output, isNot(contains('RESTORED')));
+    expect(host.writes, hasLength(beforeReplay));
+    final field = tester.widget<TextField>(
+      find.byKey(const Key('terminal-command-input')),
+    );
+    expect(field.controller!.text, '\u200b\u200b');
+    await tester.tap(find.byTooltip('关闭会话'));
+    await tester.pumpAndSettle();
+    await host.emit({
+      'type': 'snapshot',
+      'generation': 9,
+      'state': 'running',
+      'mode': 'ssh',
+      'remote': true,
+      'bytes': Uint8List(0),
+      'truncated': false,
+    });
+    expect(find.byKey(const Key('terminal-app-entry')), findsOneWidget);
+  });
+
+  testWidgets('stale notification focus cannot navigate a later session', (
+    tester,
+  ) async {
+    final host = _TerminalHost(tester);
+    await host.mount();
+    await host.emitState(10, 'running', remote: true);
+    await host.emit({'type': 'focus', 'generation': 9});
+    expect(find.byKey(const Key('terminal-output-view')), findsNothing);
+    await host.emit({'type': 'focus', 'generation': 10});
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('terminal-output-view')), findsOneWidget);
+    expect(host.starts, isEmpty);
+    await tester.tap(find.byTooltip('关闭会话'));
+    await tester.pumpAndSettle();
+  });
+
   testWidgets('queued input is discarded when its terminal generation ends', (
     tester,
   ) async {
@@ -889,6 +1062,8 @@ class _TerminalHost {
           });
         case 'deviceSnapshot':
           return '{}';
+        case 'ssh.notificationStatus':
+          return {'enabled': true};
         case 'terminalStart':
           starts.add(call.arguments as Map);
           return startResult?.future ?? Future.value('app · PTY');

@@ -1,5 +1,509 @@
 # Verification
 
+<a id="20261030-ssh-formal-install"></a>
+## 2026-10-30 开发板正式覆盖安装与人工验收：通过
+
+用户对“保留数据更新指定开发板正式APK→确认实际体验→提交当前增量”明确回复“可以”。
+重新核对`192.168.9.14:5555`为AIO-3568J，正式包UID10131；保存旧公开APK用于回退，
+以`adb install -r`正常覆盖安装冻结正式APK并启动MainActivity，未卸载、清数据或读取秘密库。
+
+证据`/tmp/ctos-ssh-formal-install-20261030.Eoz7sCcb`：安装结果Success，设备新APK SHA256
+`7c38d4dce8eb6dbfcbc3e299528f05bcc3b084207cce0f90cb92718e1c8e798a`与已验收产物一致。
+UID10131、dataDir `/data/user/0/im.majo.ctos`及firstInstallTime `2026-09-24 17:16:04`
+前后相同，只有更新路径及lastUpdateTime改变；没有代理读取或验证实际秘密内容。
+旧APK SHA256 `373f716137414227659d9d28a78f09a687291df39e1d03c43df5897f69146b1d`已保留。
+
+用户随后明确反馈“效果可以；提交”，人工体验门已通过并满足本轮提交条件。安装结果、
+隔离自动测试及用户体验分别记录，不扩展为其他设备或父全部需求通过；父完整task不归档。
+
+<a id="20261030-ssh-lock-disconnect-board"></a>
+## 2026-10-30 锁屏锁库并结束SSH、用户一键重连：指定开发板通过
+
+用户明确改用`192.168.9.14:5555`完成当前验收，指出不应把手机或逐Android版本补验作为
+统一业务规则的交付前置。本轮重新核对AIO-3568J/API30、正式应用UID10131及初始正常
+解锁状态，只安装独立fixture/test包。规则统一为锁屏锁库并结束关联SSH；普通Home后台/
+重建保留原服务行为，解锁不自动连接，用户明确点击才重新授权连接。本轮不新增分版本
+业务逻辑，不因其他版本未专项实测就推断不支持，也不扩展平台矩阵。
+
+证据`/tmp/ctos-ssh-board-lock-close-20261030.q0wCJO1f`。使用10-28已冻结的同一源码及APK，
+22项来源/产物哈希再次一致：normal `7c38d4dc…`、fixture `5e0b9ef5…`、test `c665402e…`。
+未重新构建或重跑未变化的293 Flutter/775 JVM；这些本地记录仍为10-28的实际检查。
+
+本轮运行`SshPasswordConnectPlatformTest#actualSafKeyImportManualThenConfigAndStaleBinding`，
+显式background/physicalLock/first-terminal-diagnostics及自有库重置，合成key请求独立服务；
+无旧熄屏保持/foreground-idle参数。`android-lock-close.log`方法status0、**70.244秒/OK(1 test)**。
+公开阶段`screen_lock_closed`、`await_device_unlock`、`device_unlocked`、
+`screen_lock_disconnect_pass`、`screen_lock_explicit_reconnect_pass`齐全。
+
+同一未放宽的夹具验证：
+
+- 真实SLEEP、PowerManager非交互、安全Keyguard及秘密库实际锁定；原SSH完成关闭，
+  CPU锁释放、原代次输入拒绝，精确closed/SSH_SCREEN_LOCKED回执及非秘密重连提示保持。
+- 经正常系统凭据界面解锁后库仍锁、SSH未自动重连；Activity重建后实际Flutter显示断开
+  和“重新连接”。显式正常解锁合成库仍不自行连接，点击真实按钮才建立新代次；重读当前
+  key/库/信任，原主机KNOWN无多余审批，native RUNNING及真实分段PTY标记往返通过。
+- 旧owner的迟到receiver无法结束新会话；后续Home两秒锁库、同代次继续、实际Flutter
+  重建/输入输出、通知返回/Stop与旧Stop隔离、config/KNOWN及旧binding拒绝也全部通过。
+
+开发板解锁只在夹具已确认真实SystemUI凭据控件、主会话复核当前锁屏焦点后走正常输入，
+未改锁屏策略；凭据内容未进入源码、请求JSON或测试日志，未用于手机。测试SSH仅本轮
+内部网络容器/loopback15489/专用reverse与合成RSA密钥，固定公开ed25519主机指纹；
+不连接真实账号，不改正式sshd、Root、Thanox、VPN或路由。
+
+清理已核对：两隔离包/远端合成请求/reverse已移除，容器/内部网络/精确socat及合成
+客户端/服务器私钥与JSON已清，15489无监听，专用ADB15038已停。正式包前后SHA256
+均为`373f716137414227659d9d28a78f09a687291df39e1d03c43df5897f69146b1d`，UID仍10131，
+包列表只保留正式应用；完整记录见before/after表、packages/reverse表及cleanup.json。
+
+独立reviewer复核未变源码、阶段/成功日志和正式包哈希，无具体发现。结论覆盖本轮指定
+开发板的新业务闭环，不冒充其他设备实测；手机/其他版本未测不作为新的强制门槛。
+正式新APK未覆盖安装，本轮不提交或归档，父完整需求与最终人工体验继续按既有边界维护。
+
+<a id="20261028-ssh-lock-disconnect"></a>
+## 2026-10-28 锁屏结束SSH、用户主动重连：本地通过，手机待重连
+
+2026-10-30接续：最终来源/APK表22项全部核对相同，源码未变，未重复构建或测试。
+原手机入口仍返回No route to host，当前已请求新的无线调试连接地址；未安装新版或执行
+设备测试，没有重建合成服务或修改手机策略。下列测试通过记录日期仍为10-28。
+
+用户明确选择“锁屏结束连接，回来一键重连”，沿原父task替代下节锁屏保活目标。普通Home
+后台/Activity重建仍由独立服务维护；屏幕关闭时取消精确待认证/已建立owner，立即禁止旧
+输入输出，原执行器负责清理。服务receiver捕获原owner，重复或迟到锁屏事件不能覆盖已经
+最终关闭的结果，也不能停止新owner；清理期间继续BUSY，不提前伪造资源释放。
+
+最终`closed/SSH_SCREEN_LOCKED`才带RAM非秘密目标，保留端点、模式及keyId/configAlias，
+不留密码/私钥、旧binding/票据/请求/Activity闭包。真实“重新连接”点击对私钥/config授权
+一次正常的新连接：先解锁秘密库、重读当前资料、精确选择/目标核对，再走新信任/认证。
+密码仍提示输入。授权在读取前消费，后台、唤醒、失败或重新加载不能触发自动重试；不重放
+命令。整个UID被冻结期间无法执行关闭，完全漏失的历史锁屏也不能仅凭当前已解锁状态
+推断；没有为此更改系统/Thanox/VPN策略或关闭所有普通Home返回会话。
+
+证据`/tmp/ctos-ssh-lock-close-20261028.wh75chqr`：
+
+- `flutter-oneclick-final.log`：分析无问题，65项定向/293项全量均通过。覆盖真实root按钮
+  key/config单次新请求、仍须主机确认、无效选择/密码无自动提交、后台取消及迟到library
+  回执丢弃、重新加载不复用一次授权，以及精确代次failed→最终closed/快照恢复。
+- `android-build-final.log`及`android-final-results.json`：最终775项JVM全通过；定向、
+  normal构建/lint、fixture及test构建/lint分别26秒/83秒/24秒。新增回归覆盖待启动取消、
+  老owner隔离、严格hint及输出ack未返回时重复/首次迟到锁屏不降级最终结果。首次源码
+  复核发现的终态覆盖问题已修复并补真实Port/保留ack回归，主会话运行检查，未放宽清理。
+- `apk-signatures.log`：三个APK官方v2通过，应用ID分别为正式包/独立fixture/独立test。
+  `source-apk-final.sha256`：normal `7c38d4dc…`，fixture `5e0b9ef5…`，test `c665402e…`。
+  未变核心C、生产静态库及config对象哈希核对相同，不声称重跑ARM矩阵。
+  lint为normal0错误4警告、fixture0错误6警告；StaticFieldLeak经独立复核只保存
+  applicationContext且随原owner确认释放时注销，不持有Activity，未抑制警告。
+- 独立reviewer复核backend/frontend完整本切片源码及新增异步/实际UI夹具，无剩余具体发现。
+  夹具改为真实SLEEP、实际安全锁定/库锁定、旧owner关闭/CPU锁释放，再手动正常解锁；
+  验证解锁及库解锁均不自动重连，真实Flutter提示/按钮、点击后新代次/KNOWN/PTY及旧
+  receiver隔离，然后保留Home/重建/通知Stop。这是待执行路径，不冒充手机通过。
+
+手机原入口`192.168.10.9:37821`在准备安装时离线；重连报`No route to host`，私有ADB
+列表为空。**新版尚未安装到设备，当前没有新行为手机通过记录。** 已向用户请求正常唤醒
+并确认当前地址，不扫描其他设备或改网络策略。正式应用/数据未更新；父完整AC、人工审阅
+及提交授权边界保持。本轮新容器/网络/精确loopback代理、合成客户端/服务器私钥与JSON及
+专用ADB均已清理；15469无监听，没有新版远端请求/reverse或测试包需要清理。日志和APK保留。
+
+<a id="20261028-ssh-phone-physical-investigation"></a>
+## 2026-10-28 手机真实锁屏保活调查：未通过，用户改选锁屏断开
+
+本节为已结束调查，不覆盖下方已通过的通知拒绝状态回归。用户最初要求继续PLR110/API36
+真实锁屏与自然休眠，并选择本人正常解锁。目标仍为`192.168.10.9:37821`；本轮实际未充电，
+初始mForceIdle=false、deep/light idle为ACTIVE，未改变锁屏、电源、Root、路由或VPN策略。
+20分钟自然观察尚未开始，当前未观察到deep idle，不能以熄屏持续时间推定Doze通过。
+用户随后明确选择“锁屏结束连接，回来一键重连”，停止保活/Doze和模板归因；不再请求
+模板代码。新行为正在另行实施，不能用本节失败记录或旧板保活通过替代新目标验收。
+
+证据`/tmp/ctos-ssh-phone-lock-20261028.aQnbyEbK`。用户报告Thanox自动模板会在锁屏后暂停
+新后台进程，并本人将精确测试包加入白名单，确认Shell/ADB不受该规则暂停；此后停滞仍复现。
+用户提供截图`/tmp/tmp/Screenshot_2026-10-28-16-43-09-09.jpg`显示该测试包Background Task
+允许，Smart Freeze/X Mode/Clean Tasks关闭、Resident app开启。截图不是模板代码，也不是
+agent独立读取的执行日志，不能据此认定具体暂停机制。用户明确不能停用整条模板，以免
+产生其他状态不一致；后续不得要求全局停用或自行修改Thanox配置。
+
+### 已确认的停滞机制：UID祖先cgroup冻结，触发者待查
+
+同一源码增加独立ADB shell只读进程采样（不是应用内线程自报），未新增产品代码。
+`process-state-proc-access.txt`和`process-state-samples.log`确认精确隔离进程PID13927、
+UID10499及`0::/apps/uid_10499/pid_13927`归属，线程大多显示S而非SIGSTOP的T。
+`process-state-cgroup-ancestors-before-wake.txt`在09:42:48 UTC锁屏停滞时记录：
+
+| cgroup层级 | cgroup.freeze | cgroup.events frozen |
+| --- | --- | --- |
+| /apps | 0 | 0 |
+| /apps/uid_10499 | 1 | 1 |
+| /apps/uid_10499/pid_13927 | 0 | 1 |
+
+父UID被冻结，所以子进程自身freeze=0仍然有效冻结；这也解释为什么只看Android层
+isFrozen=false或ps的S状态会漏判。[Linux内核文档](https://docs.kernel.org/admin-guide/cgroup-v2.html#core-interface-files)
+明确规定祖先冻结会停止后代进程，events frozen表示已完成冻结。主会话未写入这些控制文件。
+09:43:20 UTC正常WAKEUP后，`process-state-cgroup-after-wake.txt`记录UID freeze=0/frozen=0，
+测试随即从hold恢复至实际100秒。对应`android-process-state-physical.log`仍失败，清理前
+`process-state-terminal-final.txt`首个终端错误为STEP，不计锁屏或Doze通过。
+
+这轮已证明内核UID冻结与停滞相伴，尚未证明是谁写入freeze：可能是用户模板或其他ROM
+策略，应用管理开关截图不足以区分。无需停用整条模板或更改VPN；下一步只核对实际模板
+包名/UID排除和冻结动作的代码原为后续建议，现已随用户改选停止。未擅改任何策略或手动解冻。
+
+### 当前已确认的边界
+
+- 受限LAN前台控制`android-direct-foreground-owned-reset.log`实际2.699秒/status0/OK1，覆盖
+  合成私钥导入、NEW信任、PTY、config/KNOWN连接及旧binding拒绝。显式重置本轮自有库
+  1文件5408字节后仍执行原fresh断言；系统Storage usage的0B不能替代真实文件检查。
+- `android-foreground-idle-physical.log`亮屏实际空闲15秒、前后PTY通过。服务器
+  `server-foreground-idle-control.log`在08:37:08.808发出channel keepalive(type98)，
+  08:37:08.822收到type100。随后锁屏首个PTY也成功，之后才停滞；整轮137.03秒失败。
+  源码审阅未发现已建立连接无条件10秒到期，不能再按“连接总在10秒失效”处理。
+- 锁屏时15秒目标曾实际延长至214秒、95秒或99秒；记录过一次请求≤250ms的sleep实际
+  90.417秒/相同uptime差、进程CPU仅18ms。检查点与采样栈不是原子快照，不能由某一帧
+  直接断言具体Binder调用阻塞，也不能由isFrozen=false或FGS/逻辑CPU锁存在推定执行器在运行。
+- `manual-terminal-notice-final.txt`在测试清理前记录同一SSH代次首个远端事件
+  `state=failed reason=SSH_TERMINAL_IO`。安全固定码透传后，
+  `structured-error-terminal-final.txt`记录`SSH_SESSION_STEP`；对应整轮116.663秒失败。
+  已证实失败经过native step边界，尚不能区分传输断开、协议错误或其他native错误，
+  也不能仅凭这一代码认定ctOS缺陷或Thanox根因。
+
+### 连接路径及前置失败
+
+先前ADB reverse轮服务器启用ClientAliveInterval10/CountMax2/DEBUG3，实际channel
+keepalive两次无应答后30秒超时；其中type80是hostkeys通知，不能误记为存活探针。
+为排除reverse，后改用本机192.168.9.5:15479到内部容器的临时转发。手机既有路径在
+服务端呈现源192.168.9.5；最初仅允许192.168.10.9/32的过滤拒绝了该尝试，后只允许
+实际观察源192.168.9.5/32。该轮拒绝是连接前失败，不是锁屏失败。只读观察手机存在
+不可bypass的Clash VPN；未读取或更改其配置，没有绕过它。
+
+保留fresh-data、初始解锁、源地址过滤、旧cleanup遮蔽原始错误及超时恢复等失败轮；
+主会话曾过早WAKEUP导致96.061秒轮失败，不能算产品证据。新版初始人工解锁模式只用
+正常WAKEUP/requestDismiss及真实secure/interactive/keyguard状态，按用户选择等待正常
+系统认证；代理代输凭据的旧严格SystemUI输入框门槛仍保留。agent未处理手机凭据。
+
+### 已修复的可观测性与验证前置
+
+- 所有变化仍沿原task。夹具显式支持自然熄屏15..1800秒、实际idle采样和bounded进度；
+  线程诊断只在opt-in时记录自身测试线程的栈名/时钟/检查点，不采集局部变量、堆或输出。
+  使用目标隔离包自己的目录，SLEEP前同步写入arm，原测试包目录写入不可用的轮单列。
+- 首个终端回执严格要求remote=true及精确代次，仅固定状态/允许列表原因/时间；测试
+  清理前固化。原始异常保留，cleanup错误附为suppressed，清理独立继续尝试。
+- `ctosSshResetOwnedFixtureVault=true`是显式操作：先校验独立Application/包/UID、无会话
+  无Activity，再NOFOLLOW预检三个固定自有库文件并检查删除；不动prefs、Keystore、
+  权限或正式应用，原fresh断言随后照常执行。缺省不自动重置。
+- 生产控制器只把有限允许列表中的既有VaultException.code传入reason；未知/null/私密文本
+  仍为通用I/O，不传异常消息/路径/cause。18项定向与全量768项JVM、7项Flutter事件边界、
+  normal/fixture构建lint及官方v2通过，详见structured-focused/full日志。该改动提供准确
+  错误边界，不是锁屏根因修复。
+
+JNI step增加六类固定失败类别；ABI、认证/文件/角色准入和核心协议逻辑不变。
+首次79项定向中的生命周期测试错误地直接关闭Java角色，破坏清理所有权证明；改为实际
+认证前期限失效后79项通过。保留首次失败日志，未为测试放宽生产清理规则。全量771项
+JVM全部通过，normal/fixture构建lint与三个APK官方v2验签通过；未变核心C源码、生产静态库
+和配置对象哈希核对相同，不声称重跑核心ARM矩阵。
+
+`android-jni-category-physical.log`同一15秒亮屏/15秒熄屏场景99.857秒失败；亮屏前后PTY及
+锁屏首个PTY通过，hold实际67秒且未观察deep idle。约50秒停滞后主会话先保存
+`jni-category-before-wake.txt`和`server-jni-category-before-wake.log`，再正常WAKEUP结束失败轮。
+`jni-category-terminal-final.txt`清理前首个同代次事件仍为failed/SSH_SESSION_STEP，未命中
+六类；新fixture APK确实包含全部六个固定token，不能把通用码解释为某一种errno。
+完整产物/源码哈希见`source-apk-jni-category-final.sha256`：正常b159abe9…、fixture3e79e9d7…、
+test430080ca…。仅安装两个隔离包，没有安装正常包。该轮不是锁屏通过或根因修复。
+
+独立源码复核进一步确认当前分类的限制：核心recv/send部分硬错误、packet decode、buffer
+及构造失败统一为EIO；某些直接返回的packet builder错误不保证重设errno。因此现有映射
+只对保留下来的errno分类，通用STEP不能排除传输错误，携带的errno也不能证明builder根因。
+如需进一步native归因，应在实际失败点记录有限来源并用本地socket/parser故障测试证明，
+不能把所有EIO直接归为网络或用更多同类手机重测替代本地合同验证。
+
+试验性的六类errno映射已撤下：核心已合并或未可靠设置errno，不能以不完整分类作为
+生产归因。JNI回到原固定STEP，保留安全Vault公开码透传。撤下后的18定向/768全量
+JVM、normal/fixture构建lint及三APK官方v2通过，独立源码/证据复核无阻塞发现。
+记录为`android-final-generic-step.log`、`final-generic-full-results.json`、
+`apk-final-generic-signatures.log`和`final-generic-apk.sha256`。
+
+本轮隔离两包/两请求/reverse、容器/网络、两精确socat、合成客户端/服务器私钥和请求JSON、
+专用ADB15038已清。正式042c6b73…前后哈希完全相同，UID10497保持；清理后包列表仅正式包，
+reverse为空、请求不存在。用户自行设置的Thanox测试包白名单可自行移除，agent未改。
+未替换dist、更新正式包、提交或归档；父完整AC保持开放，新锁屏断开目标另验。
+
+<a id="20261028-ssh-phone-runtime-denied"></a>
+## 2026-10-28 Android16手机：通知权限拒绝状态下的SSH回归通过
+
+用户提供当前目标`192.168.10.9:37821`继续隔离验证。重新确认PLR110/API36，已解锁；
+未使用开发板凭据。正常安装器界面核对两个独立包名并点击INSTALL，不启用自动/静默安装，
+不修改正式应用、真实库/账号或手机安全、Root、网络策略。
+
+证据`/tmp/ctos-ssh-phone-notification-20261028.QLByJsL5`。fresh隔离应用实际
+POST_NOTIFICATIONS为`granted=false`；夹具在连接前及恢复过程中检查真实拒绝及通知不可用。
+运行`SshPasswordConnectPlatformTest#actualSafKeyImportManualThenConfigAndStaleBinding`，参数
+`ctosSshBackground=true`、`ctosSshNotificationsDenied=true`及本轮shell-owned0600合成请求；
+没有通道关闭或物理锁屏flag，也没有授予通知权限。
+
+临时SSH沿用下节固定镜像、公钥认证/合成RSA密钥/合成主机键和专用内部网络；仅通过
+127.0.0.1:15449本机转发及指定手机单条ADB reverse接入。先用无个人配置/agent/全局known_hosts
+的合成客户端验证服务，未访问个人密钥、真实SSH目标或账号。
+
+| 轮次 | 结果与边界 |
+| --- | --- |
+| `android-runtime-denied.log` | 19.065秒/status-2失败，在重建和真实新输入输出后无法操作“概览”；未计通过，原测试APK b901ee5b…保存为test-first.apk |
+| `android-runtime-denied-retry.log` | 仅夹具增加正常收起实际IME前置步骤后，10.594秒/status0/OK(1 test)通过 |
+
+源码显示窄屏终端IME展开时会隐藏底部导航，宽屏开发板使用NavigationRail。夹具现先确认
+自身当前Activity已附着/聚焦、实际root WindowInsets，再仅在IME可见时发送正常BACK，
+等待实际IME隐藏、“概览”可见并断言仍在终端路由。第二轮日志真实记录
+`navigation_ime_visible_before_back`、`navigation_ime_hidden_after_back`、
+`navigation_overview_visible`，支持夹具缺少导航前置步骤的判断；没有修改产品或放宽断言。
+
+通过覆盖真实key导入/NEW信任/公钥认证/PTY、Home后2秒库锁定但同一SSH继续、Activity
+重建/历史输出恢复、真实Flutter新输入与非回显输出、概览往返、通知不可用提示、应用内
+关闭/CPU锁释放且库仍锁，随后config/KNOWN连接与过期binding拒绝继续通过。此为**权限
+实际被拒绝状态**的运行验证，没有测试系统权限弹窗的“拒绝”按钮、永久拒绝/恢复交互，
+也不代表手机物理锁屏、长时Doze或完整父AC通过。
+
+`android-build-ime.log`隔离测试构建/lint14秒/83任务（16执行/67保留），0 errors/5 warnings；
+原生生成物复用，未重跑不变的Flutter/JVM/原生矩阵。正常a43be251…及隔离应用66e1009c…
+保持；实测新测试APK`9fb7a362e01a726676b554896319c24fe95f0fd3b9700a0aedc2d7b31ecdc09f`，
+官方v2验签通过，`source-apk-final.sha256`的四项来源/包哈希经独立reviewer核验一致。
+
+测试后通知权限仍为false。两个隔离包、合成请求、单条reverse、临时容器/内部网络已清；
+socat确认退出143，专用15038 ADB服务已停，本地客户端私钥/请求已删。正式包/UID10497
+前后相同，APK前后均为`042c6b73b1a6507e0e57e792d28f06c500dba977ce363742f82c9e1e3ef91252`。
+独立源码与证据复核及`git diff --check`通过；未安装正常a43包、替换dist、提交或归档。
+
+<a id="20261028-ssh-board-channel-denied"></a>
+## 2026-10-28 Android11开发板通知通道关闭：实测通过
+
+用户明确指定继续使用`192.168.9.14:5555`开发板并提供正常系统解锁凭据。本轮重新确认
+AIO-3568J/API30；实际处于已解锁状态，未使用或持久化凭据。仅安装独立fixture两包，
+通过正常Settings关闭其`ctos_ssh`通道，不改正式应用、锁屏、Root、VPN或电源策略。
+Android11支持本次通道关闭场景，但没有Android13+的POST_NOTIFICATIONS运行时权限；
+本次结论不能代替该权限拒绝或手机/API36验证。
+
+证据`/tmp/ctos-ssh-board-channel-20261028.XLmUzQis`。仅instrumentation源扩展独立参数
+`ctosSshNotificationChannelDenied=true`（API28+），要求`ctosSshBackground=true`，与权限拒绝
+及物理锁屏参数互斥。先检查真实通道存在/importance0及公共通知不可用，连接与恢复后
+重复检查。无通知查询/PendingIntent，复用真实Flutter输出/输入/提示/应用内关闭验证。
+
+- `android-build.log`：相同隔离构建/lint命令（见下节），15秒/83任务，16执行/67保留，
+  lint0错误5警告；复用未变化原生生成物，未重新运行原生/Flutter/JVM全量。
+- 正常APK`a43be2511e4b44f2aff6b0c348bb0cf548abccf2f68d20ba0b2fbbed2d2ac591`与
+  fixture`66e1009c4085561655b843c0eb327777ec2fd5614f931ce79483fa536b4b3542`保持。
+  实测测试APK`b901ee5be6db3a5d7ee162bacd9161b2356892244b3b7637c8aab7ee977a4352`官方v2通过；
+  `source-apk-final.sha256`记录来源及三包，独立reviewer逐项核验一致。
+- 临时服务使用已有固定镜像`sha256:d42d0d9d40e02c441870792bd3f679b446715cee38f81354366a33c9b0d84573`，
+  专用内部网络、合成RSA客户端密钥与合成主机键；本机loopback转发经一条ADB reverse接入。
+  先以独立空配置/无agent/合成known_hosts核验公钥登录，不读取个人SSH配置或访问真实账号。
+
+实际方法为`SshPasswordConnectPlatformTest#actualSafKeyImportManualThenConfigAndStaleBinding`，
+传入本轮shell-owned0600合成请求及上述两flag；保留两轮结果：
+
+| 轮次 | 实际结果与状态 |
+| --- | --- |
+| `android-channel-test.log` | 6.937秒失败：正常Settings关闭后连接前检查为0，但首次前台通知后变为2；断言未放宽，未计通过 |
+| `android-channel-retry.log` | 首次展示后经正常Settings再次关闭，实际importance0/userLockedFields4/fgServiceShown=true；同一测试源码18.907秒、method status0、OK(1 test) |
+
+`channel-disabled-after-first-fgs.txt`及`channel-final.txt`保留第二轮前后真实状态，最终仍为0。
+通过包含真实key导入/NEW信任/公钥认证/PTY、Home后2秒库锁定但原连接继续、Activity重建
+同代次及输出恢复、实际Flutter新输入输出、概览往返/通知不可用提示、应用内关闭及CPU锁释放；
+随后原config/KNOWN连接和过期binding拒绝亦继续通过。未伪造通知禁用，不因第二轮成功
+把首轮标为通过，也不将其推断为已修复生产缺陷。
+
+隔离两包、远端请求和单条reverse已清；专用容器/网络删除，socat进程确认退出143，专用
+15038 ADB服务已停。本地客户端私钥/请求已删，正式包列表恢复到仅`im.majo.ctos`；正式APK
+前后SHA均为`373f716137414227659d9d28a78f09a687291df39e1d03c43df5897f69146b1d`。
+独立源码/证据复核及`git diff --check`通过；未更新正式应用、替换dist、提交或归档。
+手机/API36运行时权限拒绝、长时Doze及最终人工体验仍待验，父完整AC保持开放。
+
+<a id="20261028-ssh-notification-denied-preparation"></a>
+## 2026-10-28 SSH 通知拒绝夹具：本地准备通过，设备待验
+
+用户要求继续已有 task，恢复 SSH 父任务指针并继续 R8。新增测试参数
+`ctosSshNotificationsDenied=true`，同时要求 `ctosSshBackground=true`，与物理锁屏探针互斥。
+API33+ 且实际 POST_NOTIFICATIONS 已拒绝、应用通知状态不可用才允许进入合成库/连接流程；
+夹具不修改权限。沿实际私钥导入、认证与PTY验证后台锁库、同代次重建、真实Flutter历史及
+新输入输出、不可用提示和应用内关闭/CPU锁释放。拒绝路径不查询活动通知或使用通知
+PendingIntent；真实Flutter事件接收器保留到实际关闭后才替换为测试observer。
+
+证据 `/tmp/ctos-ssh-denied-20261028.T7sucuTb`：
+
+- `./hako flutter --version`确认环境可用。隔离测试构建及lint：
+  `./hako bash -lc 'cd android && ./gradlew -PctosSecretsUiFixture=true :app:assembleSecretsFixtureReleaseAndroidTest :app:lintSecretsFixtureRelease -x compileSshFiles --console=plain'`。
+  `android-build.log`记录33秒、83任务（25执行/58保留）成功，lint为0 errors/5 warnings。
+- 仅测试源变更，复用已有SSH原生生成物。生成库与两flavor未strip库为`0c378b54…`，已有
+  strip库为`fa79851c…`，生成库前后哈希一致。未重跑原生矩阵/Flutter/JVM，不将历史结果记作本轮重跑。
+- 正常APK保持`a43be2511e4b44f2aff6b0c348bb0cf548abccf2f68d20ba0b2fbbed2d2ac591`；
+  隔离应用保持`66e1009c4085561655b843c0eb327777ec2fd5614f931ce79483fa536b4b3542`。
+  新测试APK为`ec6583d749f02b4e0c8fe671e3331da317173b20dbd2ea1787a4ad918952132c`，官方v2验签通过。
+- 独立Trellis源码检查及`git diff --check`通过，无具体待修发现。未操作设备/真实账号，
+  未安装正式应用、替换dist、提交或归档；通知拒绝/API36/手机、长时Doze及人工体验仍待验。
+
+10-26及10-27引用的两个原始`/tmp`目录已不存在。构建前三个旧APK均与10-27记录哈希一致；
+历史源码冻结表/原始日志已无法重新核验，不据此新增历史通过结论。实机前须确认当前目标及
+隔离安装/通知权限测试授权，并重建临时合成SSH服务、请求与清理编排；仓库现有`android/ssh`
+仅包含构建脚本，没有该轮临时设备运行器。
+
+<a id="20261027-ssh-physical-lock"></a>
+## 2026-10-27 SSH 开发板真实熄屏、安全锁定及解锁恢复
+
+用户要求继续同一开发板测试并提供设备解锁凭据。本轮只在`192.168.9.14:5555`安装独立
+fixture，使用正常系统凭据界面解锁；凭据内容不写入仓库、测试请求或日志，不更改锁屏、
+电源或网络策略，不访问个人SSH私钥/账号，也不覆盖正式应用。沿原SSH父task继续。
+
+证据 `/tmp/ctos-ssh-lockscreen-20261027.QravLlGz`。重新确认AIO-3568J/Android11/API30/
+arm64，私有loopback ADB进程仅使用显式目标。仅一份instrumentation测试源增加
+`ctosSshPhysicalLock=true`（同时要求`ctosSshBackground=true`）；生产源码与前轮279 Flutter/
+765 JVM/ARM矩阵所验证内容均未变，故未重复宣称重跑这些无变化的检查。
+
+`android-physical-lock-build.log`：隔离应用/测试包与lint通过，111任务、18执行/93保留，
+15s；沿用已验证的正常/fixture同一原生library，不重新生成OpenSSH对象。官方apksigner
+v2验签通过，`source-final-sha256.json`与`apk-final.json`记录本轮来源与产物。
+
+| APK | SHA256 |
+| --- | --- |
+| 正常（未安装） | `a43be2511e4b44f2aff6b0c348bb0cf548abccf2f68d20ba0b2fbbed2d2ac591` |
+| 本轮独立fixture | `66e1009c4085561655b843c0eb327777ec2fd5614f931ce79483fa536b4b3542` |
+| 本轮instrumentation | `4d712a28c9695f8f765a72f97957b967ad239e09456009d5e926ad2e3256f5fb` |
+
+实际方法`SshPasswordConnectPlatformTest#actualSafKeyImportManualThenConfigAndStaleBinding`
+运行85.464s，method status0、OK(1 test)。`android-background-live.log`及最终完整日志记录
+公开阶段screen_locked、screen_off_roundtrip、await_device_unlock、device_unlocked、
+screen_lock_pass；不是只检查ADB退出码或最终instrumentation code。
+
+- 真实SLEEP键令PowerManager非interactive，KeyguardManager同时报告安全锁定与锁屏显示，
+  实际秘密库已锁。期间反复检查同一SSH generation及服务CPU锁，保持15秒并两次执行
+  split-marker PTY往返，证明熄屏下连接可用，不以发送SCREEN_OFF广播冒充物理状态。
+- WAKEUP后经公开requestDismissKeyguard请求正常系统凭据界面。测试仅查看SystemUI
+  密码控件类型/可见性，不读取或输入凭据；主会话在输入前复核当前NotificationShade焦点、
+  secure/showing及非occluded状态，正常解锁成功。设备未改为无锁，也未修改密码。
+- 系统解锁后，秘密库仍锁定、SSH代次和CPU锁保持，命令往返通过。只有随后为独立
+  background场景明确解锁本测试合成秘密库，才继续原后台超时回归。
+- 同一整轮随后继续通过真实Flutter历史输出恢复、新命令输入与渲染、Activity重建、
+  概览→通知返回终端、通知Stop/CPU锁释放及旧通知不能停止后续KNOWN/config连接。
+
+`device-cleanup.json`确认passed=true、无cleanup_errors、请求/测试包/容器/网络全清，
+正式APK仍为`373f716137414227659d9d28a78f09a687291df39e1d03c43df5897f69146b1d`。
+`owned-adb-cleanup.json`确认自有PID1232920退出、全局ADB未改。设备凭据仅用于上述正常
+系统解锁，临时SSH服务仍只有合成凭据；未安装正常a43包、未替换dist或提交。
+
+结论限本Android11开发板及15秒真实熄屏条件，不代表深度Doze/长时间休眠、其他ROM、
+手机/API36或Android13+通知拒绝路径已实测。前轮一次未定因的真实UI控件等待失败继续
+保留在下节，本轮通过不构成对该历史失败的定因或虚构生产修复。父完整AC仍开放。
+
+<a id="20261026-ssh-background"></a>
+## 2026-10-26 SSH 后台会话与通知 Stop（本地实现与验证）
+
+用户明确选择此 R8 切片，沿原父 task，不新建/归档；设备和真实账号不沿用上轮授权。
+合同见[后台会话](ssh-background-session.md)。本轮新增 SshSessionService/Owner/TerminalState，
+实际 SUCCESS 后释放认证来源及文件视图，保留精确 transport 权限；库正常锁定。
+Activity 订阅重建、有界输出 snapshot、通知返回/精确 Stop、通知权限及自身 CPU 锁已实现。
+App/Root 保持原生命周期；无重连、重放输入、rekey、跳板或转发扩展。
+
+原始证据目录 `/tmp/ctos-ssh-background-20261026.3D0HonR1`。
+
+| 检查 | 实际结果 |
+| --- | --- |
+| Flutter | `flutter-final.log`：analyze 无问题，279项测试通过；含快照/UTF8/旧代次/终端查询不重放/排队输入失效、权限拒绝与恢复、小屏/横屏/大字 |
+| JVM | `android-final.log`：765项，0失败/错误/跳过；含认证材料释放失败拒绝I/O、认证后view撤销/原期限越界继续、新秘密拒绝、owner失败重试/迟到取消、缓存上限与订阅 |
+| 原生静态构建 | `native-build.log`：固定OpenSSH10.6p1、NDK27、AArch64/Bionic，严格编译通过；builder输入前后哈希相同 |
+| 原生实际运行 | `native-arm-final.log`：QEMU实际1758973 checks通过；含认证前撤销、认证后视图释放/撤销继续、凭据拒绝、原owner/KEX/cancel与关闭矩阵 |
+| Host所有权门禁 | `android-final.log`：view borrow/revoke/stale、role bootstrap及callback门禁通过 |
+| Android首次完整正常构建 | `android-final.log`：95任务，47执行/48保留，1m32s；lint/正式APK通过 |
+| 最终正常/隔离冻结构建 | `android-final-fixture.log`：正常92任务/1m39s，隔离114任务/33s，构建/lint及Android测试包均通过；正常2条、隔离4条既有lint警告 |
+
+原生实际运行程序 SHA256 `fc4dfbc2d873435c21e9dce572306fa6a73ebbe982ca04aed4fca85078948130`，
+路径 `build/ssh-background-20261026-native/ctos_ssh_native_client_test`。初次沙箱内open初始化
+失败，未计通过；同一程序获准沙箱外执行后，60s首次期限不足、无结果，最终
+240s上限执行退出0。全程仅合成自有socketpair，无设备、个人凭据或实际账号。
+
+最终APK构建重生成production archive，前一static的其余22项输入仍相同，仅archive哈希
+变化；因此另建 `build/ssh-background-20261026-final-native/`，23项输入重新核对全一致，
+实际QEMU再次退出0、1755235 checks。程序SHA256
+`3c5957a01241d385a2266278e89c4cbdb6e115ed14a08db895f6e68442464a24`，日志
+`native-final-build.log`及`native-arm-final-archive.log`。动态库重复生成也造成正常/fixture
+字节不同；随后正常包仅复用最终已验证生成物重新封装，不跳过JVM/lint或未运行的源码编译。
+`android-normal-aligned.log`确认对齐封装89任务/10s通过。正常与fixture的SSH库均为
+`fa79851c911f0105b244930ab88e10c66c37a14b3749ba896bcbf0f98b9af813`。
+最终`source-final-sha256.json`记录23份变更source/test（追加一份共享UI测试helper源），
+`apk-final.json`记录当前三包，生产源码及已有通过检查未漂移；
+正常包再次验签通过，manifest为非导出specialUse及具体subtype，min28/target36保持。
+
+| 最终APK | SHA256 |
+| --- | --- |
+| 正常 | `a43be2511e4b44f2aff6b0c348bb0cf548abccf2f68d20ba0b2fbbed2d2ac591` |
+| 独立fixture | `66e1009c4085561655b843c0eb327777ec2fd5614f931ce79483fa536b4b3542` |
+| fixture instrumentation（最终诊断/真实UI版） | `d1d4aacf76a90f2f1170c3ccc2c19affdd995d918752b9d8b5643660a823e151` |
+
+`apk-verification.log`及`apk-aligned-verification.log`记录官方apksigner v2与aapt原始结果；
+正常Gradle及Flutter APK字节一致。初次instrumentation adedeb63…属于下方首轮时序失败；
+后续仅测试文件变更，正式a43/fixture66及Flutter/SSH原生库均保持。未将中间8c9226…包
+作为最终交付产物。
+
+首轮定向Flutter50/1失败来自测试未等敏感路由清理；全量另暴露测试未设置DPR导致106dp
+误测并污染后续case，已设真实逻辑尺寸并注册完整清理。最终279通过。
+首轮JVM84/1失败为视图提前释放后的清理顺序旧断言；后续764/1为取消优先级新断言，均按
+新合同修正，未删除用例或弱化取消/关闭检查。最终765通过。
+
+独立Trellis check修复三项：认证材料清理未确认时session facade仍可I/O、旧owner迟到取消
+能改新通知状态，以及返回Intent.data被Flutter当路由。新增明确回归；返回Intent改用本次
+会话MIME区分，保持data为空，Stop仍严格绑定随机session ID。复核记录在原task check.md。
+
+Android隔离fixture已新增`ctosSshBackground=true`专项，沿实际私钥/config bridge方法验证
+Home、2s库超时锁定后命令、真实通知返回、Activity重建同代次/快照/命令、通知Stop/CPU锁
+释放及旧通知不能停止下一连接。授权后实际执行结果如下；不能据此推定手机/完整AC通过。
+
+### 本轮开发板隔离验收
+
+用户对`192.168.9.14:5555`安装独立测试包、临时合成SSH验证及清理明确回复“允许”。
+重新确认AIO-3568J/API30/arm64；私有loopback ADB服务始终显式指定目标，不改全局ADB。
+正式应用原SHA256为`373f716137414227659d9d28a78f09a687291df39e1d03c43df5897f69146b1d`。
+服务为独立内网Docker临时sshd、仅合成RSA公钥认证，设备经本轮单条ADB reverse访问；
+不读取个人私钥或真实账号，不改正式库、Root、VPN或系统策略。
+
+首轮实际执行10.805s，方法status-2，在重建后“新订阅恢复RUNNING”断言失败；之前的
+Home/2s库超时锁定/锁库后PTY/通知返回/同代次及CPU锁断言已通过，整轮仍计失败。
+原因是ActivityMonitor已返回新Activity，但重建Dart引擎尚未发送ctos/terminal onListen，
+测试安装观察器时跳过null listener并立即断言。仅修正fixture：15s内在主线程检查真实
+listener/sink就绪，之后订阅原listener取得真实snapshot；不合成状态、不削弱RUNNING或
+命令断言。独立复核通过。隔离构建/lint111任务/23s通过，新test APK
+`022be73a43c993f5cc3cba9761f930e0953c49dce551662d1f0e819e82ec3d8d`，正式/fixture应用和
+原生库字节均未变。首轮`device-cleanup.json`确认测试资源已清、正式APK不变。
+
+`device-final/android-background.log`实际14.833s、method status0、OK(1 test)，包括：
+Home后超时锁库且原shell命令往返；真实通知PendingIntent返回但库保持锁定；实际Activity
+重建、原generation及CPU锁保持、新订阅取得原服务RUNNING snapshot及再次PTY往返；通知
+Stop与CPU锁释放；后续config/KNOWN连接仍可用，旧通知不能停止后来连接。
+该轮是实际bridge/系统组件验证，不冒充Flutter渲染或物理通知抽屉操作。
+`device-final/device-cleanup.json`确认passed=true、请求/测试包/容器/网络全清、正式373不变，
+无cleanup_errors；`owned-adb-cleanup.json`确认只终止自有PID，全局ADB未改。
+
+### 追加实际 Flutter 恢复、输入及通知导航
+
+为补齐上述bridge证据未覆盖的渲染，复用已有UiAutomation测试helper，改为在重建后、
+拦截terminal sink前，用实际“终端/选择输出/当前输出/命令输入/执行命令/返回”控件：
+读取重建前已在独立SSH执行的split marker，验证缓存确实渲染；再从真实输入框提交新的
+split marker，读取独立执行后的输出；切至概览，再发实际通知PendingIntent，确认真实
+终端及输入控件出现。完整marker从未连续出现在命令中，不能以输入回显冒充执行。
+
+首个扩展测试（instrumentation3fc711e8…）20.843s在初次“关闭会话”控件等待失败，
+计失败；尚未确定原因，不能归因为某个已修复生产缺陷。随后仅在fixture增加有限公开
+状态/控件布尔诊断，截图只允许本测试包前台窗口、失败后仍抛原断言；生产代码未改。
+本轮未产生诊断截图。`android-fixture-real-ui.log`与`android-fixture-ui-diagnostics.log`
+均111任务/14s编译lint通过，最后test APK为上表d1d4aacf…。
+
+同一最终d1测试包两次完整实测：
+
+| 证据目录 | 方法时间与结果 |
+| --- | --- |
+| `device-ui-diag/` | 18.802s，method status0、OK(1 test) |
+| `device-ui-repeat/` | 19.211s，method status0、OK(1 test) |
+
+两次均覆盖真实Flutter历史输出恢复、新命令输入/渲染、概览→通知返回终端，并继续通过
+原同代次/锁库保持/PTY/通知Stop/CPU锁释放和旧通知隔离。独立源码复核未发现新生产缺陷；
+这两次通过不抹去上轮未定因的控件等待失败。对应两个device-cleanup.json均确认
+passed=true、无清理错误、正式373包未变、测试包/请求/容器/网络全清；私有ADB自有PID
+均已退出，无全局ADB变更。最新source/APK哈希记录反映两份instrumentation源文件更新，
+生产来源与已有279 Flutter/765 JVM/ARM矩阵结果未变。最终test的官方v2验签通过，见
+`test-apk-final-signature.log`。
+
+物理锁屏、ROM/Doze、Android13+通知权限拒绝真实界面及App/Root设备回归保持待验。
+审阅仍为human-required；未提交、未替换dist、未安装正式包，父完整AC仍开放。
+
 <a id="20261026-phone-ssh"></a>
 ## 2026-10-26 Android16 手机实际私钥连接修复与验收
 

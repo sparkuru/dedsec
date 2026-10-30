@@ -413,6 +413,10 @@ static int begin_callback(ctos_ssh_callback_token callback, void *environment,
     if (slot->cancelled || slot->closing || slot->failed) {
         pthread_mutex_unlock(&callbacks_lock); errno = ECANCELED; return -1;
     }
+    /* Promotion retires all authentication callbacks without revoking the owned transport. */
+    if (slot->transport_owner != NULL) {
+        pthread_mutex_unlock(&callbacks_lock); errno = EACCES; return -1;
+    }
     if (role_status(callback, slot) != 0) {
         int error = errno;
         if (error != ETIMEDOUT || slot->transport_owner == NULL) {

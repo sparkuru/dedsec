@@ -120,6 +120,12 @@ final class SshRoleContext implements AutoCloseable {
         establishedTransport = true;
     }
 
+    /** Exact retained transport only; it grants no public-file or authentication rights. */
+    synchronized void requireEstablishedTransport() throws VaultException {
+        if (!active || !establishedTransport)
+            throw new VaultException("SSH_ROLE_EXPIRED", "The established SSH role is closed");
+    }
+
     /** Only bounded metadata/publication or trusted copy; no core/native calls or waits. */
     void publishBound(Clock clock, AppSecrets.EffectGuard publication) throws VaultException {
         synchronized (this) { synchronized (publicView) {
@@ -134,13 +140,14 @@ final class SshRoleContext implements AutoCloseable {
     }
 
     /**
-     * A registry slot may be reclaimed only after the role is closed, its
-     * public view is revoked, or its monotonic deadline has passed. A failed
-     * clock must not make a still-live role disappear from the registry.
+     * A retained transport keeps its slot until explicit close. Authentication-only
+     * roles may also expire with their view or deadline; a failed clock cannot
+     * make a still-live role disappear from the registry.
      */
     synchronized boolean reclaimable(Clock clock) {
-        if (!active || !publicView.active()) return true;
+        if (!active) return true;
         if (establishedTransport) return false;
+        if (!publicView.active()) return true;
         if (clock == null) return false;
         long now = clock.now();
         return now > 0 && now >= deadline;

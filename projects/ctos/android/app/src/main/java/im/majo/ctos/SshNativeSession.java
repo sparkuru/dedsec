@@ -367,6 +367,8 @@ final class SshNativeSession implements AutoCloseable {
     private ShellStatus lastShellStatus;
     private boolean shellEofAccepted;
     private volatile boolean established;
+    private volatile boolean authenticationRetired;
+    private AppSecrets.EffectGuard authenticationRetirement;
     private PasswordAuthResult authenticationResult = PasswordAuthResult.NOT_STARTED;
     private PrivateKeyAuthResult privateKeyResult = PrivateKeyAuthResult.NOT_STARTED;
     private boolean privateKeyAuthentication;
@@ -819,10 +821,25 @@ final class SshNativeSession implements AutoCloseable {
             try { callback.retainEstablishedSession(callbackClaim); }
             catch (VaultException lifecycle) { throw selectionLifecycleFailure(lifecycle); }
             established = true;
+            view.close();
+            viewReleased = true;
+            VaultCodec.wipe(expectedSelectionReceipt);
+            AppSecrets.EffectGuard retirement = authenticationRetirement;
+            if (retirement != null) retirement.check();
+            authenticationRetirement = null;
+            authenticationRetired = true;
             requireTransportLive();
             shellPhase = ShellPhase.OPENING;
             return null;
         });
+    }
+
+    /** Called on the original owner before shell promotion; no UI or native entry may reenter. */
+    void retireAuthenticationWith(AppSecrets.EffectGuard retirement) throws VaultException {
+        requireOwnerThread();
+        if (retirement == null || established || authenticationRetirement != null)
+            throw phaseFailure();
+        authenticationRetirement = retirement;
     }
 
     ShellStatus shellStatus() throws VaultException {
@@ -958,6 +975,7 @@ final class SshNativeSession implements AutoCloseable {
     }
 
     private void requireProtocolLive() throws VaultException {
+        if (established) throw phaseFailure();
         try { requireSelectionReadLive(); }
         catch (VaultException lifecycle) { throw selectionLifecycleFailure(lifecycle); }
     }
@@ -969,9 +987,9 @@ final class SshNativeSession implements AutoCloseable {
                 if (nativeClosed || destroyed) throw failure("SSH_SESSION_CLOSED");
                 if (terminalFailure != null) throw failure(terminalFailure);
                 if (cancellationRequested) throw failure("SSH_SESSION_CANCELLED");
+                if (!authenticationRetired) throw phaseFailure();
             }
             callback.requireEstablishedSessionBound(callbackClaim);
-            if (!view.active()) throw failure("SSH_FILE_VIEW");
         } catch (VaultException lifecycle) { throw selectionLifecycleFailure(lifecycle); }
     }
 
@@ -993,6 +1011,7 @@ final class SshNativeSession implements AutoCloseable {
     }
 
     private byte[] authenticationSelectionReceiptInternal() throws VaultException {
+        if (established) throw phaseFailure();
         try { requireSelectionReadLive(); }
         catch (VaultException lifecycle) { throw selectionLifecycleFailure(lifecycle); }
         if (expectedSelectionReceipt == null) throw SshAuthenticationSelection.invalid();
@@ -1115,6 +1134,7 @@ final class SshNativeSession implements AutoCloseable {
             throw new VaultException("SSH_SESSION_CLEANUP",
                     "The native SSH session tombstone is unconfirmed");
         }
+        authenticationRetirement = null;
         synchronized (stateLock) { destroyed = true; }
     }
 
@@ -1126,7 +1146,7 @@ final class SshNativeSession implements AutoCloseable {
             callback.requireEstablishedSessionBound(callbackClaim);
         }
         catch (VaultException lifecycle) { return false; }
-        return view.active() && outputPublicationStateLive();
+        return authenticationRetired && outputPublicationStateLive();
     }
 
     private boolean outputPublicationStateLive() {

@@ -1,5 +1,10 @@
 # SSH Native Gates
 
+2026-10-26: [established background session](ssh-background-session.md) separates only exact
+SUCCESS-promoted transport from authentication lease revocation. Native releases public-view borrow
+and selection; Java releases lease/auth providers before any I/O/publication. Preauth admission,
+new secret/file/trust requests and exact transport cancellation/owner/KEX checks remain mandatory.
+
 2026-10-25: [foreground password connection](ssh-password-connect.md) now connects the
 production UI, supported whole-manifest admission, actual TCP and managed host-key approval.
 The current session JNI surface has 20 exports: the previous 19 plus caller-owned TCP

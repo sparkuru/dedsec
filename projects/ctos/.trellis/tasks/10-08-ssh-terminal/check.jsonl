@@ -13,3 +13,6 @@
 {"file":".trellis/tasks/10-08-ssh-terminal/research/private-key-connection-path.md","reason":"真实公钥来源、KeyBinding/Account 与 native selected proof 复核。"}
 {"file":".trellis/tasks/10-08-ssh-terminal/research/config-key-import-connection.md","reason":"实际 effective plan 每项消费/拒绝与导入原子性、逻辑路径、持久副本安全。"}
 {"file": ".trellis/spec/backend/ssh-detached-config-managed.md", "reason": "Android16实际64KiB MEMLOCK兼容修复；单份受保护源、实际数量公开索引和失败清理"}
+{"file":"design/ssh-background-session.md","reason":"当前 R8 验证：已认证 shell 保留、新秘密仍拒绝、通知精确 Stop、输出与 generation 和 Android 实机边界。"}
+{"file":".trellis/tasks/10-08-ssh-terminal/research/ssh-background-lifetime.md","reason":"复核 Java/C 权限分离、auth 明文释放与原 owner/cancel/close 证明，不把服务迁移视为锁库可用证据。"}
+{"file":".trellis/spec/backend/ssh-background-session.md","reason":"R8当前锁屏断开与主动一键重连：精确owner/幂等终态/确认清理、RAM提示与一次授权、新资料/新信任认证，实际短锁屏/不自动重连/新代次；不混用历史锁屏保活与Doze证据。"}

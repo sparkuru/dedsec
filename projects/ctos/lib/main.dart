@@ -12,6 +12,7 @@ import 'export_preview.dart';
 import 'settings_page.dart';
 import 'terminal_interaction.dart';
 import 'terminal_events.dart';
+import 'ssh/api.dart';
 import 'ssh/password_connect_page.dart';
 import 'traffic.dart';
 import 'workbench.dart';
@@ -52,7 +53,7 @@ class Observatory extends StatefulWidget {
 
 class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
   final tracker = TrafficTracker();
-  final terminal = Terminal(maxLines: 3000);
+  var terminal = Terminal(maxLines: 3000);
   final terminalInputFocus = FocusNode();
   final terminalInputKey = GlobalKey<TerminalCommandInputState>();
   final terminalLineTracker = TerminalEditableLineTracker();
@@ -76,6 +77,12 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
   bool terminalBusy = false;
   bool terminalShortcutsExpanded = true;
   bool terminalRemote = false;
+  bool terminalReplaying = false;
+  bool sshNotificationPermissionRequested = false;
+  bool? sshNotificationsEnabled;
+  TerminalStateEvent? sshScreenLockClosure;
+  Completer<bool>? sshForegroundWaiter;
+  int terminalInputRevision = 0;
   int terminalGeneration = 0;
   int terminalLineSyncGeneration = 0;
   bool terminalLineSyncPending = false;
@@ -119,12 +126,33 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
           if (!mounted) return;
           final update = terminalEventDecoder.accept(event);
           if (update == null) return;
-          terminal.write(update.output);
+          if (update.reset) {
+            terminalInputRevision++;
+            final columns = terminal.viewWidth;
+            final rows = terminal.viewHeight;
+            terminal.onOutput = null;
+            terminal.onResize = null;
+            terminal = Terminal(maxLines: 3000)..resize(columns, rows);
+            configureTerminal();
+          }
+          terminalReplaying = update.reset;
+          try {
+            if (update.truncated) {
+              terminal.write('[较早输出已移出缓存]\r\n');
+            }
+            terminal.write(update.output);
+          } finally {
+            terminalReplaying = false;
+          }
           if (update.output.isNotEmpty && terminalLineSyncPending) {
             terminalLineLastOutputAt = DateTime.now();
             scheduleTerminalLineSync();
           }
           final state = update.state;
+          if (update.focus) {
+            setState(() => tab = 2);
+            resizeRestoredTerminal();
+          }
           if (state != null) {
             cancelTerminalLineSync(resetTracker: true);
             terminalHistory.reset();
@@ -134,18 +162,25 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
               session = state.state == 'running';
               terminalRemote = state.remote;
               terminalMode = session ? state.mode : '未连接';
+              sshScreenLockClosure =
+                  state.remote &&
+                      state.state == 'closed' &&
+                      state.reason == 'SSH_SCREEN_LOCKED'
+                  ? state
+                  : null;
               if (session) terminalShortcutsExpanded = true;
             });
             if (!session) {
               final detail = state.exitStatus ?? state.reason ?? state.state;
               terminal.write('\r\n[session ${state.state}: $detail]\r\n');
             }
+            if (update.reset && session) {
+              resizeRestoredTerminal();
+              unawaited(refreshSshNotificationStatus());
+            }
           }
         }, onError: (Object e) => terminal.write('\r\n$e\r\n'));
-    terminal.onOutput = (text) => sendTerminal(text);
-    terminal.onResize = (columns, rows, width, height) {
-      if (session) unawaited(resizeTerminal(columns, rows));
-    };
+    configureTerminal();
     refresh();
     refreshDevice();
     unawaited(restoreRoot());
@@ -154,10 +189,40 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
     });
   }
 
+  void configureTerminal() {
+    terminal.onOutput = (text) {
+      if (!terminalReplaying) sendTerminal(text);
+    };
+    terminal.onResize = (columns, rows, width, height) {
+      if (session && !terminalReplaying) {
+        unawaited(resizeTerminal(columns, rows));
+      }
+    };
+  }
+
+  void resizeRestoredTerminal() {
+    final generation = terminalGeneration;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted &&
+          foreground &&
+          session &&
+          terminalRemote &&
+          terminalGeneration == generation) {
+        unawaited(resizeTerminal(terminal.viewWidth, terminal.viewHeight));
+      }
+    });
+  }
+
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     foreground = state == AppLifecycleState.resumed;
     if (foreground) {
+      sshForegroundWaiter?.complete(true);
+      sshForegroundWaiter = null;
+      if (session && terminalRemote) {
+        resizeRestoredTerminal();
+        unawaited(refreshSshNotificationStatus());
+      }
       if (tab == 0) refresh();
       if (tab == 0 && infoTab == 0) refreshDevice();
       if (tab == 0 && infoTab == 3) loadConnections();
@@ -170,6 +235,8 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
     terminalLineSyncTimer?.cancel();
     connectionStaleTimer?.cancel();
     terminalEvents?.cancel();
+    sshForegroundWaiter?.complete(false);
+    sshForegroundWaiter = null;
     terminalInputFocus.dispose();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
@@ -307,6 +374,7 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
     setState(() {
       terminalBusy = true;
       terminalShortcutsExpanded = true;
+      sshScreenLockClosure = null;
     });
     try {
       terminal.write('\r\n── ${privileged ? 'Root PTY' : '应用 Shell'} ──\r\n');
@@ -345,19 +413,68 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> startPasswordSsh() async {
+  Future<void> startPasswordSsh({TerminalStateEvent? reconnectFrom}) async {
     if (session || terminalBusy || !foreground) return;
+    bool currentTarget() =>
+        reconnectFrom == null ||
+        identical(sshScreenLockClosure, reconnectFrom) &&
+            terminalGeneration == reconnectFrom.generation;
+    if (!currentTarget()) return;
     terminalInputFocus.unfocus();
     setState(() => terminalBusy = true);
     try {
+      try {
+        final api = SshPasswordApi();
+        var enabled = await api.notificationsEnabled();
+        if (!enabled && !sshNotificationPermissionRequested) {
+          sshNotificationPermissionRequested = true;
+          enabled = await api.requestNotifications();
+          if (mounted && !foreground) {
+            sshForegroundWaiter ??= Completer<bool>();
+            if (!await sshForegroundWaiter!.future) return;
+          }
+        }
+        if (!mounted) return;
+        setState(() => sshNotificationsEnabled = enabled);
+      } on MissingPluginException {
+        // Older hosts can still use the existing foreground connection flow.
+      } on PlatformException {
+        if (mounted) setState(() => sshNotificationsEnabled = false);
+      } on FormatException {
+        if (mounted) setState(() => sshNotificationsEnabled = false);
+      }
+      if (!mounted || session || !foreground || !currentTarget()) return;
       await showPasswordSshConnect(
         context,
         columns: terminal.viewWidth.clamp(1, 4096).toInt(),
         rows: terminal.viewHeight.clamp(1, 4096).toInt(),
-        canOpen: () => mounted && !session && foreground,
+        reconnect: reconnectFrom?.reconnect,
+        connectOnOpen:
+            reconnectFrom?.reconnect?.mode == SshReconnectMode.key ||
+            reconnectFrom?.reconnect?.mode == SshReconnectMode.config,
+        canOpen: () => mounted && !session && foreground && currentTarget(),
       );
     } finally {
       if (mounted) setState(() => terminalBusy = false);
+    }
+  }
+
+  Future<void> refreshSshNotificationStatus() async {
+    try {
+      final enabled = await SshPasswordApi().notificationsEnabled();
+      if (mounted && session && terminalRemote) {
+        setState(() => sshNotificationsEnabled = enabled);
+      }
+    } on MissingPluginException {
+      // Retain the last known permission state on an older host.
+    } on PlatformException {
+      if (mounted && session && terminalRemote) {
+        setState(() => sshNotificationsEnabled = false);
+      }
+    } on FormatException {
+      if (mounted && session && terminalRemote) {
+        setState(() => sshNotificationsEnabled = false);
+      }
     }
   }
 
@@ -379,8 +496,12 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
   void sendTerminal(String text) {
     if (!session || terminalBusy || text.isEmpty) return;
     final generation = terminalGeneration;
+    final revision = terminalInputRevision;
     terminalWriteTail = terminalWriteTail.then((_) async {
-      if (!session || generation != terminalGeneration) return;
+      if (!session ||
+          generation != terminalGeneration ||
+          revision != terminalInputRevision)
+        return;
       try {
         await native.invokeMethod('terminalWrite', {
           'generation': generation,
@@ -1659,6 +1780,33 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
               Text('选择终端会话', style: Theme.of(context).textTheme.titleLarge),
               const SizedBox(height: 16),
             ],
+            if (sshScreenLockClosure case final closure?)
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('已因锁屏断开', key: Key('ssh-screen-lock-status')),
+                      const SizedBox(height: 8),
+                      const Text('重新连接需要解锁秘密库，并重新核验连接信息。'),
+                      if (closure.reconnect != null) ...[
+                        const SizedBox(height: 12),
+                        FilledButton.icon(
+                          key: const Key('ssh-reconnect'),
+                          onPressed: terminalBusy || !foreground
+                              ? null
+                              : () => unawaited(
+                                  startPasswordSsh(reconnectFrom: closure),
+                                ),
+                          icon: const Icon(Icons.refresh),
+                          label: const Text('重新连接'),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
             Card(
               child: ListTile(
                 key: const Key('terminal-app-entry'),
@@ -1728,6 +1876,15 @@ class _ObservatoryState extends State<Observatory> with WidgetsBindingObserver {
     final keyboard = MediaQuery.viewInsetsOf(context).bottom > 0;
     return Column(
       children: [
+        if (terminalRemote && sshNotificationsEnabled == false)
+          const Padding(
+            padding: EdgeInsets.fromLTRB(20, 8, 20, 4),
+            child: Text(
+              '通知未开启，无法从通知停止；请在此关闭会话。',
+              key: Key('ssh-notifications-unavailable'),
+              style: TextStyle(color: CtosColors.textSecondary, fontSize: 12),
+            ),
+          ),
         if (!keyboard)
           Padding(
             padding: const EdgeInsets.fromLTRB(20, 8, 20, 4),

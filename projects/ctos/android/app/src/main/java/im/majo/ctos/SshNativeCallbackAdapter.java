@@ -152,9 +152,9 @@ final class SshNativeCallbackAdapter implements AutoCloseable {
     private final SshRoleContext role;
     private final SshRoleRegistry registry;
     private final SshNativeRoleBootstrap.Issued issued;
-    private final SshHostKeyAuthority hostAuthority;
-    private final SshManagedProvider managedProvider;
-    private final SshKnownHostsCandidateHandoff candidateHandoff;
+    private SshHostKeyAuthority hostAuthority;
+    private SshManagedProvider managedProvider;
+    private volatile SshKnownHostsCandidateHandoff candidateHandoff;
     private final SshRoleContext.Clock clock;
     private final NativeBinding nativeBinding;
     private final SshNativeRoleBootstrap.NativeRelease roleRelease;
@@ -285,6 +285,7 @@ final class SshNativeCallbackAdapter implements AutoCloseable {
             if (closing) throw new Rejected("SSH_CALLBACK_CLOSING");
             if (cancelled) throw new Rejected(failureCode == null
                     ? "SSH_CALLBACK_CANCELLED" : failureCode);
+            if (establishedClaim != null) throw new Rejected("SSH_CALLBACK_TRANSPORT_ONLY");
             try {
                 role.requireActive(clock);
             } catch (VaultException failure) {
@@ -774,7 +775,8 @@ final class SshNativeCallbackAdapter implements AutoCloseable {
             cancelled = true;
             if (failureCode == null) failureCode = "SSH_CALLBACK_CANCELLED";
         }
-        if (candidateHandoff != null) candidateHandoff.abort();
+        SshKnownHostsCandidateHandoff pending = candidateHandoff;
+        if (pending != null) pending.abort();
         try {
             nativeBinding.cancel(nativeCallback);
         } catch (IOException | LinkageError | RuntimeException failure) {
@@ -973,6 +975,8 @@ final class SshNativeCallbackAdapter implements AutoCloseable {
             if (closed) throw new VaultException("SSH_CALLBACK_CLOSED", "The SSH callback binding is closed");
             if (closing) throw new VaultException("SSH_CALLBACK_CLOSING", "The SSH callback binding is closing");
             if (cancelled) throw new VaultException("SSH_CALLBACK_CANCELLED", "The SSH callback binding is cancelled");
+            if (establishedClaim != null)
+                throw new VaultException("SSH_CALLBACK_TRANSPORT_ONLY", "Authentication has finished");
             role.requireActive(clock);
         }
     }
@@ -984,9 +988,16 @@ final class SshNativeCallbackAdapter implements AutoCloseable {
                     || !claim.owned || !nativeSessionOwned || nativeSessionOpening || inCallback
                     || establishedClaim != null || authenticationSelection == null)
                 throw new VaultException("SSH_CALLBACK_SESSION", "The SSH session does not own this callback");
-            requireEstablishedState(claim);
+            requireEstablishedState(claim, false);
             role.retainEstablishedTransport();
             establishedClaim = claim;
+            // Native now owns only the exact transport claim; never retain a vault/Activity provider.
+            hostAuthority = null;
+            managedProvider = null;
+            candidateHandoff = null;
+            authenticationSelection = null;
+            hostProof = null;
+            kexProof = null;
         }
     }
 
@@ -995,17 +1006,18 @@ final class SshNativeCallbackAdapter implements AutoCloseable {
         synchronized (stateLock) {
             if (establishedClaim != claim)
                 throw new VaultException("SSH_CALLBACK_SESSION", "The SSH session was not established");
-            requireEstablishedState(claim);
+            requireEstablishedState(claim, true);
         }
     }
 
-    private void requireEstablishedState(NativeSessionClaim claim) throws VaultException {
+    private void requireEstablishedState(NativeSessionClaim claim, boolean established) throws VaultException {
         if (closed) throw new VaultException("SSH_CALLBACK_CLOSED", "The SSH callback binding is closed");
         if (closing) throw new VaultException("SSH_CALLBACK_CLOSING", "The SSH callback binding is closing");
         if (cancelled) throw new VaultException("SSH_CALLBACK_CANCELLED", "The SSH callback binding is cancelled");
         if (claim == null || claim.owner != this || !claim.owned || !nativeSessionOwned)
             throw new VaultException("SSH_CALLBACK_SESSION", "The SSH session does not own this callback");
-        role.requireBound();
+        if (established) role.requireEstablishedTransport();
+        else role.requireBound();
     }
 
     private static SshHostKeyAuthority.Classification classification(int value) throws VaultException {
