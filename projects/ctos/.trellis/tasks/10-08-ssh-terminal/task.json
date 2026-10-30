@@ -156,7 +156,9 @@
         "against_head": "20e4842",
         "human_review_classification": "human-required; satisfied by 功能通过；可以提交并继续",
         "scope": "all encrypted key, saved phrase, deletion, config recovery, lifecycle, Flutter and test/spec/design diffs; no new findings; preserve unrelated paths"
-      }
+      },
+      "work_commit": "360cca2bd36eed636722d06f0db9f6253c7d29c8",
+      "commit_status": "committed"
     },
     "screen_lock_disconnect_increment": {
       "name": "screen_lock_disconnect_manual_reconnect",

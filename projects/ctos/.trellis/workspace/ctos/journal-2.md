@@ -925,3 +925,37 @@ Delivered service-owned SSH with screen-lock disconnection and explicit fresh re
 ### Status
 
 [OK] **Completed**
+
+
+## Session 77: SSH encrypted-key lifecycle delivery
+
+**Date**: 2026-10-30
+**Task**: SSH encrypted-key lifecycle delivery
+**Branch**: `antitrust`
+
+### Summary
+
+用户确认功能通过并授权提交及继续；加密私钥、口令管理、删除和卡片修正已随正式fc98验收。父1008继续，不归档。
+
+### Main Changes
+
+- 原始加密私钥导入与当次/可选保存复用忘记；精确删除配对资料并修复缺失配置和重导入。
+- 按用户视觉反馈紧凑排列卡片操作，保留数据更新指定开发板，人工验收通过。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `360cca2` | (see git log) |
+
+### Testing
+
+- [OK] 799 JVM/317 Flutter、已记录的原生与五格式互通、隔离42.572秒及最终fc98来源/安装审计；区分历史与本轮UI执行。
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 沿原1008推进direct资料的SAF目录批量导入：相对结构、整批预览/冲突处理及原子提交；下一增量研究独立保留。
