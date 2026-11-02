@@ -227,9 +227,7 @@ class _SshLibraryPageState extends State<SshLibraryPage>
     dialog = DialogRoute<String>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        title: Text(
-          kind == SshImportKind.privateKey ? '导入私钥' : '导入配置或 Include',
-        ),
+        title: Text(kind == SshImportKind.privateKey ? '导入私钥' : '导入配置'),
         scrollable: true,
         content: Form(
           key: form,
@@ -239,7 +237,7 @@ class _SshLibraryPageState extends State<SshLibraryPage>
               Text(
                 kind == SshImportKind.privateKey
                     ? '选择 SSH 私钥；加密私钥需要输入口令。留空路径时沿用文件名。'
-                    : '根配置使用 .ssh/config；Include 文件填写配置引用的路径。',
+                    : '一个 config 可包含多个 Host 连接项，连接时选择已导入的私钥。根配置使用 .ssh/config；Include 文件填写配置引用的路径。',
               ),
               const SizedBox(height: 16),
               TextFormField(
@@ -872,7 +870,7 @@ class _SshLibraryPageState extends State<SshLibraryPage>
   }
 
   Future<void> _selectHost(SshConfigHost host) async {
-    if (_busy || !_current) return;
+    if (_busy || !_current || !_healthy) return;
     final error = host.error;
     if (error != null || host.missingIdentityPaths.isNotEmpty) {
       setState(() => _error = _hostDescription(host));
@@ -881,41 +879,90 @@ class _SshLibraryPageState extends State<SshLibraryPage>
     final eligible = _library!.keys
         .where((key) => host.keyIds.contains(key.id))
         .toList(growable: false);
-    if (eligible.isEmpty) {
-      setState(() => _error = '此主机没有已导入的可用私钥，请先导入 IdentityFile 引用的私钥。');
-      return;
-    }
-    if (eligible.length == 1) {
-      await _select(eligible.single, host: host);
-      return;
-    }
     final revision = _revision;
     late final DialogRoute<String> dialog;
     dialog = DialogRoute<String>(
       context: context,
-      builder: (dialogContext) => SimpleDialog(
+      builder: (dialogContext) => AlertDialog(
+        key: const Key('ssh-config-key-choice'),
         title: Text('选择 ${host.alias} 的私钥'),
-        children: [
-          for (final key in eligible)
-            SimpleDialogOption(
-              onPressed: () {
-                if (_foreground &&
-                    revision == _revision &&
-                    identical(_dialog, dialog) &&
-                    dialog.isCurrent)
-                  Navigator.of(dialogContext).pop(key.id);
-              },
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(key.label),
-                  Text(
-                    key.fingerprint,
-                    style: Theme.of(context).textTheme.bodySmall,
+        scrollable: true,
+        content: SizedBox(
+          width: double.maxFinite,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (host.identityHints.isNotEmpty) ...[
+                const Text('配置中的私钥路径（仅供参考）'),
+                const SizedBox(height: 8),
+                for (final hint in host.identityHints)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: Text(
+                      hint,
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
                   ),
-                ],
+                const SizedBox(height: 8),
+              ],
+              Text(
+                eligible.isEmpty
+                    ? '尚未导入可用私钥。请先返回导入私钥，再选择此连接。'
+                    : '请选择本次连接使用的已导入私钥。',
               ),
-            ),
+              for (final key in eligible)
+                Padding(
+                  padding: const EdgeInsets.only(top: 16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(key.label),
+                      const SizedBox(height: 4),
+                      Text(key.path),
+                      Text(key.algorithm),
+                      Text(
+                        key.fingerprint,
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                      const SizedBox(height: 8),
+                      OutlinedButton(
+                        key: Key('ssh-config-key-${key.id}'),
+                        style: OutlinedButton.styleFrom(
+                          minimumSize: const Size.fromHeight(48),
+                        ),
+                        onPressed: () {
+                          if (_foreground &&
+                              _healthy &&
+                              revision == _revision &&
+                              identical(_dialog, dialog) &&
+                              dialog.isCurrent)
+                            Navigator.of(dialogContext).pop(key.id);
+                        },
+                        child: Text(
+                          '使用此私钥',
+                          semanticsLabel: '使用私钥 ${key.label}',
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            key: const Key('ssh-config-key-cancel'),
+            onPressed: () {
+              if (_foreground &&
+                  revision == _revision &&
+                  identical(_dialog, dialog) &&
+                  dialog.isCurrent)
+                Navigator.of(dialogContext).pop();
+            },
+            child: Text(eligible.isEmpty ? '返回' : '取消'),
+          ),
         ],
       ),
     );
@@ -1025,7 +1072,7 @@ class _SshLibraryPageState extends State<SshLibraryPage>
                         ? null
                         : () => unawaited(_import(SshImportKind.config)),
                     icon: const Icon(Icons.file_open_outlined),
-                    label: const Text('导入配置 / Include'),
+                    label: const Text('导入配置'),
                   ),
                   OutlinedButton.icon(
                     key: const Key('ssh-edit-config'),

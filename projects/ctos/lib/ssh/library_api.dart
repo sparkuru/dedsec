@@ -42,6 +42,7 @@ class SshConfigHost {
     required this.port,
     required this.username,
     required this.keyIds,
+    this.identityHints = const [],
     this.error,
     this.missingIdentityPaths = const [],
   });
@@ -50,7 +51,7 @@ class SshConfigHost {
     _keys(
       value,
       {'alias', 'binding', 'host', 'port', 'username', 'keyIds'},
-      {'error', 'missingIdentityPaths'},
+      {'error', 'missingIdentityPaths', 'identityHints'},
     );
     final error = value.containsKey('error')
         ? _sshErrorCode(value['error'])
@@ -70,6 +71,12 @@ class SshConfigHost {
         : const <String>[];
     if (missingIdentityPaths.isNotEmpty && error != 'SSH_KEY_MISSING')
       throw _invalid();
+    final identityHints = value.containsKey('identityHints')
+        ? _sshRows(
+            value['identityHints'],
+            256,
+          ).map((hint) => _sshPublicText(hint, 512)).toList(growable: false)
+        : const <String>[];
     return SshConfigHost(
       alias: _sshAlias(value['alias']),
       binding: _sshBinding(value['binding']),
@@ -77,6 +84,7 @@ class SshConfigHost {
       port: _port(value['port']),
       username: user,
       keyIds: List.unmodifiable(keyIds),
+      identityHints: List.unmodifiable(identityHints),
       error: error,
       missingIdentityPaths: missingIdentityPaths,
     );
@@ -84,6 +92,7 @@ class SshConfigHost {
   final String alias, binding, host, username;
   final int port;
   final List<String> keyIds;
+  final List<String> identityHints;
   final List<String> missingIdentityPaths;
   final String? error;
 }
@@ -182,6 +191,14 @@ class SshLibrarySnapshot {
         hosts.map((host) => host.alias).toSet().length != hosts.length ||
         hosts.any((host) => host.keyIds.any((id) => !ids.contains(id))))
       throw _invalid();
+    var hintRows = 0, hintBytes = 0;
+    for (final host in hosts) {
+      hintRows += host.identityHints.length;
+      for (final hint in host.identityHints) {
+        hintBytes += _utf8Length(hint)!;
+      }
+      if (hintRows > 4096 || hintBytes > 1024 * 1024) throw _invalid();
+    }
     return SshLibrarySnapshot(
       keys: List.unmodifiable(keys),
       hosts: List.unmodifiable(hosts),

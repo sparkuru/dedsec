@@ -18,6 +18,8 @@ public final class SshConfigResourceAuditTest {
             hook.at("resourceReserve");
             return resourceReserves;
         }
+        @Override public long reserveProfileResourceAudit() throws IOException { return reserveResourceAudit(); }
+        @Override public byte[] profileResourceAudit(long token) throws IOException { return resourceAudit(token); }
         @Override public byte[] resourceAudit(long token) throws IOException {
             resourceGets++;
             hook.at("resourceAudit");
@@ -36,6 +38,32 @@ public final class SshConfigResourceAuditTest {
                 .putInt(resources.length / 6).put(audit);
         for (int value : resources) buffer.putInt(value);
         return buffer.array();
+    }
+
+    @Test public void productResourceHintsRequireExplicitModeVersionKindAndZeroTarget() throws Exception {
+        byte[] nested = auditFrame(catalogFrame(1, 1, 0, 0, 1));
+        for (int[] row : new int[][]{{1,1,1,1,6,0}, {3,1,1,1,6,0}, {1,1,1,1,6,2}}) {
+            ResourceBinding binding = new ResourceBinding();
+            binding.resourceResponse = resourceFrame(nested, row);
+            ByteBuffer.wrap(binding.resourceResponse).putInt(4, 2).putInt(8, 3);
+            try (SshConfigEvaluator evaluator = SshConfigEvaluator.prepareDetachedProfileResourceAudit(() -> { }, binding)) {
+                evaluator.loadDetached(source(), 0, 31_000, null); evaluator.run();
+                rejected(() -> evaluator.resourceAudit(107328, 4096));
+                if (row[0] == 1 && row[5] == 0) {
+                    SshConfigEvaluator.ResourceAudit result = evaluator.profileResourceAudit(107328, 4096);
+                    assertTrue(result.profileIdentities);
+                    assertEquals(SshConfigEvaluator.Resource.IDENTITY_HINT, result.resources.get(0).state);
+                    assertFalse(result.hasDeferred);
+                } else rejected(() -> evaluator.profileResourceAudit(107328, 4096));
+                evaluator.cancel(); rejected(() -> evaluator.profileResourceAudit(107328, 4096));
+            }
+            rejected(() -> decode(binding.resourceResponse, 107328, 4096));
+        }
+        ResourceBinding oldWire = new ResourceBinding();
+        try (SshConfigEvaluator evaluator = SshConfigEvaluator.prepareDetachedProfileResourceAudit(() -> { }, oldWire)) {
+            evaluator.loadDetached(source(), 0, 31_000, null); evaluator.run();
+            rejected(() -> evaluator.profileResourceAudit(107328, 4096));
+        }
     }
 
     static int[] repeatedResources(int parent, int count) {

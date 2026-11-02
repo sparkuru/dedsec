@@ -1,5 +1,77 @@
 # SSH 终端实施计划
 
+## 2026-11-02 人工验收通过
+
+用户明确反馈效果通过、实际remote连接成功。本轮交付体验门通过，原本地／正式安装
+证据保持，未假称agent执行合成平台方法或访问实际账号。用户随后明确“可以提交”，已
+批准Phase3.4的44文件精确清单；父完整AC仍开放，不归档或自动开始下一项。
+
+## 2026-11-02 当前修正：config-first与显式key
+
+用户已批准本轮行为，[合同](../../../design/ssh-config-identity-selection.md)及研究已冻结；
+不再停留于移除目录。原配置／用户key／真实账号不修改；诊断仅保留脱敏结构。
+
+- [x] 产品原生IdentityFile-hint审计／direct类型与旧严格模式隔离；真实native及新wire回归。
+- [x] import／stored validator／引用刷新兼容旧STATIC边；library及两处connector显式key。
+- [x] typed identityHints、config-first列表、单／多key明确选择及生命周期／16张布局回归。
+- [x] 40定向／802全量JVM、86定向／324全量Flutter、native资源／direct／catalog、构建lint／v2及独立PASS。
+- [x] spec／设计与真实证据已同步，正式eed028f0…已保留数据安装同板并启动；父完整AC开放。
+
+证据`/tmp/ctos-ssh-resume-20261102.Mtii8sL0`，独立`review-config-identity.md`最终PASS。
+新合成平台方法仅编译，未安装隔离包／操作真实key或账号；实际导入和人工体验待重试。
+源码19项／native输入36项核对，最终normal／fixture冻结同一4feccdec…库；首次产物差异
+与测试夹具／命令失败均保留。安装UID／dataDir／首次安装保持，专用ADB15047已停。
+
+## 2026-11-02 正式保留数据更新
+
+用户“更新上去”后，已将已审阅e1241897…install-r更新指定开发板并启动；设备hash与
+UID／dataDir／首次安装保持核对通过，旧公开b2dAPK已备份，专用ADB15045成功停止。
+`design/verification.md#20261102-ssh-single-config-formal-install`记录新证据；未操作真实
+库／密钥／账号或SAF，新增范围人工体验及提交仍待反馈，父完整AC开放。
+
+## 2026-11-02 用户要求撤下目录功能
+
+本轮授权为单config读取多个Host及独立私钥导入；不做路径适配。沿原父任务实施，不另建
+任务，不把先前目录测试通过等同人工验收。
+
+- [x] 移除目录页／API／宿主树导入与专用provider／测试，保留单文件路径、库内资料及共享修正。
+- [x] 简化配置导入文案，验证一个config的多个连接项与独立私钥路径，不添加自动适配。
+- [x] analyze／41定向／318全量Flutter、799 JVM／lint／正常及fixture构建／v2、3736及71923原生／8张布局。
+- [x] 独立check最终PASS，已同步需求／设计／spec与真实检查；本轮无设备／真实账号／提交授权，父完整AC开放。
+
+证据 `/tmp/ctos-ssh-resume-20261102.Mtii8sL0`，正式e1241897…、fixture496da199…、
+teste9e04db9…。旧目录临时脚本移出后analyze通过；未将删除前测试或旧设备结果记作本轮
+通过。详情见 `design/verification.md#20261102-ssh-single-config`。
+
+## 2026-11-02 恢复目录增量
+
+已恢复本父任务current；用户询问批量导入内容，已说明支持集合和显式排除范围，未推定
+新增人工验收或提交许可。定向14 Flutter／20 JVM重新执行通过，三个本地产物哈希仍与
+10-30相同。旧/tmp原始证据已不存在，设备／安装／审阅／布局无法重新核对；
+本轮证据和限制见 `design/verification.md#20261102-ssh-directory-resume`。
+R5主机信任恢复仅开展下一步源码研究，不启动未经选择的新增量。
+
+## 2026-10-30 当前接续：direct资料目录批量导入
+
+已验收密钥增量commit360cca2，日志e0f866f；用户要求继续原父任务。按
+`design/ssh-directory-import.md`和`research/next-increment-20261030.md`实施R7下一切片。
+
+- [x] 有界SAF树快照、原Context／期限／取消、实际类型及逐密钥解锁、明确排除阻断项。
+- [x] 整套候选／严格native闭包、替换／真正unchanged、一次bundle提交与回执。
+- [x] typed预览与文件选择／解锁／冲突确认、保护窗和布局回归。
+- [x] 819 JVM／331 Flutter、实际native／合成provider／两次连接验证和事实记录。
+- [x] 最终源码／产物／原始证据及布局独立审阅，review-final.json PASS，无未决发现。
+- [x] 用户回复允许后保留数据更新指定板正式b2d91de2…并启动，核对hash及包身份保持。
+- [ ] 新增目录页面人工体验；安装许可不等于提交许可。
+
+证据 `/tmp/ctos-ssh-directory-20261030.bmVGMsZS`，正常b2d91de2…／fixture5b7dfa17…／
+testf5903623…。指定板方法31.649秒OK1，正式fc98和UID10131／包元数据保持，隔离资源
+及专用ADB15041／15491已清。28张实际字体布局通过；详情和未验证项见
+`design/verification.md#20261030-ssh-directory-import`。随后已正式安装并启动，证据为
+`design/verification.md#20261030-ssh-directory-formal-install`。本增量未提交，父完整AC开放。
+
+不放宽120秒BundleContext；不导入来源主机信任／证书，不读取真实账号或改外部原件。
+
 ## 2026-10-30 用户验收通过，授权提交并继续
 
 用户“功能通过；可以提交并继续”，当前正式fc98密钥管理／删除／视觉修正人工门通过。

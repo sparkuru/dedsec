@@ -1,5 +1,11 @@
 # Managed SSH private-key deletion
 
+2026-11-02: [config-first explicit identity selection](ssh-config-identity-selection.md) supersedes
+the path-missing import/host-disable rules below for user CONFIG. Deleted selected IDs always
+fail; retained profiles remain listable and may use another current key only after a fresh
+explicit user selection. No fallback or source rewrite. Keep exact deletion and old STATIC-edge
+compatibility; generated manual/legacy and generic audit contracts remain strict.
+
 ## 1. Scope / Trigger
 
 Extend the existing single model and guarded bundle lifecycle per

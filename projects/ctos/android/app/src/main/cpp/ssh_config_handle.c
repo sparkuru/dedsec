@@ -190,6 +190,12 @@ int ctos_ssh_config_handle_reserve_detached(int catalog_mode, ctos_ssh_config_to
 int ctos_ssh_config_handle_reserve_direct(ctos_ssh_config_token *out) {
     return reserve_mode(CTOS_CONFIG_EFFECTIVE, 1, out);
 }
+int ctos_ssh_config_handle_reserve_profile_direct(ctos_ssh_config_token *out) {
+    return reserve_mode(CTOS_CONFIG_EFFECTIVE, 2, out);
+}
+int ctos_ssh_config_handle_reserve_profile_resource_audit(ctos_ssh_config_token *out) {
+    return reserve_mode(CTOS_CONFIG_PROFILE_RESOURCE_AUDIT, 0, out);
+}
 int ctos_ssh_config_handle_reserve_audit(ctos_ssh_config_token *out) {
     return reserve_mode(CTOS_CONFIG_AUDIT, 0, out);
 }
@@ -212,7 +218,9 @@ int ctos_ssh_config_handle_load_detached(ctos_ssh_config_token token, size_t len
         (s->mode != CTOS_CONFIG_EFFECTIVE && request_present) ||
         (s->mode == CTOS_CONFIG_EFFECTIVE && (!request_present || request_length == 0)) ||
         request_length > sizeof(request_wire)) goto done;
-    int prepared = s->direct_mode ? ctos_ssh_config_eval_prepare_direct_detached(deadline, &e) :
+    int prepared = s->direct_mode == 2 ? ctos_ssh_config_eval_prepare_profile_direct_detached(deadline, &e) :
+        s->mode == CTOS_CONFIG_PROFILE_RESOURCE_AUDIT ? ctos_ssh_config_eval_prepare_profile_resource_audit_detached(deadline, &e) :
+        s->direct_mode == 1 ? ctos_ssh_config_eval_prepare_direct_detached(deadline, &e) :
         s->mode == CTOS_CONFIG_RESOURCE_AUDIT ? ctos_ssh_config_eval_prepare_resource_audit_detached(deadline, &e) :
         s->mode == CTOS_CONFIG_AUDIT ? ctos_ssh_config_eval_prepare_audit_detached(deadline, &e) :
         ctos_ssh_config_eval_prepare_detached(s->mode == CTOS_CONFIG_CATALOG, deadline, &e);
@@ -311,7 +319,7 @@ int ctos_ssh_config_handle_summary_live(ctos_ssh_config_token token) {
     return ret == 0 ? 0 : bad(failure);
 }
 static int read_direct_plan(struct config_slot *s, const struct ctos_ssh_config_direct_plan **plan) {
-    if (!s->direct_mode || s->closed) return bad(EINVAL);
+    if (s->direct_mode != 1 || s->closed) return bad(EINVAL);
     if (!s->loaded || s->eval == NULL) return bad(s->open_errno ? s->open_errno : EAGAIN);
     return ctos_ssh_config_eval_direct_plan(s->eval, plan);
 }
@@ -345,6 +353,44 @@ int ctos_ssh_config_handle_direct_plan_live(ctos_ssh_config_token token) {
     if (s == NULL) return -1;
     const struct ctos_ssh_config_direct_plan *plan = NULL;
     int ret = read_direct_plan(s, &plan), failure = errno;
+    unpin(s);
+    return ret == 0 ? 0 : bad(failure);
+}
+static int read_profile_direct_plan(struct config_slot *s, const struct ctos_ssh_config_direct_plan **plan) {
+    if (s->direct_mode != 2 || s->closed) return bad(EINVAL);
+    if (!s->loaded || s->eval == NULL) return bad(s->open_errno ? s->open_errno : EAGAIN);
+    return ctos_ssh_config_eval_profile_direct_plan(s->eval, plan);
+}
+int ctos_ssh_config_handle_profile_direct_plan(ctos_ssh_config_token token,
+    unsigned char out[CTOS_SSH_CONFIG_DIRECT_BYTES], size_t *length) {
+    if (out == NULL || length == NULL) return bad(EINVAL);
+    *length = 0; wipe(out, CTOS_SSH_CONFIG_DIRECT_BYTES);
+    struct config_slot *s = pin(token);
+    if (s == NULL) return -1;
+    const struct ctos_ssh_config_direct_plan *plan = NULL;
+    int ret = read_profile_direct_plan(s, &plan), failure = errno;
+    if (ret == 0) {
+        unsigned char *p = out;
+        put_u32(&p, 0x43535050U); put_u32(&p, 1);
+        uint32_t values[] = {plan->summary.port, plan->identities_only, plan->pubkey_authentication,
+            plan->password_authentication, plan->connect_timeout_millis, (uint32_t)plan->summary.request_tty,
+            plan->strict_host_key_checking, plan->summary.user_required, plan->identity_hint_count, plan->hostfile_count};
+        for (unsigned int i = 0; i < sizeof(values) / sizeof(values[0]); i++) put_u32(&p, values[i]);
+        put_text(&p, plan->summary.alias); put_text(&p, plan->summary.hostname); put_text(&p, plan->summary.user);
+        for (unsigned int i = 0; i < plan->identity_hint_count; i++) put_text(&p, plan->identity_hints[i]);
+        for (unsigned int i = 0; i < plan->hostfile_count; i++) put_text(&p, plan->user_hostfiles[i]);
+        *length = (size_t)(p - out);
+        ret = read_profile_direct_plan(s, &plan); failure = errno;
+    }
+    unpin(s);
+    if (ret != 0) { wipe(out, CTOS_SSH_CONFIG_DIRECT_BYTES); *length = 0; return bad(failure); }
+    return 0;
+}
+int ctos_ssh_config_handle_profile_direct_plan_live(ctos_ssh_config_token token) {
+    struct config_slot *s = pin(token);
+    if (s == NULL) return -1;
+    const struct ctos_ssh_config_direct_plan *plan = NULL;
+    int ret = read_profile_direct_plan(s, &plan), failure = errno;
     unpin(s);
     return ret == 0 ? 0 : bad(failure);
 }
@@ -470,6 +516,45 @@ int ctos_ssh_config_handle_resource_audit_live(ctos_ssh_config_token token) {
     if (s == NULL) return -1;
     const struct ctos_ssh_config_resource_audit *audit = NULL;
     int ret = read_resource_audit(s, &audit), failure = errno;
+    unpin(s); return ret == 0 ? 0 : bad(failure);
+}
+static int read_profile_resource_audit(struct config_slot *s, const struct ctos_ssh_config_resource_audit **audit) {
+    if (s->closed) return bad(EALREADY);
+    if (s->mode != CTOS_CONFIG_PROFILE_RESOURCE_AUDIT) return bad(EINVAL);
+    if (!s->loaded || s->eval == NULL) return bad(s->open_errno ? s->open_errno : EAGAIN);
+    return ctos_ssh_config_eval_profile_resource_audit(s->eval, audit);
+}
+int ctos_ssh_config_handle_profile_resource_audit(ctos_ssh_config_token token,
+    unsigned char out[CTOS_SSH_CONFIG_RESOURCE_BYTES], size_t *length) {
+    if (out == NULL || length == NULL) return bad(EINVAL);
+    *length = 0; wipe(out, CTOS_SSH_CONFIG_RESOURCE_BYTES);
+    struct config_slot *s = pin(token);
+    if (s == NULL) return -1;
+    const struct ctos_ssh_config_resource_audit *audit = NULL;
+    int ret = read_profile_resource_audit(s, &audit), failure = errno;
+    if (ret == 0) {
+        size_t audit_length = write_audit(out + 20, audit->audit);
+        unsigned char *p = out;
+        put_u32(&p, 0x43534352U); put_u32(&p, 2); put_u32(&p, 3);
+        put_u32(&p, (uint32_t)audit_length); put_u32(&p, audit->resource_count);
+        p = out + 20 + audit_length;
+        for (unsigned int i = 0; i < audit->resource_count; i++) {
+            const struct ctos_ssh_config_resource *r = &audit->resources[i];
+            put_u32(&p, r->kind); put_u32(&p, r->parent); put_u32(&p, r->line);
+            put_u32(&p, r->argument); put_u32(&p, r->state); put_u32(&p, r->target);
+        }
+        *length = (size_t)(p - out);
+        ret = read_profile_resource_audit(s, &audit); failure = errno;
+    }
+    unpin(s);
+    if (ret != 0) { wipe(out, CTOS_SSH_CONFIG_RESOURCE_BYTES); *length = 0; return bad(failure); }
+    return 0;
+}
+int ctos_ssh_config_handle_profile_resource_audit_live(ctos_ssh_config_token token) {
+    struct config_slot *s = pin(token);
+    if (s == NULL) return -1;
+    const struct ctos_ssh_config_resource_audit *audit = NULL;
+    int ret = read_profile_resource_audit(s, &audit), failure = errno;
     unpin(s); return ret == 0 ? 0 : bad(failure);
 }
 int ctos_ssh_config_handle_usage(ctos_ssh_config_token token, uint32_t out[3]) {

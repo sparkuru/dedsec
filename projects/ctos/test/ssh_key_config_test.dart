@@ -178,6 +178,61 @@ void main() {
     },
   );
 
+  test('identity hints are bounded public text rather than managed paths', () {
+    final parsed = SshConfigHost.parse({
+      ..._host(),
+      'identityHints': [
+        '/home/source/.ssh/id_rsa',
+        'keys/other',
+        r'C:\Users\source\.ssh\id_rsa',
+        r'${HOME}/.ssh/%h',
+      ],
+    });
+    expect(parsed.identityHints, hasLength(4));
+    expect(parsed.identityHints.first, '/home/source/.ssh/id_rsa');
+    expect(() => parsed.identityHints.add('another'), throwsUnsupportedError);
+    expect(
+      SshConfigHost.parse({..._host()}..remove('identityHints')).identityHints,
+      isEmpty,
+    );
+    for (final hints in <Object?>[
+      'path',
+      [1],
+      [''],
+      ['bad\npath'],
+      ['bad\u0085path'],
+      [List.filled(513, 'a').join()],
+      [List.filled(171, '密').join()],
+      List.filled(257, 'key'),
+    ]) {
+      expect(
+        () => SshConfigHost.parse({..._host(), 'identityHints': hints}),
+        throwsFormatException,
+      );
+    }
+    expect(sshManagedPathError(parsed.identityHints.first), isNotNull);
+  });
+
+  test('library rejects aggregate hint row and byte exhaustion', () {
+    for (final (count, hint) in [
+      (17, 'key'),
+      (9, List.filled(512, 'a').join()),
+    ]) {
+      final hosts = List.generate(
+        count,
+        (index) => {
+          ..._host(),
+          'alias': 'host_$index',
+          'identityHints': List.filled(256, hint),
+        },
+      );
+      expect(
+        () => SshLibrarySnapshot.parse({..._library(), 'hosts': hosts}),
+        throwsFormatException,
+      );
+    }
+  });
+
   testWidgets(
     'deletion reviews exact impact and commits only its opaque ticket',
     (tester) async {
@@ -199,12 +254,7 @@ void main() {
       ui.libraryValue = {
         'keys': <Object>[],
         'hosts': [
-          {
-            ..._host(),
-            'keyIds': <String>[],
-            'error': 'SSH_KEY_MISSING',
-            'missingIdentityPaths': ['.ssh/id_ed25519'],
-          },
+          {..._host(), 'keyIds': <String>[]},
         ],
         'hasConfig': true,
       };
@@ -226,8 +276,8 @@ void main() {
       final row = tester.widget<ListTile>(
         find.byKey(const Key('ssh-config-host-demo')),
       );
-      expect(row.enabled, isFalse);
-      expect(row.onTap, isNull);
+      expect(row.enabled, isTrue);
+      expect(row.onTap, isNotNull);
       final hintColor = (row.subtitle! as Text).style?.color;
       expect(hintColor, isNotNull);
       final surfaceColor = Theme.of(
@@ -238,12 +288,15 @@ void main() {
             (surfaceColor.computeLuminance() + 0.05),
         greaterThanOrEqualTo(4.5),
         reason:
-            'Missing-key recovery text must stay readable on a disabled row',
+            'The retained connection target must stay readable without a key',
       );
       expect(
-        find.textContaining('缺少配置引用的私钥：\n.ssh/id_ed25519'),
+        find.textContaining('configured@config.invalid:2223'),
         findsOneWidget,
       );
+      await ui.tap('ssh-config-host-demo');
+      expect(find.text('尚未导入可用私钥。请先返回导入私钥，再选择此连接。'), findsOneWidget);
+      await ui.tap('ssh-config-key-cancel');
       await ui.tap('ssh-library-cancel');
       expect(ui.releases, hasLength(1));
       await ui.remove();
@@ -406,34 +459,177 @@ void main() {
   );
 
   testWidgets(
-    'a missing identity disables its config even when another key is present',
+    'a desktop identity hint permits an explicitly chosen different imported key',
     (tester) async {
       final ui = _Ui(tester)
         ..libraryValue = {
-          ..._library(),
+          'keys': [_key(), _otherKey()],
           'hosts': [
             {
               ..._host(),
-              'error': 'SSH_KEY_MISSING',
-              'missingIdentityPaths': ['.ssh/id_missing'],
+              'keyIds': ['key_a', 'key_b'],
             },
           ],
+          'hasConfig': true,
         };
       await ui.open(manual: true);
       await ui.tap('ssh-manage-identities');
-      await ui.reveal('ssh-config-host-demo');
-      final row = tester.widget<ListTile>(
-        find.byKey(const Key('ssh-config-host-demo')),
-      );
-      expect(row.enabled, isFalse);
-      expect(row.onTap, isNull);
-      expect(find.textContaining('.ssh/id_missing'), findsOneWidget);
-      await tester.tap(find.byKey(const Key('ssh-config-host-demo')));
+      await ui.tap('ssh-config-host-demo');
+      expect(find.byKey(const Key('ssh-config-key-choice')), findsOneWidget);
+      expect(find.text('/home/source/.ssh/id_rsa'), findsOneWidget);
+      expect(ui.arguments('ssh.configConnect'), isEmpty);
+      await ui.tap('ssh-config-key-key_b');
+      expect(ui.field('ssh-host').text, 'config.invalid');
+      await ui.tap('ssh-connect');
+      final request = ui.arguments('ssh.configConnect').single;
+      expect(request['keyId'], 'key_b');
+      expect(request['alias'], 'demo');
+      expect(request['binding'], List.filled(64, 'b').join());
+      expect(request.containsKey('identityHints'), isFalse);
+      expect(request.containsKey('path'), isFalse);
+      expect(ui.arguments('ssh.passwordConnect'), isEmpty);
+      ui.connect!.completeError(PlatformException(code: 'SSH_AUTHENTICATION'));
       await ui.pump();
+      await ui.remove();
+    },
+  );
+
+  testWidgets('config import retains host entries before importing any key', (
+    tester,
+  ) async {
+    final ui = _Ui(tester)
+      ..libraryValue = {
+        'keys': <Object>[],
+        'hosts': <Object>[],
+        'hasConfig': false,
+      }
+      ..previewValue = _preview(config: true);
+    await ui.open();
+    await ui.tap('ssh-import-config');
+    await ui.tap('ssh-import-choose-file');
+    ui.libraryValue = {
+      'keys': <Object>[],
+      'hosts': [
+        {..._host(), 'keyIds': <String>[]},
+      ],
+      'hasConfig': true,
+    };
+    await ui.tap('ssh-import-confirm');
+    await ui.tap('ssh-import-acknowledge');
+    expect(ui.arguments('ssh.importCommit'), hasLength(1));
+    await ui.tap('ssh-config-host-demo');
+    expect(find.text('尚未导入可用私钥。请先返回导入私钥，再选择此连接。'), findsOneWidget);
+    expect(find.text('/home/source/.ssh/id_rsa'), findsOneWidget);
+    expect(find.byKey(const Key('ssh-config-key-key_a')), findsNothing);
+    await ui.tap('ssh-config-key-cancel');
+    expect(find.byKey(const Key('ssh-config-host-demo')), findsOneWidget);
+    expect(ui.arguments('ssh.configConnect'), isEmpty);
+    expect(ui.arguments('ssh.passwordConnect'), isEmpty);
+    await ui.remove();
+  });
+
+  testWidgets(
+    'a sole imported key still requires an explicit choice or cancel',
+    (tester) async {
+      final ui = _Ui(tester);
+      await ui.open(manual: true);
+      await ui.tap('ssh-manage-identities');
+      await ui.tap('ssh-config-host-demo');
+      expect(find.byKey(const Key('ssh-config-key-key_a')), findsOneWidget);
       expect(find.byType(SshLibraryPage), findsOneWidget);
       expect(ui.arguments('ssh.configConnect'), isEmpty);
+      await ui.tap('ssh-config-key-cancel');
+      expect(find.byType(SshLibraryPage), findsOneWidget);
+      expect(ui.arguments('ssh.configConnect'), isEmpty);
+      await ui.tap('ssh-config-host-demo');
+      await tester.binding.handlePopRoute();
+      await ui.pump();
+      expect(find.byKey(const Key('ssh-config-key-choice')), findsNothing);
+      expect(find.byType(SshLibraryPage), findsOneWidget);
+      expect(ui.arguments('ssh.configConnect'), isEmpty);
+      await ui.tap('ssh-config-host-demo');
+      await ui.tap('ssh-config-key-key_a');
+      expect(find.byType(SshLibraryPage), findsNothing);
+      expect(ui.field('ssh-host').text, 'config.invalid');
+      await ui.remove();
+    },
+  );
+
+  testWidgets('stale config or background cannot deliver an old key choice', (
+    tester,
+  ) async {
+    for (final background in [false, true]) {
+      final ui = _Ui(tester);
+      await ui.open(manual: true);
+      await ui.tap('ssh-manage-identities');
+      await ui.tap('ssh-config-host-demo');
+      final choose = tester
+          .widget<OutlinedButton>(find.byKey(const Key('ssh-config-key-key_a')))
+          .onPressed!;
+      if (background) {
+        tester.binding.handleAppLifecycleStateChanged(
+          AppLifecycleState.inactive,
+        );
+      } else {
+        final read = ui.arguments('ssh.library').last['requestId'];
+        await ui.messenger.handlePlatformMessage(
+          'ctos/ssh',
+          const StandardMethodCodec().encodeSuccessEnvelope({
+            'type': 'state',
+            'requestId': read,
+            'state': 'cancelled',
+            'reason': 'VAULT_CHANGED',
+          }),
+          (_) {},
+        );
+      }
+      await ui.pump();
+      if (background) {
+        _resume(tester);
+        await ui.pump();
+      }
+      choose();
+      await ui.pump();
+      expect(find.byKey(const Key('ssh-config-key-choice')), findsNothing);
+      expect(find.byType(SshLibraryPage), findsOneWidget);
+      expect(ui.arguments('ssh.configConnect'), isEmpty);
+      expect(ui.arguments('ssh.keyConnect'), isEmpty);
       expect(ui.arguments('ssh.passwordConnect'), isEmpty);
       await ui.remove();
+    }
+  });
+
+  testWidgets(
+    'key choice hint and cancel stay reachable with large text and keyboard',
+    (tester) async {
+      for (final size in [const Size(320, 568), const Size(568, 320)]) {
+        await tester.binding.setSurfaceSize(size);
+        final ui = _Ui(tester)
+          ..libraryValue = {
+            'keys': [_key(), _otherKey()],
+            'hosts': [
+              {
+                ..._host(),
+                'keyIds': ['key_a', 'key_b'],
+              },
+            ],
+            'hasConfig': true,
+          };
+        await ui.open(scale: 2, keyboard: size.height > 400 ? 180 : 0);
+        await ui.tap('ssh-config-host-demo');
+        expect(find.text('/home/source/.ssh/id_rsa'), findsOneWidget);
+        await ui.reveal('ssh-config-key-key_b');
+        final target = tester.getRect(
+          find.byKey(const Key('ssh-config-key-key_b')),
+        );
+        expect(target.height, greaterThanOrEqualTo(48));
+        expect(target.left, greaterThanOrEqualTo(0));
+        expect(target.right, lessThanOrEqualTo(size.width));
+        await ui.tap('ssh-config-key-cancel');
+        expect(tester.takeException(), isNull);
+        await ui.remove();
+      }
+      await tester.binding.setSurfaceSize(null);
     },
   );
 
@@ -766,6 +962,7 @@ void main() {
       await ui.open(manual: true);
       await ui.tap('ssh-manage-identities');
       await ui.tap('ssh-config-host-demo');
+      await ui.tap('ssh-config-key-key_a');
       expect(
         tester
             .widget<CheckboxListTile>(
@@ -886,12 +1083,87 @@ void main() {
   );
 
   testWidgets(
+    'one config import exposes multiple independently selectable host connections',
+    (tester) async {
+      final hosts = <String, Map<String, Object>>{
+        'demo': {
+          ..._host(),
+          'keyIds': ['key_a', 'key_b'],
+        },
+        'backup': {
+          ..._host(),
+          'alias': 'backup',
+          'binding': List.filled(64, 'c').join(),
+          'host': 'backup.invalid',
+          'port': 2204,
+          'username': 'backup-user',
+          'keyIds': ['key_a', 'key_b'],
+          'identityHints': ['/home/source/.ssh/other-key/ft'],
+        },
+      };
+      for (final selected in hosts.keys) {
+        final ui = _Ui(tester)
+          ..libraryValue = {
+            'keys': [_key(), _otherKey()],
+            'hosts': <Object>[],
+            'hasConfig': false,
+          }
+          ..previewValue = _preview(config: true);
+        await ui.open(manual: true);
+        await ui.tap('ssh-manage-identities');
+        await ui.tap('ssh-import-config');
+        expect(find.textContaining('一个 config 可包含多个 Host 连接项'), findsOneWidget);
+        expect(ui.field('ssh-import-path').text, '.ssh/config');
+        await ui.tap('ssh-import-choose-file');
+        final imported = ui.arguments('ssh.importFile').single;
+        expect(imported, {
+          'requestId': imported['requestId'],
+          'kind': 'config',
+          'path': '.ssh/config',
+        });
+        ui.libraryValue = {
+          'keys': [_key(), _otherKey()],
+          'hosts': hosts.values.toList(),
+          'hasConfig': true,
+        };
+        await ui.tap('ssh-import-confirm');
+        expect(ui.arguments('ssh.importCommit'), hasLength(1));
+        await ui.tap('ssh-import-acknowledge');
+        for (final alias in hosts.keys) {
+          await ui.reveal('ssh-config-host-$alias');
+        }
+        await ui.tap('ssh-config-host-$selected');
+        await ui.tap(
+          'ssh-config-key-${selected == 'demo' ? 'key_a' : 'key_b'}',
+        );
+        final expected = hosts[selected]!;
+        expect(ui.field('ssh-host').text, expected['host']);
+        expect(ui.field('ssh-port').text, '${expected['port']}');
+        expect(ui.field('ssh-username').text, expected['username']);
+        await ui.tap('ssh-connect');
+        final connected = ui.arguments('ssh.configConnect').single;
+        expect(connected['alias'], selected);
+        expect(connected['keyId'], selected == 'demo' ? 'key_a' : 'key_b');
+        expect(connected['binding'], expected['binding']);
+        expect(connected.containsKey('host'), isFalse);
+        expect(ui.arguments('ssh.passwordConnect'), isEmpty);
+        ui.connect!.completeError(
+          PlatformException(code: 'SSH_AUTHENTICATION'),
+        );
+        await ui.pump();
+        await ui.remove();
+      }
+    },
+  );
+
+  testWidgets(
     'config alias uses evaluated target and config RPC without a frontend target override',
     (tester) async {
       final ui = _Ui(tester);
       await ui.open(manual: true);
       await ui.tap('ssh-manage-identities');
       await ui.tap('ssh-config-host-demo');
+      await ui.tap('ssh-config-key-key_a');
       expect(ui.field('ssh-host').text, 'config.invalid');
       expect(ui.field('ssh-port').text, '2223');
       expect(ui.field('ssh-username').text, 'configured');
@@ -938,6 +1210,7 @@ void main() {
       await ui.open(manual: true);
       await ui.tap('ssh-manage-identities');
       await ui.tap('ssh-config-host-demo');
+      await ui.tap('ssh-config-key-key_a');
       ui.libraryValue = {
         ..._library(),
         'hosts': [
@@ -1227,6 +1500,13 @@ Map<String, Object> _key() => {
   'algorithm': 'ssh-ed25519',
   'fingerprint': _fingerprint,
 };
+Map<String, Object> _otherKey() => {
+  ..._key(),
+  'id': 'key_b',
+  'label': 'phone-key',
+  'path': '.ssh/phone-key',
+  'fingerprint': 'SHA256:${List.filled(42, 'B').join()}A',
+};
 Map<String, Object> _host() => {
   'alias': 'demo',
   'binding': List.filled(64, 'b').join(),
@@ -1234,6 +1514,7 @@ Map<String, Object> _host() => {
   'port': 2223,
   'username': 'configured',
   'keyIds': ['key_a'],
+  'identityHints': ['/home/source/.ssh/id_rsa'],
 };
 Map<String, Object> _library() => {
   'keys': [_key()],

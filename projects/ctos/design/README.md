@@ -1,5 +1,30 @@
 # ctOS 信息入口
 
+2026-11-02 当前修正：实际config导入被电脑IdentityFile路径阻断，用户已批准
+[先导入连接项、连接时显式选择私钥](ssh-config-identity-selection.md)。保留原路径提示和
+CONFIG正文，不做迁移／猜测。324 Flutter／802 JVM、原生回归／16张布局／构建lint／
+三APK审计与独立复核通过；正式eed028f0…已保留数据更新开发板并启动。用户随后确认
+效果通过并成功连接实际remote，[人工验收](verification.md#20261102-ssh-config-identity-human-acceptance)已记录。
+[诊断、检查和安装](verification.md#20261102-ssh-config-identity-selection)。
+
+2026-11-02 用户澄清：“批量”是一个config读取多个Host；取消整目录导入和路径适配。
+当前沿原1008收敛为[单配置与独立私钥导入](ssh-key-config-connect.md)，已有配置编辑／
+粘贴保留；[目录方案](ssh-directory-import.md)转为历史。移除已完成，318 Flutter／799 JVM、
+原生配置及多Host枚举／8张布局／构建lint／v2通过；用户要求更新后，新版e1241897…已保留
+数据安装开发板并启动，待体验。[安装核对](verification.md#20261102-ssh-single-config-formal-install)。详情见
+[本轮记录](verification.md#20261102-ssh-single-config)。
+
+2026-11-02 接续：已恢复原1008父任务，目录导入定向14 Flutter／20 JVM重新执行通过，
+三个本地产物哈希仍匹配10-30交付；旧临时原始证据已不存在，历史设备结果未重验。
+[本轮检查与限制](verification.md#20261102-ssh-directory-resume)。目录增量人工体验及提交仍待反馈。
+
+2026-10-30 接续：[SSH目录批量导入](ssh-directory-import.md)已实现受支持资料的相对结构
+快照、逐项选择／私钥解锁、整批审阅与一次原子提交。819 JVM／331 Flutter、构建lint／
+APK审计、28张实际字体布局及指定板隔离31.649秒通过；两次真实SSH登录，临时资源已清。
+随后用户回复“允许”，正式b2d91de2…已保留数据更新同板并启动，待人工体验；
+[安装记录](verification.md#20261030-ssh-directory-formal-install)及
+[验证范围](verification.md#20261030-ssh-directory-import)。前序密钥交付已提交360cca2／e0f866f。
+
 2026-10-30 人工验收：用户反馈“功能通过；可以提交并继续”，当前正式fc98的加密私钥／
 口令管理／删除及卡片调整验收通过并授权提交。[验收范围](verification.md#20261030-ssh-keys-human-acceptance)。
 1008父任务保持进行中，提交后继续原规划下一项。

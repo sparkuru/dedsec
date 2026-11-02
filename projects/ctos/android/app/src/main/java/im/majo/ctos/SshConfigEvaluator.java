@@ -41,12 +41,16 @@ final class SshConfigEvaluator implements AutoCloseable {
         default long openCatalog(long view) throws IOException { throw unavailable(); }
         default byte[] catalog(long handle) throws IOException { throw unavailable(); }
         default long reserveResourceAudit() throws IOException { throw unavailable(); }
+        default long reserveProfileResourceAudit() throws IOException { throw unavailable(); }
         default byte[] resourceAudit(long handle) throws IOException { throw unavailable(); }
+        default byte[] profileResourceAudit(long handle) throws IOException { throw unavailable(); }
         default long reserveAudit() throws IOException { throw unavailable(); }
         default byte[] audit(long handle) throws IOException { throw unavailable(); }
         default long reserveDetached(boolean catalogMode) throws IOException { throw unavailable(); }
         default long reserveDirect() throws IOException { throw unavailable(); }
+        default long reserveProfileDirect() throws IOException { throw unavailable(); }
         default byte[] directPlan(long handle) throws IOException { throw unavailable(); }
+        default byte[] profileDirectPlan(long handle) throws IOException { throw unavailable(); }
         default void loadDetached(long handle, byte[] source, int root, long deadline,
                 byte[] request) throws IOException { throw unavailable(); }
         default int[] usage(long handle) throws IOException { throw unavailable(); }
@@ -63,12 +67,16 @@ final class SshConfigEvaluator implements AutoCloseable {
         static native long openCatalog(long view) throws IOException;
         static native byte[] catalog(long handle) throws IOException;
         static native long reserveResourceAudit() throws IOException;
+        static native long reserveProfileResourceAudit() throws IOException;
         static native byte[] resourceAudit(long handle) throws IOException;
+        static native byte[] profileResourceAudit(long handle) throws IOException;
         static native long reserveAudit() throws IOException;
         static native byte[] audit(long handle) throws IOException;
         static native long reserveDetached(boolean catalogMode) throws IOException;
         static native long reserveDirect() throws IOException;
+        static native long reserveProfileDirect() throws IOException;
         static native byte[] directPlan(long handle) throws IOException;
+        static native byte[] profileDirectPlan(long handle) throws IOException;
         static native void loadDetached(long handle, byte[] source, int root, long deadline,
                 byte[] request) throws IOException;
         static native int[] usage(long handle) throws IOException;
@@ -86,14 +94,18 @@ final class SshConfigEvaluator implements AutoCloseable {
         @Override public long openCatalog(long view) throws IOException { return Native.openCatalog(view); }
         @Override public byte[] catalog(long handle) throws IOException { return Native.catalog(handle); }
         @Override public long reserveResourceAudit() throws IOException { return Native.reserveResourceAudit(); }
+        @Override public long reserveProfileResourceAudit() throws IOException { return Native.reserveProfileResourceAudit(); }
         @Override public byte[] resourceAudit(long handle) throws IOException { return Native.resourceAudit(handle); }
+        @Override public byte[] profileResourceAudit(long handle) throws IOException { return Native.profileResourceAudit(handle); }
         @Override public long reserveAudit() throws IOException { return Native.reserveAudit(); }
         @Override public byte[] audit(long handle) throws IOException { return Native.audit(handle); }
         @Override public long reserveDetached(boolean catalogMode) throws IOException {
             return Native.reserveDetached(catalogMode);
         }
         @Override public long reserveDirect() throws IOException { return Native.reserveDirect(); }
+        @Override public long reserveProfileDirect() throws IOException { return Native.reserveProfileDirect(); }
         @Override public byte[] directPlan(long handle) throws IOException { return Native.directPlan(handle); }
+        @Override public byte[] profileDirectPlan(long handle) throws IOException { return Native.profileDirectPlan(handle); }
         @Override public void loadDetached(long handle, byte[] source, int root, long deadline,
                 byte[] request) throws IOException {
             Native.loadDetached(handle, source, root, deadline, request);
@@ -214,15 +226,16 @@ final class SshConfigEvaluator implements AutoCloseable {
     }
 
     /** Actual supported direct-connection options; the caller still binds a current vault/role. */
-    static final class DirectPlan {
+    static class DirectPlan {
         final String alias, hostname, user;
         final int port, connectTimeoutMillis, requestTty, strictHostKeyChecking;
         final boolean identitiesOnly, pubkeyAuthentication, passwordAuthentication, userRequired;
-        final List<String> identityFiles, userKnownHostsFiles;
-        private DirectPlan(byte[] wire) throws IOException {
+        final List<String> identityFiles, userKnownHostsFiles, identityHints;
+        private DirectPlan(byte[] wire) throws IOException { this(wire, false); }
+        private DirectPlan(byte[] wire, boolean profile) throws IOException {
             if (wire == null || wire.length < 60 || wire.length > MAX_DIRECT_PLAN_BYTES) throw invalid();
             ByteBuffer buffer = ByteBuffer.wrap(wire);
-            if (buffer.getInt() != 0x43534350 || buffer.getInt() != 1) throw invalid();
+            if (buffer.getInt() != (profile ? 0x43535050 : 0x43534350) || buffer.getInt() != 1) throw invalid();
             port = buffer.getInt();
             identitiesOnly = flag(buffer.getInt());
             pubkeyAuthentication = flag(buffer.getInt());
@@ -241,14 +254,22 @@ final class SshConfigEvaluator implements AutoCloseable {
             List<String> keys = new ArrayList<>(identities), known = new ArrayList<>(hosts);
             for (int i = 0; i < identities + hosts; i++) {
                 String path = readText(buffer, false, 512);
-                try { VaultManifest.path(path); }
-                catch (VaultException error) { throw invalid(); }
+                if (!profile || i >= identities) {
+                    try { VaultManifest.path(path); }
+                    catch (VaultException error) { throw invalid(); }
+                }
                 (i < identities ? keys : known).add(path);
             }
             if (buffer.hasRemaining()) throw invalid();
-            identityFiles = Collections.unmodifiableList(keys);
+            identityFiles = profile ? Collections.emptyList() : Collections.unmodifiableList(keys);
+            identityHints = profile ? Collections.unmodifiableList(keys) : Collections.emptyList();
             userKnownHostsFiles = Collections.unmodifiableList(known);
         }
+    }
+
+    /** Product-only identity hints are not managed file paths or read capabilities. */
+    static final class ProfilePlan extends DirectPlan {
+        private ProfilePlan(byte[] wire) throws IOException { super(wire, true); }
     }
 
     static final class Site {
@@ -385,10 +406,10 @@ final class SshConfigEvaluator implements AutoCloseable {
     /** One explicit resource declaration; unresolved values never carry an invented target. */
     static final class Resource {
         static final int STATIC = 1, DEFERRED_CONTEXT = 2, DEFERRED_CWD = 3,
-                DISABLED = 4, DEFERRED_KEY_RESOLUTION = 5;
+                DISABLED = 4, DEFERRED_KEY_RESOLUTION = 5, IDENTITY_HINT = 6;
         final int kind, parent, line, argument, state, target;
 
-        private Resource(ByteBuffer buffer) throws IOException {
+        private Resource(ByteBuffer buffer, boolean profile) throws IOException {
             kind = buffer.getInt();
             parent = buffer.getInt();
             line = buffer.getInt();
@@ -399,7 +420,8 @@ final class SshConfigEvaluator implements AutoCloseable {
                     || line > MAX_LINES || argument < 1 || argument > 256
                     || ((kind == 1 || kind == 2) && argument != 1)
                     || ((kind == 3 || kind == 4) && argument > 32)
-                    || state < STATIC || state > DEFERRED_KEY_RESOLUTION
+                    || state < STATIC || state > (profile ? IDENTITY_HINT : DEFERRED_KEY_RESOLUTION)
+                    || (state == IDENTITY_HINT && kind != 1)
                     || (kind == 4 && state == DEFERRED_CONTEXT)
                     || (state == DISABLED && (kind == 2 || argument != 1))
                     || (state == DEFERRED_KEY_RESOLUTION && kind != 1 && kind != 2)
@@ -424,13 +446,17 @@ final class SshConfigEvaluator implements AutoCloseable {
         final Audit audit;
         final List<Resource> resources;
         final int encodedBytes;
-        final boolean hasDeferred;
+        final boolean hasDeferred, profileIdentities;
 
         private ResourceAudit(byte[] wire, int maxBytes, int maxRows) throws IOException {
+            this(wire, maxBytes, maxRows, false);
+        }
+        private ResourceAudit(byte[] wire, int maxBytes, int maxRows, boolean profile) throws IOException {
+            profileIdentities = profile;
             if (wire == null || wire.length < 64 || wire.length > MAX_RESOURCE_AUDIT_BYTES
                     || wire.length > maxBytes) throw invalid();
             ByteBuffer buffer = ByteBuffer.wrap(wire);
-            if (buffer.getInt() != 0x43534352 || buffer.getInt() != 1 || buffer.getInt() != 1)
+            if (buffer.getInt() != 0x43534352 || buffer.getInt() != (profile ? 2 : 1) || buffer.getInt() != (profile ? 3 : 1))
                 throw invalid();
             int auditLength = buffer.getInt(), count = buffer.getInt();
             if (auditLength < 44 || auditLength > MAX_AUDIT_BYTES || count < 0 || count > 1024
@@ -447,7 +473,7 @@ final class SshConfigEvaluator implements AutoCloseable {
             Set<Long> locators = new HashSet<>();
             boolean deferred = false;
             for (int i = 0; i < count; i++) {
-                Resource resource = new Resource(buffer);
+                Resource resource = new Resource(buffer, profile);
                 // Argument 256 requires nine bits; it must not overlap source-line bits.
                 long locator = ((long)resource.kind << 40) | ((long)resource.parent << 32)
                         | ((long)resource.line << 9) | resource.argument;
@@ -467,7 +493,7 @@ final class SshConfigEvaluator implements AutoCloseable {
     private final ViewBinding view;
     private final DetachedGuard detachedGuard;
     private final NativeBinding binding;
-    private final boolean catalogMode, auditMode, resourceAuditMode, directMode;
+    private final boolean catalogMode, auditMode, resourceAuditMode, directMode, profileIdentities;
     private volatile long handle;
     private volatile boolean cancelled;
     private boolean inFlight, attempted, ready, nativeClosed;
@@ -482,6 +508,7 @@ final class SshConfigEvaluator implements AutoCloseable {
         auditMode = false;
         resourceAuditMode = false;
         directMode = false;
+        profileIdentities = false;
     }
 
     private SshConfigEvaluator(DetachedGuard guard, NativeBinding binding, boolean catalogMode) {
@@ -500,6 +527,10 @@ final class SshConfigEvaluator implements AutoCloseable {
 
     private SshConfigEvaluator(DetachedGuard guard, NativeBinding binding, boolean catalogMode,
             boolean auditMode, boolean resourceAuditMode, boolean directMode) {
+        this(guard, binding, catalogMode, auditMode, resourceAuditMode, directMode, false);
+    }
+    private SshConfigEvaluator(DetachedGuard guard, NativeBinding binding, boolean catalogMode,
+            boolean auditMode, boolean resourceAuditMode, boolean directMode, boolean profileIdentities) {
         view = null;
         detachedGuard = guard;
         this.binding = binding;
@@ -507,6 +538,7 @@ final class SshConfigEvaluator implements AutoCloseable {
         this.auditMode = auditMode;
         this.resourceAuditMode = resourceAuditMode;
         this.directMode = directMode;
+        this.profileIdentities = profileIdentities;
     }
 
     static SshConfigEvaluator prepareDetached(DetachedGuard guard, boolean catalogMode)
@@ -526,6 +558,18 @@ final class SshConfigEvaluator implements AutoCloseable {
         return prepareDetachedMode(guard, binding, false, false, false, true);
     }
 
+    static SshConfigEvaluator prepareProfileDirectDetached(DetachedGuard guard) throws IOException {
+        return prepareProfileDirectDetached(guard, PRODUCTION);
+    }
+    static SshConfigEvaluator prepareProfileDirectDetached(DetachedGuard guard, NativeBinding binding) throws IOException {
+        return prepareDetachedMode(guard, binding, false, false, false, true, true);
+    }
+    static SshConfigEvaluator prepareDetachedProfileResourceAudit(DetachedGuard guard) throws IOException {
+        return prepareDetachedProfileResourceAudit(guard, PRODUCTION);
+    }
+    static SshConfigEvaluator prepareDetachedProfileResourceAudit(DetachedGuard guard, NativeBinding binding) throws IOException {
+        return prepareDetachedMode(guard, binding, false, true, true, false, true);
+    }
     static SshConfigEvaluator prepareDetachedAudit(DetachedGuard guard) throws IOException {
         return prepareDetachedAudit(guard, PRODUCTION);
     }
@@ -556,13 +600,19 @@ final class SshConfigEvaluator implements AutoCloseable {
 
     private static SshConfigEvaluator prepareDetachedMode(DetachedGuard guard, NativeBinding binding,
             boolean catalogMode, boolean auditMode, boolean resourceAuditMode, boolean directMode) throws IOException {
+        return prepareDetachedMode(guard, binding, catalogMode, auditMode, resourceAuditMode, directMode, false);
+    }
+    private static SshConfigEvaluator prepareDetachedMode(DetachedGuard guard, NativeBinding binding,
+            boolean catalogMode, boolean auditMode, boolean resourceAuditMode, boolean directMode,
+            boolean profileIdentities) throws IOException {
         if (guard == null || binding == null) throw invalid();
         SshConfigEvaluator evaluator = new SshConfigEvaluator(guard, binding, catalogMode, auditMode,
-                resourceAuditMode, directMode);
+                resourceAuditMode, directMode, profileIdentities);
         evaluator.enter();
         try {
             guard.check();
-            long token = directMode ? binding.reserveDirect() : resourceAuditMode ? binding.reserveResourceAudit()
+            long token = profileIdentities ? (directMode ? binding.reserveProfileDirect() : binding.reserveProfileResourceAudit())
+                    : directMode ? binding.reserveDirect() : resourceAuditMode ? binding.reserveResourceAudit()
                     : auditMode ? binding.reserveAudit() : binding.reserveDetached(catalogMode);
             if (token <= 0) throw unavailable();
             evaluator.handle = token;
@@ -721,9 +771,22 @@ final class SshConfigEvaluator implements AutoCloseable {
         byte[] wire = null;
         try {
             live();
-            if (!ready || !directMode) throw unavailable();
+            if (!ready || !directMode || profileIdentities) throw unavailable();
             wire = binding.directPlan(handle);
             DirectPlan plan = new DirectPlan(wire);
+            live();
+            return plan;
+        } catch (IOException | LinkageError failure) { throw unavailable(); }
+        finally { wipe(wire); leave(); }
+    }
+    ProfilePlan profileDirectPlan() throws IOException {
+        enter();
+        byte[] wire = null;
+        try {
+            live();
+            if (!ready || !directMode || !profileIdentities) throw unavailable();
+            wire = binding.profileDirectPlan(handle);
+            ProfilePlan plan = new ProfilePlan(wire);
             live();
             return plan;
         } catch (IOException | LinkageError failure) { throw unavailable(); }
@@ -767,9 +830,22 @@ final class SshConfigEvaluator implements AutoCloseable {
         byte[] wire = null;
         try {
             live();
-            if (!ready || !resourceAuditMode) throw unavailable();
+            if (!ready || !resourceAuditMode || profileIdentities) throw unavailable();
             wire = binding.resourceAudit(handle);
             ResourceAudit audit = new ResourceAudit(wire, maxBytes, maxRows);
+            live();
+            return audit;
+        } catch (IOException | LinkageError failure) { throw unavailable(); }
+        finally { wipe(wire); leave(); }
+    }
+    ResourceAudit profileResourceAudit(int maxBytes, int maxRows) throws IOException {
+        enter();
+        byte[] wire = null;
+        try {
+            live();
+            if (!ready || !resourceAuditMode || !profileIdentities) throw unavailable();
+            wire = binding.profileResourceAudit(handle);
+            ResourceAudit audit = new ResourceAudit(wire, maxBytes, maxRows, true);
             live();
             return audit;
         } catch (IOException | LinkageError failure) { throw unavailable(); }

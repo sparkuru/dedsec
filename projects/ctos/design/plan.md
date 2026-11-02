@@ -1,5 +1,27 @@
 # ctOS 产品与实施规划
 
+2026-11-02 后续修正：用户实际config.bin含电脑绝对IdentityFile而无法导入，明确批准
+[config先导入Host、连接时选择受管key](ssh-config-identity-selection.md)。身份路径只为
+提示，正文原样保留；保留非身份配置／信任约束，原产品路径绑定政策由本次选择取代。
+本轮本地324 Flutter／802 JVM、原生与布局／产物独立复核通过，正式eed028f0…已保留
+数据更新指定板并启动；用户已确认效果通过且实际remote连接成功。不恢复目录或增加
+自动适配，父完整范围与其他未测项保持开放。
+
+2026-11-02 范围更正：用户明确取消目录扫描／整批文件导入及电脑路径适配，其所说
+“批量”是一个config导入多个Host。沿原1008保留[单文件配置及独立私钥](ssh-key-config-connect.md)
+和现有编辑／粘贴能力；已移除目录专用实现，未删除已导入库内资料。318 Flutter／799 JVM、
+原生配置／多Host枚举、布局与构建lint通过；用户要求更新后，正式e1241897…已保留数据
+安装指定开发板并启动，[安装核对](verification.md#20261102-ssh-single-config-formal-install)，待体验反馈。
+[当前验证](verification.md#20261102-ssh-single-config)，下方目录交付段落仅为历史。
+
+2026-10-30 接续：[当前受支持资料的目录批量导入](ssh-directory-import.md)完成实现及
+本地／指定板隔离验证：819 JVM／331 Flutter、28张布局、两次实际SSH登录通过，资源已清。
+不导入来源主机信任或证书，保留原120秒期限与一次原子提交；父完整R7／AC保持开放。
+前序密钥交付已提交360cca2／e0f866f；用户随后允许保留数据更新，正式b2d91de2…已安装
+同板并启动，UID／数据目录／首次安装保持，新增目录功能待人工验收。
+[正式安装](verification.md#20261030-ssh-directory-formal-install)。
+[本轮证据](verification.md#20261030-ssh-directory-import)。
+
 2026-10-30 当前交付获用户“功能通过；可以提交并继续”：正式fc98的SSH密钥管理与
 视觉修正人工验收通过，提交当前增量后继续原1008父任务的已确认需求；完整父AC开放，
 不归档或切到应用细节旁任务。[验收](verification.md#20261030-ssh-keys-human-acceptance)。

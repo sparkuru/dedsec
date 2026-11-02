@@ -1,5 +1,70 @@
 # 初步规划检查
 
+## 2026-11-02 用户实际remote连接与人工验收通过
+
+用户在正式eed028f0…交付后明确反馈“不错；效果通过；我已连接实际 remote 连接成功。”
+本轮人工门通过，实际远端成功按用户报告记录，不伪造agent日志或逐Host／算法／平台
+方法已通过。原本地／产物／安装证据不变，来源未改、未重复测试；用户随后明确“可以
+提交”，批准本轮精确清单，父完整AC继续开放，不自动归档或推进其他能力。
+
+## 2026-11-02 config-first显式key：本地PASS与正式修复更新
+
+当前合同为`design/ssh-config-identity-selection.md`。原始user config只做点名只读诊断，
+原文件未改、本地原文已清。324 Flutter／802 JVM／analyze0、ARM资源4872／direct5651
+（各含detached1262）及catalog71923／16张布局、正常与fixture构建lint／v2通过。
+独立review-config-identity.md最终PASS，无剩余具体发现；口令保存前trust检查已修，
+hint分类与hasDeferred字段语义按明确合同结案。未重跑无关矩阵，未将平台方法编译当运行。
+两次native重编先有产物字节差异，已冻结同一生产结果重打normal；最终19项来源、36项
+native输入、APK／XML均重核。正常eed028f0…／fixture18816610…／test9936f2b1…。
+
+沿同一更新流程，eed正式包install-r到指定板成功，设备hash匹配，UID10131／dataDir／
+firstInstallTime保持、lastUpdate11:31:52，MainActivity resumed。专用ADB15047已停；
+未安装隔离包／读取真实库key／访问账号，导入／选择／实际SSH和人工体验待用户重试。
+父完整AC开放，未提交／归档／更新dist；详情在`design/verification.md`当前修正节。
+
+## 2026-11-02 正式安装核对通过
+
+用户明确“更新上去”，本轮保留数据install-r成功；指定板实际e1241897…与审阅产物相同，
+UID10131／dataDir／firstInstallTime保持，lastUpdateTime10:24:03，MainActivity启动ok及
+实际resumed，进程存在。原公开b2dAPK已保存，专用ADB15045已停，未读取库或访问账号。
+详见 `design/verification.md#20261102-ssh-single-config-formal-install`；人工体验与提交未
+因此推定通过，父完整AC保持开放。
+
+## 2026-11-02 撤下目录，保留单config多个Host
+
+用户澄清及新范围见PRD头部；目录代码／通道／provider／夹具已移除，保留单文件及已有
+库对象，不加路径适配。41定向／318全量Flutter及analyze通过；799 JVM／53套无失败／
+错误／跳过；实际原生求值3736／枚举71923、8张真实字体布局与正常／隔离构建lint／
+官方三APK v2审计通过。正式e1241897…未安装设备，父完整AC和人工体验分列。
+当前来源／APK／原生17项输入已核对；旧缓存native源码不符未使用，重新构建后才执行。
+首次analyze旧目录临时脚本错误、统计脚本lint路径误拼及修正均如实保留，未改校验规则。
+详见 `design/verification.md#20261102-ssh-single-config`；独立check最终PASS，无具体待修发现，
+未改源码。review-removal.md保存在本轮证据根，重算源码／APK／native输入／JUnit与布局
+均相符；本地交付ready，设备及人工体验保持human-required，不增加逐版本验收前置。
+
+## 2026-11-02 接续定向检查
+
+目录14 Flutter及快照8／候选12 JVM重新执行通过，失败／错误／跳过均零；三个本地APK
+仍匹配10-30哈希。旧/tmp目录及其原始设备／安装／独立review／布局证据已不存在，本轮
+没有重新核验历史日志；12项当前来源哈希不等于恢复历史42项冻结表。详见
+`design/verification.md#20261102-ssh-directory-resume`。无产品代码变更或设备操作，未重跑
+全量／lint／native；人工体验和提交许可仍待反馈，父完整AC开放。
+
+## 2026-10-30 目录批量导入：本地及指定板隔离通过
+
+合同 `design/ssh-directory-import.md`，权威证据
+`design/verification.md#20261030-ssh-directory-import`。819 JVM／55套零失败错误跳过，
+331 Flutter／目录14项／analyze0，normal与fixture构建lint／三APK验签审计通过。
+28张实际字体布局通过，42项来源冻结；未改native，原9／23／25项输入相符，不重记矩阵。
+
+指定板实际方法31.649秒／status0／OK1，覆盖快照不重读、嵌套Include／密钥证明、选择／
+解锁／整批原子提交、unchanged关联保持、异常provider及主动失效快照清零；2次真实公钥
+登录和PTY。正式fc98／UID10131及包元数据保持，资源全清，专用15041／15491端口已关闭。
+源码三项发现由owner修复并补回归；review-final.json独立PASS，无未决发现。新增正常b2d91de2…尚未
+人工验收；随后获用户允许已正式安装并启动，UID／数据目录／首次安装保持，安装证据
+`design/verification.md#20261030-ssh-directory-formal-install`，review-install.json独立PASS。
+真实DocumentsUI／grant及不确定写入设备故障注入未运行，父AC开放。
+
 ## 2026-10-30 人工体验通过／授权提交
 
 用户明确“功能通过；可以提交并继续”，当前正式fc98的密钥功能与视觉调整人工验收通过。

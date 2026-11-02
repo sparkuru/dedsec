@@ -35,11 +35,25 @@ JNIEXPORT jlong JNICALL Java_im_majo_ctos_SshConfigEvaluator_00024Native_reserve
     if (ctos_ssh_config_handle_reserve_direct(&token) != 0) { fail(env); return 0; }
     return (jlong)token;
 }
+JNIEXPORT jlong JNICALL Java_im_majo_ctos_SshConfigEvaluator_00024Native_reserveProfileDirect(
+    JNIEnv *env, jclass type) {
+    (void)type;
+    ctos_ssh_config_token token = 0;
+    if (ctos_ssh_config_handle_reserve_profile_direct(&token) != 0) { fail(env); return 0; }
+    return (jlong)token;
+}
 JNIEXPORT jlong JNICALL Java_im_majo_ctos_SshConfigEvaluator_00024Native_reserveResourceAudit(
     JNIEnv *env, jclass type) {
     (void)type;
     ctos_ssh_config_token token = 0;
     if (ctos_ssh_config_handle_reserve_resource_audit(&token) != 0) { fail(env); return 0; }
+    return (jlong)token;
+}
+JNIEXPORT jlong JNICALL Java_im_majo_ctos_SshConfigEvaluator_00024Native_reserveProfileResourceAudit(
+    JNIEnv *env, jclass type) {
+    (void)type;
+    ctos_ssh_config_token token = 0;
+    if (ctos_ssh_config_handle_reserve_profile_resource_audit(&token) != 0) { fail(env); return 0; }
     return (jlong)token;
 }
 struct detached_copy { JNIEnv *env; jbyteArray source, request; };
@@ -152,6 +166,24 @@ done:
     wipe(wire, CTOS_SSH_CONFIG_DIRECT_BYTES); free(wire);
     return result;
 }
+JNIEXPORT jbyteArray JNICALL Java_im_majo_ctos_SshConfigEvaluator_00024Native_profileDirectPlan(
+    JNIEnv *env, jclass type, jlong token) {
+    (void)type;
+    unsigned char *wire = calloc(CTOS_SSH_CONFIG_DIRECT_BYTES, 1);
+    size_t length = 0;
+    jbyteArray result = NULL;
+    if (wire == NULL) { fail(env); return NULL; }
+    if (ctos_ssh_config_handle_profile_direct_plan((ctos_ssh_config_token)token, wire, &length) != 0) { fail(env); goto done; }
+    result = (*env)->NewByteArray(env, (jsize)length);
+    if ((*env)->ExceptionCheck(env)) { result = NULL; goto done; }
+    if (result == NULL) { fail(env); goto done; }
+    (*env)->SetByteArrayRegion(env, result, 0, (jsize)length, (const jbyte *)wire);
+    if ((*env)->ExceptionCheck(env)) { result = NULL; goto done; }
+    if (ctos_ssh_config_handle_profile_direct_plan_live((ctos_ssh_config_token)token) != 0) { fail(env); result = NULL; }
+done:
+    wipe(wire, CTOS_SSH_CONFIG_DIRECT_BYTES); free(wire);
+    return result;
+}
 JNIEXPORT void JNICALL Java_im_majo_ctos_SshConfigEvaluator_00024Native_close(
     JNIEnv *env, jclass type, jlong token) {
     (void)type;
@@ -221,6 +253,22 @@ JNIEXPORT jbyteArray JNICALL Java_im_majo_ctos_SshConfigEvaluator_00024Native_re
     (*env)->SetByteArrayRegion(env, result, 0, (jsize)length, (const jbyte *)wire);
     if ((*env)->ExceptionCheck(env)) { result = NULL; goto done; }
     if (ctos_ssh_config_handle_resource_audit_live((ctos_ssh_config_token)token) != 0) { fail(env); result = NULL; }
+done:
+    wipe(wire, CTOS_SSH_CONFIG_RESOURCE_BYTES); free(wire); return result;
+}
+JNIEXPORT jbyteArray JNICALL Java_im_majo_ctos_SshConfigEvaluator_00024Native_profileResourceAudit(
+    JNIEnv *env, jclass type, jlong token) {
+    (void)type;
+    unsigned char *wire = calloc(1, CTOS_SSH_CONFIG_RESOURCE_BYTES);
+    if (wire == NULL) { fail(env); return NULL; }
+    size_t length = 0; jbyteArray result = NULL;
+    if (ctos_ssh_config_handle_profile_resource_audit((ctos_ssh_config_token)token, wire, &length) != 0) { fail(env); goto done; }
+    result = (*env)->NewByteArray(env, (jsize)length);
+    if ((*env)->ExceptionCheck(env)) { result = NULL; goto done; }
+    if (result == NULL) { fail(env); goto done; }
+    (*env)->SetByteArrayRegion(env, result, 0, (jsize)length, (const jbyte *)wire);
+    if ((*env)->ExceptionCheck(env)) { result = NULL; goto done; }
+    if (ctos_ssh_config_handle_profile_resource_audit_live((ctos_ssh_config_token)token) != 0) { fail(env); result = NULL; }
 done:
     wipe(wire, CTOS_SSH_CONFIG_RESOURCE_BYTES); free(wire); return result;
 }

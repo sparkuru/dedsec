@@ -205,8 +205,20 @@ final class SshManifestConfigInspector implements AutoCloseable {
         return inspectMode(manifest, deadline, cancellation, true, true, false);
     }
 
+    Report inspectProfileResourceAudit(VaultManifest manifest, long deadline, Cancellation cancellation)
+            throws IOException {
+        return inspectMode(manifest, deadline, cancellation, true, true, true, true);
+    }
+    Report inspectProfileResourceDeclarationsForReferenceRefresh(VaultManifest manifest, long deadline,
+            Cancellation cancellation) throws IOException {
+        return inspectMode(manifest, deadline, cancellation, true, true, false, true);
+    }
     private Report inspectMode(VaultManifest manifest, long deadline, Cancellation cancellation,
             boolean audited, boolean resourcesAudited, boolean verifyReferences) throws IOException {
+        return inspectMode(manifest, deadline, cancellation, audited, resourcesAudited, verifyReferences, false);
+    }
+    private Report inspectMode(VaultManifest manifest, long deadline, Cancellation cancellation,
+            boolean audited, boolean resourcesAudited, boolean verifyReferences, boolean profileIdentities) throws IOException {
         enter();
         Input input = null;
         Throwable primary = null;
@@ -231,7 +243,13 @@ final class SshManifestConfigInspector implements AutoCloseable {
                 ByteBuffer.wrap(input.wire).putInt(12, SshConfigEvaluator.MAX_OPENS - opens)
                         .putInt(16, SshConfigEvaluator.MAX_READ_BYTES - readBytes)
                         .putInt(20, SshConfigEvaluator.MAX_LINES - lines);
-                if (resourcesAudited) {
+                String rootPath = manifest.files.get(i).path;
+                boolean profile = profileIdentities && rootPath.startsWith(".ssh/")
+                        && !rootPath.equals(SshConnectionMaterial.MANUAL);
+                if (resourcesAudited && profile) {
+                    active = binding == null ? SshConfigEvaluator.prepareDetachedProfileResourceAudit(this::checkGuard)
+                            : SshConfigEvaluator.prepareDetachedProfileResourceAudit(this::checkGuard, binding);
+                } else if (resourcesAudited) {
                     active = binding == null ? SshConfigEvaluator.prepareDetachedResourceAudit(this::checkGuard)
                             : SshConfigEvaluator.prepareDetachedResourceAudit(this::checkGuard, binding);
                 } else if (audited) {
@@ -250,7 +268,8 @@ final class SshManifestConfigInspector implements AutoCloseable {
                 SshConfigEvaluator.Usage usage = active.usage();
                 check();
                 SshConfigEvaluator.ResourceAudit resourceAudit = resourcesAudited
-                        ? active.resourceAudit(MAX_OUTPUT - output, MAX_ROWS - rows) : null;
+                        ? (profile ? active.profileResourceAudit(MAX_OUTPUT - output, MAX_ROWS - rows)
+                                : active.resourceAudit(MAX_OUTPUT - output, MAX_ROWS - rows)) : null;
                 SshConfigEvaluator.Audit audit = resourceAudit != null ? resourceAudit.audit : audited
                         ? active.audit(MAX_OUTPUT - output, MAX_ROWS - rows) : null;
                 SshConfigEvaluator.Catalog catalog = audit == null

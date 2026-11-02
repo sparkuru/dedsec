@@ -93,7 +93,7 @@ final class SshPasswordManifestValidator implements AppSecrets.SshContentValidat
                 SshManifestConfigInspector configs = new SshManifestConfigInspector();
                 synchronized (pendingConfigs) { pendingConfigs.put(Thread.currentThread(), configs); }
                 try {
-                    SshManifestConfigInspector.Report report = configs.inspectResourceAudit(manifest, deadline,
+                    SshManifestConfigInspector.Report report = configs.inspectProfileResourceAudit(manifest, deadline,
                             new SshManifestConfigInspector.Cancellation());
                     for (SshManifestConfigInspector.Root root : report.roots) if (root.path.startsWith(".ssh/")) {
                         java.util.List<String> expected = SshConnectionMaterial.storedReferences(manifest, root.object, root.resourceAudit);

@@ -87,7 +87,7 @@ struct ctos_ssh_config_eval {
     struct config_origin host_origin, user_origin, diagnostic_origin, algorithm_origin[6];
     struct config_origin identity_origin[CTOS_SSH_CONFIG_LIST], hostfile_origin[CTOS_SSH_CONFIG_HOSTFILES];
     struct config_input input[CTOS_SSH_CONFIG_DEPTH + 1];
-    int options_live;
+    int options_live, profile_identities;
     enum ctos_ssh_config_mode mode;
     struct ctos_ssh_config_catalog *catalog;
     struct ctos_ssh_config_audit *audit;
@@ -214,18 +214,50 @@ static int utf8(const unsigned char *s, size_t n) {
     return 0;
 }
 int ctos_config_catalog_mode(void) { return current != NULL && current->mode == CTOS_CONFIG_CATALOG; }
-int ctos_config_audit_mode(void) { return current != NULL && (current->mode == CTOS_CONFIG_AUDIT || current->mode == CTOS_CONFIG_RESOURCE_AUDIT); }
+int ctos_config_audit_mode(void) { return current != NULL && (current->mode == CTOS_CONFIG_AUDIT || current->mode == CTOS_CONFIG_RESOURCE_AUDIT || current->mode == CTOS_CONFIG_PROFILE_RESOURCE_AUDIT); }
 int ctos_config_scan_mode(void) { return current != NULL && current->mode != CTOS_CONFIG_EFFECTIVE; }
-int ctos_config_resource_mode(void) { return current != NULL && current->mode == CTOS_CONFIG_RESOURCE_AUDIT; }
+int ctos_config_resource_mode(void) { return current != NULL && (current->mode == CTOS_CONFIG_RESOURCE_AUDIT || current->mode == CTOS_CONFIG_PROFILE_RESOURCE_AUDIT); }
 static int resource_type(unsigned int kind, unsigned int type) {
     if (kind == 1) return type == CTOS_SSH_PRIVATE_KEY || type == CTOS_SSH_PUBLIC_KEY || type == CTOS_SSH_CERTIFICATE;
     if (kind == 2) return type == CTOS_SSH_CERTIFICATE;
     if (kind == 3 || kind == 4) return type == CTOS_SSH_KNOWN_HOSTS;
     return kind == 5 && type == CTOS_SSH_PUBLIC_KEY;
 }
+static int checked_identity_hint(const char *value) {
+    size_t n = strlen(value);
+    if (n == 0 || n > 512 || utf8((const unsigned char *)value, n) != 0)
+        return ctos_config_reject(n > 512 ? CTOS_CONFIG_LIMIT : CTOS_CONFIG_INPUT, EINVAL);
+    for (size_t i = 0; i < n; i++)
+        if ((unsigned char)value[i] < 32 || (unsigned char)value[i] == 127 ||
+            ((unsigned char)value[i] == 0xc2 && i + 1 < n &&
+             (unsigned char)value[i + 1] >= 0x80 && (unsigned char)value[i + 1] <= 0x9f))
+            return ctos_config_reject(CTOS_CONFIG_INPUT, EINVAL);
+    return 0;
+}
+/* Identity hints never open a path or erase a parser rejection. Preserve only
+ * independently resolvable, correctly typed static graph edges. */
+static int profile_identity_state(const char *value, unsigned int *state, unsigned int *target) {
+    if (checked_identity_hint(value) != 0) return -1;
+    *state = 6; *target = 0;
+    if (strchr(value, '%') || strstr(value, "${")) return 0;
+    char absolute[sizeof(CTOS_SSH_VIRTUAL_HOME) + 514], relative[513];
+    const char *path = value;
+    if (strncmp(value, "~/", 2) == 0) {
+        snprintf(absolute, sizeof(absolute), "%s/%s", CTOS_SSH_VIRTUAL_HOME, value + 2); path = absolute;
+    } else if (strncmp(value, CTOS_SSH_VIRTUAL_HOME "/", sizeof(CTOS_SSH_VIRTUAL_HOME)) != 0) return 0;
+    if (ctos_ssh_io_resolve(path, 0, relative) != 0) return 0;
+    for (unsigned int i = 0; i < current->io.count; i++) {
+        if (ctos_config_check() != 0) return -1;
+        const struct ctos_ssh_file *file = &current->io.files[i];
+        if (file->path.length == strlen(relative) && !memcmp(file->path.data, relative, file->path.length)
+            && resource_type(1, file->type)) { *state = 1; *target = i + 1; break; }
+    }
+    return 0;
+}
 static int resource_state(unsigned int kind, const char *value, unsigned int *state, unsigned int *target) {
     *target = 0;
     if (kind != 2 && strcasecmp(value, "none") == 0) { *state = 4; return 0; }
+    if (kind == 1 && current->profile_identities) return profile_identity_state(value, state, target);
     if ((*value == '~' && strncmp(value, "~/", 2) != 0) ||
         (*value == '/' && strncmp(value, CTOS_SSH_VIRTUAL_HOME "/", sizeof(CTOS_SSH_VIRTUAL_HOME)) != 0))
         return ctos_config_reject(CTOS_CONFIG_PATH, EACCES);
@@ -793,6 +825,14 @@ int ctos_ssh_config_eval_prepare_resource_audit_detached(uint64_t deadline, stru
     }
     e->resource_audit->audit = e->audit; e->mode = CTOS_CONFIG_RESOURCE_AUDIT; return 0;
 }
+int ctos_ssh_config_eval_prepare_profile_direct_detached(uint64_t deadline, struct ctos_ssh_config_eval **out) {
+    if (ctos_ssh_config_eval_prepare_direct_detached(deadline, out) != 0) return -1;
+    (*out)->profile_identities = 1; return 0;
+}
+int ctos_ssh_config_eval_prepare_profile_resource_audit_detached(uint64_t deadline, struct ctos_ssh_config_eval **out) {
+    if (ctos_ssh_config_eval_prepare_resource_audit_detached(deadline, out) != 0) return -1;
+    (*out)->profile_identities = 1; (*out)->mode = CTOS_CONFIG_PROFILE_RESOURCE_AUDIT; return 0;
+}
 int ctos_ssh_config_eval_detached_buffer(struct ctos_ssh_config_eval *e, size_t length, unsigned char **out) {
     if (out == NULL) { errno = EINVAL; return -1; }
     *out = NULL;
@@ -906,9 +946,17 @@ static int finish_direct_plan(struct ctos_ssh_config_eval *e) {
     plan->strict_host_key_checking = (unsigned int)o->strict_host_key_checking;
     for (int i = 0; i < o->num_identity_files; i++) {
         if (strcasecmp(o->identity_files[i], "none") == 0) continue;
-        if (direct_path(e, o->identity_files[i], CTOS_SSH_PRIVATE_KEY, e->identity_origin[i],
-            plan->identity_files[plan->identity_count]) != 0) return -1;
-        plan->identity_count++;
+        if (e->profile_identities) {
+            if (e->identity_origin[i].object == 0) continue;
+            e->diagnostic_origin = e->identity_origin[i];
+            if (checked_identity_hint(o->identity_files[i]) != 0) return -1;
+            strcpy(plan->identity_hints[plan->identity_hint_count++], o->identity_files[i]);
+            e->diagnostic_origin = (struct config_origin){0};
+        } else {
+            if (direct_path(e, o->identity_files[i], CTOS_SSH_PRIVATE_KEY, e->identity_origin[i],
+                plan->identity_files[plan->identity_count]) != 0) return -1;
+            plan->identity_count++;
+        }
     }
     for (unsigned int i = 0; i < o->num_user_hostfiles; i++) {
         if (strcasecmp(o->user_hostfiles[i], "none") == 0) continue;
@@ -1036,6 +1084,17 @@ int ctos_ssh_config_eval_direct_plan(const struct ctos_ssh_config_eval *e,
     const struct ctos_ssh_config_direct_plan **out) {
     if (out == NULL) { errno = EINVAL; return -1; }
     *out = NULL;
+    if (e != NULL && e->profile_identities) { errno = EINVAL; return -1; }
+    if (result_live(e) != 0) return -1;
+    if (e->direct_plan == NULL || e->mode != CTOS_CONFIG_EFFECTIVE) { errno = EINVAL; return -1; }
+    *out = e->direct_plan;
+    return 0;
+}
+int ctos_ssh_config_eval_profile_direct_plan(const struct ctos_ssh_config_eval *e,
+    const struct ctos_ssh_config_direct_plan **out) {
+    if (out == NULL) { errno = EINVAL; return -1; }
+    *out = NULL;
+    if (e == NULL || !e->profile_identities) { errno = EINVAL; return -1; }
     if (result_live(e) != 0) return -1;
     if (e->direct_plan == NULL || e->mode != CTOS_CONFIG_EFFECTIVE) { errno = EINVAL; return -1; }
     *out = e->direct_plan;
@@ -1069,6 +1128,14 @@ int ctos_ssh_config_eval_resource_audit(const struct ctos_ssh_config_eval *e,
     *out = NULL;
     if (result_live(e) != 0) return -1;
     if (e->mode != CTOS_CONFIG_RESOURCE_AUDIT) { errno = EINVAL; return -1; }
+    *out = e->resource_audit; return 0;
+}
+int ctos_ssh_config_eval_profile_resource_audit(const struct ctos_ssh_config_eval *e,
+    const struct ctos_ssh_config_resource_audit **out) {
+    if (out == NULL) { errno = EINVAL; return -1; }
+    *out = NULL;
+    if (result_live(e) != 0) return -1;
+    if (e->mode != CTOS_CONFIG_PROFILE_RESOURCE_AUDIT) { errno = EINVAL; return -1; }
     *out = e->resource_audit; return 0;
 }
 void ctos_ssh_config_eval_cancel(struct ctos_ssh_config_eval *e) {

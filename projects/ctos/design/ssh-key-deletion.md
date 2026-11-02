@@ -1,5 +1,10 @@
 # SSH 私钥删除
 
+2026-11-02更新：[配置先导入、连接时选key](ssh-config-identity-selection.md)取代下方基于
+IdentityFile缺失禁用用户配置的旧产品规则。删除后该keyId／口令／Account仍精确失效，
+Host连接项保留；其他key只有用户重新明确选择才可使用，不静默回退。CONFIG正文不变，
+旧可证明STATIC引用边与新增hint结果统一校验，生成manual及generic检查器保持严格。
+
 2026-10-30，沿原 `10-08-ssh-terminal` 父任务接续。用户发现缺少删除入口并要求继续。
 本合同范围已实现；799 JVM／317 Flutter及指定板隔离链路42.572秒通过，
 具体范围以 [验证记录](verification.md#20261030-ssh-key-deletion) 为准。随后按用户允许，

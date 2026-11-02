@@ -318,24 +318,15 @@ final class SshPasswordConnector implements MainActivity.AuthenticatedSshFactory
                 hostsPath = SshConnectionMaterial.HOSTS;
             } else {
                 rootPath = SshConnectionMaterial.ROOT;
-                SshConfigEvaluator.DirectPlan plan = SshConnectionMaterial.plan(snapshot.manifest, rootPath,
+                SshConfigEvaluator.DirectPlan plan = SshConnectionMaterial.profilePlan(snapshot.manifest, rootPath,
                         configAlias, usernameOverride, deadline, this::check);
-                SshConnectionMaterial.requireIdentities(snapshot.manifest, plan);
                 if (plan.userRequired) throw new VaultException("SSH_USER_REQUIRED", "Enter an SSH username");
-                if (!plan.pubkeyAuthentication || !plan.identityFiles.contains(selectedKey.path))
-                    throw new VaultException("SSH_KEY_SELECTION", "Choose an identity allowed by this SSH configuration");
+                if (!plan.pubkeyAuthentication)
+                    throw new VaultException("SSH_KEY_SELECTION", "This SSH configuration disables public-key authentication");
                 profile = new SshPasswordProfile(plan.hostname, plan.port, plan.user);
                 strictHostKeyChecking = plan.strictHostKeyChecking;
                 transportDeadline = Math.min(deadline, requestStarted + plan.connectTimeoutMillis);
-                hostsPath = null;
-                for (String path : plan.userKnownHostsFiles) {
-                    VaultManifest.FileObject candidate = SshConnectionMaterial.file(snapshot.manifest, path);
-                    if (candidate == null) continue;
-                    if (candidate.type != VaultManifest.FileType.KNOWN_HOSTS || hostsPath != null)
-                        throw new VaultException("SSH_CONFIG_UNSUPPORTED", "This connection cannot consume multiple host trust sources");
-                    hostsPath = path;
-                }
-                if (hostsPath == null) throw new VaultException("SSH_CONFIG_DEPENDENCY", "The managed host trust file is missing");
+                hostsPath = SshConnectionMaterial.singleTrustPath(snapshot.manifest, plan);
             }
             SshConnectionMaterial.KeyAccount account = new SshConnectionMaterial.KeyAccount(profile, selectedKey);
             targetIdentity = account.target;
@@ -374,12 +365,12 @@ final class SshPasswordConnector implements MainActivity.AuthenticatedSshFactory
             SshConnectionMaterial.Key key = SshConnectionMaterial.key(snapshot.manifest, privateKeyId);
             SshPasswordProfile actualProfile = profile;
             if (!configAlias.isEmpty()) {
-                SshConfigEvaluator.DirectPlan plan = SshConnectionMaterial.plan(snapshot.manifest, SshConnectionMaterial.ROOT,
+                SshConfigEvaluator.DirectPlan plan = SshConnectionMaterial.profilePlan(snapshot.manifest, SshConnectionMaterial.ROOT,
                         configAlias, usernameOverride, deadline, this::check);
-                SshConnectionMaterial.requireIdentities(snapshot.manifest, plan);
                 if (plan.userRequired) throw new VaultException("SSH_USER_REQUIRED", "Enter an SSH username");
-                if (!plan.pubkeyAuthentication || !plan.identityFiles.contains(key.path))
-                    throw new VaultException("SSH_KEY_SELECTION", "Choose an identity allowed by this SSH configuration");
+                if (!plan.pubkeyAuthentication)
+                    throw new VaultException("SSH_KEY_SELECTION", "This SSH configuration disables public-key authentication");
+                SshConnectionMaterial.singleTrustPath(snapshot.manifest, plan);
                 actualProfile = new SshPasswordProfile(plan.hostname, plan.port, plan.user);
             }
             VaultManifest.FileObject privateFile = SshConnectionMaterial.fileId(snapshot.manifest, key.binding.privateFileId);

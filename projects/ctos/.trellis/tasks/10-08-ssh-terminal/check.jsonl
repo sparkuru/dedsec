@@ -12,7 +12,7 @@
 {"file":"design/ssh-key-config-connect.md","reason":"当前 key-only/config 交付，禁止用密码成功或底层矩阵替代真实产品认证。"}
 {"file":".trellis/tasks/10-08-ssh-terminal/research/private-key-connection-path.md","reason":"真实公钥来源、KeyBinding/Account 与 native selected proof 复核。"}
 {"file":".trellis/tasks/10-08-ssh-terminal/research/config-key-import-connection.md","reason":"实际 effective plan 每项消费/拒绝与导入原子性、逻辑路径、持久副本安全。"}
-{"file": ".trellis/spec/backend/ssh-detached-config-managed.md", "reason": "Android16实际64KiB MEMLOCK兼容修复；单份受保护源、实际数量公开索引和失败清理"}
+{"file":".trellis/spec/backend/ssh-detached-config-managed.md","reason":"Android16实际64KiB MEMLOCK兼容修复；单份受保护源、实际数量公开索引和失败清理"}
 {"file":"design/ssh-background-session.md","reason":"当前 R8 验证：已认证 shell 保留、新秘密仍拒绝、通知精确 Stop、输出与 generation 和 Android 实机边界。"}
 {"file":".trellis/tasks/10-08-ssh-terminal/research/ssh-background-lifetime.md","reason":"复核 Java/C 权限分离、auth 明文释放与原 owner/cancel/close 证明，不把服务迁移视为锁库可用证据。"}
 {"file":".trellis/spec/backend/ssh-background-session.md","reason":"R8当前锁屏断开与主动一键重连：精确owner/幂等终态/确认清理、RAM提示与一次授权、新资料/新信任认证，实际短锁屏/不自动重连/新代次；不混用历史锁屏保活与Doze证据。"}
@@ -22,3 +22,7 @@
 {"file":"design/ssh-key-deletion.md","reason":"核对原子删除影响、明确确认、配置正文和外部原文件保留、缺失拒绝和重导入恢复。"}
 {"file":".trellis/spec/backend/ssh-key-deletion.md","reason":"复核原source／预算／once／uncertain生命周期、跨票据拒绝与严格导入和连接准入。"}
 {"file":".trellis/tasks/10-08-ssh-terminal/research/key-deletion-20261030.md","reason":"核对实际native缺失路径来源和未运行边界，不以源码研究冒充实测。"}
+{"file":".trellis/tasks/10-08-ssh-terminal/research/import-path-portability-20261102.md","reason":"用户已取消目录功能和路径适配；核对保留的单config多Host及独立私钥现状，不实施研究中的迁移方向。"}
+{"file":"design/ssh-config-identity-selection.md","reason":"当前已明确批准config-first、IdentityFile提示及显式受管key选择；严格generic模式、旧图兼容与实际证明边界。"}
+{"file":".trellis/tasks/10-08-ssh-terminal/research/config-independent-identity-20261102.md","reason":"实际import/stored/library/两处connector/native路径阻断与精确改动接点；不只绕过Java检查。"}
+{"file":".trellis/spec/backend/ssh-config-identity-selection.md","reason":"当前产品hint新原生模式/typedwire与generic严格分离；旧STATIC边/实际key/原证明/explicitchooser。"}

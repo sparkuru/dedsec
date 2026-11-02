@@ -1,8 +1,13 @@
 # Config and private-key connections
 
+2026-11-02: the later [explicit config identity selection](ssh-config-identity-selection.md)
+supersedes product IdentityFile path eligibility below: user CONFIG imports before keys, original
+paths are hints, and the user explicitly chooses a managed key at connection. Generic native
+strict modes remain unchanged; do not remove other config/trust or secret-release checks.
+
 [Private-key deletion](ssh-key-deletion.md) extends this contract: safe absent static
-IdentityFile declarations are representable in stored CONFIG after metadata refresh; config
-import/edit stays strict and every effective missing identity blocks actual connection.
+IdentityFile declarations are representable in stored CONFIG after metadata refresh. Imported
+profiles keep identity hints independently; the actually selected key must still be current.
 
 The original clear-key product contract below is extended by
 [encrypted private keys](ssh-encrypted-key-connect.md). Use that contract for phrase-aware
@@ -10,6 +15,10 @@ public extraction, encrypted import/unlock, optional persistence and selected CS
 do not apply the earlier encrypted refusal to that approved production path.
 
 ## 1. Scope / Trigger
+
+2026-11-02 user scope: one config file imports multiple concrete Host connections; private
+keys are imported independently. Directory scanning/batch import and desktop path adaptation
+are withdrawn. Preserve existing imported vault objects and the protected editor/paste flow.
 
 Extend the same production model/connector described in
 [the current contract](../../../design/ssh-key-config-connect.md). The selected user case uses
@@ -27,6 +36,9 @@ Host UI methods: `ssh.library`, `ssh.importFile`, `ssh.importCommit`, `ssh.impor
 `ssh.configRead`, `ssh.configPreview`, `ssh.keyConnect`, `ssh.configConnect`; preserve the prior
 password API and ctos/ssh review/state events. Exact metadata payloads belong to the current
 domain contract and typed Dart boundary; no method returns private key/credential bytes.
+`ssh.importFile(requestId,kind,path)` uses `kind=config` with default `.ssh/config`, or
+`kind=privateKey` with the explicit path/source-name fallback. There are no `ssh.directory*`
+methods or directory preview payloads in the current product contract.
 
 ## 3. Contracts
 
@@ -38,7 +50,7 @@ unsupported and malformed outcomes carry no key/proof fields. The no-phrase NEED
 no public proof; phrase-aware extraction and retry follow the extension. No returned signature
 or arbitrary signing payload. Wipe all private and JNI scratch on every exit.
 
-Direct mode adds strict active-declaration policy to the same lexer; old effective/catalog/
+Generic Direct mode adds strict active-declaration policy to the same lexer; old effective/catalog/
 audit/resource modes remain unchanged. Keep actual Host/Match/Include/first-value/identity-list
 semantics. Final plan includes real tuple, ordered expanded managed IdentityFile/known_hosts,
 auth enabled flags, identitiesOnly, timeout, PTY and strict host policy. Resolve identity paths
@@ -59,6 +71,11 @@ write, persistent grant or URI reread after review. Picker, preview, confirm and
 retain original epoch/revision/registration/deadline/cancel. Replacement is exact and explicit.
 ConfigRead returns CONFIG only; source known_hosts never automatically becomes trusted.
 Mixed key material must survive old password defaults/status/save and forget-all operations.
+One CONFIG may contain multiple concrete Host aliases. Catalog supplies aliases and real direct
+evaluation supplies each effective tuple/binding; Host patterns remain rules, not synthetic rows.
+CONFIG bytes are not rewritten for desktop absolute paths. A renamed source `config.bin` can
+still be imported to explicit `.ssh/config`; an empty private destination preserves its actual
+source basename. Never strip suffixes or assign identities based solely on matching names.
 
 Library key IDs bind managed path AND actual public identity. Host rows carry an authenticated
 source/epoch/revision/alias binding; configConnect must require/recheck that exact binding before
@@ -90,6 +107,9 @@ selected identity or lost protection -> fail before secret copy. Late write canc
 shared uncertain result and lock, not a false no-effect receipt. Config auth disabled/unsupported
 direct plan -> fail before TCP/credential use; no password or direct-connect fallback.
 Diagnostics expose bounded source/path/line/codes, never raw key bodies or exception payloads.
+External absolute or unresolved CWD identity references remain strict in generic modes; imported
+profile mode projects them as hints and requires explicit managed-key selection. Nonidentity
+dependency/policy failures remain refusals, with no automatic identity or password fallback.
 
 ## 5. Good / Base / Bad Cases
 
@@ -98,6 +118,8 @@ to the shown tuple/key, real KEX and publickey SUCCESS precede PTY. Base: previo
 TOTP data remain usable. Bad: use a canned fixture public blob, parse config in Dart/Java,
 persist files before their bindings, auto-trust imported records, or keep a successful old key
 selection after source replacement.
+Good: one supplied CONFIG yields two concrete Host rows with distinct effective targets and
+bindings. Bad: interpret “multiple connections” as permission to scan a filesystem tree.
 
 ## 6. Tests Required
 
@@ -108,9 +130,17 @@ imports/editor, preview/replace/cancel/uncertain, key-only empty password, real-
 selection, stale/lifecycle and narrow/landscape/large-text paths. Independent sshd must disable
 password and prove non-echo PTY output; Android import/JNI/UI and actual server require distinct
 current authorization/evidence. Main serializes all builds; record only actual results.
+Multi-host coverage keeps native catalog/effective parsing separate from Flutter: the latter
+tests one config import/commit, both resulting rows, each exact selected tuple/alias/binding and
+no password fallback; mock metadata is not proof of native config parsing. Removing directory
+code must preserve normal/fixture compilation and retain existing imported file objects.
 
 ## 7. Wrong vs Correct
 
 Wrong: the key parser passed, therefore the installed APK supports private-key login.
 Correct: separately verify user-selected import, stored identity, actual selection/KEX/key-only
 authentication and terminal handoff; keep engine-only evidence explicitly scoped.
+
+Wrong: silently relocate desktop IdentityFile paths or drop other unsupported declarations to
+make an import look successful. Correct: preserve CONFIG bytes, project original identity hints,
+and require explicit managed-key choice while retaining nonidentity dependency/policy refusals.

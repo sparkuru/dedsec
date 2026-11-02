@@ -13,7 +13,7 @@
 #define CTOS_SSH_CONFIG_FORWARDS 32U
 #define CTOS_SSH_CONFIG_SOURCE_BYTES 8455704U
 #define CTOS_SSH_CONFIG_EDGES 1024U
-enum ctos_ssh_config_mode { CTOS_CONFIG_EFFECTIVE, CTOS_CONFIG_CATALOG, CTOS_CONFIG_AUDIT, CTOS_CONFIG_RESOURCE_AUDIT };
+enum ctos_ssh_config_mode { CTOS_CONFIG_EFFECTIVE, CTOS_CONFIG_CATALOG, CTOS_CONFIG_AUDIT, CTOS_CONFIG_RESOURCE_AUDIT, CTOS_CONFIG_PROFILE_RESOURCE_AUDIT };
 
 enum ctos_ssh_config_reason {
     CTOS_CONFIG_OK, CTOS_CONFIG_INPUT, CTOS_CONFIG_PATH, CTOS_CONFIG_LIMIT,
@@ -59,6 +59,8 @@ struct ctos_ssh_config_direct_plan {
     unsigned int identity_count, hostfile_count;
     char identity_files[CTOS_SSH_CONFIG_LIST][513];
     char user_hostfiles[CTOS_SSH_CONFIG_HOSTFILES][513];
+    unsigned int identity_hint_count;
+    char identity_hints[CTOS_SSH_CONFIG_LIST][513];
 };
 struct ctos_ssh_config_catalog_entry {
     unsigned int object, line;
@@ -111,6 +113,10 @@ int ctos_ssh_config_eval_prepare_detached(int, uint64_t, struct ctos_ssh_config_
 int ctos_ssh_config_eval_prepare_direct_detached(uint64_t, struct ctos_ssh_config_eval **);
 int ctos_ssh_config_eval_prepare_audit_detached(uint64_t, struct ctos_ssh_config_eval **);
 int ctos_ssh_config_eval_prepare_resource_audit_detached(uint64_t, struct ctos_ssh_config_eval **);
+int ctos_ssh_config_eval_prepare_profile_direct_detached(uint64_t, struct ctos_ssh_config_eval **);
+int ctos_ssh_config_eval_prepare_profile_resource_audit_detached(uint64_t, struct ctos_ssh_config_eval **);
+int ctos_ssh_config_eval_profile_direct_plan(const struct ctos_ssh_config_eval *, const struct ctos_ssh_config_direct_plan **);
+int ctos_ssh_config_eval_profile_resource_audit(const struct ctos_ssh_config_eval *, const struct ctos_ssh_config_resource_audit **);
 int ctos_ssh_config_eval_detached_buffer(struct ctos_ssh_config_eval *, size_t, unsigned char **);
 int ctos_ssh_config_eval_loading_live(const struct ctos_ssh_config_eval *);
 int ctos_ssh_config_eval_complete_detached(struct ctos_ssh_config_eval *, unsigned int,

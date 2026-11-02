@@ -268,10 +268,64 @@ static void lifecycle(void) {
     }
     input_free(&w);
 }
+static ctos_ssh_config_token profile_audit_body(const char *body, int with_key) {
+    struct audit_input w = input_new(with_key ? 3 : 2);
+    input_file(&w, CTOS_SSH_CONFIG, ".ssh/config", body);
+    input_file(&w, CTOS_SSH_KNOWN_HOSTS, ".ssh/known_hosts", NULL);
+    if (with_key) input_file(&w, CTOS_SSH_PRIVATE_KEY, ".ssh/present", NULL);
+    ctos_ssh_config_token token = 0;
+    CHECK(ctos_ssh_config_handle_reserve_profile_resource_audit(&token) == 0);
+    CHECK(load_input(token, &w, 0, NULL, NULL) == 0); input_free(&w); return token;
+}
+static void profile_resources(void) {
+    const char *body = "Host one\n IdentityFile \"/home/source/.ssh/key one\"\n"
+        "Host two\n IdentityFile /home/source/.ssh/key-two\n"
+        "Host three\n IdentityFile relative/key\n"
+        "Host four\n IdentityFile ${KEY}/%h\n"
+        "Host five\n IdentityFile ~/.ssh/missing\n"
+        "Host six\n IdentityFile ~/.ssh/present\n"
+        "Host *\n UserKnownHostsFile ~/.ssh/known_hosts\n";
+    unsigned char out[CTOS_SSH_CONFIG_RESOURCE_BYTES]; size_t n;
+    ctos_ssh_config_token token = profile_audit_body(body, 1); run_audit_ok(token);
+    CHECK(ctos_ssh_config_handle_resource_audit(token, out, &n) == -1 && n == 0);
+    CHECK(ctos_ssh_config_handle_profile_resource_audit(token, out, &n) == 0);
+    CHECK(u32_at(out) == 0x43534352 && u32_at(out + 4) == 2 && u32_at(out + 8) == 3);
+    CHECK(u32_at(out + 16) == 7);
+    const unsigned char *rows = out + 20 + u32_at(out + 12);
+    for (unsigned int i = 0; i < 5; i++) {
+        CHECK(u32_at(rows + 24 * i) == 1 && u32_at(rows + 24 * i + 16) == 6
+            && u32_at(rows + 24 * i + 20) == 0);
+    }
+    CHECK(u32_at(rows + 24 * 5 + 16) == 1 && u32_at(rows + 24 * 5 + 20) == 3);
+    CHECK(u32_at(rows + 24 * 6) == 3 && u32_at(rows + 24 * 6 + 20) == 2);
+    CHECK(ctos_ssh_config_handle_cancel(token) == 0);
+    CHECK(ctos_ssh_config_handle_profile_resource_audit(token, out, &n) == -1 && n == 0);
+    finish_token(token);
+    token = profile_audit_body("IdentityFile ~/.ssh/known_hosts\nIdentityFile none\n", 0);
+    run_audit_ok(token);
+    CHECK(ctos_ssh_config_handle_profile_resource_audit(token, out, &n) == 0);
+    rows = out + 20 + u32_at(out + 12);
+    CHECK(u32_at(rows + 16) == 6 && u32_at(rows + 20) == 0 && u32_at(rows + 24 + 16) == 4);
+    finish_token(token);
+    const char *bad[] = {"Include /home/source/extra\n", "Include missing\n",
+        "UserKnownHostsFile /home/source/known_hosts\n", "UserKnownHostsFile ~/.ssh/missing\n",
+        "IdentityFile\n", "IdentityFile first second\n", "LocalCommand echo forbidden\n",
+        "StrictHostKeyChecking no\n", "RevokedHostKeys /home/source/revoked\n", NULL};
+    for (unsigned int i = 0; bad[i]; i++) {
+        token = profile_audit_body(bad[i], 0); int32_t outcome[5];
+        CHECK(ctos_ssh_config_handle_run(token, outcome) == 0 && outcome[0] != 0);
+        CHECK(ctos_ssh_config_handle_profile_resource_audit(token, out, &n) == -1 && n == 0);
+        finish_token(token);
+    }
+    token = audit_body("IdentityFile /home/source/.ssh/key\n"); int32_t outcome[5];
+    CHECK(ctos_ssh_config_handle_run(token, outcome) == 0 && outcome[1] == CTOS_CONFIG_PATH);
+    CHECK(ctos_ssh_config_handle_profile_resource_audit(token, out, &n) == -1 && n == 0);
+    finish_token(token);
+}
 int main(void) {
     CHECK(ctos_detached_baseline_main() == 0);
     unsigned int before = fd_count(); observe = 1;
-    declaration_rows(); declaration_errors(); original_ordinals(); resource_limits(); lifecycle();
+    declaration_rows(); declaration_errors(); original_ordinals(); resource_limits(); lifecycle(); profile_resources();
     CHECK(fd_count() == before && effects == 0 && capabilities == 0 && owned_mapping == NULL);
     for (unsigned int i = 0; i < 256; i++) CHECK(managed[i].p == NULL);
     observe = 0;

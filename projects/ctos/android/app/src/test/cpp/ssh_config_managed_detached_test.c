@@ -320,6 +320,53 @@ static void direct_text(const unsigned char **cursor, const char *expected) {
     CHECK(value(*cursor) == n && memcmp(*cursor + 4, expected, n) == 0);
     *cursor += 4 + n;
 }
+static void profile_plans(void) {
+    char body[4096] = {0}, line[512];
+    const char *hints[2] = {"/home/source/.ssh/key one", "/home/source/.ssh/key-two"};
+    for (unsigned int i = 0; i < 6; i++) {
+        snprintf(line, sizeof(line), "Host host%u\n HostName server%u.example\n User user%u\n Port %u\n IdentityFile \"%s\"\n",
+            i, i, i, 2200 + i, hints[i % 2]); strcat(body, line);
+    }
+    strcat(body, "Host *\n UserKnownHostsFile ~/.ssh/known_hosts\n");
+    unsigned char out[CTOS_SSH_CONFIG_DIRECT_BYTES]; size_t n;
+    for (unsigned int i = 0; i < 6; i++) {
+        char alias[32], host[32], user[32]; snprintf(alias, sizeof(alias), "host%u", i);
+        snprintf(host, sizeof(host), "server%u.example", i); snprintf(user, sizeof(user), "user%u", i);
+        struct source_wire source = wire_new(2, 1024, CTOS_SSH_IO_READ_BYTES, CTOS_SSH_CONFIG_LINES);
+        record(&source, CTOS_SSH_CONFIG, ".ssh/config", body);
+        record(&source, CTOS_SSH_KNOWN_HOSTS, ".ssh/known_hosts", NULL);
+        struct source_wire request = direct_request(alias, ""); ctos_ssh_config_token token = 0;
+        CHECK(ctos_ssh_config_handle_reserve_profile_direct(&token) == 0);
+        CHECK(load(token, &source, 0, &request, NULL) == 0); int32_t outcome[5]; CHECK(ctos_ssh_config_handle_run(token, outcome) == 0 && outcome[0] == 0);
+        CHECK(ctos_ssh_config_handle_direct_plan(token, out, &n) == -1 && n == 0);
+        CHECK(ctos_ssh_config_handle_profile_direct_plan(token, out, &n) == 0);
+        CHECK(value(out) == 0x43535050 && value(out + 4) == 1 && value(out + 8) == 2200 + i);
+        CHECK(value(out + 16) == 1 && value(out + 40) == 1 && value(out + 44) == 1);
+        const unsigned char *cursor = out + 48;
+        direct_text(&cursor, alias); direct_text(&cursor, host); direct_text(&cursor, user);
+        direct_text(&cursor, hints[i % 2]); direct_text(&cursor, ".ssh/known_hosts");
+        CHECK((size_t)(cursor - out) == n);
+        CHECK(ctos_ssh_config_handle_cancel(token) == 0);
+        CHECK(ctos_ssh_config_handle_profile_direct_plan(token, out, &n) == -1 && n == 0);
+        finish_handle(token); drop(&source); drop(&request);
+    }
+    const char *extras[] = {"", "IdentityFile none\n", "IdentityFile relative/key\nIdentityFile ${KEY}/%h\n",
+        "PubkeyAuthentication no\n", "Include missing\n", "UserKnownHostsFile /home/source/known\n",
+        "StrictHostKeyChecking no\n", "LocalCommand echo forbidden\n", "ProxyJump jump.invalid\n", NULL};
+    for (unsigned int i = 0; extras[i]; i++) {
+        snprintf(body, sizeof(body), "Host target\n HostName server.example\n User remote\n%sUserKnownHostsFile ~/.ssh/known_hosts\n", extras[i]);
+        struct source_wire source = one(body), request = direct_request("target", "");
+        ctos_ssh_config_token token = 0; CHECK(ctos_ssh_config_handle_reserve_profile_direct(&token) == 0);
+        CHECK(load(token, &source, 0, &request, NULL) == 0); int32_t outcome[5];
+        CHECK(ctos_ssh_config_handle_run(token, outcome) == 0);
+        if (i < 4) {
+            CHECK(outcome[0] == 0 && ctos_ssh_config_handle_profile_direct_plan(token, out, &n) == 0);
+            CHECK(value(out + 40) == (i == 2 ? 2 : 0));
+            if (i == 3) CHECK(value(out + 16) == 0);
+        } else CHECK(outcome[0] != 0 && ctos_ssh_config_handle_profile_direct_plan(token, out, &n) == -1 && n == 0);
+        finish_handle(token); drop(&source); drop(&request);
+    }
+}
 static void direct_plans(void) {
     const char *body = "Host ignored\n ProxyJump jump.invalid\nHost target !excluded\n"
         " HostName TARGET.EXAMPLE\n User remote\n Port 2207\n Include direct.conf\n"
@@ -496,7 +543,7 @@ static void reservations(void) {
 int main(void) {
     CHECK(ctos_detached_baseline_main() == 0);
     unsigned int before = fd_count(); observe = 1;
-    basic_registry(); malformed_wire(); request_modes(); budgets(); staged_declarations(); failures_and_cancel(); result_lifetime(); direct_plans(); low_memlock(); reservations();
+    basic_registry(); malformed_wire(); request_modes(); budgets(); staged_declarations(); failures_and_cancel(); result_lifetime(); direct_plans(); profile_plans(); low_memlock(); reservations();
     CHECK(fd_count() == before && capabilities == 0 && effects == 0 && owned_mapping == NULL);
     for (unsigned int i = 0; i < 256; i++) CHECK(managed[i].p == NULL);
     observe = 0;

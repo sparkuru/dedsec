@@ -6,13 +6,19 @@ local forget/delete text buttons as well as the outlined use action, including h
 Do not stretch each card action into full-width banners. Keep destructive error color and
 the existing exact impact confirmation; layout must support clear and saved-phrase keys.
 
+2026-11-02: [config identity selection](../backend/ssh-config-identity-selection.md) makes a
+valid imported profile independent of its original IdentityFile paths. Parse optional
+identityHints as bounded protected public text, never managed paths. Keep no-key profiles visible;
+clicking explains key import. With keys, always show an explicit scrollable chooser, even for
+one key, with original hints and actual key label/path/algorithm/fingerprint. Cancel/coverage/
+background/stale generation cannot select. There is no automatic first-key or saved-Account
+default. Preserve exact alias/binding/keyId configConnect and ordinary encrypted phrase flow.
+
 2026-10-30: [private-key deletion](../backend/ssh-key-deletion.md) adds a public impact preview,
 explicit destructive confirmation and exact ticket commit/cancel. Keep the sensitive window
-until terminal mutation outcome is acknowledged. Show missing effective identity paths and
-disable affected config rows; retain external originals and distinguish forgetting a phrase.
-Disabled host rows must keep recovery instructions readable with explicit theme onSurface /
-onSurfaceVariant colors and error icon; disabled semantics must not dim essential missing-key
-paths below readable contrast. The row remains noninteractive and cannot choose another key.
+until terminal mutation outcome is acknowledged. Retain profiles and original hint text after
+deletion; an unavailable selected ID needs fresh choice, never silent fallback. Real config
+error rows remain disabled with readable explicit theme onSurface/onSurfaceVariant and icon.
 
 2026-10-30: [encrypted private-key flows](../backend/ssh-encrypted-key-connect.md) extend the
 protected library/connection route. Library exposes only encrypted/saved-state flags; locked

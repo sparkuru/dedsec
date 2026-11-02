@@ -1,5 +1,9 @@
 # Explicit CONFIG resource references
 
+The separate [product identity-hint policy](ssh-config-identity-selection.md) adds CSCRv2/flags3
+for imported profiles. This document still defines generic CSCRv1/flags1: its closed states and
+strict path semantics are unchanged. Never accept a profile frame through a generic decoder.
+
 ## 1. Scope / Trigger
 
 Use [the resource contract](../../../design/ssh-config-resources.md) for explicit IdentityFile,

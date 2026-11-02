@@ -23,6 +23,7 @@ general database. Use these guides for work below the Flutter presentation layer
 | [Password SSH Connection](./ssh-password-connect.md) | Real managed trust, default transient/explicit saved Account password, atomic save/forget, proof-bound selected read, TCP/FD handoff and operable UI |
 | [SSH Background Session](./ssh-background-session.md) | Service owner, SUCCESS-only retirement, screen-lock cancellation and cleanup finalization, RAM reconnect hints, manual fresh connection, exact notification Stop and Activity reattachment |
 | [Config and Private-key Connection](./ssh-key-config-connect.md) | Real public derivation, strict native direct plan, SAF memory import, atomic file/identity metadata and actual key-only connection |
+| [Config Identity Selection](./ssh-config-identity-selection.md) | Config-first profiles, explicit managed-key choice and typed IdentityFile hints; old strict modes and graph compatibility |
 | [Encrypted Private-key Connection](./ssh-encrypted-key-connect.md) | Original encrypted import, actual phrase/public proof, one-use or atomic saved key phrase, exact CSASv2/CSKB release and forget |
 | [Private-key Deletion](./ssh-key-deletion.md) | Exact reviewed bundle removal, retained CONFIG bytes, absent-identity refusal and atomic reimport reference repair |
 | [Error Handling](./error-handling.md) | Typed snapshot states, channel errors, and runtime failures |

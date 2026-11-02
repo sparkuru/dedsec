@@ -21,6 +21,12 @@ int ctos_ssh_config_handle_open(ctos_ssh_view_token, const unsigned char *, size
 int ctos_ssh_config_handle_open_catalog(ctos_ssh_view_token, ctos_ssh_config_token *);
 int ctos_ssh_config_handle_reserve_detached(int, ctos_ssh_config_token *);
 int ctos_ssh_config_handle_reserve_direct(ctos_ssh_config_token *);
+int ctos_ssh_config_handle_reserve_profile_direct(ctos_ssh_config_token *);
+int ctos_ssh_config_handle_reserve_profile_resource_audit(ctos_ssh_config_token *);
+int ctos_ssh_config_handle_profile_direct_plan(ctos_ssh_config_token, unsigned char [CTOS_SSH_CONFIG_DIRECT_BYTES], size_t *);
+int ctos_ssh_config_handle_profile_direct_plan_live(ctos_ssh_config_token);
+int ctos_ssh_config_handle_profile_resource_audit(ctos_ssh_config_token, unsigned char [CTOS_SSH_CONFIG_RESOURCE_BYTES], size_t *);
+int ctos_ssh_config_handle_profile_resource_audit_live(ctos_ssh_config_token);
 int ctos_ssh_config_handle_reserve_audit(ctos_ssh_config_token *);
 int ctos_ssh_config_handle_reserve_resource_audit(ctos_ssh_config_token *);
 int ctos_ssh_config_handle_audit(ctos_ssh_config_token,

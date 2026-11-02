@@ -244,6 +244,20 @@ final class SshConnectionMaterial {
     }
     static SshConfigEvaluator.DirectPlan plan(VaultManifest manifest, String root, String alias,
             String user, long deadline, AppSecrets.EffectGuard guard, Limits limits) throws IOException, VaultException {
+        return planMode(manifest, root, alias, user, deadline, guard, limits, false);
+    }
+    static SshConfigEvaluator.ProfilePlan profilePlan(VaultManifest manifest, String root, String alias,
+            String user, long deadline, AppSecrets.EffectGuard guard) throws IOException, VaultException {
+        return profilePlan(manifest, root, alias, user, deadline, guard, null);
+    }
+    static SshConfigEvaluator.ProfilePlan profilePlan(VaultManifest manifest, String root, String alias,
+            String user, long deadline, AppSecrets.EffectGuard guard, Limits limits) throws IOException, VaultException {
+        if (!root.startsWith(".ssh/") || root.equals(MANUAL)) throw unsupported();
+        return (SshConfigEvaluator.ProfilePlan)planMode(manifest, root, alias, user, deadline, guard, limits, true);
+    }
+    private static SshConfigEvaluator.DirectPlan planMode(VaultManifest manifest, String root, String alias,
+            String user, long deadline, AppSecrets.EffectGuard guard, Limits limits, boolean profile)
+            throws IOException, VaultException {
         retryCleanup();
         byte[] source = detached(manifest);
         SshConfigEvaluator evaluator = null;
@@ -255,16 +269,31 @@ final class SshConnectionMaterial {
             }
             String[] local = SshNativeRoleBootstrap.systemIdentity();
             if (local == null || local.length != 2) throw unsupported();
-            evaluator = SshConfigEvaluator.prepareDirectDetached(() -> check(guard));
+            evaluator = profile ? SshConfigEvaluator.prepareProfileDirectDetached(() -> check(guard))
+                    : SshConfigEvaluator.prepareDirectDetached(() -> check(guard));
             retain(evaluator);
             int index = index(manifest, root);
             evaluator.loadDetached(source, index, deadline, new SshConfigEvaluator.Request(alias, user, "",
                     local[0], local[1], "", "", 0, Process.myUid()));
             evaluator.run();
-            SshConfigEvaluator.DirectPlan result = evaluator.directPlan();
+            SshConfigEvaluator.DirectPlan result = profile ? evaluator.profileDirectPlan() : evaluator.directPlan();
             guard.check();
             return result;
         } finally { VaultCodec.wipe(source); if (evaluator != null) closeEvaluator(evaluator); }
+    }
+
+    static String singleTrustPath(VaultManifest manifest, SshConfigEvaluator.DirectPlan plan) throws VaultException {
+        String selected = null;
+        for (String path : plan.userKnownHostsFiles) {
+            VaultManifest.FileObject file = file(manifest, path);
+            if (file == null) continue;
+            if (file.type != VaultManifest.FileType.KNOWN_HOSTS || selected != null)
+                throw new VaultException("SSH_CONFIG_UNSUPPORTED", "This connection cannot consume multiple host trust sources");
+            selected = path;
+        }
+        if (selected == null)
+            throw new VaultException("SSH_CONFIG_DEPENDENCY", "The managed host trust file is missing");
+        return selected;
     }
 
     static List<String> missingIdentityPaths(VaultManifest manifest, SshConfigEvaluator.DirectPlan plan)
@@ -296,7 +325,7 @@ final class SshConnectionMaterial {
         synchronized (PENDING_CONFIGS) { PENDING_CONFIGS.put(Thread.currentThread(), inspector); }
         List<VaultManifest.FileObject> changed = new ArrayList<>();
         try {
-            SshManifestConfigInspector.Report report = inspector.inspectResourceDeclarationsForReferenceRefresh(
+            SshManifestConfigInspector.Report report = inspector.inspectProfileResourceDeclarationsForReferenceRefresh(
                     manifest, deadline, new SshManifestConfigInspector.Cancellation());
             for (SshManifestConfigInspector.Root root : report.roots) {
                 if (!root.path.startsWith(".ssh/")) continue;
@@ -319,13 +348,17 @@ final class SshConnectionMaterial {
         byte[] source = detached(manifest);
         SshConfigEvaluator evaluator = null;
         try {
-            evaluator = SshConfigEvaluator.prepareDetachedResourceAudit(() -> {
+            boolean profile = root.startsWith(".ssh/") && !root.equals(MANUAL);
+            SshConfigEvaluator.DetachedGuard guard = () -> {
                 if (SystemClock.elapsedRealtime() >= deadline) throw new IOException("SSH configuration expired");
-            });
+            };
+            evaluator = profile ? SshConfigEvaluator.prepareDetachedProfileResourceAudit(guard)
+                    : SshConfigEvaluator.prepareDetachedResourceAudit(guard);
             retain(evaluator);
             evaluator.loadDetached(source, index(manifest, root), deadline, null);
             evaluator.run();
-            SshConfigEvaluator.ResourceAudit audit = evaluator.resourceAudit(1024 * 1024, 4096);
+            SshConfigEvaluator.ResourceAudit audit = profile ? evaluator.profileResourceAudit(1024 * 1024, 4096)
+                    : evaluator.resourceAudit(1024 * 1024, 4096);
             return references(manifest, index(manifest, root) + 1, audit);
         } finally { VaultCodec.wipe(source); if (evaluator != null) closeEvaluator(evaluator); }
     }
@@ -351,7 +384,9 @@ final class SshConnectionMaterial {
         // Strict import covers the entire traversed Include closure; references remain direct edges.
         for (SshConfigEvaluator.Resource resource : audit.resources)
             if (resource.state != SshConfigEvaluator.Resource.STATIC
-                    && resource.state != SshConfigEvaluator.Resource.DISABLED)
+                    && resource.state != SshConfigEvaluator.Resource.DISABLED
+                    && !(audit.profileIdentities && resource.kind == 1
+                    && resource.state == SshConfigEvaluator.Resource.IDENTITY_HINT))
                 throw new VaultException("SSH_CONFIG_DEPENDENCY", "Import the referenced SSH file or edit its managed path");
         return references(manifest, parent, audit, false);
     }
@@ -371,6 +406,8 @@ final class SshConnectionMaterial {
             if (resource.state == SshConfigEvaluator.Resource.STATIC)
                 references.add(manifest.files.get(resource.target - 1).path);
             else if (resource.state != SshConfigEvaluator.Resource.DISABLED
+                    && !(audit.profileIdentities && resource.kind == 1
+                    && resource.state == SshConfigEvaluator.Resource.IDENTITY_HINT)
                     && !(allowMissingIdentity && resource.kind == 1
                     && resource.state == SshConfigEvaluator.Resource.DEFERRED_KEY_RESOLUTION))
                 throw new VaultException("SSH_CONFIG_DEPENDENCY", "Import the referenced SSH file or edit its managed path");

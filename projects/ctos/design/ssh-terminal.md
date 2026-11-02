@@ -1,5 +1,23 @@
 # SSH 终端规划入口
 
+2026-11-02 当前修正：用户实际config导入被电脑IdentityFile路径阻断，已批准
+[先导入连接项、连接时选择私钥](ssh-config-identity-selection.md)。原路径只为提示，
+不做迁移或默认猜测。本地检查及独立复核通过，正式eed028f0…已保留数据更新指定板并
+启动；用户已确认效果通过、实际remote连接成功。[当前记录](verification.md#20261102-ssh-config-identity-selection)。
+
+2026-11-02 用户澄清：“批量”指一个config中的多个Host连接项；取消整目录功能及路径
+适配。当前保留[导入配置／独立私钥](ssh-key-config-connect.md)和编辑／粘贴配置，目录
+专用实现已移除，既有库内资料保留。318 Flutter／799 JVM、原生配置／多Host枚举、布局与
+构建lint／v2通过；正式e1241897…已按用户要求保留数据更新开发板并启动，待体验。
+[安装](verification.md#20261102-ssh-single-config-formal-install)及[验证](verification.md#20261102-ssh-single-config)分列。
+
+2026-10-30 历史：[目录批量导入](ssh-directory-import.md)在私钥与配置页增加「导入目录」。
+支持当前direct配置／Include与软件私钥闭包，逐项选择／解锁／审阅后一次保存；来源信任
+和证书明确阻断或排除。819 JVM／331 Flutter及指定板31.649秒隔离验证通过。用户随后
+允许保留数据更新，正式b2d91de2…已安装同板并启动，待人工体验；
+[安装](verification.md#20261030-ssh-directory-formal-install)与
+[隔离证据](verification.md#20261030-ssh-directory-import)分别记录。
+
 2026-10-30 当前正式fc98已获用户“功能通过”及提交授权，密钥管理本轮人工验收通过；
 原1008父任务继续。[当前验收范围](verification.md#20261030-ssh-keys-human-acceptance)。
 
@@ -76,9 +94,10 @@ MainActivity、ContentResolver、加密提交、JNI、主机核验、私钥认�
 由隔离provider提供，真实DocumentsUI/文件grant和此次新界面人工体验仍待用户验证。
 未访问用户真实私钥或实际SSH目标。
 
-当前支持前台密码与普通无口令私钥直连、受约束config/Include导入编辑。加密私钥、
-证书/agent/KBI、ProxyJump、转发、rekey、后台服务和复杂恢复仍未交付。未消费的配置
-明确拒绝，不忽略后直连；不承诺切后台保活。父规划继续in_progress，本轮不提交/归档。
+当前已交付密码与普通／加密软件私钥直连、受约束config/Include导入编辑、可选保存与
+忘记凭据、私钥删除，以及后台服务／通知停止／锁屏断开和主动重连。目录批量导入已由
+用户于11-02撤销；当前单config多个Host与独立私钥收敛的验证见上方记录。证书/agent/KBI、ProxyJump、转发、rekey和复杂恢复
+继续按父规划推进；未消费的配置明确拒绝，不忽略后直连。父规划保持in_progress。
 
 ## 历史交付记录
 

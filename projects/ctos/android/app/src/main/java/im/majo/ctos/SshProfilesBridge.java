@@ -240,24 +240,28 @@ final class SshProfilesBridge implements AutoCloseable {
                     (SshConfigEvaluator.MAX_OPENS - scan.usage.opens) / count,
                     (SshConfigEvaluator.MAX_READ_BYTES - scan.usage.readBytes) / count,
                     (SshConfigEvaluator.MAX_LINES - scan.usage.lines) / count);
+            int hintCount = 0, hintBytes = 0;
             for (SshConfigEvaluator.Entry alias : scan.catalog.entries) {
                 request.check();
                 try {
-                    SshConfigEvaluator.DirectPlan plan = SshConnectionMaterial.plan(source.manifest,
+                    SshConfigEvaluator.ProfilePlan plan = SshConnectionMaterial.profilePlan(source.manifest,
                             SshConnectionMaterial.ROOT, alias.alias, "", deadline, request::check, share);
                     List<String> eligible = new ArrayList<>();
-                    List<String> missing = SshConnectionMaterial.missingIdentityPaths(source.manifest, plan);
-                    if (plan.pubkeyAuthentication && missing.isEmpty())
-                        for (String path : plan.identityFiles)
-                            for (SshConnectionMaterial.Key key : material)
-                                if (key.path.equals(path) && !eligible.contains(key.id)) eligible.add(key.id);
+                    hintCount += plan.identityHints.size();
+                    for (String hint : plan.identityHints) hintBytes += hint.getBytes(StandardCharsets.UTF_8).length;
+                    if (hintCount > 4096 || hintBytes > 1024 * 1024)
+                        throw failure("SSH_CONFIG_LIMIT");
+                    if (plan.pubkeyAuthentication)
+                        for (SshConnectionMaterial.Key key : material) eligible.add(key.id);
                     Map<String, Object> row = new HashMap<>(VaultCollections.map("alias", alias.alias, "host", plan.hostname,
                             "port", plan.port, "username", plan.user, "keyIds", VaultCollections.copyList(eligible),
-                            "missingIdentityPaths", VaultCollections.copyList(missing),
+                            "identityHints", plan.identityHints,
                             "binding", SshConnectionMaterial.configBinding(source, alias.alias)));
-                    if (eligible.isEmpty()) row.put("error", "SSH_KEY_MISSING");
+                    if (!plan.pubkeyAuthentication) row.put("error", "SSH_KEY_SELECTION");
                     hosts.add(java.util.Collections.unmodifiableMap(row));
                 } catch (IOException | VaultException failure) {
+                    if (failure instanceof VaultException && ((VaultException)failure).code.equals("SSH_CONFIG_LIMIT"))
+                        throw failure;
                     hosts.add(VaultCollections.map("alias", alias.alias, "host", "", "port", 22,
                             "username", "", "keyIds", List.of(), "error", configCode(failure),
                             "binding", SshConnectionMaterial.configBinding(source, alias.alias)));
@@ -512,7 +516,7 @@ final class SshProfilesBridge implements AutoCloseable {
                 || !selected.binding.equals(binding) || (selected.deleting != null) != deletion
                 || !deletion && (!(replace instanceof Boolean)
                 || (Boolean)replace != selected.replacing || selected.imported == null)) throw failure("VAULT_CHANGED");
-        if (connecting.getAsBoolean() || committing != null) throw failure("BUSY");
+        if (connecting.getAsBoolean() || committing != null || input != null) throw failure("BUSY");
         Request origin = (Request)selected.owner; origin.check(); admission.admit(id);
         Request request = new Request(id, result, origin.deadline);
         requests.put(id, request); committing = request;
@@ -567,7 +571,7 @@ final class SshProfilesBridge implements AutoCloseable {
 
     boolean cancel(String id) {
         Request request = requests.get(id);
-        if (request == null) return false;
+        if (request == null || request.cancelled) return false;
         if (request.handedOff && (ticket == null || ticket.owner != request)) return false;
         if (request.handedOff) return false;
         request.cancel();

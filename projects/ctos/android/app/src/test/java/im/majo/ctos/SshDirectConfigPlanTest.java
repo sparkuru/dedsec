@@ -23,6 +23,7 @@ public final class SshDirectConfigPlanTest {
         Runnable during;
         @Override public long open(long view, byte[] request) { return 31; }
         @Override public long reserveDirect() { reserved++; return 31; }
+        @Override public long reserveProfileDirect() { reserved++; return 31; }
         @Override public long reserveDetached(boolean catalog) { return 32; }
         @Override public void loadDetached(long handle, byte[] source, int root, long deadline, byte[] request) {
             loaded++; assertNotNull(request); assertEquals(0x43534551, ByteBuffer.wrap(request).getInt());
@@ -33,6 +34,7 @@ public final class SshDirectConfigPlanTest {
             byte[] result = response.clone(); outputs.add(result);
             if (during != null) during.run(); return result;
         }
+        @Override public byte[] profileDirectPlan(long handle) { return directPlan(handle); }
         @Override public void cancel(long handle) { cancelled++; }
         @Override public void close(long handle) { closed++; }
         @Override public void destroy(long handle) { destroyed++; }
@@ -64,6 +66,40 @@ public final class SshDirectConfigPlanTest {
     private static void rejected(Work work) throws Exception {
         try { work.run(); fail("Expected direct plan refusal"); } catch (IOException expected) { }
     }
+    @Test public void profileHintsAreDistinctFromManagedPathsAndOldGettersStayStrict() throws Exception {
+        Binding binding = new Binding();
+        binding.response = frame("remote", "/home/source/.ssh/key with spaces", "relative/key", "${KEY}/%h");
+        ByteBuffer.wrap(binding.response).putInt(0, 0x43535050);
+        try (SshConfigEvaluator evaluator = SshConfigEvaluator.prepareProfileDirectDetached(() -> { }, binding)) {
+            evaluator.loadDetached(source(), 0, 31000, request()); evaluator.run();
+            rejected(evaluator::directPlan);
+            SshConfigEvaluator.ProfilePlan plan = evaluator.profileDirectPlan();
+            assertTrue(plan.identityFiles.isEmpty());
+            assertEquals(List.of("/home/source/.ssh/key with spaces", "relative/key", "${KEY}/%h"), plan.identityHints);
+            assertEquals(List.of(".ssh/known_hosts"), plan.userKnownHostsFiles);
+            try { plan.identityHints.add("foreign"); fail(); } catch (UnsupportedOperationException expected) { }
+            evaluator.cancel(); rejected(evaluator::profileDirectPlan); binding.clean();
+        }
+        for (boolean oldMode : List.of(false, true)) {
+            Binding wrong = new Binding(); wrong.response = frame("remote", ".ssh/key");
+            if (oldMode) ByteBuffer.wrap(wrong.response).putInt(0, 0x43535050);
+            try (SshConfigEvaluator evaluator = oldMode ? prepare(wrong)
+                    : SshConfigEvaluator.prepareProfileDirectDetached(() -> { }, wrong)) {
+                evaluator.loadDetached(source(), 0, 31000, request()); evaluator.run();
+                if (oldMode) rejected(evaluator::directPlan); else rejected(evaluator::profileDirectPlan);
+                wrong.clean();
+            }
+        }
+        for (String hint : List.of("bad\u0001value", "bad\u0085value", "x".repeat(513))) {
+            Binding wrong = new Binding(); wrong.response = frame("remote", hint);
+            ByteBuffer.wrap(wrong.response).putInt(0, 0x43535050);
+            try (SshConfigEvaluator evaluator = SshConfigEvaluator.prepareProfileDirectDetached(() -> { }, wrong)) {
+                evaluator.loadDetached(source(), 0, 31000, request()); evaluator.run();
+                rejected(evaluator::profileDirectPlan); wrong.clean();
+            }
+        }
+    }
+
     @Test public void directProjectionRetainsActualTupleAndManagedPathsWithoutNativePointer() throws Exception {
         Binding binding = new Binding(); binding.response = frame("remote", ".ssh/id_ed25519");
         try (SshConfigEvaluator evaluator = prepare(binding)) {
@@ -128,6 +164,32 @@ public final class SshDirectConfigPlanTest {
         try (SshConfigEvaluator evaluator = prepare(cancelled)) {
             evaluator.loadDetached(source(), 0, 31000, request()); evaluator.run(); evaluator.cancel();
             rejected(evaluator::directPlan); assertEquals(0, cancelled.outputs.size());
+        }
+    }
+
+    @Test public void actualTrustSourceMustBeConsumableBeforeEitherConnectionPreparation() throws Exception {
+        VaultManifest.FileObject hosts = new VaultManifest.FileObject(VaultManifest.FileType.KNOWN_HOSTS,
+                "hosts", ".ssh/known_hosts", "trust", new byte[0], List.of());
+        VaultManifest.FileObject second = new VaultManifest.FileObject(VaultManifest.FileType.KNOWN_HOSTS,
+                "second", "ssh/known_hosts", "second-trust", new byte[0], List.of());
+        VaultManifest.FileObject wrong = new VaultManifest.FileObject(VaultManifest.FileType.CONFIG,
+                "wrong", ".ssh/known_hosts", "wrong-kind", new byte[0], List.of());
+        byte[] one = frame("remote");
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream(); bytes.write(one);
+        text(new DataOutputStream(bytes), "ssh/known_hosts");
+        byte[] multiple = bytes.toByteArray(); ByteBuffer.wrap(multiple).putInt(44, 2);
+        for (int mode = 0; mode < 4; mode++) {
+            Binding binding = new Binding(); binding.response = mode == 3 ? multiple : one;
+            try (VaultManifest manifest = new VaultManifest(List.of(), mode == 0 ? List.of(hosts)
+                    : mode == 1 ? List.of() : mode == 2 ? List.of(wrong) : List.of(hosts, second));
+                    SshConfigEvaluator evaluator = prepare(binding)) {
+                evaluator.loadDetached(source(), 0, 31000, request()); evaluator.run();
+                if (mode == 0) assertEquals(".ssh/known_hosts", SshConnectionMaterial.singleTrustPath(manifest, evaluator.directPlan()));
+                else try { SshConnectionMaterial.singleTrustPath(manifest, evaluator.directPlan()); fail("Unconsumable trust source"); }
+                catch (VaultException expected) {
+                    assertEquals(mode == 1 ? "SSH_CONFIG_DEPENDENCY" : "SSH_CONFIG_UNSUPPORTED", expected.code);
+                }
+            }
         }
     }
 
