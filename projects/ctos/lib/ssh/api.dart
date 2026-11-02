@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import '../secrets/api.dart';
 
 part 'library_api.dart';
+part 'host_trust_api.dart';
 
 enum SshAttemptState { connecting, reviewing, connected, failed, cancelled }
 
@@ -386,7 +387,8 @@ String sshConnectionError(Object error) {
     'VAULT_PROTECTION_REQUIRED' => '未取得敏感页面保护，请重新打开 SSH 连接。',
     'VAULT_COMMIT_UNCERTAIN' => '保存结果未能确认，请重新解锁并核验连接信息、已保存密码或主机密钥。',
     'SSH_PASSWORD_MISSING' => '此连接没有已保存密码，请输入密码后重试。',
-    'SSH_HOSTKEY_CHANGED' || 'SSH_HOST_KEY_CHANGED' => '主机密钥与已保存记录不同，连接已拒绝。',
+    'SSH_HOSTKEY_CHANGED' ||
+    'SSH_HOST_KEY_CHANGED' => '主机密钥与已保存记录不同，连接已拒绝。可在“私钥与配置 → 主机信任”核对并管理旧记录。',
     'SSH_HOSTKEY_REVOKED' || 'SSH_HOST_KEY_REVOKED' => '主机密钥已被撤销，连接已拒绝。',
     'SSH_HOST_KEY_CERTIFICATE' => '此连接方式暂不支持主机证书。',
     'SSH_HOST_KEY_INVALID' => '服务端主机密钥无效，连接已拒绝。',

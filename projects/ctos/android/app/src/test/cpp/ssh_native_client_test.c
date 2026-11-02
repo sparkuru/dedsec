@@ -1122,6 +1122,9 @@ static void setup_revoked_fixture(struct fixture *fixture,
 static void cleanup_fixture(struct fixture *fixture,
     unsigned int expected_release_calls) {
     CHECK(ctos_ssh_native_client_close(fixture->client) == 0);
+    enum ctos_ssh_native_host_key_rejection rejection = CTOS_SSH_HOST_REJECTION_CHANGED;
+    CHECK(ctos_ssh_native_client_host_key_rejection(fixture->client, &rejection) != 0
+        && errno == ENOENT && rejection == CTOS_SSH_HOST_REJECTION_NONE);
     enum ctos_ssh_native_client_password_auth_result auth = CTOS_SSH_PASSWORD_AUTH_SUCCESS;
     errno = 0;
     CHECK(ctos_ssh_native_client_password_auth_result(fixture->client, &auth) != 0
@@ -2630,6 +2633,24 @@ static void test_verify_new_host_key_candidate_rollback(void) {
     cleanup_fixture(&fixture, 2);
 }
 
+struct host_rejection_thread {
+    struct ctos_ssh_native_client *client;
+    enum ctos_ssh_native_host_key_rejection rejection;
+    int result;
+};
+
+static void *host_rejection_wrong_thread(void *opaque) {
+    struct host_rejection_thread *attempt = opaque;
+    attempt->result = ctos_ssh_native_client_host_key_rejection(attempt->client, &attempt->rejection);
+    return NULL;
+}
+
+static void assert_host_rejection(struct ctos_ssh_native_client *client,
+    enum ctos_ssh_native_host_key_rejection expected) {
+    enum ctos_ssh_native_host_key_rejection rejection = CTOS_SSH_HOST_REJECTION_CERTIFICATE;
+    CHECK(ctos_ssh_native_client_host_key_rejection(client, &rejection) == 0 && rejection == expected);
+}
+
 static void test_verify_changed_host_key_classification(void) {
     struct fixture fixture;
     struct ctos_ssh_hostfile_issue issue = {0};
@@ -2641,6 +2662,7 @@ static void test_verify_changed_host_key_classification(void) {
     CHECK(sshkey_from_private(known_hosts_private_key, &known_hosts_public_key) == 0);
     CHECK(expected_fingerprint(known_hosts_public_key, known_hosts_fingerprint) == 0);
     setup_fixture(&fixture, 15000U, known_hosts_public_key);
+    assert_host_rejection(fixture.client, CTOS_SSH_HOST_REJECTION_NONE);
     CHECK(memcmp(known_hosts_fingerprint, fixture.fingerprint,
         sizeof(known_hosts_fingerprint)) != 0);
 
@@ -2669,6 +2691,17 @@ static void test_verify_changed_host_key_classification(void) {
         fixture.public_blob, fixture.public_blob_length) != 0
         && errno == EACCES);
     CHECK(fixture.callback.host_evidence_calls == 0);
+    assert_host_rejection(fixture.client, CTOS_SSH_HOST_REJECTION_CHANGED);
+    struct host_rejection_thread attempt = {fixture.client, CTOS_SSH_HOST_REJECTION_CHANGED, 0};
+    pthread_t thread;
+    CHECK(pthread_create(&thread, NULL, host_rejection_wrong_thread, &attempt) == 0);
+    CHECK(pthread_join(thread, NULL) == 0);
+    CHECK(attempt.result != 0 && attempt.rejection == CTOS_SSH_HOST_REJECTION_NONE);
+    assert_host_rejection(fixture.client, CTOS_SSH_HOST_REJECTION_CHANGED);
+    enum ctos_ssh_native_host_key_rejection invalid = CTOS_SSH_HOST_REJECTION_CHANGED;
+    CHECK(ctos_ssh_native_client_host_key_rejection(NULL, &invalid) != 0
+        && invalid == CTOS_SSH_HOST_REJECTION_NONE);
+    CHECK(ctos_ssh_native_client_host_key_rejection(fixture.client, NULL) != 0);
 
     cleanup_fixture(&fixture, 1);
     sshkey_free(known_hosts_public_key);
@@ -2706,6 +2739,7 @@ static void test_verify_revoked_host_key_classification(void) {
         fixture.public_blob, fixture.public_blob_length) != 0
         && errno == EACCES);
     CHECK(fixture.callback.host_evidence_calls == 0);
+    assert_host_rejection(fixture.client, CTOS_SSH_HOST_REJECTION_REVOKED);
 
     cleanup_fixture(&fixture, 1);
 }
@@ -2740,6 +2774,7 @@ static void test_verify_certificate_host_key_classification(void) {
         fixture.public_blob, fixture.public_blob_length) != 0
         && errno == EACCES);
     CHECK(fixture.callback.host_evidence_calls == 0);
+    assert_host_rejection(fixture.client, CTOS_SSH_HOST_REJECTION_CERTIFICATE);
 
     cleanup_fixture(&fixture, 1);
 }
@@ -2775,6 +2810,7 @@ static void test_verify_invalid_hostfile_classification(void) {
         fixture.public_blob, fixture.public_blob_length) != 0
         && errno == EACCES);
     CHECK(fixture.callback.host_evidence_calls == 0);
+    assert_host_rejection(fixture.client, CTOS_SSH_HOST_REJECTION_NONE);
 
     cleanup_fixture(&fixture, 1);
 }

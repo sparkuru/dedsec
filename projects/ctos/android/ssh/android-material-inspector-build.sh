@@ -11,6 +11,7 @@ readonly TEST="$PROJECT_ROOT/android/app/src/test/cpp/ssh_material_inspect_test.
 readonly PAIR_TEST="$PROJECT_ROOT/android/app/src/test/cpp/ssh_key_association_test.c"
 readonly PRIVATE_TEST="$PROJECT_ROOT/android/app/src/test/cpp/ssh_private_material_test.c"
 readonly CERTIFICATE_TEST="$PROJECT_ROOT/android/app/src/test/cpp/ssh_certificate_facts_test.c"
+readonly HOST_TRUST_TEST="$PROJECT_ROOT/android/app/src/test/cpp/ssh_host_trust_test.c"
 readonly NDK_BIN="$PROJECT_ROOT/.devhome/android-sdk/ndk/27.0.12077973/toolchains/llvm/prebuilt/linux-x86_64/bin"
 readonly STYLE_TITLE=$'\033[1;36m'
 readonly STYLE_ERROR=$'\033[1;31m'
@@ -28,7 +29,7 @@ style_text() {
 }
 usage() {
 	style_text "$STYLE_TITLE" 'Pinned context-free SSH material inspector'
-	printf '\nUsage: %s --output <new-directory> [--test | --static-test | --pair-test | --static-pair-test | --private-test | --static-private-test | --certificate-test | --static-certificate-test]\n' "${0##*/}" >&2
+	printf '\nUsage: %s --output <new-directory> [--test | --static-test | --pair-test | --static-pair-test | --private-test | --static-private-test | --certificate-test | --static-certificate-test | --host-trust-test | --static-host-trust-test]\n' "${0##*/}" >&2
 }
 die() {
 	style_text "$STYLE_ERROR" "Error: $*"
@@ -94,6 +95,14 @@ parse_args() {
 			mode=static-certificate
 			shift
 			;;
+		--host-trust-test)
+			mode=host-trust
+			shift
+			;;
+		--static-host-trust-test)
+			mode=static-host-trust
+			shift
+			;;
 		--help | -h)
 			usage
 			exit 0
@@ -129,7 +138,7 @@ main() {
 		-Wno-deprecated-declarations -Wno-misleading-indentation
 	)
 	local -a link_flags=(-fPIE -pie)
-	if [[ "$mode" == static || "$mode" == static-pair || "$mode" == static-private || "$mode" == static-certificate ]]; then
+	if [[ "$mode" == static || "$mode" == static-pair || "$mode" == static-private || "$mode" == static-certificate || "$mode" == static-host-trust ]]; then
 		cp -- "$compat" "$scratch_dir/compat-static.a"
 		"$NDK_BIN/llvm-ar" d "$scratch_dir/compat-static.a" reallocarray.o
 		compat="$scratch_dir/compat-static.a"
@@ -158,12 +167,18 @@ main() {
 		binary='ctos_ssh_certificate_facts_test'
 		test_inputs+=("$CERTIFICATE_TEST")
 	fi
+	if [[ "$mode" == host-trust || "$mode" == static-host-trust ]]; then
+		test_source="$HOST_TRUST_TEST"
+		binary='ctos_ssh_host_trust_test'
+		test_inputs+=("$HOST_TRUST_TEST")
+	fi
 	mkdir -p -- "$output_dir"
 	cp -- "$scratch_dir/baseline-before.sha256" "$output_dir/baseline.sha256"
 	sha256sum -- "$CPP/ssh_material_inspect.c" "$CPP/ssh_material_inspect.h" "$CPP/ssh_material_jni.c" \
 		"$CPP/ssh_key_policy.c" "$CPP/ssh_key_policy.h" "${test_inputs[@]}" "$archive" >"$output_dir/inputs.sha256"
+	sha256sum -- "$CPP/ssh_host_trust.c" "$CPP/ssh_host_trust.h" "$CPP/ssh_host_trust_jni.c" >>"$output_dir/inputs.sha256"
 	"$cc" "${flags[@]}" "${link_flags[@]}" -Wl,--no-undefined -Wl,-z,max-page-size=16384 \
-		"$CPP/ssh_key_policy.c" "$CPP/ssh_material_inspect.c" "$test_source" "${wraps[@]}" \
+		"$CPP/ssh_key_policy.c" "$CPP/ssh_material_inspect.c" "$CPP/ssh_host_trust.c" "$test_source" "${wraps[@]}" \
 		-Wl,--start-group "$archive" "$compat" "$SSL/lib/libcrypto.a" -Wl,--end-group -lz -ldl \
 		-o "$output_dir/$binary"
 	"$NDK_BIN/llvm-nm" --defined-only "$output_dir/$binary" >"$output_dir/symbols.txt"

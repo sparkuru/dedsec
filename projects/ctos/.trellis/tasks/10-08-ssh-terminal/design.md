@@ -1,5 +1,20 @@
 # SSH 终端与公共认证集成设计
 
+## 2026-11-02 接续：主机信任管理已批准实施
+
+[本轮合同](../../../design/ssh-host-trust-management.md)补齐R5/AC5窄恢复：实际host+port
+查询两种精确对象，按组预览/忘记全部普通单目标旧记录；共享/通配和匹配CA/吊销/
+不支持记录整组拒绝。忘记不批准新键或恢复连接。固定parser+原byte spans生成单对象
+source-bound replacement，保留无关字节、原context/期限与一次bundle事务。独立wire/
+typed通道，不改CSMI、vault schema或NEW-only trust authority。UI复用Form/保护路由/
+主题/可滚动确认框，UUPM Flutter检索支持Form、Semantics、大字和48dp操作。
+用户回复“开始”批准本地实施/测试，native/JNI、Java与Flutter按明确所有权并行实施。
+CSHTv1与四操作metadata合同已固定；最终353 Flutter/828 JVM、native矩阵/20张布局、
+normal/fixture构建审计与指定板JNI3/真实CHANGED→忘记→NEW/Known/PTY均通过并清理。
+原生实际负分类只增加受约束终态诊断及类型异常，不新增批准回调；正式5e70已保留数据更新并启动，
+新增页面已获用户“通过；可以继续；”反馈，人工体验门通过，沿原1008核对下一增量，
+完整父AC保持开放。
+
 ## 2026-11-02 当前：配置身份路径只作提示
 
 用户已明确批准先导入Host连接项、连接时选受管私钥。实施合同为

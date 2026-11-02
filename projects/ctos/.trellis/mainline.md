@@ -1,5 +1,69 @@
 # ctOS Mainline
 
+## 2026-11-02 主机信任人工验收通过，继续1008
+
+用户在正式5e70df40…交付后回复“通过；可以继续；”，本增量human gate通过，
+[验收记录](../design/verification.md#20261102-ssh-host-trust-human-acceptance)已更新，HT1–HT8完成。
+原父1008继续current/in_progress，完整AC开放；核对下一项已确认需求，不恢复目录导入/
+路径适配，不重复安装或索取已获授权。提交清单随后获用户“可以”批准，设备/真实账号/推送/
+父归档不随“继续”扩展。下方人工待验状态均为本次反馈前的历史。
+主机信任52路径工作提交计划及六处部分内容已独立复核PASS，清单在
+`/tmp/ctos-ssh-host-trust-20261102.lFHL3SXq/commit-plan.md`，现按清单执行工作提交，父任务继续。
+本轮源码29项及三APK冻结哈希不变，JSON/JSONL、文档链接和diff检查通过，无新产品测试。
+
+## 2026-11-02 主机信任正式更新完成，等待人工体验
+
+用户对保留数据正式更新另回复“授权。”。指定板实际APK由eed028f0…更新为已审阅
+5e70df40…，新旧v2签名相同、UID10131/dataDir/首次安装保持，MainActivity实际resumed。
+[安装证据](../design/verification.md#20261102-ssh-host-trust-formal-install)及独立审计通过；
+旧公开APK已备份，专用ADB15051退出，无监听/剩余TCP状态，未访问正式库资料/真实账号。
+当前formal_installed_human_review_pending，不重复索取更新授权或重跑安装；等待新页面
+反馈与之后的提交指示，父1008保持current/in_progress，不归档。下方未正式更新/待授权为历史。
+
+## 2026-11-02 指定板主机信任隔离验收通过
+
+[最终记录](../design/verification.md#20261102-ssh-host-trust-device)：同板JNI3项及实际
+CHANGED拒绝→两组精确忘记→NEW新pin/密码PTY→KNOWN复用通过，最终方法6.893秒。
+两次合成密码/shell、三次TCP与客户端断言一致，包/请求/reverse/relay/容器/网络/ADB全清，
+正式eed028f0…及UID/安装元数据保持。两个失败轮次及修复/环境原因保留，不混为通过。
+最终353 Flutter/828 JVM、1758432 ARM客户端及构建审计/独立复核通过，正常arm64
+5e70df40…尚未安装。下一步等待明确保留数据更新授权及新增页面人工反馈；当前授权仅
+隔离验收，不自动正式更新/访问真实账号/提交/归档，父1008继续current/in_progress。
+
+## 2026-11-02 已授权设备验收与拒绝诊断修复
+
+用户回复“授权。”，仅指定192.168.9.14隔离包/合成SSH及清理，不更新正式应用。
+[首轮记录](../design/verification.md#20261102-ssh-host-trust-device)：JNI3通过，实际换键
+首次拒绝被归成STEP，未记通过；资源全清、正式eed028f0…及公开元数据保持。
+已补实际issuer负分类的owner/role/view约束终态诊断及类型化JNI错误，保持无host批准
+回调/证据/候选。定向74 JVM/严格JNI编译及1758432 ARM客户端矩阵通过，353 Flutter
+重跑通过，正在最终构建并同授权重测。新fixture只修正失败清理所有权，不放宽断言。
+
+## 2026-11-02 主机信任管理本地关卡通过
+
+原1008/current/in_progress继续；[主机信任](../design/ssh-host-trust-management.md)双对象
+查询/独立预览/精确忘记已实现，353 Flutter/824 JVM、native四矩阵、20张字体布局、
+normal/fixture构建lint及三APK审计/独立check最终PASS。正常arm64 a6b35d7b…未安装，
+[真实证据与限制](../design/verification.md#20261102-ssh-host-trust)。
+下一步须当前授权的192.168.9.14隔离JNI/真实换键方法与人工体验；本轮无设备/真实账号/
+正式安装/提交/归档/dist，父完整AC和HT6继续开放，其他task/既有journal/邻项目保持。
+
+## 2026-11-02 主机信任管理开始本地实施
+
+用户在最终方案后回复“开始”，原1008指针已恢复；当前增量implementing，父in_progress。
+按已审阅合同分派native/Java/Flutter实施，层间CSHTv1与metadata字段已固定；只授权本地
+实现/测试/构建，不操作设备或真实账号，不提交/归档/dist。前序待审记录为批准前历史。
+
+## 2026-11-02 接续1008：主机信任管理方案待审
+
+- 用户上次已选择R5窄恢复并留待新session，本次要求继续1008；沿原父任务，不新建/归档。
+- 已对b1064c7核对双对象、lookup、原拒绝、parser限额和现有import/keyDelete票据；
+  旧研究的目录/数字kind已修正。[技术合同](../design/ssh-host-trust-management.md)、父PRD
+  HT1–HT8、design/implement及上下文已补齐，状态planning_review_pending。
+- 下一步审阅按目标查询两组、单组精确普通记录忘记及匹配marker/shared整组阻断方案；
+  获最终方案批准后恢复task指针、分派实施。本次未改产品代码/构建/测试/设备/账号，
+  未提交或归档，历史安装许可不扩展到本增量。前序config-first交付及父未完AC保持。
+
 ## 2026-11-02 当前修正：实际config导入与独立key
 
 e124正式交付后，用户导入config.bin在第5行被路径限制阻断；只读点名文件确认6Host／

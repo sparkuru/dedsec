@@ -49,9 +49,11 @@ public final class SshPasswordConnectPlatformTest {
     private String activeRequest, connectedRequest, protection;
     private String pendingImportTicket;
     private String pendingDeleteTicket;
+    private String pendingTrustTicket;
     private Object oldSshSink, oldTerminalSink;
     private SshPasswordConnectBridge ssh;
     private final AtomicBoolean running = new AtomicBoolean();
+    private final AtomicBoolean observedSshTerminal = new AtomicBoolean();
     private final AtomicInteger reviews = new AtomicInteger();
     private final StringBuilder output = new StringBuilder();
     private android.app.PendingIntent backgroundStaleStop;
@@ -471,6 +473,11 @@ public final class SshPasswordConnectPlatformTest {
 
     private void cleanupKeyFixture(JSONObject request, byte[] privateKey, File vaultFile,
             boolean created, boolean observed) throws Exception {
+        cleanupKeyFixture(request, privateKey, vaultFile, created, observed, true);
+    }
+
+    private void cleanupKeyFixture(JSONObject request, byte[] privateKey, File vaultFile,
+            boolean created, boolean observed, boolean stopOwnedTerminal) throws Exception {
         Throwable[] failure = new Throwable[1];
         try {
             keyFixtureCleanup(failure, () -> request.remove("privateKey"));
@@ -483,7 +490,7 @@ public final class SshPasswordConnectPlatformTest {
                         () -> call("ssh.importCancel", VaultCollections.map("ticketId", pendingImportTicket)));
                 if (pendingDeleteTicket != null) keyFixtureCleanup(failure,
                         () -> call("ssh.keyDeleteCancel", VaultCollections.map("ticketId", pendingDeleteTicket)));
-                keyFixtureCleanup(failure, this::stopTerminal);
+                if (stopOwnedTerminal) keyFixtureCleanup(failure, this::stopTerminal);
                 keyFixtureCleanup(failure, this::waitReleased);
                 keyFixtureCleanup(failure, this::releaseProtection);
                 keyFixtureCleanup(failure, () -> call("secrets.lock", java.util.Collections.emptyMap()));
@@ -1117,6 +1124,243 @@ public final class SshPasswordConnectPlatformTest {
         } finally { VaultCodec.wipe(scratch); }
     }
 
+    /**
+     * Opt-in real changed-key recovery, prepared separately from the JNI-only material tests.
+     * ctosSshHostTrustRequestFile names a shell-owned0600 regular file under
+     * /data/local/tmp/ctos-ssh-host-trust-NAME.json. Exact fields: host,port,username,password,
+     * oldPublicKey (one synthetic ssh-ed25519 public line without host/comment/newline),
+     * oldFingerprint, fingerprint (the independently observed NEW server fingerprint).
+     * The separately provisioned synthetic server serves the NEW Ed25519 key throughout.
+     */
+    @Test public void actualBridgeChangedTrustForgetThenNewAndKnownPasswordShell() throws Exception {
+        String path = InstrumentationRegistry.getArguments().getString("ctosSshHostTrustRequestFile");
+        Assume.assumeTrue("Explicit independent host-trust fixture request was not provided", path != null);
+        assertTrue("Invalid host-trust fixture request path",
+                path.matches("/data/local/tmp/ctos-ssh-host-trust-[A-Za-z0-9_-]{1,64}\\.json"));
+        Context context = instrumentation.getTargetContext();
+        assertEquals("im.majo.ctos.secretsfixture", context.getPackageName());
+        assertTrue(context.getApplicationContext() instanceof SecretsFixtureApplication);
+        assertFalse(context.getSharedPreferences("root_access", Context.MODE_PRIVATE).getBoolean("auto_start", true));
+        try {
+            assertNotEquals("Host-trust fixture must never share the formal application's UID", android.os.Process.myUid(),
+                    context.getPackageManager().getApplicationInfo("im.majo.ctos", 0).uid);
+        } catch (android.content.pm.PackageManager.NameNotFoundException absentFormalApp) { /* Isolated fixture only. */ }
+        assertFalse("No existing SSH service may be interrupted by this fixture", SshSessionService.active());
+        File vaultFile = new File(context.getNoBackupFilesDir(), "app-secrets.bin");
+        for (String suffix : new String[] {"", ".bak", ".new"})
+            assertFalse("Fresh isolated fixture app data is required", new File(vaultFile.getPath() + suffix).exists());
+        JSONObject request = readHostTrustRequest(path);
+        String host = request.getString("host"), username = request.getString("username");
+        int port = request.getInt("port"), otherPort = port == 65535 ? 65534 : port + 1;
+        String oldFingerprint = request.getString("oldFingerprint"), fingerprint = request.getString("fingerprint");
+        String publicKey = request.getString("oldPublicKey");
+        String lookup = hostTrustLookup(host, port);
+        String retained = "# synthetic host-trust fixture\r\n" + hostTrustLookup(host, otherPort) + " " + publicKey
+                + "\r\nctos-unrelated.invalid " + publicKey + "\n# retained without final newline";
+        byte[] remaining = retained.getBytes(StandardCharsets.US_ASCII);
+        byte[] original = ("# synthetic host-trust fixture\r\n" + lookup + " " + publicKey + "\n"
+                + retained.substring(retained.indexOf('\n') + 1)).getBytes(StandardCharsets.US_ASCII);
+        boolean created = false, observed = false;
+        Throwable primaryFailure = null;
+        try {
+            activity = (MainActivity)instrumentation.startActivitySync(new Intent(context, MainActivity.class)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            dispatch = MainActivity.class.getDeclaredMethod("call", MethodCall.class, MethodChannel.Result.class);
+            dispatch.setAccessible(true);
+            ssh = (SshPasswordConnectBridge)field(activity, "sshPasswordConnect");
+            AppSecretsBridge secrets = (AppSecretsBridge)field(activity, "appSecrets");
+            assertSame(AppSecretsOwner.acquire(activity), secrets.sshVault());
+            protection = (String)map(call("secrets.protect", VaultCollections.map("action", "acquire"))).get("owner");
+            String master = "Fixture-" + UUID.randomUUID();
+            created = true;
+            call("secrets.create", VaultCollections.map("requestId", id(), "password", master, "confirmation", master));
+            seedHostTrustFixture(secrets.sshVault(), new SshPasswordProfile(host, port, username), original);
+            installObservers(host, port, fingerprint); observed = true;
+            assertTrustQuery(host, port, oldFingerprint, true, true);
+            assertTrustQuery(host, otherPort, oldFingerprint, true, true);
+            assertTrustQuery("ctos-unrelated.invalid", 22, oldFingerprint, true, true);
+
+            byte[] before = java.nio.file.Files.readAllBytes(vaultFile.toPath());
+            try {
+                Map<String, Object> preview = trustPreview(host, port, "password", oldFingerprint);
+                assertEquals(false, map(call("ssh.importCancel", VaultCollections.map("ticketId", preview.get("ticketId")))).get("cancelled"));
+                assertFixedHostFailure("VAULT_CHANGED", "ssh.keyDeleteCommit", VaultCollections.map("requestId", id(),
+                        "ticketId", preview.get("ticketId"), "binding", preview.get("binding")));
+                assertEquals(true, map(call("ssh.hostTrustForgetCancel", VaultCollections.map("ticketId", pendingTrustTicket))).get("cancelled"));
+                pendingTrustTicket = null;
+                assertFixedHostFailure("VAULT_CHANGED", "ssh.hostTrustForgetCommit", VaultCollections.map("requestId", id(),
+                        "ticketId", preview.get("ticketId"), "binding", preview.get("binding")));
+                assertCiphertextUnchanged(vaultFile, before);
+                try { connect(request); fail("The actual changed server key must be refused"); }
+                catch (java.util.concurrent.ExecutionException rejected) {
+                    assertEquals("Fixed host failure: SSH_HOST_KEY_CHANGED", rejected.getCause().getMessage()); activeRequest = null;
+                }
+                assertFalse("A changed key must not publish RUNNING", running.get());
+                assertEquals("Changed trust must not be converted into a NEW review", 0, reviews.get());
+                waitReleased(); assertCiphertextUnchanged(vaultFile, before);
+            } finally { VaultCodec.wipe(before); }
+
+            Map<String, Object> configPreview = trustPreview(host, port, "config", oldFingerprint);
+            trustCommit(configPreview);
+            assertTrustBodies(secrets.sshVault(), original, remaining);
+            assertTrustQuery(host, port, oldFingerprint, true, false);
+            Map<String, Object> passwordPreview = trustPreview(host, port, "password", oldFingerprint);
+            trustCommit(passwordPreview);
+            assertFixedHostFailure("VAULT_CHANGED", "ssh.hostTrustForgetCommit", VaultCollections.map("requestId", id(),
+                    "ticketId", passwordPreview.get("ticketId"), "binding", passwordPreview.get("binding")));
+            assertTrustBodies(secrets.sshVault(), remaining, remaining);
+            assertTrustQuery(host, port, oldFingerprint, false, false);
+            assertTrustQuery(host, otherPort, oldFingerprint, true, true);
+            assertTrustQuery("ctos-unrelated.invalid", 22, oldFingerprint, true, true);
+            assertEquals("Management must never approve a key or start a connection", 0, reviews.get());
+            assertFalse("Forgetting old trust must not automatically connect", SshSessionService.active());
+
+            connect(request);
+            assertEquals("The fresh actual server key needs its own exact pinned NEW approval", 1, reviews.get());
+            assertFixedHostFailure("BUSY", "ssh.hostTrustQuery", VaultCollections.map("requestId", id(), "host", host, "port", port));
+            assertFixedHostFailure("BUSY", "ssh.hostTrustForgetPreview", VaultCollections.map("requestId", id(),
+                    "host", host, "port", port, "group", "password"));
+            releaseProtection(); assertShellRoundTrip(); stopTerminal(); waitReleased();
+            protection = (String)map(call("secrets.protect", VaultCollections.map("action", "acquire"))).get("owner");
+            assertTrustQuery(host, port, fingerprint, true, false);
+            assertTrustQuery(host, otherPort, oldFingerprint, true, true);
+            assertTrustQuery("ctos-unrelated.invalid", 22, oldFingerprint, true, true);
+            byte[] preservedConfigTrust = deletionConfigBytes(secrets.sshVault(), SshConnectionMaterial.HOSTS);
+            try { assertArrayEquals("NEW trust saving must preserve the other exact trust object", remaining, preservedConfigTrust); }
+            finally { VaultCodec.wipe(preservedConfigTrust); }
+            connect(request);
+            assertEquals("The actual saved NEW key must be reused as KNOWN without another review", 1, reviews.get());
+            releaseProtection(); assertShellRoundTrip(); stopTerminal(); waitReleased();
+        } catch (Exception | Error failure) { primaryFailure = failure; throw failure; }
+        finally {
+            request.remove("password");
+            Throwable[] cleanupFailure = {primaryFailure};
+            if (activity != null && dispatch != null && pendingTrustTicket != null)
+                keyFixtureCleanup(cleanupFailure, () -> call("ssh.hostTrustForgetCancel", VaultCollections.map("ticketId", pendingTrustTicket)));
+            pendingTrustTicket = null;
+            boolean ownVault = created, ownObservers = observed;
+            boolean ownedTerminal = connectedRequest != null || observedSshTerminal.get();
+            // Pre-auth refusal has only an owned connection request, not an attached shell.
+            // Cancel that request and still await service/native cleanup without a stale terminalStop.
+            keyFixtureCleanup(cleanupFailure,
+                    () -> cleanupKeyFixture(request, null, vaultFile, ownVault, ownObservers, ownedTerminal));
+            VaultCodec.wipe(original); VaultCodec.wipe(remaining);
+            if (primaryFailure == null && cleanupFailure[0] != null) {
+                if (cleanupFailure[0] instanceof Error) throw (Error)cleanupFailure[0];
+                throw (Exception)cleanupFailure[0];
+            }
+        }
+    }
+
+    private JSONObject readHostTrustRequest(String path) throws Exception {
+        byte[] ownership = keyShellBytes("stat -c %a:%u:%F " + path, 128);
+        try { assertEquals("Fixture request must be a shell-owned0600 regular file", "600:2000:regular file",
+                new String(ownership, StandardCharsets.US_ASCII).trim()); }
+        finally { VaultCodec.wipe(ownership); }
+        byte[] encoded = keyShellBytes("cat " + path, 32768);
+        try {
+            JSONObject request = new JSONObject(new String(encoded, StandardCharsets.UTF_8));
+            assertEquals("Only the exact host-trust fixture fields are accepted", 7, request.length());
+            for (String field : new String[] {"host", "username", "password", "oldPublicKey", "oldFingerprint", "fingerprint"})
+                assertTrue("Required synthetic host-trust fixture field is missing", request.opt(field) instanceof String);
+            assertTrue("An exact synthetic port is required", request.opt("port") instanceof Integer);
+            new SshPasswordProfile(request.getString("host"), request.getInt("port"), request.getString("username"));
+            assertNotEquals("The preservation target must differ from the supplied connection", "ctos-unrelated.invalid",
+                    request.getString("host").toLowerCase(java.util.Locale.ROOT));
+            assertTrue("A bounded single synthetic Ed25519 public line is required",
+                    request.getString("oldPublicKey").matches("ssh-ed25519 [A-Za-z0-9+/]{1,4096}={0,2}"));
+            for (String field : new String[] {"oldFingerprint", "fingerprint"})
+                assertTrue("An explicit complete synthetic fingerprint is required", request.getString(field).matches("SHA256:[A-Za-z0-9+/]{43}"));
+            assertNotEquals("The independently supplied old and new keys must differ",
+                    request.getString("oldFingerprint"), request.getString("fingerprint"));
+            return request;
+        } catch (org.json.JSONException invalid) { throw new AssertionError("Invalid synthetic host-trust fixture request"); }
+        finally { VaultCodec.wipe(encoded); }
+    }
+
+    private static String hostTrustLookup(String host, int port) {
+        return (port == 22 ? host : "[" + host + "]:" + port).toLowerCase(java.util.Locale.ROOT);
+    }
+
+    private void seedHostTrustFixture(AppSecrets vault, SshPasswordProfile profile, byte[] body) throws Exception {
+        long deadline = SystemClock.elapsedRealtime() + 60_000;
+        AppSecrets.BundleContext context = vault.newBundleContext(deadline, () -> { });
+        List<VaultManifest.FileObject> files = new java.util.ArrayList<>();
+        List<SshBundleProposal.Change> changes = new java.util.ArrayList<>();
+        byte[] config = profile.configBytes();
+        try (SshConnectionMaterial.Snapshot source = SshPasswordManifestValidator.within(deadline, () -> vault.sshLibrarySnapshot(context))) {
+            assertTrue("Only the fresh empty fixture vault may be seeded", source.manifest.files.isEmpty() && source.manifest.entries.isEmpty());
+            files.add(new VaultManifest.FileObject(VaultManifest.FileType.CONFIG, SshPasswordProfile.CONFIG_ID,
+                    SshPasswordProfile.CONFIG_PATH, SshPasswordProfile.CONFIG_IDENTITY, config, List.of(SshPasswordProfile.HOSTS_PATH)));
+            files.add(new VaultManifest.FileObject(VaultManifest.FileType.KNOWN_HOSTS, SshPasswordProfile.HOSTS_ID,
+                    SshPasswordProfile.HOSTS_PATH, SshPasswordProfile.HOSTS_IDENTITY, body, List.of()));
+            files.add(new VaultManifest.FileObject(VaultManifest.FileType.KNOWN_HOSTS,
+                    SshConnectionMaterial.id("hosts", SshConnectionMaterial.HOSTS), SshConnectionMaterial.HOSTS,
+                    SshConnectionMaterial.id("hosts-owner", SshConnectionMaterial.HOSTS), body, List.of()));
+            for (VaultManifest.FileObject file : files) changes.add(SshBundleProposal.Change.add(file));
+            try (SshBundleProposal proposal = new SshBundleProposal(changes)) {
+                try (VaultManifest candidate = proposal.applyTo(source.manifest)) { vault.validateSshCandidate(context, candidate); }
+                SshVaultAdapter adapter = new SshVaultAdapter(vault, (connection, target) -> { throw VaultException.invalid(); },
+                        trust -> { throw VaultException.invalid(); }, exact -> assertSame(proposal, exact));
+                VaultOperation operation = SshPasswordManifestValidator.within(deadline, () -> adapter.bundleRequest(proposal, context));
+                try { SshPasswordManifestValidator.within(deadline, () -> { adapter.commitBundle(operation, proposal, () -> { }); return null; }); }
+                finally { adapter.cancel(operation); }
+            }
+        } finally {
+            try { vault.cancelBundleContext(context); vault.retryPasswordValidationCleanup(); }
+            finally {
+                for (SshBundleProposal.Change change : changes) change.close();
+                for (VaultManifest.FileObject file : files) VaultCodec.wipe(file.content);
+                VaultCodec.wipe(config);
+            }
+        }
+    }
+
+    private void assertTrustQuery(String host, int port, String fingerprint, boolean password, boolean config) throws Exception {
+        Map<String, Object> query = map(call("ssh.hostTrustQuery", VaultCollections.map("requestId", id(), "host", host, "port", port)));
+        assertEquals(java.util.Set.of("host", "port", "groups"), query.keySet());
+        assertEquals(host, query.get("host")); assertEquals(port, query.get("port"));
+        List<?> groups = (List<?>)query.get("groups"); assertEquals(2, groups.size());
+        for (int index = 0; index < 2; index++) {
+            Map<String, Object> group = map(groups.get(index)); boolean expected = index == 0 ? password : config;
+            assertEquals(index == 0 ? "password" : "config", group.get("group"));
+            assertEquals(true, group.get("exists")); assertEquals(expected, group.get("canForget"));
+            List<?> records = (List<?>)group.get("records"); assertEquals(expected ? 1 : 0, records.size());
+            if (expected) {
+                Map<String, Object> record = map(records.get(0)); assertEquals(fingerprint, record.get("fingerprint"));
+                assertEquals("none", record.get("reason")); assertEquals("none", record.get("marker"));
+            }
+        }
+    }
+
+    private Map<String, Object> trustPreview(String host, int port, String group, String oldFingerprint) throws Exception {
+        Map<String, Object> preview = map(call("ssh.hostTrustForgetPreview", VaultCollections.map("requestId", id(),
+                "host", host, "port", port, "group", group)));
+        pendingTrustTicket = (String)preview.get("ticketId");
+        assertEquals(host, preview.get("host")); assertEquals(port, preview.get("port")); assertEquals(group, preview.get("group"));
+        List<?> rows = (List<?>)preview.get("records"); assertEquals(1, rows.size());
+        assertEquals(oldFingerprint, map(rows.get(0)).get("fingerprint")); assertEquals("none", map(rows.get(0)).get("reason"));
+        return preview;
+    }
+
+    private void trustCommit(Map<String, Object> preview) throws Exception {
+        AppSecrets vault = ((AppSecretsBridge)field(activity, "appSecrets")).sshVault();
+        long revision = vault.contentRevision;
+        Map<String, Object> reply = map(call("ssh.hostTrustForgetCommit", VaultCollections.map("requestId", id(),
+                "ticketId", preview.get("ticketId"), "binding", preview.get("binding"))));
+        assertEquals(java.util.Set.of("forgotten"), reply.keySet()); assertEquals(true, reply.get("forgotten"));
+        assertEquals("One reviewed commit must consume exactly one content revision", revision + 1, vault.contentRevision);
+        pendingTrustTicket = null;
+    }
+
+    private void assertTrustBodies(AppSecrets vault, byte[] password, byte[] config) throws Exception {
+        for (String path : new String[] {SshPasswordProfile.HOSTS_PATH, SshConnectionMaterial.HOSTS}) {
+            byte[] actual = deletionConfigBytes(vault, path);
+            try { assertArrayEquals("Only reviewed target bytes may change", path.equals(SshPasswordProfile.HOSTS_PATH) ? password : config, actual); }
+            finally { VaultCodec.wipe(actual); }
+        }
+    }
+
     @Test public void actualBridgeNewThenKnownPasswordShellAndProtectionRelease() throws Exception {
         String path = InstrumentationRegistry.getArguments().getString("ctosSshPasswordRequestFile");
         Assume.assumeTrue("Explicit independent TCP fixture request was not provided", path != null);
@@ -1272,7 +1516,10 @@ public final class SshPasswordConnectPlatformTest {
                         Map<?, ?> event = (Map<?, ?>)value;
                         captureDiagnosticTerminal(event);
                         if (("state".equals(event.get("type")) || "snapshot".equals(event.get("type")))
-                                && "running".equals(event.get("state"))) running.set(true);
+                                && "running".equals(event.get("state"))) {
+                            running.set(true);
+                            if (Boolean.TRUE.equals(event.get("remote"))) observedSshTerminal.set(true);
+                        }
                         if ("data".equals(event.get("type")) || "snapshot".equals(event.get("type"))) synchronized (output) {
                             output.append(new String((byte[])event.get("bytes"), StandardCharsets.UTF_8));
                             if (output.length() > 65536) output.delete(0, output.length() - 65536);

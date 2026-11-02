@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-11-02 主机信任管理正式更新与人工验收
+
+- SSH资料页增加受保护“主机信任”：按实际host/port查询密码与配置/私钥两组完整旧指纹，
+  新预览确认后精确忘记普通单目标记录；共享/通配/marker/不支持项阻断，不自动信任或重连。
+- pinned parser/byte spans与CSHTv1接入原source-bound一次bundle提交，保留所有其他字节/
+  数据；公共session事件流供SSH与Authenticator共享，处理锁库、晚到路由及强制移除回执。
+- 修正实际负主机键分类被JNI吞成STEP的问题，只传固定类型诊断，保留原拒绝/无批准回调。
+- 353 Flutter、828 JVM、1758432客户端及原材料矩阵/20张字体布局、构建审计通过；
+  指定板实际JNI3项及真实换键/忘记/NEW/KNOWN/PTY通过并清理。正常arm64 5e70df40…
+  已另获授权[保留数据安装并启动](verification.md#20261102-ssh-host-trust-formal-install)，
+  用户随后反馈“通过；可以继续；”，[新页面人工验收通过](verification.md#20261102-ssh-host-trust-human-acceptance)，
+  [验证/失败历史及限制](verification.md#20261102-ssh-host-trust-device)保留。
+
 ## 2026-11-02 config先导入、连接时显式选key
 
 - 修正电脑绝对IdentityFile阻断整份config的问题。原路径／正文保留为提示，用户先导入

@@ -61,6 +61,14 @@ enum ctos_ssh_native_host_key_mode {
     CTOS_SSH_HOST_KEY_MANAGED = 1
 };
 
+/* Terminal diagnostics from an actual issuer result, never host-key approval. */
+enum ctos_ssh_native_host_key_rejection {
+    CTOS_SSH_HOST_REJECTION_NONE = 0,
+    CTOS_SSH_HOST_REJECTION_CHANGED = 1,
+    CTOS_SSH_HOST_REJECTION_REVOKED = 2,
+    CTOS_SSH_HOST_REJECTION_CERTIFICATE = 3
+};
+
 struct ctos_ssh_native_client_config {
     ctos_ssh_role_token role;
     int socket_fd;
@@ -134,6 +142,11 @@ int ctos_ssh_native_client_verify_host_key(
 
 int ctos_ssh_native_client_complete(
     const struct ctos_ssh_native_client *);
+
+/* Owner/live-role-only metadata, including after a terminal verifier denial.
+ * Errors clear out; close retires it. No callback, proof or credential authority. */
+int ctos_ssh_native_client_host_key_rejection(const struct ctos_ssh_native_client *,
+    enum ctos_ssh_native_host_key_rejection *);
 
 /* Live owner-only metadata fingerprint, permitted before/after KEX. No I/O or
  * credential authority; every error clears a non-null 32-byte output. */

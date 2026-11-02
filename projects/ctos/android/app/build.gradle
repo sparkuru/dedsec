@@ -379,7 +379,25 @@ def sshConfigHandleSources = files('src/main/cpp/ssh_config_handle.c', 'src/main
 
 def sshMaterialRunner = rootProject.file('ssh/android-material-inspector-build.sh')
 def sshMaterialSources = files('src/main/cpp/ssh_material_inspect.c', 'src/main/cpp/ssh_material_inspect.h',
-    'src/main/cpp/ssh_material_jni.c', 'src/main/cpp/ssh_key_policy.c', 'src/main/cpp/ssh_key_policy.h')
+    'src/main/cpp/ssh_material_jni.c', 'src/main/cpp/ssh_key_policy.c', 'src/main/cpp/ssh_key_policy.h',
+    'src/main/cpp/ssh_host_trust.c', 'src/main/cpp/ssh_host_trust.h', 'src/main/cpp/ssh_host_trust_jni.c')
+['Host', 'StaticHost'].each { variant ->
+    tasks.register("testSshHostTrust${variant}", Exec) {
+        dependsOn 'compileSshProductionObjects'
+        inputs.files(sshMaterialRunner, sshMaterialSources, 'src/test/cpp/ssh_host_trust_test.c',
+            'src/test/cpp/ssh_material_inspect_test.c')
+        def output = layout.buildDirectory.dir("verification/sshHostTrust${variant}")
+        outputs.dir(output)
+        outputs.upToDateWhen { false }
+        outputs.cacheIf { false }
+        workingDir rootProject.file('..')
+        doFirst {
+            project.delete(output.get().asFile)
+            commandLine 'bash', sshMaterialRunner.absolutePath, '--output', output.get().asFile.absolutePath,
+                variant == 'StaticHost' ? '--static-host-trust-test' : '--host-trust-test'
+        }
+    }
+}
 ['Host', 'StaticHost'].each { variant ->
     tasks.register("testSshMaterialInspector${variant}", Exec) {
         dependsOn 'compileSshProductionObjects'
@@ -492,6 +510,7 @@ tasks.register('compileSshFiles', Exec) {
             'src/main/cpp/ssh_hostfile_issuer.c', 'src/main/cpp/ssh_kex_guard.c',
             'src/main/cpp/ssh_native_client.c', 'src/main/cpp/ssh_key_policy.c',
             'src/main/cpp/ssh_material_inspect.c', 'src/main/cpp/ssh_material_jni.c',
+            'src/main/cpp/ssh_host_trust.c', 'src/main/cpp/ssh_host_trust_jni.c',
             new File(sshConfigRoot.get().asFile, 'readconf.o').absolutePath,
             new File(sshConfigRoot.get().asFile, 'config_eval.o').absolutePath,
             '-Wl,--start-group', productionArchive.absolutePath,

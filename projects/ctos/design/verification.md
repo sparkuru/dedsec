@@ -1,5 +1,179 @@
 # Verification
 
+<a id="20261102-ssh-host-trust-human-acceptance"></a>
+## 2026-11-02 主机信任页面人工验收通过
+
+正式5e70df40…保留数据更新并启动后，用户反馈“通过；可以继续；”。本增量人工体验门
+通过，结合下方本地、隔离设备及正式安装证据，HT1–HT8验收完成；不将这句反馈扩写为
+用户逐项执行了全部异常场景，也不声称agent操作过正式秘密库或真实账号。
+原1008父任务继续in_progress，完整R1–R11/AC1–AC10仍有未完成范围；下一增量先按
+现有实现核对。当前反馈未明确批准提交清单，不推送、归档或重跑安装。
+
+<a id="20261102-ssh-host-trust-formal-install"></a>
+## 2026-11-02 主机信任正式APK保留数据更新并启动
+
+用户在指定板隔离验收通过后，另对“保留数据更新正式APK供体验”回复“授权。”。
+本次只在`192.168.9.14:5555`执行已审阅5e70df40…的`adb install -r`及正常启动，
+未卸载/清数据，未操作库内资料、真实账号、系统安全配置或dist。下方“正式未更新/
+待授权”均为本次另行授权之前的隔离验收/候选历史，不表示还需重复安装许可。
+
+证据`/tmp/ctos-ssh-host-trust-install-20261102.kzzZ8HBd`：重新核对AIO-3568J/API30、
+本地冻结APK及27项源码；备份旧公开APK为`previous-public.apk`并核对eed028f0…哈希。
+新旧包v2验签通过，签名证书SHA256均为
+`8d36c8be418174cb4cda0b897ff3e32b2da6f84032819726e8e5671872df52ef`。
+
+| 核对项 | 安装前 | 安装后 |
+| --- | --- | --- |
+| 实际设备APK SHA256 | `eed028f0446b44288670db0f7a590dfc67b9203ac18a055d1c93e6724348651a` | `5e70df40ccb95c883e5b3d2f27d498345612ff9eafb080a78e9d66f739ead35e` |
+| UID | 10131 | 10131 |
+| 数据路径 | `/data/user/0/im.majo.ctos` | `/data/user/0/im.majo.ctos` |
+| 首次安装 | 2026-09-24 17:16:04 | 2026-09-24 17:16:04 |
+| 最后更新 | 2026-11-02 11:31:52 | 2026-11-02 16:15:28 |
+
+`install.log`为Success，`launch.log`为Status ok/COLD，MainActivity实际resumed；
+正常启动耗时1813ms（am wait1825ms）。只读取公开APK/包元数据，不将上述身份保持
+声称为直接读取并逐字节比较了用户秘密库。用户资料保留由install-r及UID/dataDir/
+首次安装保持核对支持，未执行任何业务写入或恢复。
+
+专用ADB15051已停止，全局ADB未改。原`result.json`的即时bind检查false导致驱动退出1，
+但安装/启动/身份核对均已通过；独立ss核对无LISTEN，仅短时TCP TIME_WAIT，随后状态完全
+清空。保留原失败探针，`install-review.json`、`adb-listeners-after.txt`及
+`adb-tcp-states-after.txt`记录最终无监听/无剩余TCP状态，不因清理探针重跑安装或伪称首次
+检查成功。最终交付审计通过，新增页面人工体验和本增量提交仍待用户反馈/授权。
+
+<a id="20261102-ssh-host-trust-device"></a>
+## 2026-11-02 主机信任开发板验收通过，正式应用未更新
+
+最终第三轮证据：`/tmp/ctos-ssh-host-trust-device-20261102.Bwg1kvBz`。指定同一
+AIO-3568J/API30/arm64，`SshHostTrustMaterialDeviceTest`实际3项通过（instrumentation
+2.363秒）；`actualBridgeChangedTrustForgetThenNewAndKnownPasswordShell`实际方法
+6.893秒、instrumentation9.119秒，方法status0、`OK (1 test)`，没有放宽任何断言。
+
+- 实际CHANGED准确拒绝且无NEW审阅/运行状态/密文改写；取消、跨种类与旧票据不能写入。
+- 两种精确对象分别预览并各提交一次，真实contentRevision各只增1；重放拒绝，其他组、
+  端口/主机、CRLF及末行原字节保留，忘记不自动连接或批准新键。
+- 用户式新连接经过实际新KEX和精确新pin审批，真实密码/PTY通过；再次连接实际KNOWN
+  复用、不再审阅，活动服务期间信任操作BUSY。合成服务日志恰好2次Accepted password及
+  2次shell，relay共3次连接（最初拒绝、NEW、KNOWN）。
+- 全部cleanup标记true，两包/请求/单条reverse/relay/容器/网络/专用ADB15049均已清；
+  `ports-clean.json`独立确认15049/15493可重新bind，带任务标签容器/网络为空。本地合成
+  请求已删除，密码不进入仓库/参数/日志。正式APK/UID10131/dataDir及首次/最后安装时间
+  前后一致，仅核对公开APK/元数据，不读取正式秘密库。真实账号和正式安装未操作。
+
+最终修复候选位于`/tmp/ctos-ssh-host-trust-20261102.lFHL3SXq/host-rejection-fix`：
+全量353 Flutter/828 JVM（55套、零失败/错误/跳过），定向74 JVM/严格JNI编译及完整
+ARM客户端矩阵1758432项通过；原材料矩阵源码未变，历史运行分列保留。normal/fixture
+lint零错误4/6既有警告，三包arm64/v2/精确包名/27+2项来源及类型异常DEX审计通过。
+`focused/`与`tested-production/`冻结实际客户端矩阵所用archive；后续两个构建各自重新
+生成archive，源码manifest相同，不声称二进制相同。默认沙箱socket准入失败在新用例前
+发生，提升权限后的自有socket完整运行通过，两个日志均保留。
+
+| 最终产物 | SHA256 |
+| --- | --- |
+| 正常arm64（未安装） | `5e70df40ccb95c883e5b3d2f27d498345612ff9eafb080a78e9d66f739ead35e` |
+| 实测隔离应用 | `903b03f5e039ffe5fd0b1fa504ceb8a10627182853eff9dbf075d8405fc0a116` |
+| 实测隔离测试 | `fefc38bf7b73c5d46915d7127f72aff9df249f307a8d931adb7e72796e8f5b90` |
+
+本次是实际JNI/受保护host bridge/加密库/SSH协议与PTY验收，不代替新增Flutter页面人工
+体验，也不宣布完整R5/父AC完成。正式APK仍是eed028f0…，供人工体验的正式更新尚未授权。
+
+### 首轮失败与修复（历史）
+
+用户在隔离安装/合成SSH验收及清理的明确范围后回复“授权。”，当前目标仅
+`192.168.9.14:5555`，已核对AIO-3568J/API30/arm64。首轮证据
+`/tmp/ctos-ssh-host-trust-device-20261102.aKffryei`：实际JNI三方法全部通过，方法总耗时
+0.074秒、instrumentation总耗时2.290秒。换键instrumentation壁钟7.623秒失败：预期固定
+`SSH_HOST_KEY_CHANGED`，实际返回`SSH_SESSION_STEP`，**没有记作换键通过**。
+
+源码追踪确认native issuer会在任何批准回调前拒绝CHANGED/REVOKED/CERTIFICATE，
+但原native session/JNI只保留通用失败，Java映射成STEP。现已补只读终态诊断传递，
+保留原无host批准回调/无证据/无候选/无批准规则，并同授权重测。首轮还有失败清理向已退休
+service代次发送Stop的附带CTOS，已定向修正新fixture的所有权条件；原测试断言未放宽。
+合成服务的preauth清理缺少容器CAP_KILL，后续驱动补此容器内能力，不改宿主或设备。
+
+首轮`result.json`全部cleanup标记true，两个包、请求文件、唯一reverse、loopback relay、
+内部容器/网络及专用ADB15049已清。随后独立确认15049/15493可重新bind、带任务标签的
+容器/网络均为空。正式APK前后均`eed028f0446b44288670db0f7a590dfc67b9203ac18a055d1c93e6724348651a`，
+UID10131/dataDir/首次及最后安装时间保持。只检查公开APK/包元数据，未读取正式秘密库；
+测试使用独立UID，不更新正式APK、真实账号或系统配置。
+
+第二轮证据`/tmp/ctos-ssh-host-trust-device-20261102.e8jBqcq5`：JNI3仍通过，准确CHANGED
+及两组忘记/保留检查已通过，但首次NEW密码接受后出现SSH_TERMINAL_START。合成sshd日志
+`linux_audit_write_entry failed: Operation not permitted`对应固定源码audit-linux.c的
+session-open fatal；临时容器缺少默认Docker能力AUDIT_WRITE。只补该容器能力后，以
+相同903b/fefc APK完成第三轮，没有修改产品代码/验收断言或宿主/设备策略。第二轮整体
+仍记失败，8.674秒；其所有资源同样已清、正式元数据保持。
+
+<a id="20261102-ssh-host-trust"></a>
+## 2026-11-02 主机信任管理：首个本地候选记录（历史）
+
+下述824 JVM/a6b35d7b…为设备发现诊断缺口前的本地候选，非当前最终APK。
+当前828 JVM/5e70df40…及指定板通过见[最终验收](#20261102-ssh-host-trust-device)。
+
+用户在方案摘要后回复“开始”，随后要求继续，授权沿原1008本地实施/测试/构建。
+[功能合同](ssh-host-trust-management.md)与父PRD HT1–HT8对应：实际host+port查询密码及
+配置/私钥两组指纹，独立新预览、明确确认后精确忘记旧普通记录；不批准新键或自动重连。
+匹配共享/通配/CA/吊销/不支持记录整组拒绝，原字节/其他端口/其他对象和库数据保留。
+
+原始证据：`/tmp/ctos-ssh-host-trust-20261102.lFHL3SXq`。该临时目录不是持久归档，
+若以后不存在，不可据本文声称重新核对过原始日志。HEAD为`b1064c7`加本轮未提交变更。
+
+| 实际检查 | 结果与范围 |
+| --- | --- |
+| `./hako flutter test --reporter expanded` | 353项通过；新增主机信任29项，含锁库/共同事件流、正常返回、晚到保护授权、强制移除、成功/不确定回执及Navigator销毁 |
+| `./hako flutter analyze`、格式/差异检查 | 无问题；最终Flutter9文件哈希保持，`git diff --check`通过 |
+| 全量`:app:testReleaseUnitTest` | 55套824项，零失败/错误/跳过；主机信任wire8项、事务/生命周期14项，含写后底层已不确定再遇传输失败的回归 |
+| normal / fixture lint | 零错误，4 / 6项既有警告；未抑制规则 |
+| 原生真实parser ARM/QEMU | 最终trust9051项（材料7785+新增1266），effects0、streams169平衡、cleanup通过 |
+| 旧原生材料矩阵 ARM/QEMU | pair13814、private21009、certificate23268通过，effects0/cleanup通过；各含重复基线，不能相加当独立项数 |
+| 真实字体布局 | 20张PNG及1项渲染矩阵通过，root抽查375宽及320宽/2倍字/键盘的完整指纹和操作；不代替设备人工体验 |
+| 构建与APK审计 | 最终normal/fixture均仅arm64-v8a，fixture测试APK已编译；三APK v2签名、精确包名、无探针库及JNI导出检查通过 |
+
+正常检查命令为
+`./hako bash -lc 'cd android && ./gradlew :app:testReleaseUnitTest :app:lintRelease :app:assembleRelease :app:assembleReleaseAndroidTest --console=plain'`，
+最终正常arm64包另由 `./hako flutter build apk --release --target-platform android-arm64` 构建。
+最终隔离构建使用
+`./hako bash -lc 'cd android && ./gradlew -Ptarget-platform=android-arm64 -PctosSecretsUiFixture=true :app:assembleSecretsFixtureRelease :app:assembleSecretsFixtureReleaseAndroidTest :app:lintSecretsFixtureRelease --console=plain'`。
+
+最终native构建采用现有runner新增`--static-host-trust-test`及既有`--static-pair-test` /
+`--static-private-test` / `--static-certificate-test`，输出分别在
+`build/ssh-host-trust-final-{trust,pair,private,certificate}-20261102`，随后实际运行各自
+`qemu-aarch64`二进制。`native-final-*-build.log`、`native-final-*-run.log`与输出目录内
+inputs/binary/baseline manifests区分编译和运行，旧static02不作为最终archive运行证据。
+
+最终冻结产物位于证据目录的normal/fixture中：
+
+| 产物 | SHA256 |
+| --- | --- |
+| 正常`im.majo.ctos` | `a6b35d7bcd9623c25319525a740a6724d66084d46399cd623686113293700414` |
+| 隔离`im.majo.ctos.secretsfixture` | `99fcac8cecd128ad4a2e1091e0fba8278245874459e27dfd330d01e56bafee54` |
+| 隔离测试`im.majo.ctos.secretsfixture.test` | `7bd207c27fb51ede4827f5a1c1859a13c30a80f798823e3e66264528ed8db42d` |
+
+`artifact-audit.json`复核21项normal源码、2项新增/扩展fixture源码与四组native输入
+11/11/12/13项无差异。生产archive每次Gradle都会重建，normal与fixture库哈希不同，
+各自已冻结；两组pinned upstream源码manifest相同。最终C-only运行绑定fixture最终
+archive `933d26e83298b202ddb9d9e48d489a6d64243dc0adde754b335f2fa5cb91fc0e`，
+不声称normal/fixture二进制相同或normal APK已经Android执行。
+
+检查中间结果保留：最初typed测试夹具/字体设置及fakeasync取消错误已修正；独立复核
+发现并修正活动服务互斥、晚到子路由、强制移除后的回执和已不确定结果降级。一次review
+Gradle在Flutter改动中遇到暂态Dart编译错误，随后最终全量/构建通过。首轮直接Gradle
+APK含默认Flutter多ABI，未交付；保留在`normal-initial-multi-abi`，最终显式arm64重建。
+旧static02 archive在后续Gradle重建后不再匹配，已用最终archive重编/重跑，未隐藏差异。
+
+已编译但**未运行**：隔离`SshHostTrustMaterialDeviceTest`三项实际JNI方法，以及
+`SshPasswordConnectPlatformTest.actualBridgeChangedTrustForgetThenNewAndKnownPasswordShell`。
+后者只接受`ctosSshHostTrustRequestFile`指定的shell-owned0600常规JSON文件
+`/data/local/tmp/ctos-ssh-host-trust-NAME.json`，字段严格为
+`host,port,username,password,oldPublicKey,oldFingerprint,fingerprint`；仅合成旧公钥和独立
+观测的新server pin，不把密码放进instrumentation参数或日志。需独立新fixture UID及
+合成服务，验证实际CHANGED拒绝→逐组忘记→新KEX/NEW核对→PTY→KNOWN复用和精确清理。
+请求文件/服务由调用者负责清理，不能读取个人SSH资料或把此夹具改成真实账号访问。
+
+首个本地候选阶段尚无设备/真实账号/正式安装授权，未连接ADB/安装；当时HT6新KEX/JNI/
+页面体验待验，不能由C-only/JVM/Flutter/编译替代。后续另获指定板隔离授权并已补齐实际
+JNI/KEX，见上节最终记录；页面人工、正式更新及父完整R5/AC5/其他范围仍未由此完成。
+
 <a id="20261102-ssh-config-identity-human-acceptance"></a>
 ## 2026-11-02 配置连接项与显式私钥：用户验收通过
 

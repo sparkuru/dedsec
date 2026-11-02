@@ -1,5 +1,20 @@
 # SSH Native Gates
 
+2026-11-02: negative host-key diagnostics remain separate from trust authority.
+`verify_host_key` still rejects actual issuer CHANGED/REVOKED/CERTIFICATE before any managed
+host-evidence callback, proposal or proof. Record only a terminal `host_key_rejection` enum
+from that successful issuer result. `ctos_ssh_native_client_host_key_rejection` clears its
+output on failure, checks callback owner/thread/environment, exact live role PID/UID/deadline
+and view, publishes only when failed, and retires on close/new allocation. It is metadata,
+never a credential/file/NEW capability. Unknown/invalid/transport failures retain NONE.
+Session JNI maps only three known enums to `SshNativeSession.HostKeyRejectedException`;
+the constructor permits only the fixed changed/revoked/certificate codes and carries no
+key/path/peer payload. Initial KEX accepts only this typed exception, never IOException text;
+explicit protocol stepping keeps generic STEP. Current cancellation, expiry, view revocation
+and terminal-state guards outrank diagnostics. Preserve negative-class zero-callback tests,
+output clearing/wrong owner/close tests, untyped spoof rejection and lifecycle precedence.
+Actual Android host-key error delivery is a separate device gate from C/JVM tests.
+
 2026-10-30: [encrypted private-key production export](ssh-encrypted-key-connect.md) adds
 SshKeyMaterial.Native.inspectWithPassphrase and a phrase-aware public C export. Existing strict
 context-free exports/inspectors keep their behavior. CSKEv1 parsed flags1/3 distinguish clear/

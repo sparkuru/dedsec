@@ -105,6 +105,7 @@ public final class SshNativeSessionTest {
         boolean malformedStepResult;
         boolean completeStepResult;
         boolean failStep;
+        IOException stepFailure;
         Runnable openHook;
         Runnable stepHook;
         Runnable verifyHook;
@@ -135,6 +136,7 @@ public final class SshNativeSessionTest {
             lastStepCancelled = cancelled;
             order.add("step");
             if (stepHook != null) stepHook.run();
+            if (stepFailure != null) throw stepFailure;
             if (failStep) throw new IOException("synthetic step failure");
             if (cancelled) throw new IOException("fixture cancellation");
             if (malformedStepResult) {
@@ -945,6 +947,77 @@ public final class SshNativeSessionTest {
         } finally {
             setup.closeRegistry();
         }
+    }
+
+    @Test public void actualHostRejectionDiagnosticIsFixedAndTerminalWithoutReplayingNative() throws Exception {
+        for (String code : new String[] {"SSH_HOST_KEY_CHANGED", "SSH_HOST_KEY_REVOKED", "SSH_HOST_KEY_CERTIFICATE"}) {
+            ManagedShellNative binding = new ManagedShellNative();
+            Setup setup = new Setup(false, binding);
+            try {
+                setup.session = openManaged(setup);
+                binding.stepFailure = new SshNativeSession.HostKeyRejectedException(code);
+                assertCode(code, () -> setup.session.step());
+                binding.stepFailure = null;
+                assertCode(code, () -> setup.session.step());
+                assertEquals(Arrays.asList("managedOpen", "step"), binding.order);
+            } finally { setup.session.close(); setup.closeRegistry(); }
+        }
+    }
+
+    @Test public void arbitraryNativeIOExceptionTextNeverBecomesHostTrustEvidence() throws Exception {
+        ManagedShellNative binding = new ManagedShellNative();
+        Setup setup = new Setup(false, binding);
+        try {
+            setup.session = openManaged(setup);
+            binding.stepFailure = new IOException("SSH_HOST_KEY_CHANGED");
+            assertCode("SSH_SESSION_STEP", () -> setup.session.step());
+            assertCode("SSH_SESSION_STEP", () -> setup.session.step());
+        } finally { setup.session.close(); setup.closeRegistry(); }
+        try {
+            new SshNativeSession.HostKeyRejectedException("remote payload");
+            fail("Unknown native rejection tag must fail closed");
+        } catch (IllegalArgumentException expected) { }
+    }
+
+    @Test public void currentLifecycleInvalidationOutranksActualHostRejectionDiagnostic() throws Exception {
+        for (int mode = 0; mode < 4; mode++) {
+            final int selected = mode;
+            ManagedShellNative binding = new ManagedShellNative();
+            Setup setup = new Setup(false, binding);
+            try {
+                setup.session = openManaged(setup);
+                binding.stepFailure = new SshNativeSession.HostKeyRejectedException("SSH_HOST_KEY_CHANGED");
+                binding.stepHook = () -> {
+                    try {
+                        if (selected == 0) setup.session.cancel();
+                        if (selected == 1) setup.callback.cancel();
+                        if (selected == 2) setup.clock.value = setup.issued.role.deadline;
+                        if (selected == 3) setup.view.active = false;
+                    } catch (VaultException failure) { throw new AssertionError(failure); }
+                };
+                String code = selected < 2 ? "SSH_SESSION_CANCELLED"
+                        : selected == 2 ? "SSH_SESSION_EXPIRED" : "SSH_FILE_VIEW";
+                assertCode(code, () -> setup.session.step());
+                binding.stepHook = null;
+                assertCode(code, () -> setup.session.step());
+            } finally { binding.stepHook = null; setup.session.close(); setup.closeRegistry(); }
+        }
+    }
+
+    @Test public void aFreshSessionDoesNotInheritAnotherAttemptHostRejection() throws Exception {
+        ManagedShellNative firstBinding = new ManagedShellNative();
+        Setup first = new Setup(false, firstBinding);
+        try {
+            first.session = openManaged(first);
+            firstBinding.stepFailure = new SshNativeSession.HostKeyRejectedException("SSH_HOST_KEY_CHANGED");
+            assertCode("SSH_HOST_KEY_CHANGED", () -> first.session.step());
+        } finally { first.session.close(); first.closeRegistry(); }
+        ManagedShellNative secondBinding = new ManagedShellNative();
+        Setup second = new Setup(false, secondBinding);
+        try {
+            second.session = openManaged(second);
+            assertNotNull(second.session.step());
+        } finally { second.session.close(); second.closeRegistry(); }
     }
 
     @Test public void malformedStepResultTerminalizesTheSession() throws Exception {

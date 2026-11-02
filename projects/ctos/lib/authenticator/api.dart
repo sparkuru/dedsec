@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/services.dart';
@@ -105,23 +104,7 @@ class TotpPreview {
   late final int invalidCodes;
 }
 
-class TotpSessionEvent {
-  TotpSessionEvent.fromMap(Object? value) {
-    final row = _map(value, {'epoch', 'unlocked', 'foreground'});
-    if (row['epoch'] is! int ||
-        (row['epoch'] as int) < 0 ||
-        row['unlocked'] is! bool ||
-        row['foreground'] is! bool) {
-      throw const FormatException('秘密库事件无效');
-    }
-    epoch = row['epoch'] as int;
-    unlocked = row['unlocked'] as bool;
-    foreground = row['foreground'] as bool;
-  }
-  late final int epoch;
-  late final bool unlocked;
-  late final bool foreground;
-}
+typedef TotpSessionEvent = SecretSessionEvent;
 
 class AuthenticatorApi {
   const AuthenticatorApi({
@@ -135,9 +118,7 @@ class AuthenticatorApi {
   int get unixSeconds =>
       clock?.call() ?? DateTime.now().millisecondsSinceEpoch ~/ 1000;
 
-  static final _eventStreams = <EventChannel, _SessionEvents>{};
-  Stream<TotpSessionEvent> get sessionEvents =>
-      _eventStreams.putIfAbsent(events, () => _SessionEvents(events)).stream;
+  Stream<TotpSessionEvent> get sessionEvents => secretSessionEvents(events);
   Future<TotpSnapshot> list(SecretRequest request) async =>
       TotpSnapshot.fromMap(await vault.call('totpList', request: request));
   Future<TotpPreview> preview(
@@ -192,43 +173,6 @@ class AuthenticatorApi {
         request: request,
         arguments: {'entryId': entryId},
       );
-}
-
-/// Nested protected routes share one native listener and the last validated
-/// event, but a new route after the final unsubscribe needs a fresh handshake.
-class _SessionEvents {
-  _SessionEvents(this.channel);
-  final EventChannel channel;
-  Stream<TotpSessionEvent>? source;
-  TotpSessionEvent? latest;
-  int listeners = 0;
-  Stream<TotpSessionEvent> get stream => Stream.multi((controller) {
-    if (listeners > 0 && latest != null) controller.add(latest!);
-    listeners++;
-    final subscription =
-        (source ??= channel.receiveBroadcastStream().map(
-          TotpSessionEvent.fromMap,
-        )).listen(
-          (event) {
-            latest = event;
-            controller.add(event);
-          },
-          onError: (Object error, StackTrace stack) {
-            latest = null;
-            controller.addError(error, stack);
-          },
-          onDone: () {
-            source = null;
-            latest = null;
-            controller.close();
-          },
-        );
-    controller.onCancel = () {
-      unawaited(subscription.cancel());
-      listeners--;
-      if (listeners == 0) latest = null;
-    };
-  });
 }
 
 String authenticatorError(Object error) => switch (error) {

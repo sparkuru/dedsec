@@ -19,11 +19,15 @@ final class SshPasswordProfile {
     final int port;
 
     SshPasswordProfile(String host, int port, String username) throws VaultException {
-        if (host == null || !host.matches("[A-Za-z0-9.:%\\[\\]-]{1,253}")
-                || port < 1 || port > 65535) throw parameters();
+        checkTarget(host, port);
         byte[] checked = VaultCodec.sshText(username, 255);
         VaultCodec.wipe(checked);
         this.host = host; this.port = port; this.username = username;
+    }
+
+    static void checkTarget(String host, int port) throws VaultException {
+        if (host == null || !host.matches("[A-Za-z0-9.:%\\[\\]-]{1,253}")
+                || port < 1 || port > 65535) throw parameters();
     }
 
     byte[] configBytes() {

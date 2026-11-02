@@ -490,7 +490,7 @@ void main() {
       );
       expect(
         sshConnectionError(PlatformException(code: 'SSH_HOST_KEY_CHANGED')),
-        '主机密钥与已保存记录不同，连接已拒绝。',
+        '主机密钥与已保存记录不同，连接已拒绝。可在“私钥与配置 → 主机信任”核对并管理旧记录。',
       );
     },
   );
@@ -1220,7 +1220,10 @@ void main() {
         'state': 'failed',
         'reason': 'SSH_HOSTKEY_CHANGED',
       });
-      expect(find.text('主机密钥与已保存记录不同，连接已拒绝。'), findsOneWidget);
+      expect(
+        find.text('主机密钥与已保存记录不同，连接已拒绝。可在“私钥与配置 → 主机信任”核对并管理旧记录。'),
+        findsOneWidget,
+      );
       expect(find.text('信任并保存'), findsNothing);
       expect(host.decisions, isEmpty);
       host.completeConnect(

@@ -26,6 +26,27 @@ not fall back to another online target. Every subsequent command uses
 address. Current task authorization remains required for installation or
 state changes; recording this address alone does not establish a device pass.
 
+### Task-owned ADB cleanup
+
+Use an initially unused task-owned server port and explicit `adb -P "$TASK_ADB_PORT"
+-s "$BOARD_ADB_SERIAL"` for device commands; server start/stop are local operations.
+Stop only that owned server, preserving any shared ADB server. After stop, distinguish
+an absent listener from an immediately reusable TCP port:
+
+```bash
+ss -ltnp "sport = :$TASK_ADB_PORT"
+ss -tan "sport = :$TASK_ADB_PORT"
+```
+
+No LISTEN with only transient TIME_WAIT means the daemon has exited, even if an
+immediate bind probe fails. Retain the original failure/exit status and subsequent
+listener/TCP receipts; do not relabel the first probe as passed. Report listener
+absence separately, and claim an empty TCP state only when actually observed.
+A remaining LISTEN requires ownership investigation. Never repeat a successful
+installation solely because this cleanup probe failed, or kill a shared server
+to make it pass. The 2026-11-02 host-trust formal installation records this case in
+[verification](../../../design/verification.md#20261102-ssh-host-trust-formal-install).
+
 ## Checks by changed surface
 
 | Surface | Focused check | Wider check when relevant |

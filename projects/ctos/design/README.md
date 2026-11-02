@@ -1,5 +1,12 @@
 # ctOS 信息入口
 
+2026-11-02：[主机信任正式5e70df40…已保留数据更新开发板并启动](verification.md#20261102-ssh-host-trust-formal-install)，
+实际设备APK与已审阅产物匹配，UID/数据路径/首次安装时间保持；用户随后反馈“通过；可以继续；”，
+[新增页面人工验收通过](verification.md#20261102-ssh-host-trust-human-acceptance)，沿1008核对下一增量。
+前序353 Flutter／828 JVM、1758432客户端及材料/布局/构建审计、指定板JNI3项和实际换键/
+分组忘记/NEW/KNOWN/PTY均通过并清理；[验证及历史失败](verification.md#20261102-ssh-host-trust-device)。
+父1008继续，不提交/归档；下方正式未更新或待授权均为本次明确更新授权前的历史。
+
 2026-11-02 当前修正：实际config导入被电脑IdentityFile路径阻断，用户已批准
 [先导入连接项、连接时显式选择私钥](ssh-config-identity-selection.md)。保留原路径提示和
 CONFIG正文，不做迁移／猜测。324 Flutter／802 JVM、原生回归／16张布局／构建lint／

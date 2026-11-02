@@ -1,5 +1,49 @@
 # SSH 终端实施计划
 
+## 2026-11-02 接续：主机信任管理
+
+状态：本地与指定板隔离JNI3/真实换键KEX/PTY及独立检查通过；用户“通过；可以继续；”
+确认新增页面人工体验通过，沿原1008核对下一增量。
+原task保持current/in_progress，不新建/提交/归档；正式更新已另获授权并完成，不操作真实账号。合同见
+[主机信任管理](../../../design/ssh-host-trust-management.md)，验收HT1–HT8。
+
+1. [x] 恢复最后已选增量，核对双对象、真实lookup、parser上限、原拒绝与现有票据。
+2. [x] 补齐PRD/设计/执行顺序/上下文：分组查询与忘记、受保护政策阻断、原字节保留。
+3. [x] 用户批准本轮方案后恢复原task指针，分派trellis-implement；prompt以
+   `Active task: .trellis/tasks/10-08-ssh-terminal`开头，禁止子代理重复分派。
+4. [x] Native先冻结有界版本化wire，实现真实parser查询/候选与span保留；补实际键/
+   匹配/限额/故障/零外部效果测试。明确接入Gradle和固定材料runner，不修改pinned upstream。
+5. [x] Java/JNI实现owned副本和严格wire、两种对象身份、source/candidate生产校验、
+   单replacement/独立ticket/原context一次写入；覆盖跨种类、重放、取消/迟到、源变化/
+   后台锁库和uncertain。
+6. [x] Flutter实现typed四操作、资料页入口/表单/分组/本次预览确认，完整指纹和受限原因、
+   原目标代次/回执保护；覆盖窄屏/横屏/键盘/大字和取消。
+7. [x] 专项通过后执行全量Flutter/JVM/native旧矩阵、normal/fixture构建lint，核对
+   frozen源码/APK来源与哈希；准备Android JNI/合成换键回归，编译不记作运行。
+8. [x] trellis-check独立检查最终依赖和实际证据PASS，同步spec/设计/验证/changelog。
+   用户另授权后已完成指定板隔离平台验收和清理，又另授权保留数据正式更新并启动；人工体验通过。
+9. [x] 人工体验：正式5e70交付后用户反馈“通过；可以继续；”。下层异常场景以各自测试
+   证据为准，不扩写用户实操细节；当前提交清单待批准，不归档完整父任务。
+
+验证命令已执行；正式arm64产物另由Flutter显式target-platform构建：
+
+```sh
+./hako flutter --version
+./hako flutter analyze
+./hako flutter test
+./hako bash -lc 'cd android && ./gradlew :app:testReleaseUnitTest :app:lintRelease :app:assembleRelease :app:assembleReleaseAndroidTest --console=plain'
+./hako flutter build apk --release --target-platform android-arm64
+./hako bash -lc 'cd android && ./gradlew -Ptarget-platform=android-arm64 -PctosSecretsUiFixture=true :app:assembleSecretsFixtureRelease :app:assembleSecretsFixtureReleaseAndroidTest :app:lintSecretsFixtureRelease --console=plain'
+```
+
+native入口 `android/ssh/android-material-inspector-build.sh --output <新目录>` 已补
+`--host-trust-test` / `--static-host-trust-test`；最终静态trust及旧pair/private/certificate
+均已构建并由QEMU运行，[命令/数量/产物与限制](../../../design/verification.md#20261102-ssh-host-trust)。
+ARM C-only/QEMU、Android JNI、真实KEX和人工体验分列。临时证据用独立
+`/tmp/ctos-ssh-host-trust-*`；已授权隔离安装并清理，正式APK已另授权install-r更新，
+不替换dist、不访问真实key/账号，不提交/归档。
+回退只撤入口/API，不恢复用户已忘记的旧信任，不改变其他库数据。
+
 ## 2026-11-02 人工验收通过
 
 用户明确反馈效果通过、实际remote连接成功。本轮交付体验门通过，原本地／正式安装

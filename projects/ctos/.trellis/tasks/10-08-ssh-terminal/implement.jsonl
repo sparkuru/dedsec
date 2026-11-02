@@ -26,3 +26,7 @@
 {"file":"design/ssh-config-identity-selection.md","reason":"当前已明确批准config-first、IdentityFile提示及显式受管key选择；严格generic模式、旧图兼容与实际证明边界。"}
 {"file":".trellis/tasks/10-08-ssh-terminal/research/config-independent-identity-20261102.md","reason":"实际import/stored/library/两处connector/native路径阻断与精确改动接点；不只绕过Java检查。"}
 {"file":".trellis/spec/backend/ssh-config-identity-selection.md","reason":"当前产品hint新原生模式/typedwire与generic严格分离；旧STATIC边/实际key/原证明/explicitchooser。"}
+{"file":"design/ssh-host-trust-management.md","reason":"2026-11-02本地/指定板隔离验证的R5合同：双对象query/精确forget、marker/shared阻断、span/原事务及拒绝诊断；JNI3及真实换键/KEX/PTY、正式5e70保留数据安装启动均通过，用户随后确认页面体验通过并继续原1008。"}
+{"file":".trellis/tasks/10-08-ssh-terminal/research/trust-recovery-20261102.md","reason":"已对b1064c7刷新：真实parser/lookup/双对象/票据边界，directory和数字kind已移除；研究不是实现或测试通过。"}
+{"file":".trellis/spec/backend/ssh-native.md","reason":"保留实际host evidence、NEW-only trust CAS、固定parser/build closure与native/JNI生命周期。"}
+{"file":".trellis/spec/backend/ssh-host-trust-management.md","reason":"已实施CSHTv1/双对象query及精确forget票据、服务互斥、once/uncertain和原字节保留；指定板Android/JNI/实际换键及新增页面人工体验均通过，父完整AC开放。"}

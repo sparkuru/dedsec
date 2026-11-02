@@ -1,5 +1,14 @@
 # SSH 终端规划入口
 
+2026-11-02 接续：[主机信任管理](ssh-host-trust-management.md)已本地实现。入口为终端→
+SSH连接→私钥与配置→主机信任，输入实际host/port查询两组旧指纹；按组新预览确认后
+忘记普通旧记录，再由用户主动连接并核对实际新键。共享/通配/受保护记录不强删。
+353 Flutter／828 JVM、native/布局/构建和APK审计、指定板JNI3/真实换键/PTY通过并清理，
+最终正常arm64 5e70df40…已[保留数据更新并启动](verification.md#20261102-ssh-host-trust-formal-install)；
+[本轮验证与待验项](verification.md#20261102-ssh-host-trust-device)，
+用户随后确认[新增页面人工验收通过](verification.md#20261102-ssh-host-trust-human-acceptance)，
+沿原1008继续；父完整AC保持开放。
+
 2026-11-02 当前修正：用户实际config导入被电脑IdentityFile路径阻断，已批准
 [先导入连接项、连接时选择私钥](ssh-config-identity-selection.md)。原路径只为提示，
 不做迁移或默认猜测。本地检查及独立复核通过，正式eed028f0…已保留数据更新指定板并

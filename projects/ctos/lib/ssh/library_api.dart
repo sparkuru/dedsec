@@ -626,6 +626,10 @@ String _sshBinding(Object? raw) {
 String sshMaterialError(Object error) {
   final code = error is PlatformException ? error.code : null;
   return switch (code) {
+    'SSH_HOST_TRUST_FAILED' => '主机信任操作未完成，请重新查看指纹后重试。',
+    'SSH_HOST_TRUST_BLOCKED' => '匹配记录包含受保护或共享规则，不能在此忘记。',
+    'SSH_HOST_TRUST_EMPTY' => '此目标没有可忘记的旧指纹，请重新查看。',
+    'SSH_HOST_TRUST_LIMIT' => '匹配记录过多，无法完整审阅；未作任何修改。',
     'SSH_KEY_DELETE_FAILED' => '删除私钥失败，请重新读取资料后重试。',
     'SSH_KEY_REPLACED' => '替换私钥会清除该身份的旧连接关联；其他凭据保留。',
     'SSH_AUTHENTICATION' ||

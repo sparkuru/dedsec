@@ -75,6 +75,29 @@ reauthorization. `SecretExportPreview`, `SecretExportRemaining`,
 
 ## 4. Validation & Error Matrix
 
+SSH host-trust management uses independent query and fresh forget-preview flows per
+[the host contract](../backend/ssh-host-trust-management.md). Query actual host+port, show
+both exact groups including absent/empty/policy-blocked, and confirm the returned preview's
+complete old fingerprints. Editing the target or retiring its route invalidates old results;
+late replies must not revive them. Keep the sensitive owner and wait for a management write's
+terminal receipt even on cancel/background/pop. A successful forget is not approval of a
+new key and must not automatically reconnect. Shared/marker/unsupported records have a
+visible reason and no force-delete action. Use typed bounded metadata; never transfer
+replacement known-host bodies or choose arbitrary rows/paths in Flutter.
+
+The public `SecretSessionEvent` and `secretSessionEvents(EventChannel)` broker in
+`secrets/api.dart` own the existing `ctos/secrets` listener for SSH and Authenticator;
+`TotpSessionEvent` remains a compatibility alias. Share the native listener and validated
+latest event across nested routes, retire the cached handshake after final unsubscribe,
+and wait for a fresh healthy event before acting. Query releases host context, so its page
+still needs this independent lock/epoch/foreground/error stream. A healthy own-write epoch
+advance before terminal reply clears old display without cancelling that write's receipt.
+Gate delayed protection acquisition with the originating opening owner/revision and canOpen;
+Back/retirement before acquisition must not push a late child. Keep pending commit outcome
+outside disposable page State: forced removeRoute/navigator destruction must still await its
+terminal outcome before releasing sensitive protection. A surviving origin receives a
+protected acknowledgement; a destroyed navigator must not be used for new navigation.
+
 | Condition | UI |
 | --- | --- |
 | Wrong password / damaged authenticated file | same retry message |

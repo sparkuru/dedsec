@@ -1,5 +1,12 @@
 # Compatibility
 
+2026-11-02：[主机信任管理](ssh-host-trust-management.md)兼容现有password/config两套精确
+信任对象及合法literal/hash记录，不迁移schema或旧库；共享/通配/匹配CA或吊销/不支持类型
+只允许查看，整组忘记拒绝。沿原NEW/CHANGED/REVOKED/CERTIFICATE核验，不因忘记放行新键。
+353 Flutter／828 JVM和native/布局/构建审计通过；指定AIO-3568J/API30实际JNI/CHANGED/
+NEW/KNOWN/PTY已通过并清理，新增页面人工体验待验；最终正常5e70df40…仅arm64，
+[验证边界](verification.md#20261102-ssh-host-trust-device)不推广为所有ROM或证书认证验收。
+
 2026-10-30 接续：[私钥删除](ssh-key-deletion.md)不改变库格式、依赖或原生 wire。
 窄 stored kind1/state5 可代表缺失静态身份；CONFIG 导入／编辑仍严格，实际连接任一有效
 身份缺失即拒绝。用户配置正文和外部原文件保持，重新导入修复元数据；799 JVM／317

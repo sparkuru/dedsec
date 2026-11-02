@@ -1,5 +1,13 @@
 # Architecture
 
+2026-11-02：[主机信任管理](ssh-host-trust-management.md)由supplied-body native真实parser/
+CSHTv1提供公开记录与byte-span候选，Java选择两种精确对象并复用原bundle事务；Flutter
+只持typed metadata/opaque票据，不持replacement正文或新信任权威。公共session事件broker
+下沉secrets层供SSH/TOTP共享；流级outcome跨页面销毁保留终态与保护，旧引擎/schema保持。
+[本地与指定板JNI/KEX验收](verification.md#20261102-ssh-host-trust-device)通过，人工体验待验。
+原生实际负主机键仍在host批准回调前拒绝，受owner/role/view约束的终态enum只经固定类型
+JNI异常提供诊断；Java不依赖异常文本猜测，取消/过期/失效优先，不成为新信任权威。
+
 2026-10-30 接续：[私钥删除](ssh-key-deletion.md)复用原 source-bound bundle 及 ticket
 生命周期，原子移除精确身份／配对对象／口令／KEY Accounts。存储允许窄静态缺失身份，
 实际连接仍校验全部有效身份；重导入以原生审计刷新元数据，保留用户 CONFIG 内容。

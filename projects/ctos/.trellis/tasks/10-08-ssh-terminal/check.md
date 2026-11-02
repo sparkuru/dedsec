@@ -1,5 +1,88 @@
 # 初步规划检查
 
+## 2026-11-02 主机信任人工验收通过并继续
+
+正式5e70df40交付后，用户回复“通过；可以继续；”，本增量人工体验门通过。
+HT1–HT8按本地/隔离设备/正式更新/用户反馈分层证据完成，不推定用户逐项执行异常测试。
+本轮仅同步验收状态，产品源码和已审阅APK未改变；父完整AC保持开放，提交清单待批准。
+[验收记录](../../../design/verification.md#20261102-ssh-host-trust-human-acceptance)。
+最终提交准备独立复核PASS：27+2项源码及三APK hash不变，52路径/六处部分提交范围、
+JSON/JSONL/文档链接/diff通过。清单在
+`/tmp/ctos-ssh-host-trust-20261102.lFHL3SXq/commit-plan.md`；不含下一KBI草案、既有
+journal/应用细节TODO或邻项目。新KBI研究/合同仅规划待范围确认，未实施、重建或操作设备。
+
+## 2026-11-02 正式保留数据更新已完成，待人工体验
+
+用户另行授权后，指定板5e70df40…已通过install-r安装并正常启动；实际APK hash与候选
+匹配，新旧v2 signer相同，UID10131/dataDir/首次安装保持，MainActivity实际resumed。
+旧公开eed028f0…APK已备份，未卸载/清数据/访问库内资料或真实账号。
+证据`/tmp/ctos-ssh-host-trust-install-20261102.kzzZ8HBd`；驱动即时bind15051失败保留，
+专用ADB已退出，独立ss确认无监听，仅短暂TIME_WAIT后全空，install-review最终PASS。
+独立交付审计PASS，[当前安装记录](../../../design/verification.md#20261102-ssh-host-trust-formal-install)。
+本轮没有代码变动或重跑产品测试，前序冻结源码/验证仍匹配。新增页面人工体验/提交
+指示仍待反馈，父任务不归档，不自动开始下一功能。
+
+## 2026-11-02 修复候选与指定板最终验收通过
+
+- 最终353 Flutter/828 JVM/55套零失败错误跳过，定向74 JVM及1758432 ARM客户端矩阵
+  通过，保留默认沙箱socket拒绝的失败日志；normal/fixture零lint错误4/6既有警告。
+- 源码27+2项、三APK hash/arm64/v2/包名/类型异常DEX及独立复核PASS；正常5e70df40…、
+  fixture903b03f5…、testfefc38bf…，修复只提供受约束终态诊断，不放宽host批准门。
+- 指定AIO-3568J/API30实际JNI3项通过（JUnit0.093秒/壁钟2.363秒）；实际换键方法
+  6.893秒（壁钟9.119秒）OK1/status0，含准确CHANGED、无自动审阅/写入/连接、双组
+  cancel/cross-kind/replay/逐次提交/无关字节与端口保留、精确NEW批准/PTY/KNOWN及服务BUSY。
+- 第三轮`/tmp/ctos-ssh-host-trust-device-20261102.Bwg1kvBz`所有11项cleanup为true，
+  合成服务2密码/2shell，relay3；端口15049/15493及带标签容器网络独立核对已清。
+  正式eed028f0…/UID10131/数据路径及安装时间保持，仅公开元数据审计，没有读取正式库。
+- 首轮通用STEP缺口已修复；第二轮合成sshd缺AUDIT_WRITE导致密码后fatal，仅补临时容器
+  能力并使用完全相同903b/fefc应用重测通过。两失败整体仍保留失败，三轮全部清理。
+- 独立review最终候选+授权板关卡PASS，无未决代码问题；[完整证据](../../../design/verification.md#20261102-ssh-host-trust-device)。
+  human-required只余新增Flutter页面实际体验；未更新正式包/真实账号/提交/归档/dist，父AC未全完。
+
+## 2026-11-02 已授权设备首轮与诊断修复（重测中）
+
+指定AIO-3568J/API30的实际JNI3项通过；真实换键方法因固定CHANGED变成通用STEP而失败，
+未记设备整体通过。原native负分类拒绝在Java回调前发生，旧JNI丢失原因；本轮只增加
+actualissuer终态诊断/owner-role-view及固定类型异常，保持无negative批准能力。定向74 JVM、
+严格JNI编译及1758432 ARM客户端矩阵通过；353 Flutter复跑通过，最终APK/设备尚待本轮
+重测。默认沙箱native socket准入失败和提升权限后的实际通过日志均保留。
+首轮外部驱动所有清理标记true、端口15049/15493及容器/网络均清，正式APK/UID元数据
+保持。[当前记录](../../../design/verification.md#20261102-ssh-host-trust-device)。
+
+## 2026-11-02 主机信任：最终本地关卡通过，设备待验
+
+- 用户“开始”及“继续”后，沿原1008实现双对象query/新preview/精确forget，保留原
+  host-key拒绝、source-bound一次事务和所有无关字节/数据，不自动连接或接受新键。
+- 353全量Flutter、824 JVM/55套（主机信任8+14）、analyze/格式、20张真实字体布局通过；
+  normal/fixture构建lint零错误4/6既有警告，三最终APK arm64/v2/包标识/无探针审计通过。
+- 最终真实ARM/QEMU trust9051、pair13814、private21009、certificate23268通过；各含
+  重复材料基线，不相加。源码21+2项、native四组输入/二进制/基线与最终archive冻结复核通过。
+- 独立trellis-check最终local gate PASS，无未决源码发现；已修正活动服务互斥、晚到保护
+  授权、强制移除回执和底层已不确定结果传输失败后的降级。检查的暂态失败和初轮多ABI
+  中间产物保留，最终产物已显式arm64重建；完整事实见[验证](../../../design/verification.md#20261102-ssh-host-trust)。
+- 证据`/tmp/ctos-ssh-host-trust-20261102.lFHL3SXq`，独立`review-host-trust.md`最终PASS；
+  normal a6b35d7b…、fixture99fcac8c…、test7bd207c2…。
+- JNI三方法与真实CHANGED→忘记→NEW/Known集成夹具仅编译；设备/真实账号/正式安装/
+  人工体验未执行，本轮未提交/归档/dist，父完整AC开放。human-required：新增界面与实际
+  Android换键流程需当前授权下的隔离方法及用户体验反馈；历史设备许可不继承。
+
+## 2026-11-02 接续1008：主机信任方案文档检查
+
+- 当前HEAD `b1064c7`，沿已有父task；当前增量为已选但尚未实施的host-trust management。
+  本次补齐[合同](../../../design/ssh-host-trust-management.md)、PRD HT1–HT8、设计、执行计划、
+  两份真实上下文manifest、主线和design索引，不改产品代码/数据/邻项目。
+- 定向源码复核确认两套完整对象身份、issuer lookup、CHANGED/REVOKED/CERTIFICATE拒绝、
+  parser限额和byte span风险。旧研究的数字/目录票据已纠正为当前import/keyDelete布尔分派。
+- 实际执行 `git diff --check -- .` 通过；`jq empty` 检查task JSON和两份JSONL通过；
+  新合同及父PRD/design/implement全部33条本地文件链接存在，无缺失。
+- 独立定向源码/规划一致性复核PASS，核对双对象、现有票据、原source/context、marker/
+  shared拒绝和证据分层；仅为规划复核，不代表wire/实现或产品行为已经验证。
+- UUPM执行Flutter表单/确认/无障碍检索及通用设计查询；只采用既有主题内的Form/
+  Semantics/文字缩放建议，不增加网站布局、字体/配色依赖或第二设计体系。
+- 方案待最终审阅，父status保持in_progress，current指针尚未恢复，implementation_started=false。
+  未执行产品测试、native/JNI、构建、设备、真实key/账号、安装、提交、归档或dist更新。
+  上方文档检查不能替代HT1–HT8或完整父AC通过，旁任务和既有journal修改保持。
+
 ## 2026-11-02 用户实际remote连接与人工验收通过
 
 用户在正式eed028f0…交付后明确反馈“不错；效果通过；我已连接实际 remote 连接成功。”

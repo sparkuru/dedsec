@@ -26,3 +26,7 @@
 {"file":"design/ssh-config-identity-selection.md","reason":"当前已明确批准config-first、IdentityFile提示及显式受管key选择；严格generic模式、旧图兼容与实际证明边界。"}
 {"file":".trellis/tasks/10-08-ssh-terminal/research/config-independent-identity-20261102.md","reason":"实际import/stored/library/两处connector/native路径阻断与精确改动接点；不只绕过Java检查。"}
 {"file":".trellis/spec/backend/ssh-config-identity-selection.md","reason":"当前产品hint新原生模式/typedwire与generic严格分离；旧STATIC边/实际key/原证明/explicitchooser。"}
+{"file":"design/ssh-host-trust-management.md","reason":"核对HT1-HT8、双对象/端口/marker/shared拒绝、原字节与不自动信任/连接；本地/指定板JNI/真实CHANGED-NEW-KNOWN/PTY及正式更新审计通过，用户随后确认页面人工通过并继续1008，提交清单仍须批准，不归档父任务。"}
+{"file":".trellis/tasks/10-08-ssh-terminal/research/trust-recovery-20261102.md","reason":"按当前实际源核对parser与原事务，不以Java假数据代替native证据，不恢复已删除directory通道。"}
+{"file":".trellis/spec/backend/ssh-native.md","reason":"复核真实host/KEX权威、固定parser/构建输入与C-only/AndroidJNI/实际连接证据分离。"}
+{"file":".trellis/spec/backend/ssh-host-trust-management.md","reason":"复核CSHTv1/双对象/票据/活动服务/once/uncertain、byte spans及与真实设备证据严格分离的稳定执行合同。"}

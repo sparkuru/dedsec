@@ -68,6 +68,7 @@ struct ctos_ssh_native_client {
     int caller_socket_fd;
     int closed;
     int failed;
+    enum ctos_ssh_native_host_key_rejection host_key_rejection;
     int completed;
     int candidate_handed_off;
     int kex_released;
@@ -653,6 +654,12 @@ static int verify_host_key(struct sshkey *host_key, struct ssh *ssh) {
     }
     if (issue.classification != CTOS_SSH_CALLBACK_HOST_KNOWN
         && issue.classification != CTOS_SSH_CALLBACK_HOST_NEW) {
+        if (issue.classification == CTOS_SSH_CALLBACK_HOST_CHANGED)
+            client->host_key_rejection = CTOS_SSH_HOST_REJECTION_CHANGED;
+        else if (issue.classification == CTOS_SSH_CALLBACK_HOST_REVOKED)
+            client->host_key_rejection = CTOS_SSH_HOST_REJECTION_REVOKED;
+        else if (issue.classification == CTOS_SSH_CALLBACK_HOST_CERTIFICATE)
+            client->host_key_rejection = CTOS_SSH_HOST_REJECTION_CERTIFICATE;
         errno = EACCES;
         goto out;
     }
@@ -2047,6 +2054,30 @@ int ctos_ssh_native_client_complete(
     return client != NULL && !client->closed && client->completed;
 }
 
+int ctos_ssh_native_client_host_key_rejection(const struct ctos_ssh_native_client *client,
+    enum ctos_ssh_native_host_key_rejection *rejection) {
+    struct ctos_ssh_role_snapshot snapshot = {0};
+    int result, error;
+
+    if (rejection != NULL) *rejection = CTOS_SSH_HOST_REJECTION_NONE;
+    if (client == NULL || rejection == NULL) { errno = EINVAL; return -1; }
+    if (client->closed) { errno = ENOENT; return -1; }
+    if (ctos_ssh_callback_check_live(client->callback, client->callback_environment) != 0)
+        return -1;
+    result = ctos_ssh_role_bootstrap_snapshot(client->role, &snapshot);
+    error = errno;
+    if (result == 0 && (snapshot.token != client->role || snapshot.owner_pid != getpid()
+        || snapshot.owner_uid != getuid() || snapshot.deadline != client->deadline)) {
+        result = -1;
+        error = EACCES;
+    }
+    wipe_bytes(&snapshot, sizeof(snapshot));
+    if (result != 0) { errno = error; return -1; }
+    if (view_borrow_is_live(client->managed_view_borrow) != 0) return -1;
+    if (client->failed) *rejection = client->host_key_rejection;
+    return 0;
+}
+
 int ctos_ssh_native_client_authentication_selection_receipt(
     const struct ctos_ssh_native_client *client, unsigned char receipt[32]) {
     struct ctos_ssh_role_snapshot snapshot = {0};
@@ -2092,6 +2123,7 @@ int ctos_ssh_native_client_close(struct ctos_ssh_native_client *client) {
         errno = ENOENT;
         return -1;
     }
+    client->host_key_rejection = CTOS_SSH_HOST_REJECTION_NONE;
     if (!client->completed && client->candidate_handed_off
         && abort_handed_off_candidate(client) != 0) return -1;
     /* The callback binding was opened for this native event-loop owner. Close

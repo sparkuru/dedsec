@@ -27,6 +27,18 @@ final class SshNativeSession implements AutoCloseable {
     private static final String KNOWN_HOSTS_PATH = "ssh/known_hosts";
     private static final ThreadLocal<Boolean> NATIVE_ENTRY = new ThreadLocal<>();
 
+    /** JNI-only negative issuer metadata, not a proof or an arbitrary exception message. */
+    static final class HostKeyRejectedException extends IOException {
+        final String code;
+        HostKeyRejectedException(String code) {
+            super("The actual SSH host key was rejected");
+            if (!"SSH_HOST_KEY_CHANGED".equals(code) && !"SSH_HOST_KEY_REVOKED".equals(code)
+                    && !"SSH_HOST_KEY_CERTIFICATE".equals(code))
+                throw new IllegalArgumentException("Invalid SSH host rejection code");
+            this.code = code;
+        }
+    }
+
     enum PasswordAuthResult {
         NOT_STARTED(0), PENDING(1), SUCCESS(2), REJECTED(3), PARTIAL(4), CHANGE_REQUIRED(5);
 
@@ -635,12 +647,10 @@ final class SshNativeSession implements AutoCloseable {
         } catch (VaultException failure) {
             throw failure;
         } catch (IOException | LinkageError | RuntimeException failure) {
-            if (explicit) throw protocolNativeFailure("SSH_SESSION_STEP");
-            synchronized (stateLock) {
-                terminalFailure = cancellationRequested
-                        ? "SSH_SESSION_CANCELLED" : "SSH_SESSION_STEP";
-            }
-            throw failure(terminalFailure);
+            String code = !explicit && failure instanceof HostKeyRejectedException
+                    ? ((HostKeyRejectedException)failure).code : "SSH_SESSION_STEP";
+            // Current cancellation, expiry and view revocation still outrank diagnostics.
+            throw protocolNativeFailure(code);
         } catch (Error failure) {
             if (explicit) recordProtocolError("SSH_SESSION_STEP");
             throw failure;

@@ -45,6 +45,22 @@ static void fail(JNIEnv *env) {
     }
 }
 
+static void fail_step(JNIEnv *env, enum ctos_ssh_native_host_key_rejection rejection) {
+    const char *code;
+    switch (rejection) {
+        case CTOS_SSH_HOST_REJECTION_CHANGED: code = "SSH_HOST_KEY_CHANGED"; break;
+        case CTOS_SSH_HOST_REJECTION_REVOKED: code = "SSH_HOST_KEY_REVOKED"; break;
+        case CTOS_SSH_HOST_REJECTION_CERTIFICATE: code = "SSH_HOST_KEY_CERTIFICATE"; break;
+        default: fail(env); return;
+    }
+    if (env == NULL || (*env)->ExceptionCheck(env)) return;
+    jclass error = (*env)->FindClass(env, "im/majo/ctos/SshNativeSession$HostKeyRejectedException");
+    if (error != NULL) {
+        (*env)->ThrowNew(env, error, code);
+        (*env)->DeleteLocalRef(env, error);
+    }
+}
+
 JNIEXPORT void JNICALL Java_im_majo_ctos_SshNativeSession_00024Native_prepareTcpDescriptor(
     JNIEnv *env, jclass type, jint descriptor) {
     (void)type;
@@ -334,8 +350,10 @@ JNIEXPORT jintArray JNICALL Java_im_majo_ctos_SshNativeSession_00024Native_step(
     slot = lock_session(env, handle);
     if (slot == NULL) return NULL;
     if (ctos_ssh_native_client_step(slot->client, &step) != 0) {
+        enum ctos_ssh_native_host_key_rejection rejection = CTOS_SSH_HOST_REJECTION_NONE;
+        (void)ctos_ssh_native_client_host_key_rejection(slot->client, &rejection);
         pthread_mutex_unlock(&sessions_lock);
-        fail(env);
+        fail_step(env, rejection);
         return NULL;
     }
     values[0] = (jint)step.bytes_read;

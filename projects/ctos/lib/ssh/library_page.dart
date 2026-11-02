@@ -7,6 +7,7 @@ import '../secrets/flows.dart';
 import '../ui/ctos_components.dart';
 import 'api.dart';
 import 'config_editor_page.dart';
+import 'host_trust_page.dart';
 
 class SshLibrarySelection {
   const SshLibrarySelection({required this.key, this.host});
@@ -43,6 +44,7 @@ class _SshLibraryPageState extends State<SshLibraryPage>
   String? _readId, _operationId, _error, _receipt;
   Completer<void>? _mutation;
   TextEditingController? _importPassphrase;
+  Object? _hostTrustOpening;
   int _revision = 0;
   bool _loading = true, _picker = false, _working = false, _unlocking = false;
   bool _deleting = false;
@@ -53,7 +55,13 @@ class _SshLibraryPageState extends State<SshLibraryPage>
       _editing = false;
   final _cancelled = <String>{};
   bool get _busy =>
-      _loading || _picker || _working || _unlocking || _deleting || _closing;
+      _loading ||
+      _picker ||
+      _working ||
+      _unlocking ||
+      _deleting ||
+      _closing ||
+      _hostTrustOpening != null;
   bool get _current => mounted && _foreground && _route?.isCurrent != false;
 
   @override
@@ -869,6 +877,35 @@ class _SshLibraryPageState extends State<SshLibraryPage>
       Navigator.of(context).pop(SshLibrarySelection(key: key, host: host));
   }
 
+  Future<void> _openHostTrust() async {
+    if (_busy || !_current || !_healthy) return;
+    final opening = Object();
+    final revision = ++_revision;
+    setState(() => _hostTrustOpening = opening);
+    bool current() =>
+        _current &&
+        _healthy &&
+        !_closing &&
+        !_leaving &&
+        revision == _revision &&
+        identical(_hostTrustOpening, opening);
+    try {
+      await _retireRead();
+      if (!current()) return;
+      _editing = true;
+      await showSshHostTrust(context, api: widget.api, canOpen: current);
+    } catch (error) {
+      if (current()) setState(() => _error = sshMaterialError(error));
+    } finally {
+      _editing = false;
+      if (identical(_hostTrustOpening, opening)) {
+        _hostTrustOpening = null;
+        if (mounted) setState(() {});
+      }
+    }
+    if (_current && !_closing && !_leaving) await _load();
+  }
+
   Future<void> _selectHost(SshConfigHost host) async {
     if (_busy || !_current || !_healthy) return;
     final error = host.error;
@@ -1081,6 +1118,14 @@ class _SshLibraryPageState extends State<SshLibraryPage>
                         : () => unawaited(_edit()),
                     icon: const Icon(Icons.edit_outlined),
                     label: const Text('编辑配置'),
+                  ),
+                  OutlinedButton.icon(
+                    key: const Key('ssh-host-trust'),
+                    onPressed: _busy || !_foreground || !_healthy
+                        ? null
+                        : () => unawaited(_openHostTrust()),
+                    icon: const Icon(Icons.verified_user_outlined),
+                    label: const Text('主机信任'),
                   ),
                 ],
               ),

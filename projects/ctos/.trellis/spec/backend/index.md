@@ -26,6 +26,7 @@ general database. Use these guides for work below the Flutter presentation layer
 | [Config Identity Selection](./ssh-config-identity-selection.md) | Config-first profiles, explicit managed-key choice and typed IdentityFile hints; old strict modes and graph compatibility |
 | [Encrypted Private-key Connection](./ssh-encrypted-key-connect.md) | Original encrypted import, actual phrase/public proof, one-use or atomic saved key phrase, exact CSASv2/CSKB release and forget |
 | [Private-key Deletion](./ssh-key-deletion.md) | Exact reviewed bundle removal, retained CONFIG bytes, absent-identity refusal and atomic reimport reference repair |
+| [Host-trust Management](./ssh-host-trust-management.md) | Supplied-body real-parser query, exact endpoint row forgetting, preserved policy/bytes and source-bound once bundle tickets |
 | [Error Handling](./error-handling.md) | Typed snapshot states, channel errors, and runtime failures |
 | [Logging](./logging-guidelines.md) | Protocol stdout, bounded HFTP diagnostics, and secret-safe logs |
 | [Quality](./quality-guidelines.md) | Layer-specific checks and tests |

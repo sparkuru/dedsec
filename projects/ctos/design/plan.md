@@ -1,5 +1,12 @@
 # ctOS 产品与实施规划
 
+2026-11-02 接续1008：[主机信任管理](ssh-host-trust-management.md)经用户“开始”后完成
+本地实现与检查，353 Flutter／828 JVM及native/布局/构建lint/三APK审计通过。实际目标
+查询双组、单组精确忘记，不批准新键或自动重连；[指定板隔离验收通过](verification.md#20261102-ssh-host-trust-device)，
+正式5e70df40…已另获授权保留数据安装并启动，用户反馈“通过；可以继续；”，
+[新页面人工验收通过](verification.md#20261102-ssh-host-trust-human-acceptance)，沿原1008推进下一增量。
+无目录/路径适配、跳板/转发、CA/吊销管理或完整恢复扩展，父完整AC保持开放。
+
 2026-11-02 后续修正：用户实际config.bin含电脑绝对IdentityFile而无法导入，明确批准
 [config先导入Host、连接时选择受管key](ssh-config-identity-selection.md)。身份路径只为
 提示，正文原样保留；保留非身份配置／信任约束，原产品路径绑定政策由本次选择取代。

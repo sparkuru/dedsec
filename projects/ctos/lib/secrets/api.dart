@@ -1,5 +1,70 @@
+import 'dart:async';
 import 'dart:math';
 import 'package:flutter/services.dart';
+
+final class SecretSessionEvent {
+  SecretSessionEvent.fromMap(Object? raw) {
+    if (raw is! Map ||
+        raw.length != 3 ||
+        raw.keys.any(
+          (key) => !const {'epoch', 'unlocked', 'foreground'}.contains(key),
+        ) ||
+        raw['epoch'] is! int ||
+        (raw['epoch'] as int) < 0 ||
+        raw['unlocked'] is! bool ||
+        raw['foreground'] is! bool)
+      throw const FormatException('秘密库事件无效');
+    epoch = raw['epoch'] as int;
+    unlocked = raw['unlocked'] as bool;
+    foreground = raw['foreground'] as bool;
+  }
+  late final int epoch;
+  late final bool unlocked, foreground;
+}
+
+final _sessionEventStreams = <EventChannel, _SecretSessionEvents>{};
+
+/// One native listener shared by business routes; a final unsubscribe retires
+/// the cached handshake so a later consumer must receive fresh host state.
+Stream<SecretSessionEvent> secretSessionEvents(EventChannel channel) =>
+    _sessionEventStreams
+        .putIfAbsent(channel, () => _SecretSessionEvents(channel))
+        .stream;
+
+class _SecretSessionEvents {
+  _SecretSessionEvents(this.channel);
+  final EventChannel channel;
+  Stream<SecretSessionEvent>? source;
+  SecretSessionEvent? latest;
+  int listeners = 0;
+  Stream<SecretSessionEvent> get stream => Stream.multi((controller) {
+    if (listeners > 0 && latest != null) controller.add(latest!);
+    listeners++;
+    final subscription =
+        (source ??= channel.receiveBroadcastStream().map(
+          SecretSessionEvent.fromMap,
+        )).listen(
+          (event) {
+            latest = event;
+            controller.add(event);
+          },
+          onError: (Object error, StackTrace stack) {
+            latest = null;
+            controller.addError(error, stack);
+          },
+          onDone: () {
+            source = null;
+            latest = null;
+            controller.close();
+          },
+        );
+    controller.onCancel = () {
+      unawaited(subscription.cancel());
+      listeners--;
+      if (listeners == 0) latest = null;
+    };
+  });
+}
 
 class SecretVaultStatus {
   const SecretVaultStatus({
@@ -145,8 +210,14 @@ class SecretRequest {
 }
 
 class SecretVaultApi {
-  const SecretVaultApi({this.channel = const MethodChannel('ctos/native')});
+  const SecretVaultApi({
+    this.channel = const MethodChannel('ctos/native'),
+    this.sessionEventChannel = const EventChannel('ctos/secrets'),
+  });
   final MethodChannel channel;
+  final EventChannel sessionEventChannel;
+  Stream<SecretSessionEvent> get sessionEvents =>
+      secretSessionEvents(sessionEventChannel);
 
   Future<Map<String, dynamic>> call(
     String method, {
