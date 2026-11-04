@@ -7,6 +7,7 @@ import '../secrets/api.dart';
 
 part 'library_api.dart';
 part 'host_trust_api.dart';
+part 'keyboard_api.dart';
 
 enum SshAttemptState { connecting, reviewing, connected, failed, cancelled }
 
@@ -75,6 +76,14 @@ sealed class SshEvent {
       case 'hostKeyDismissed':
         _keys(value, {'type', 'requestId', 'ticketId'});
         return SshHostKeyDismissed(requestId, _identifier(value['ticketId']));
+      case 'keyboardChallenge':
+        return SshKeyboardChallenge.parse(value);
+      case 'keyboardChallengeDismissed':
+        _keys(value, {'type', 'requestId', 'ticketId'});
+        return SshKeyboardChallengeDismissed(
+          requestId,
+          _identifier(value['ticketId']),
+        );
       default:
         throw _invalid();
     }
@@ -107,7 +116,7 @@ final class SshHostKeyDismissed extends SshEvent {
   final String ticketId;
 }
 
-enum SshReconnectMode { password, key, config }
+enum SshReconnectMode { password, key, config, keyboard, configKeyboard }
 
 /// Public selection hints only; every retry reads current vault metadata again.
 final class SshReconnectTarget {
@@ -126,6 +135,8 @@ final class SshReconnectTarget {
       'password' => SshReconnectMode.password,
       'key' => SshReconnectMode.key,
       'config' => SshReconnectMode.config,
+      'keyboard' => SshReconnectMode.keyboard,
+      'configKeyboard' => SshReconnectMode.configKeyboard,
       _ => throw _invalid(),
     };
     _keys(value, {
@@ -133,8 +144,11 @@ final class SshReconnectTarget {
       'host',
       'port',
       'username',
-      if (mode != SshReconnectMode.password) 'keyId',
-      if (mode == SshReconnectMode.config) 'configAlias',
+      if (mode == SshReconnectMode.key || mode == SshReconnectMode.config)
+        'keyId',
+      if (mode == SshReconnectMode.config ||
+          mode == SshReconnectMode.configKeyboard)
+        'configAlias',
     });
     final username = value['username'];
     if (username is! String || sshUsernameError(username) != null)
@@ -144,10 +158,12 @@ final class SshReconnectTarget {
       host: _host(value['host']),
       port: _port(value['port']),
       username: username,
-      keyId: mode == SshReconnectMode.password
-          ? null
-          : _identifier(value['keyId']),
-      configAlias: mode == SshReconnectMode.config
+      keyId: mode == SshReconnectMode.key || mode == SshReconnectMode.config
+          ? _identifier(value['keyId'])
+          : null,
+      configAlias:
+          mode == SshReconnectMode.config ||
+              mode == SshReconnectMode.configKeyboard
           ? _sshAlias(value['configAlias'])
           : null,
     );
@@ -403,6 +419,9 @@ String sshConnectionError(Object error) {
     'SSH_AUTHENTICATION' ||
     'SSH_PASSWORD_AUTH' ||
     'SSH_AUTH_REJECTED' => 'SSH 登录被拒绝，请检查用户名和密码。',
+    'SSH_KEYBOARD_AUTH' => '服务器交互式认证未完成或被拒绝，请重新连接后回答服务器问题。',
+    'SSH_KEYBOARD_POLICY' => '此配置未允许服务器交互式认证，请检查配置中的认证方式。',
+    'SSH_KEYBOARD_CHALLENGE' => '服务器问题或回答已失效，请重新连接。',
     'SSH_UNSUPPORTED' ||
     'SSH_PROFILE_UNSUPPORTED' ||
     'SSH_PROFILE_VALIDATION' ||

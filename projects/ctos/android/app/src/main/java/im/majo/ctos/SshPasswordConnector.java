@@ -13,6 +13,8 @@ final class SshPasswordConnector implements MainActivity.AuthenticatedSshFactory
     interface Events {
         void present(SshHostKeyReviewMailbox.Ticket ticket) throws VaultException;
         void dismiss(SshHostKeyReviewMailbox.Ticket ticket);
+        default void present(SshKeyboardMailbox.Ticket ticket) throws VaultException { throw SshKeyboardChallenge.failure(); }
+        default void dismiss(SshKeyboardMailbox.Ticket ticket) { }
     }
     private final AppSecrets vault;
     private SshPasswordProfile profile;
@@ -27,6 +29,7 @@ final class SshPasswordConnector implements MainActivity.AuthenticatedSshFactory
     private final SshTransientPassword password;
     private final SshSavedPassword saved;
     private final boolean useSaved;
+    private final boolean keyboardInteractive;
     private final AppSecrets.SshEntryMutationContext saveContext;
     private final AppSecrets.BundleContext origin;
     private final String privateKeyId, configAlias, usernameOverride, expectedConfigBinding;
@@ -60,6 +63,7 @@ final class SshPasswordConnector implements MainActivity.AuthenticatedSshFactory
     private SshNativeCallbackAdapter callback;
     private volatile SshHostKeyReviewMailbox mailbox;
     private volatile SshHostKeyReviewMailbox.Ticket ticket;
+    private volatile SshKeyboardMailbox keyboardMailbox;
     private SshHostKeyAuthority.Review approved;
     private SshNativeSession session;
     private boolean returned;
@@ -80,6 +84,7 @@ final class SshPasswordConnector implements MainActivity.AuthenticatedSshFactory
         privateKeyId = null; configAlias = ""; usernameOverride = ""; expectedConfigBinding = "";
         origin = vault.newBundleContext(deadline, this::check);
         useSaved = useSavedPassword || savePassword;
+        keyboardInteractive = false;
         targetIdentity = useSaved ? saved.target : SshPasswordProfile.TARGET;
         transportDeadline = deadline;
         if (useSavedPassword && (savePassword || bytes.length != 0)) throw SshPasswordProfile.parameters();
@@ -112,6 +117,7 @@ final class SshPasswordConnector implements MainActivity.AuthenticatedSshFactory
         initialRevision = vault.contentRevision; tcp = new SshTcpConnector();
         origin = vault.newBundleContext(deadline, this::check);
         saved = null; useSaved = false; saveContext = null; password = null;
+        keyboardInteractive = false;
         if (passphrase == null || useSavedPassphrase && (savePassphrase || passphrase.length != 0))
             throw SshPasswordProfile.parameters();
         if (passphrase.length != 0) SshSavedPassword.validateSecret(passphrase);
@@ -119,6 +125,24 @@ final class SshPasswordConnector implements MainActivity.AuthenticatedSshFactory
         useSavedKeyPassphrase = useSavedPassphrase; saveKeyPassphrase = savePassphrase;
         expectedKeyRevision = initialRevision;
         transportDeadline = deadline;
+        try { check(); } catch (VaultException | RuntimeException | Error failure) { cancel(); throw failure; }
+    }
+
+    SshPasswordConnector(AppSecrets vault, SshPasswordProfile manual, String configAlias,
+            String configBinding, String usernameOverride, long deadline,
+            AppSecrets.EffectGuard sensitive, Events events) throws VaultException {
+        if (configAlias == null || configBinding == null || usernameOverride == null
+                || manual == null && configAlias.isEmpty() || manual != null && !configAlias.isEmpty())
+            throw SshPasswordProfile.parameters();
+        this.vault = vault; profile = manual; privateKeyId = null;
+        this.configAlias = configAlias; expectedConfigBinding = configBinding; this.usernameOverride = usernameOverride;
+        this.deadline = deadline; this.sensitive = sensitive; this.events = events;
+        clock = SystemClock::elapsedRealtime; requestStarted = clock.now(); expectedEpoch = vault.session.epoch();
+        initialRevision = vault.contentRevision; tcp = new SshTcpConnector();
+        origin = vault.newBundleContext(deadline, this::check);
+        saved = null; useSaved = false; saveContext = null; password = null; keyboardInteractive = true;
+        transportDeadline = deadline;
+        targetIdentity = "target:ctos-keyboard-" + UUID.randomUUID();
         try { check(); } catch (VaultException | RuntimeException | Error failure) { cancel(); throw failure; }
     }
 
@@ -145,6 +169,8 @@ final class SshPasswordConnector implements MainActivity.AuthenticatedSshFactory
         }
         SshHostKeyReviewMailbox current = mailbox;
         if (current != null) current.cancel();
+        SshKeyboardMailbox keyboard = keyboardMailbox;
+        if (keyboard != null) keyboard.cancel();
         Runnable action = cancellationAction;
         if (action != null) action.run();
     }
@@ -155,13 +181,25 @@ final class SshPasswordConnector implements MainActivity.AuthenticatedSshFactory
                 && current.resolve(pending, accept);
     }
 
+    boolean respondKeyboard(String id, String binding, java.util.List<?> answers) throws VaultException {
+        SshKeyboardMailbox current = keyboardMailbox;
+        return current != null && current.respond(id, binding, answers);
+    }
+
+    boolean keyboardPending(SshKeyboardMailbox.Ticket pending) throws VaultException {
+        check();
+        SshKeyboardMailbox current = keyboardMailbox;
+        return current != null && current.pending(pending);
+    }
+
     @Override public SshNativeSession create(BooleanSupplier hostCancelled) throws Exception {
         if (started) throw new VaultException("BUSY", "The SSH connection was already started");
         owner = Thread.currentThread(); started = true; this.hostCancelled = hostCancelled;
         return SshPasswordManifestValidator.within(deadline, () -> {
             check();
             if (vault.contentRevision != initialRevision) throw changed();
-            if (privateKeyId != null) prepareKey();
+            if (keyboardInteractive && !configAlias.isEmpty()) prepareKeyboardConfig();
+            else if (privateKeyId != null) prepareKey();
             else {
             long expectedRevision = initialRevision;
             if (saveContext != null) {
@@ -245,7 +283,8 @@ final class SshPasswordConnector implements MainActivity.AuthenticatedSshFactory
                     (b, r, proof, kind) -> { throw denied(); });
             callback = SshNativeCallbackAdapter.bind(issued, registry, authority, clock, provider, handoff);
             SshAuthenticationSelection selection;
-            if (selectedKey == null) selection = SshAuthenticationSelection.password(issued.role,
+            if (keyboardInteractive) selection = SshAuthenticationSelection.keyboardInteractive(issued.role, profile.username, clock);
+            else if (selectedKey == null) selection = SshAuthenticationSelection.password(issued.role,
                     profile.username, useSaved ? saved.entryId : password.entryId, clock);
             else {
                 byte[] blob = selectedKey.publicBlob();
@@ -268,7 +307,38 @@ final class SshPasswordConnector implements MainActivity.AuthenticatedSshFactory
             check(); session.beginUserauthService();
             while (!session.userauthServiceReady()) { session.step(); pause(); }
             check();
-            if (selectedKey == null) {
+            if (keyboardInteractive) {
+                session.beginKeyboardInteractiveAuth();
+                SshHostKeyAuthority.Proof actualHost = callback.hostProof();
+                SshKexProof actualKex = callback.kexProof();
+                if (actualHost == null || actualKex == null) throw denied();
+                actualKex.requireMatches(issued.role, actualHost);
+                keyboardMailbox = new SshKeyboardMailbox(issued.role, clock, () -> {
+                    check(); callback.requireAuthenticationSelectionLive();
+                    if (callback.hostProof() != actualHost || callback.kexProof() != actualKex) throw denied();
+                    actualKex.requireMatches(issued.role, actualHost);
+                }, new SshKeyboardMailbox.Sink() {
+                    @Override public void present(SshKeyboardMailbox.Ticket pending) throws VaultException { events.present(pending); }
+                    @Override public void dismiss(SshKeyboardMailbox.Ticket pending) { events.dismiss(pending); }
+                });
+                SshNativeSession.KeyboardInteractiveAuthResult result;
+                while ((result = session.keyboardInteractiveAuthResult()) == SshNativeSession.KeyboardInteractiveAuthResult.PENDING
+                        || result == SshNativeSession.KeyboardInteractiveAuthResult.CHALLENGE) {
+                    if (result == SshNativeSession.KeyboardInteractiveAuthResult.CHALLENGE) {
+                        SshKeyboardChallenge challenge = session.keyboardInteractiveChallenge();
+                        byte[] response = keyboardMailbox.await(challenge, () -> {
+                            session.step();
+                            if (session.keyboardInteractiveAuthResult() != SshNativeSession.KeyboardInteractiveAuthResult.CHALLENGE)
+                                throw new VaultException("SSH_KEYBOARD_AUTH", "SSH keyboard-interactive authentication failed");
+                        });
+                        try { check(); session.respondKeyboardInteractive(challenge, response); }
+                        finally { VaultCodec.wipe(response); }
+                    } else { session.step(); pause(); }
+                }
+                keyboardMailbox.close(); keyboardMailbox = null;
+                if (result != SshNativeSession.KeyboardInteractiveAuthResult.SUCCESS)
+                    throw new VaultException("SSH_KEYBOARD_AUTH", "SSH keyboard-interactive authentication failed");
+            } else if (selectedKey == null) {
                 session.beginPasswordAuth();
                 SshNativeSession.PasswordAuthResult result;
                 while ((result = session.passwordAuthResult()) == SshNativeSession.PasswordAuthResult.PENDING) {
@@ -286,7 +356,7 @@ final class SshPasswordConnector implements MainActivity.AuthenticatedSshFactory
                     throw new VaultException("SSH_AUTHENTICATION", "SSH private key authentication failed");
             }
             check();
-            reconnectTarget = new SshReconnectTarget(profile, privateKeyId, configAlias);
+            reconnectTarget = new SshReconnectTarget(profile, privateKeyId, configAlias, keyboardInteractive);
             session.retireAuthenticationWith(this::retireAuthentication);
             returned = true;
             return session;
@@ -353,6 +423,33 @@ final class SshPasswordConnector implements MainActivity.AuthenticatedSshFactory
                 hostsId = hosts.id; hostsIdentity = hosts.identity;
             }
         } finally { vault.cancelBundleContext(context); }
+    }
+
+    private void prepareKeyboardConfig() throws Exception {
+        SshPasswordProfile selected = null;
+        String selectedTrust = null;
+        for (int pass = 0; pass < 2; pass++) {
+            AppSecrets.BundleContext context = vault.newBundleContext(deadline, this::check);
+            try (SshConnectionMaterial.Snapshot snapshot = vault.sshLibrarySnapshot(context)) {
+                if (snapshot.epoch != expectedEpoch || snapshot.revision != initialRevision
+                        || !SshConnectionMaterial.configBinding(snapshot, configAlias).equals(expectedConfigBinding)) throw changed();
+                SshConfigEvaluator.DirectPlan plan = SshConnectionMaterial.profilePlan(snapshot.manifest, SshConnectionMaterial.ROOT,
+                        configAlias, usernameOverride, deadline, this::check);
+                if (plan.userRequired) throw new VaultException("SSH_USER_REQUIRED", "Enter an SSH username");
+                if (!plan.keyboardInteractiveAuthentication)
+                    throw new VaultException("SSH_KEYBOARD_POLICY", "This SSH configuration does not allow keyboard-interactive authentication");
+                SshPasswordProfile actual = new SshPasswordProfile(plan.hostname, plan.port, plan.user);
+                String trustPath = SshConnectionMaterial.singleTrustPath(snapshot.manifest, plan);
+                if (pass == 0) { selected = actual; selectedTrust = trustPath; }
+                else if (!selected.same(actual) || !selectedTrust.equals(trustPath)) throw changed();
+                profile = actual; rootPath = SshConnectionMaterial.ROOT; hostsPath = trustPath;
+                strictHostKeyChecking = plan.strictHostKeyChecking;
+                transportDeadline = Math.min(deadline, requestStarted + plan.connectTimeoutMillis);
+                VaultManifest.FileObject hosts = SshConnectionMaterial.file(snapshot.manifest, trustPath);
+                hostsId = hosts.id; hostsIdentity = hosts.identity;
+            } finally { vault.cancelBundleContext(context); }
+            check();
+        }
     }
 
     private void prepareKeyPhrase() throws Exception {
@@ -460,6 +557,7 @@ final class SshPasswordConnector implements MainActivity.AuthenticatedSshFactory
             throw new VaultException("SSH_CANCELLED", "The SSH connection was cancelled");
         vault.cancelBundleContext(origin);
         if (password != null) password.close();
+        if (keyboardMailbox != null) { keyboardMailbox.close(); keyboardMailbox = null; }
         if (transientKey != null) { transientKey.close(); transientKey = null; }
         if (keyPassphraseMutation != null) keyPassphraseMutation.cancel();
         if (saveContext != null) saveContext.cancel();

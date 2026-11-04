@@ -723,6 +723,9 @@ struct fixture {
     const char *identity_algorithm;
     const char *signature_advertisement;
     unsigned int private_requests;
+    int keyboard_expected;
+    unsigned int keyboard_requests, keyboard_responses, keyboard_prompt_count;
+    struct ctos_ssh_slice keyboard_answers[CTOS_SSH_NATIVE_CLIENT_KBI_PROMPTS];
     int shell_expected, shell_stage, shell_reject;
     uint32_t shell_window, shell_maxpacket, shell_credit;
     unsigned int shell_resize_count, shell_eof_count, shell_close_count;
@@ -883,6 +886,17 @@ static void exercise_selection_admission(struct fixture *fixture,
         make_selection_wire(&changed, snapshot, 4U, altered);
         reject_selection_open(fixture, config, changed.bytes, changed.length, EINVAL);
     }
+    fields[0] = (struct ctos_ssh_slice){(const unsigned char *)"user", 4U};
+    fields[1] = fields[2] = fields[3] = fields[4] = (struct ctos_ssh_slice){NULL, 0};
+    make_selection_wire(&changed, snapshot, 3U, fields);
+    changed.bytes[5] = 2;
+    reject_selection_open(fixture, config, changed.bytes, changed.length, EINVAL);
+    for (size_t index = 1; index < 5; index++) {
+        fields[index] = (struct ctos_ssh_slice){(const unsigned char *)"x", 1U};
+        make_selection_wire(&changed, snapshot, 3U, fields);
+        reject_selection_open(fixture, config, changed.bytes, changed.length, EINVAL);
+        fields[index] = (struct ctos_ssh_slice){NULL, 0};
+    }
 }
 
 static void finish_fixture_setup_selected_mode(struct fixture *fixture,
@@ -984,7 +998,7 @@ static void finish_fixture_setup_selected_mode(struct fixture *fixture,
             if (!fixture->password_expected)
                 fields[0] = (struct ctos_ssh_slice){boundary_username, sizeof(boundary_username)};
             fields[1] = (struct ctos_ssh_slice){(const unsigned char *)"password_2", 10U};
-        } else {
+        } else if (selection_kind == 4U) {
             fields[2] = (struct ctos_ssh_slice){(const unsigned char *)"keys/私钥", sizeof("keys/私钥") - 1U};
             fields[3] = (struct ctos_ssh_slice){(const unsigned char *)"身份😀", sizeof("身份😀") - 1U};
             fields[4] = (struct ctos_ssh_slice){(const unsigned char *)"\0public\xff", 8U};
@@ -1559,6 +1573,33 @@ static void accept_shell_packet(struct fixture *fixture, int type) {
     } else CHECK(0);
 }
 
+static void accept_keyboard_packet(struct fixture *fixture, int type) {
+    const unsigned char *bytes;
+    size_t length;
+    uint32_t count;
+    if (type == SSH2_MSG_USERAUTH_REQUEST) {
+        CHECK(sshpkt_get_string_direct(fixture->server, &bytes, &length) == 0);
+        CHECK(length == sizeof(" 用户😀 ") - 1U && memcmp(bytes, " 用户😀 ", length) == 0);
+        CHECK(sshpkt_get_string_direct(fixture->server, &bytes, &length) == 0);
+        CHECK(length == 14U && memcmp(bytes, "ssh-connection", length) == 0);
+        CHECK(sshpkt_get_string_direct(fixture->server, &bytes, &length) == 0);
+        CHECK(length == 20U && memcmp(bytes, "keyboard-interactive", length) == 0);
+        CHECK(sshpkt_get_string_direct(fixture->server, &bytes, &length) == 0 && length == 0);
+        CHECK(sshpkt_get_string_direct(fixture->server, &bytes, &length) == 0 && length == 0);
+        CHECK(++fixture->keyboard_requests == 1U);
+    } else {
+        CHECK(type == SSH2_MSG_USERAUTH_INFO_RESPONSE);
+        CHECK(sshpkt_get_u32(fixture->server, &count) == 0 && count == fixture->keyboard_prompt_count);
+        for (uint32_t index = 0; index < count; index++) {
+            CHECK(sshpkt_get_string_direct(fixture->server, &bytes, &length) == 0);
+            CHECK(length == fixture->keyboard_answers[index].length);
+            CHECK(length == 0 || memcmp(bytes, fixture->keyboard_answers[index].data, length) == 0);
+        }
+        fixture->keyboard_responses++;
+    }
+    CHECK(sshpkt_get_end(fixture->server) == 0);
+}
+
 static int pump_synthetic_server(struct fixture *fixture, size_t chunk,
     int *read_would_block, int *partial_write) {
     unsigned char input[64];
@@ -1603,6 +1644,9 @@ static int pump_synthetic_server(struct fixture *fixture, size_t chunk,
         accept_password_request(fixture);
     } else if (packet_type == SSH2_MSG_USERAUTH_REQUEST && fixture->private_expected) {
         accept_private_request(fixture);
+    } else if (fixture->keyboard_expected && (packet_type == SSH2_MSG_USERAUTH_REQUEST
+        || packet_type == SSH2_MSG_USERAUTH_INFO_RESPONSE)) {
+        accept_keyboard_packet(fixture, packet_type);
     } else if (fixture->shell_expected && packet_type >= SSH2_MSG_CHANNEL_OPEN
         && packet_type <= SSH2_MSG_CHANNEL_FAILURE) {
         accept_shell_packet(fixture, packet_type);
@@ -4551,7 +4595,371 @@ static void test_managed_host_denials(void) {
     }
 }
 
+static void setup_keyboard_fixture(struct fixture *fixture, int new_host,
+    enum ctos_ssh_native_host_key_mode mode) {
+    memset(fixture, 0, sizeof(*fixture));
+    fixture->keyboard_expected = 1;
+    fixture->pair[0] = fixture->pair[1] = -1;
+    fixture->callback.release_fd = -1;
+    CHECK(sshkey_generate(KEY_ED25519, 0, &fixture->private_key) == 0);
+    CHECK(sshkey_from_private(fixture->private_key, &fixture->public_key) == 0);
+    fixture->host_key = fixture->public_key;
+    finish_fixture_setup_selected_mode(fixture, 60000U, NULL, NULL, new_host, 0, 3U, 0, mode);
+    CHECK(ctos_ssh_native_client_begin_keyboard_interactive_auth(fixture->client) != 0 && errno == EACCES);
+    finish_service_fixture(fixture, new_host, 0);
+    CHECK(ctos_ssh_native_client_begin_keyboard_interactive_auth(fixture->client) != 0 && errno == EACCES);
+    CHECK(ctos_ssh_native_client_begin_userauth_service(fixture->client) == 0);
+    drive_service(fixture, 0);
+    enum ctos_ssh_native_client_keyboard_interactive_auth_result result;
+    CHECK(ctos_ssh_native_client_keyboard_interactive_auth_result(fixture->client, &result) == 0
+        && result == CTOS_SSH_KEYBOARD_AUTH_NOT_STARTED);
+    CHECK(ctos_ssh_native_client_begin_password_auth(fixture->client) != 0 && errno == EACCES);
+    CHECK(ctos_ssh_native_client_begin_private_key_auth(fixture->client) != 0 && errno == EACCES);
+    CHECK(ctos_ssh_native_client_begin_keyboard_interactive_auth(fixture->client) == 0);
+    CHECK(ctos_ssh_native_client_begin_keyboard_interactive_auth(fixture->client) != 0 && errno == EALREADY);
+    unsigned char output[32]; size_t length = 99;
+    CHECK(ctos_ssh_native_client_selected_credential_bytes(fixture->client, output, sizeof(output), &length) != 0
+        && errno == EALREADY && length == 0 && fixture->callback.selected_calls == 0);
+    for (unsigned int turn = 0; turn < 100000U; turn++) {
+        CHECK(shell_turn(fixture) == 0);
+        if (fixture->keyboard_requests == 1U) return;
+    }
+    CHECK(0);
+}
+
+static void keyboard_result(struct fixture *fixture,
+    enum ctos_ssh_native_client_keyboard_interactive_auth_result expected, int error) {
+    for (unsigned int turn = 0; turn < 200000U; turn++) {
+        enum ctos_ssh_native_client_keyboard_interactive_auth_result result = CTOS_SSH_KEYBOARD_AUTH_SUCCESS;
+        int status = shell_turn(fixture), saved = errno;
+        if (status != 0) {
+            CHECK(error != 0 && saved == error);
+            CHECK(ctos_ssh_native_client_keyboard_interactive_auth_result(fixture->client, &result) != 0
+                && result == CTOS_SSH_KEYBOARD_AUTH_NOT_STARTED);
+            return;
+        }
+        CHECK(ctos_ssh_native_client_keyboard_interactive_auth_result(fixture->client, &result) == 0);
+        if (error != 0 && result == CTOS_SSH_KEYBOARD_AUTH_CHALLENGE) continue;
+        if (result != CTOS_SSH_KEYBOARD_AUTH_PENDING) {
+            CHECK(error == 0 && result == expected);
+            CHECK(fixture->callback.selected_calls == 0 && fixture->callback.credential_calls == 0
+                && fixture->callback.credential_bytes_calls == 0);
+            return;
+        }
+    }
+    CHECK(0);
+}
+
+static void keyboard_challenge_packet(struct fixture *fixture, unsigned int count, unsigned int variant) {
+    unsigned char long_text[4097];
+    memset(long_text, 'p', sizeof(long_text));
+    CHECK(sshpkt_start(fixture->server, SSH2_MSG_USERAUTH_INFO_REQUEST) == 0);
+    if (variant == 1U) CHECK(sshpkt_put_string(fixture->server, "\xc0\xaf", 2U) == 0);
+    else if (variant == 5U) CHECK(sshpkt_put_string(fixture->server, long_text, sizeof(long_text)) == 0);
+    else CHECK(sshpkt_put_cstring(fixture->server, "服务器\033Name") == 0);
+    if (variant != 6U) {
+        CHECK(sshpkt_put_cstring(fixture->server, "第一行\n第二行\t\001") == 0);
+        CHECK(sshpkt_put_cstring(fixture->server, "") == 0);
+        CHECK(sshpkt_put_u32(fixture->server, variant == 4U ? 17U : count) == 0);
+        for (unsigned int index = 0; index < count; index++) {
+            if (variant == 2U) CHECK(sshpkt_put_cstring(fixture->server, "") == 0);
+            else if (variant == 8U) CHECK(sshpkt_put_string(fixture->server, long_text, 4096U) == 0);
+            else CHECK(sshpkt_put_cstring(fixture->server, index % 2 ? "Code: " : "Password: ") == 0);
+            CHECK(sshpkt_put_u8(fixture->server, variant == 3U ? 2U : variant == 9U ? 255U : index % 2) == 0);
+        }
+        if (variant == 7U) CHECK(sshpkt_put_u8(fixture->server, 0) == 0);
+    }
+    CHECK(sshpkt_send(fixture->server) == 0);
+    fixture->keyboard_prompt_count = count;
+}
+
+static struct wire keyboard_response_wire(struct fixture *fixture, uint32_t round) {
+    struct wire wire = {0};
+    wire_u32(&wire, 0x43534b52U); wire_u32(&wire, 0x00010000U);
+    wire_u32(&wire, round); wire_u32(&wire, fixture->keyboard_prompt_count);
+    for (uint32_t index = 0; index < fixture->keyboard_prompt_count; index++) {
+        wire_u32(&wire, (uint32_t)fixture->keyboard_answers[index].length);
+        wire_put(&wire, fixture->keyboard_answers[index].data, fixture->keyboard_answers[index].length);
+    }
+    return wire;
+}
+
+static void keyboard_answer(struct fixture *fixture, uint32_t round) {
+    struct wire wire = keyboard_response_wire(fixture, round);
+    unsigned int before = fixture->keyboard_responses;
+    CHECK(ctos_ssh_native_client_respond_keyboard_interactive(fixture->client, wire.bytes, wire.length) == 0);
+    CHECK(ctos_ssh_native_client_respond_keyboard_interactive(fixture->client, wire.bytes, wire.length) != 0
+        && errno == EACCES);
+    memset(&wire, 0, sizeof(wire));
+    for (unsigned int turn = 0; turn < 100000U; turn++) {
+        CHECK(shell_turn(fixture) == 0);
+        if (fixture->keyboard_responses == before + 1U) return;
+    }
+    CHECK(0);
+}
+
+static void keyboard_finish_packet(struct fixture *fixture, unsigned int outcome) {
+    CHECK(sshpkt_start(fixture->server, outcome == 2U ? SSH2_MSG_USERAUTH_SUCCESS : SSH2_MSG_USERAUTH_FAILURE) == 0);
+    if (outcome != 2U) {
+        CHECK(sshpkt_put_cstring(fixture->server, "keyboard-interactive") == 0);
+        CHECK(sshpkt_put_u8(fixture->server, outcome == 4U) == 0);
+    }
+    CHECK(sshpkt_send(fixture->server) == 0);
+}
+
+static void test_keyboard_rounds_and_outcomes(void) {
+    for (unsigned int mode = 0; mode < 2U; mode++) for (unsigned int outcome = 2; outcome <= 4U; outcome++) {
+        struct fixture fixture;
+        unsigned char challenge[CTOS_SSH_NATIVE_CLIENT_KBI_WIRE_BYTES];
+        size_t length;
+        setup_keyboard_fixture(&fixture, mode, (enum ctos_ssh_native_host_key_mode)mode);
+        keyboard_challenge_packet(&fixture, 2, 0);
+        keyboard_result(&fixture, CTOS_SSH_KEYBOARD_AUTH_CHALLENGE, 0);
+        CHECK(ctos_ssh_native_client_keyboard_interactive_challenge(fixture.client, challenge, sizeof(challenge), &length) == 0);
+        CHECK(read_u32(challenge) == 0x43534b49U && read_u32(challenge + 4) == 0x00010000U
+            && read_u32(challenge + 8) == 1 && read_u32(challenge + 20) == 2);
+        size_t name_length = read_u32(challenge + 12), instruction_length = read_u32(challenge + 16);
+        CHECK(name_length == sizeof("服务器?Name") - 1U
+            && memcmp(challenge + 24, "服务器?Name", name_length) == 0);
+        CHECK(instruction_length == sizeof("第一行\n第二行\t?") - 1U
+            && memcmp(challenge + 24 + name_length, "第一行\n第二行\t?", instruction_length) == 0);
+        const unsigned char *p = challenge + 24 + name_length + instruction_length;
+        CHECK(read_u32(p) == 0 && read_u32(p + 4) == 10);
+        p += 18;
+        CHECK(read_u32(p) == 1 && read_u32(p + 4) == 6 && p + 14 == challenge + length);
+        fixture.keyboard_answers[0] = (struct ctos_ssh_slice){(const unsigned char *)"secret😀", sizeof("secret😀") - 1U};
+        fixture.keyboard_answers[1] = (struct ctos_ssh_slice){(const unsigned char *)"", 0};
+        keyboard_answer(&fixture, 1);
+        memset(challenge, 0xa5, sizeof(challenge)); length = 99;
+        CHECK(ctos_ssh_native_client_keyboard_interactive_challenge(fixture.client, challenge, sizeof(challenge), &length) != 0
+            && length == 0);
+        for (size_t index = 0; index < sizeof(challenge); index++) CHECK(challenge[index] == 0);
+        keyboard_challenge_packet(&fixture, 0, 0);
+        keyboard_result(&fixture, CTOS_SSH_KEYBOARD_AUTH_CHALLENGE, 0);
+        keyboard_answer(&fixture, 2);
+        keyboard_challenge_packet(&fixture, 1, 0);
+        keyboard_result(&fixture, CTOS_SSH_KEYBOARD_AUTH_CHALLENGE, 0);
+        fixture.keyboard_answers[0] = (struct ctos_ssh_slice){(const unsigned char *)"a\0b", 3U};
+        struct wire stale = keyboard_response_wire(&fixture, 1);
+        CHECK(ctos_ssh_native_client_respond_keyboard_interactive(fixture.client, stale.bytes, stale.length) != 0
+            && errno == EINVAL);
+        keyboard_answer(&fixture, 3);
+        keyboard_finish_packet(&fixture, outcome);
+        keyboard_result(&fixture, (enum ctos_ssh_native_client_keyboard_interactive_auth_result)outcome, 0);
+        CHECK(fixture.keyboard_requests == 1 && fixture.keyboard_responses == 3 && fixture.callback.selected_calls == 0);
+        if (outcome != 2U) CHECK(ctos_ssh_native_client_begin_shell(fixture.client, 80, 24) != 0 && errno == EACCES);
+        else {
+            fixture.shell_expected = 1; fixture.shell_window = 4096; fixture.shell_maxpacket = 1024;
+            CHECK(ctos_ssh_native_client_begin_shell(fixture.client, 80, 24) == 0);
+            drive_shell_phase(&fixture, CTOS_SSH_SHELL_RUNNING);
+            CHECK(fixture.shell_stage == 3 && fixture.callback.selected_calls == 0);
+        }
+        cleanup_fixture(&fixture, 1);
+    }
+    struct fixture direct;
+    setup_keyboard_fixture(&direct, 0, CTOS_SSH_HOST_KEY_MANAGED);
+    keyboard_finish_packet(&direct, 2);
+    keyboard_result(&direct, CTOS_SSH_KEYBOARD_AUTH_SUCCESS, 0);
+    CHECK(direct.keyboard_responses == 0 && direct.callback.selected_calls == 0);
+    cleanup_fixture(&direct, 1);
+}
+
+static void test_keyboard_wire_echo_booleans(void) {
+    for (unsigned int mode = 0; mode < 2U; mode++) for (unsigned int variant = 3U; variant <= 9U; variant += 6U) {
+        struct fixture fixture;
+        unsigned char challenge[CTOS_SSH_NATIVE_CLIENT_KBI_WIRE_BYTES];
+        size_t length = 0;
+        setup_keyboard_fixture(&fixture, 0, (enum ctos_ssh_native_host_key_mode)mode);
+        keyboard_challenge_packet(&fixture, 1, variant);
+        keyboard_result(&fixture, CTOS_SSH_KEYBOARD_AUTH_CHALLENGE, 0);
+        CHECK(ctos_ssh_native_client_keyboard_interactive_challenge(fixture.client,
+            challenge, sizeof(challenge), &length) == 0);
+        size_t offset = 24U + read_u32(challenge + 12) + read_u32(challenge + 16);
+        CHECK(length >= offset + 8U && read_u32(challenge + 20) == 1U);
+        CHECK(read_u32(challenge + offset) == 1U);
+        fixture.keyboard_answers[0] = (struct ctos_ssh_slice){(const unsigned char *)"visible-answer", 14U};
+        keyboard_answer(&fixture, 1);
+        keyboard_finish_packet(&fixture, 2);
+        keyboard_result(&fixture, CTOS_SSH_KEYBOARD_AUTH_SUCCESS, 0);
+        CHECK(fixture.keyboard_responses == 1U && fixture.callback.selected_calls == 0U);
+        cleanup_fixture(&fixture, 1);
+    }
+}
+
+static void test_keyboard_exact_wire_bounds(void) {
+    struct fixture fixture;
+    unsigned char text[4096], challenge[CTOS_SSH_NATIVE_CLIENT_KBI_WIRE_BYTES];
+    size_t length;
+    memset(text, 'p', sizeof(text));
+    setup_keyboard_fixture(&fixture, 0, CTOS_SSH_HOST_KEY_MANAGED);
+    CHECK(sshpkt_start(fixture.server, SSH2_MSG_USERAUTH_INFO_REQUEST) == 0);
+    CHECK(sshpkt_put_cstring(fixture.server, "") == 0);
+    CHECK(sshpkt_put_cstring(fixture.server, "") == 0);
+    CHECK(sshpkt_put_cstring(fixture.server, "") == 0);
+    CHECK(sshpkt_put_u32(fixture.server, 8) == 0);
+    for (uint32_t index = 0; index < 8; index++) {
+        CHECK(sshpkt_put_string(fixture.server, text, index == 7 ? 4008U : sizeof(text)) == 0);
+        CHECK(sshpkt_put_u8(fixture.server, index % 2) == 0);
+        fixture.keyboard_answers[index] = (struct ctos_ssh_slice){text, index == 7 ? 4048U : sizeof(text)};
+    }
+    CHECK(sshpkt_send(fixture.server) == 0);
+    fixture.keyboard_prompt_count = 8;
+    keyboard_result(&fixture, CTOS_SSH_KEYBOARD_AUTH_CHALLENGE, 0);
+    CHECK(ctos_ssh_native_client_keyboard_interactive_challenge(fixture.client, challenge, sizeof(challenge), &length) == 0
+        && length == sizeof(challenge) && read_u32(challenge + 12) == 0 && read_u32(challenge + 16) == 0);
+    length = 99;
+    CHECK(ctos_ssh_native_client_keyboard_interactive_challenge(fixture.client, challenge, sizeof(challenge) - 1, &length) != 0
+        && errno == EOVERFLOW && length == 0);
+    struct sshbuf *response = sshbuf_new(); CHECK(response != NULL);
+    CHECK(sshbuf_put_u32(response, 0x43534b52U) == 0 && sshbuf_put_u32(response, 0x00010000U) == 0
+        && sshbuf_put_u32(response, 1) == 0 && sshbuf_put_u32(response, 8) == 0);
+    for (uint32_t index = 0; index < 8; index++)
+        CHECK(sshbuf_put_string(response, fixture.keyboard_answers[index].data,
+            fixture.keyboard_answers[index].length) == 0);
+    CHECK(sshbuf_len(response) == CTOS_SSH_NATIVE_CLIENT_KBI_WIRE_BYTES);
+    CHECK(sshbuf_put_u8(response, 0) == 0);
+    CHECK(ctos_ssh_native_client_respond_keyboard_interactive(fixture.client, sshbuf_ptr(response), sshbuf_len(response)) != 0
+        && errno == EINVAL);
+    CHECK(sshbuf_consume_end(response, 1) == 0);
+    unsigned char *mutable = sshbuf_mutable_ptr(response); CHECK(mutable != NULL);
+    mutable[19] = 1;
+    CHECK(ctos_ssh_native_client_respond_keyboard_interactive(fixture.client, mutable, sshbuf_len(response)) != 0
+        && errno == EINVAL);
+    mutable[19] = 0; mutable[20] = 0xff;
+    CHECK(ctos_ssh_native_client_respond_keyboard_interactive(fixture.client, mutable, sshbuf_len(response)) != 0
+        && errno == EINVAL);
+    mutable[20] = 'p';
+    CHECK(ctos_ssh_native_client_respond_keyboard_interactive(fixture.client, mutable, sshbuf_len(response)) == 0);
+    sshbuf_free(response);
+    for (uint32_t turn = 0; turn < 100000; turn++) {
+        CHECK(shell_turn(&fixture) == 0);
+        if (fixture.keyboard_responses == 1) break;
+    }
+    CHECK(fixture.keyboard_responses == 1);
+    keyboard_finish_packet(&fixture, 2);
+    keyboard_result(&fixture, CTOS_SSH_KEYBOARD_AUTH_SUCCESS, 0);
+    cleanup_fixture(&fixture, 1);
+}
+
+static void test_keyboard_protocol_limits(void) {
+    for (unsigned int bad = 1; bad <= 8U; bad++) {
+        if (bad == 3U) continue;
+        struct fixture fixture;
+        setup_keyboard_fixture(&fixture, 0, CTOS_SSH_HOST_KEY_MANAGED);
+        keyboard_challenge_packet(&fixture, bad == 8U ? 8U : 1U, bad);
+        keyboard_result(&fixture, CTOS_SSH_KEYBOARD_AUTH_NOT_STARTED, EPROTO);
+        CHECK(fixture.keyboard_responses == 0 && fixture.callback.selected_calls == 0);
+        cleanup_fixture(&fixture, 1);
+    }
+    struct fixture duplicate;
+    setup_keyboard_fixture(&duplicate, 0, CTOS_SSH_HOST_KEY_MANAGED);
+    keyboard_challenge_packet(&duplicate, 1, 0);
+    keyboard_result(&duplicate, CTOS_SSH_KEYBOARD_AUTH_CHALLENGE, 0);
+    keyboard_challenge_packet(&duplicate, 1, 0);
+    keyboard_result(&duplicate, CTOS_SSH_KEYBOARD_AUTH_NOT_STARTED, EPROTO);
+    CHECK(duplicate.keyboard_responses == 0);
+    cleanup_fixture(&duplicate, 1);
+    struct fixture rounds;
+    setup_keyboard_fixture(&rounds, 0, CTOS_SSH_HOST_KEY_MANAGED);
+    for (uint32_t round = 1; round <= CTOS_SSH_NATIVE_CLIENT_KBI_ROUNDS; round++) {
+        keyboard_challenge_packet(&rounds, round == 1 ? 16U : 0U, 0);
+        keyboard_result(&rounds, CTOS_SSH_KEYBOARD_AUTH_CHALLENGE, 0);
+        keyboard_answer(&rounds, round);
+    }
+    keyboard_challenge_packet(&rounds, 0, 0);
+    keyboard_result(&rounds, CTOS_SSH_KEYBOARD_AUTH_NOT_STARTED, EPROTO);
+    CHECK(rounds.keyboard_responses == 16 && rounds.callback.selected_calls == 0);
+    cleanup_fixture(&rounds, 1);
+}
+
+static void test_keyboard_negative_host(void) {
+    for (unsigned int revoked = 0; revoked < 2; revoked++) {
+        struct fixture fixture = {0};
+        struct sshkey *different = NULL;
+        fixture.keyboard_expected = 1; fixture.pair[0] = fixture.pair[1] = -1;
+        fixture.callback.release_fd = -1;
+        CHECK(sshkey_generate(KEY_ED25519, 0, &fixture.private_key) == 0
+            && sshkey_from_private(fixture.private_key, &fixture.public_key) == 0);
+        fixture.host_key = fixture.public_key;
+        CHECK(sshkey_generate(KEY_ED25519, 0, &different) == 0);
+        finish_fixture_setup_selected_mode(&fixture, 60000U, revoked ? NULL : different,
+            revoked ? "@revoked " : NULL, 0, 0, 3U, 0, CTOS_SSH_HOST_KEY_MANAGED);
+        setup_synthetic_server(&fixture);
+        int failed = 0;
+        for (uint32_t turn = 0; turn < 100000; turn++) {
+            if (ctos_ssh_native_client_step(fixture.client, &(struct ctos_ssh_native_client_step){0}) != 0) { failed = 1; break; }
+            CHECK(pump_synthetic_server(&fixture, 64, NULL, NULL) == 0);
+        }
+        CHECK(failed && fixture.callback.host_evidence_calls == 0 && fixture.callback.kex_complete_calls == 0
+            && fixture.keyboard_requests == 0 && fixture.keyboard_responses == 0 && fixture.callback.selected_calls == 0);
+        CHECK(ctos_ssh_native_client_begin_keyboard_interactive_auth(fixture.client) != 0);
+        cleanup_fixture(&fixture, 1);
+        sshkey_free(different);
+    }
+}
+
+struct keyboard_owner_attempt { struct ctos_ssh_native_client *client; struct wire response; };
+
+static void *keyboard_wrong_owner(void *opaque) {
+    struct keyboard_owner_attempt *attempt = opaque;
+    unsigned char challenge[CTOS_SSH_NATIVE_CLIENT_KBI_WIRE_BYTES];
+    size_t length = 99;
+    enum ctos_ssh_native_client_keyboard_interactive_auth_result result = CTOS_SSH_KEYBOARD_AUTH_SUCCESS;
+    CHECK(ctos_ssh_native_client_keyboard_interactive_auth_result(attempt->client, &result) != 0
+        && errno == EPERM && result == CTOS_SSH_KEYBOARD_AUTH_NOT_STARTED);
+    memset(challenge, 0xa5, sizeof(challenge));
+    CHECK(ctos_ssh_native_client_keyboard_interactive_challenge(attempt->client, challenge, sizeof(challenge), &length) != 0
+        && errno == EPERM && length == 0);
+    for (size_t index = 0; index < sizeof(challenge); index++) CHECK(challenge[index] == 0);
+    CHECK(ctos_ssh_native_client_respond_keyboard_interactive(attempt->client,
+        attempt->response.bytes, attempt->response.length) != 0 && errno == EPERM);
+    return NULL;
+}
+
+static void test_keyboard_answer_ownership(void) {
+    for (unsigned int guard = 0; guard < 4U; guard++) {
+        struct fixture fixture;
+        setup_keyboard_fixture(&fixture, 0, CTOS_SSH_HOST_KEY_MANAGED);
+        keyboard_challenge_packet(&fixture, 1, 0);
+        keyboard_result(&fixture, CTOS_SSH_KEYBOARD_AUTH_CHALLENGE, 0);
+        struct wire response = keyboard_response_wire(&fixture, 1);
+        for (size_t length = 0; length < response.length; length++)
+            CHECK(ctos_ssh_native_client_respond_keyboard_interactive(fixture.client, response.bytes, length) != 0);
+        for (unsigned int bad = 0; bad < 6U; bad++) {
+            struct wire invalid = response;
+            if (bad < 4) invalid.bytes[bad * 4 + 3] ^= 1;
+            else if (bad == 4) wire_put(&invalid, "x", 1);
+            else { invalid.bytes[19] = 1; wire_put(&invalid, "\xff", 1); }
+            CHECK(ctos_ssh_native_client_respond_keyboard_interactive(fixture.client, invalid.bytes, invalid.length) != 0);
+        }
+        struct keyboard_owner_attempt attempt = {.client = fixture.client, .response = response};
+        pthread_t thread;
+        CHECK(pthread_create(&thread, NULL, keyboard_wrong_owner, &attempt) == 0);
+        CHECK(pthread_join(thread, NULL) == 0);
+        if (guard == 0) { keyboard_answer(&fixture, 1); keyboard_finish_packet(&fixture, 2); keyboard_result(&fixture, CTOS_SSH_KEYBOARD_AUTH_SUCCESS, 0); }
+        else {
+            if (guard == 1) fixture.view->valid = 0;
+            else if (guard == 2) fixture.view->deadline = deadline_after(0);
+            if (guard != 3) CHECK(ctos_ssh_native_client_respond_keyboard_interactive(fixture.client, response.bytes, response.length) != 0);
+            else CHECK(ctos_ssh_native_client_step(fixture.client,
+                &(struct ctos_ssh_native_client_step){.cancelled = 1}) != 0 && errno == ECANCELED);
+            CHECK(fixture.keyboard_responses == 0);
+        }
+        cleanup_fixture(&fixture, 1);
+    }
+}
+
 int main(int argc, char **argv) {
+    if (argc == 2 && strcmp(argv[1], "--keyboard-only") == 0) {
+        test_keyboard_rounds_and_outcomes();
+        test_keyboard_wire_echo_booleans();
+        test_keyboard_exact_wire_bounds();
+        test_keyboard_protocol_limits();
+        test_keyboard_negative_host();
+        test_keyboard_answer_ownership();
+        printf("SSH_NATIVE_KEYBOARD checks=%u gate=pass runtime=synthetic\n", checks);
+        return 0;
+    }
     if (argc == 2 && strcmp(argv[1], "--view-roots-only") == 0) {
         test_actual_view_roots();
         printf("SSH_NATIVE_VIEW_ROOTS checks=%u gate=pass runtime=synthetic\n", checks);
@@ -4619,6 +5027,12 @@ int main(int argc, char **argv) {
     test_password_auth_active_liveness();
     test_private_auth();
     test_encrypted_private_auth();
+    test_keyboard_rounds_and_outcomes();
+    test_keyboard_wire_echo_booleans();
+    test_keyboard_exact_wire_bounds();
+    test_keyboard_protocol_limits();
+    test_keyboard_negative_host();
+    test_keyboard_answer_ownership();
     test_shell_roundtrip();
     test_shell_rejection_and_auth_gate();
     test_shell_window_and_backpressure();

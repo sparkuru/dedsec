@@ -58,6 +58,7 @@ public final class SshPasswordConnectPlatformTest {
     private final StringBuilder output = new StringBuilder();
     private android.app.PendingIntent backgroundStaleStop;
     private volatile int diagnosticGeneration;
+    private java.util.function.Consumer<Map<?, ?>> keyboardEvents;
     private final java.util.concurrent.atomic.AtomicReference<String> firstDiagnosticTerminal =
             new java.util.concurrent.atomic.AtomicReference<>();
 
@@ -1252,6 +1253,157 @@ public final class SshPasswordConnectPlatformTest {
         }
     }
 
+    /** Opt-in actual JNI/bridge KBI; the independent synthetic SSH peer emits 3/0/1 prompts. */
+    @Test public void actualBridgeKeyboardInteractiveRoundsTrustCancelConfigAndPty() throws Exception {
+        String path=InstrumentationRegistry.getArguments().getString("ctosSshKeyboardRequestFile");
+        Assume.assumeTrue("Explicit synthetic keyboard-interactive fixture request was not provided",path!=null);
+        assertTrue("Invalid keyboard fixture request path",path.matches("/data/local/tmp/ctos-ssh-keyboard-[A-Za-z0-9_-]{1,64}\\.json"));
+        Context context=instrumentation.getTargetContext();
+        assertEquals("im.majo.ctos.secretsfixture",context.getPackageName());
+        assertTrue(context.getApplicationContext() instanceof SecretsFixtureApplication);
+        assertFalse(context.getSharedPreferences("root_access",Context.MODE_PRIVATE).getBoolean("auto_start",true));
+        try{assertNotEquals("Fixture UID must be isolated",android.os.Process.myUid(),
+                context.getPackageManager().getApplicationInfo("im.majo.ctos",0).uid);}
+        catch(android.content.pm.PackageManager.NameNotFoundException absent){ }
+        assertFalse("Fixture cannot interrupt an existing SSH service",SshSessionService.active());
+        File vaultFile=new File(context.getNoBackupFilesDir(),"app-secrets.bin");
+        for(String suffix:new String[]{"",".bak",".new"})assertFalse("Fresh isolated fixture data required",new File(vaultFile.getPath()+suffix).exists());
+        JSONObject request=readHostTrustRequest(path);
+        String host=request.getString("host"),user=request.getString("username"),fingerprint=request.getString("fingerprint");
+        int port=request.getInt("port");
+        byte[] old=(hostTrustLookup(host,port)+" "+request.getString("oldPublicKey")+"\n").getBytes(StandardCharsets.US_ASCII);
+        boolean created=false,observed=false;Throwable primary=null;
+        AtomicInteger rounds=new AtomicInteger(),expectedReviews=new AtomicInteger(1);AtomicBoolean cancelling=new AtomicBoolean();
+        java.util.concurrent.atomic.AtomicReference<Map<?,?>> previous=new java.util.concurrent.atomic.AtomicReference<>();
+        try{
+            activity=(MainActivity)instrumentation.startActivitySync(new Intent(context,MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            dispatch=MainActivity.class.getDeclaredMethod("call",MethodCall.class,MethodChannel.Result.class);dispatch.setAccessible(true);
+            ssh=(SshPasswordConnectBridge)field(activity,"sshPasswordConnect");
+            AppSecretsBridge secrets=(AppSecretsBridge)field(activity,"appSecrets");
+            protection=(String)map(call("secrets.protect",VaultCollections.map("action","acquire"))).get("owner");
+            String master="Fixture-"+UUID.randomUUID();created=true;
+            call("secrets.create",VaultCollections.map("requestId",id(),"password",master,"confirmation",master));
+            seedHostTrustFixture(secrets.sshVault(),new SshPasswordProfile(host,port,user),old);
+            keyboardEvents=event->{
+                assertEquals(activeRequest,event.get("requestId"));
+                int round=((Number)event.get("round")).intValue();assertEquals(rounds.incrementAndGet(),round);
+                List<?> prompts=(List<?>)event.get("prompts");
+                assertTrue(((Number)event.get("remainingMillis")).longValue()>0);
+                assertTrue(((Number)event.get("remainingMillis")).longValue()<=60000);
+                assertEquals("Actual host review must precede KBI",expectedReviews.get(),reviews.get());
+                if(cancelling.get()){
+                    assertEquals(1,round);
+                    assertEquals(true,map(invoke("ssh.cancel",VaultCollections.map("requestId",activeRequest)).join()).get("cancelled"));
+                    assertEquals(false,keyboardAnswer(event,activeRequest,List.of("fixture-label",syntheticPassword(request),"")));
+                    previous.set(event);return;
+                }
+                List<String> answers;
+                if(round==1){
+                    assertEquals(3,prompts.size());
+                    assertEquals("Account label: ",map(prompts.get(0)).get("text"));assertEquals(true,map(prompts.get(0)).get("echo"));
+                    assertEquals("Password: ",map(prompts.get(1)).get("text"));assertEquals(false,map(prompts.get(1)).get("echo"));
+                    assertEquals("Optional value: ",map(prompts.get(2)).get("text"));assertEquals(false,map(prompts.get(2)).get("echo"));
+                    answers=List.of("fixture-label",syntheticPassword(request),"");
+                }else if(round==2){assertTrue(prompts.isEmpty());assertFalse(((String)event.get("instruction")).isEmpty());answers=List.of();}
+                else{assertEquals(3,round);assertEquals(1,prompts.size());
+                    assertEquals("Verification code: ",map(prompts.get(0)).get("text"));assertEquals(false,map(prompts.get(0)).get("echo"));
+                    answers=List.of("654321");}
+                assertEquals(false,keyboardAnswer(event,id(),answers));
+                if(previous.get()!=null)assertEquals(false,keyboardAnswer(previous.get(),activeRequest,answers));
+                assertEquals(true,keyboardAnswer(event,activeRequest,answers));
+                assertEquals(false,keyboardAnswer(event,activeRequest,answers));previous.set(event);
+            };
+            installObservers(host,port,fingerprint);observed=true;
+            byte[] before=java.nio.file.Files.readAllBytes(vaultFile.toPath());
+            try{assertKeyboardConnectFailure(request,null,"SSH_HOST_KEY_CHANGED");assertCiphertextUnchanged(vaultFile,before);}
+            finally{VaultCodec.wipe(before);}
+            assertEquals(0,rounds.get());assertEquals(0,reviews.get());
+            trustCommit(trustPreview(host,port,"password",request.getString("oldFingerprint")));
+            connectKeyboard(request,null);assertEquals(3,rounds.get());assertEquals(1,reviews.get());
+            assertKeyboardReconnect("keyboard",null);releaseProtection();assertShellRoundTrip();stopTerminal();waitReleased();
+            protection=(String)map(call("secrets.protect",VaultCollections.map("action","acquire"))).get("owner");
+            rounds.set(0);cancelling.set(true);
+            assertKeyboardConnectFailure(request,null,"SSH_CANCELLED");assertEquals(1,rounds.get());assertEquals(1,reviews.get());
+            cancelling.set(false);rounds.set(0);
+            String content="Host keyboardfixture\n    HostName "+host+"\n    Port "+port+"\n    User \""
+                    +user.replace("\\","\\\\").replace("\"","\\\"")+"\"\n    KbdInteractiveAuthentication yes\n"
+                    +"    PreferredAuthentications keyboard-interactive\n    UserKnownHostsFile ~/.ssh/known_hosts\n";
+            assertFixedHostFailure("VAULT_CHANGED","ssh.configPreview",VaultCollections.map("requestId",id(),
+                    "path",SshConnectionMaterial.ROOT,"content",content));
+            // The real editor reads this exact path before preview, including a new empty CONFIG.
+            Map<String,Object> document=map(call("ssh.configRead",VaultCollections.map("requestId",id(),"path",SshConnectionMaterial.ROOT)));
+            assertEquals(java.util.Set.of("path","content"),document.keySet());
+            assertEquals(SshConnectionMaterial.ROOT,document.get("path"));assertEquals("",document.get("content"));
+            Map<String,Object> edit=map(call("ssh.configPreview",VaultCollections.map("requestId",id(),"path",SshConnectionMaterial.ROOT,"content",content)));
+            pendingImportTicket=(String)edit.get("ticketId");assertEquals(true,edit.get("canCommit"));commitImport(edit);
+            Map<String,Object> configured=deletionHost(map(call("ssh.library",VaultCollections.map("requestId",id()))),"keyboardfixture");
+            assertEquals(List.of(),configured.get("keyIds"));
+            assertKeyboardConnectFailure(request,configured,"SSH_HOST_KEY_CHANGED");assertEquals(0,rounds.get());assertEquals(1,reviews.get());
+            trustCommit(trustPreview(host,port,"config",request.getString("oldFingerprint")));
+            expectedReviews.set(2);
+            configured=deletionHost(map(call("ssh.library",VaultCollections.map("requestId",id()))),"keyboardfixture");
+            connectKeyboard(request,configured);assertEquals(3,rounds.get());assertEquals(2,reviews.get());
+            assertKeyboardReconnect("configKeyboard","keyboardfixture");releaseProtection();assertShellRoundTrip();stopTerminal();waitReleased();
+            protection=(String)map(call("secrets.protect",VaultCollections.map("action","acquire"))).get("owner");rounds.set(0);
+            configured=deletionHost(map(call("ssh.library",VaultCollections.map("requestId",id()))),"keyboardfixture");
+            connectKeyboard(request,configured);assertEquals(3,rounds.get());assertEquals(2,reviews.get());
+            releaseProtection();assertShellRoundTrip();stopTerminal();waitReleased();
+            protection=(String)map(call("secrets.protect",VaultCollections.map("action","acquire"))).get("owner");rounds.set(0);
+            // Prior preview handoff and own trust writes do not authorize another edit source.
+            document=map(call("ssh.configRead",VaultCollections.map("requestId",id(),"path",SshConnectionMaterial.ROOT)));
+            assertEquals(SshConnectionMaterial.ROOT,document.get("path"));assertEquals(content,document.get("content"));
+            edit=map(call("ssh.configPreview",VaultCollections.map("requestId",id(),"path",SshConnectionMaterial.ROOT,
+                    "content",content.replace("KbdInteractiveAuthentication yes","KbdInteractiveAuthentication no"))));
+            pendingImportTicket=(String)edit.get("ticketId");commitImport(edit);
+            configured=deletionHost(map(call("ssh.library",VaultCollections.map("requestId",id()))),"keyboardfixture");
+            assertKeyboardConnectFailure(request,configured,"SSH_KEYBOARD_POLICY");assertEquals(0,rounds.get());
+            long deadline=SystemClock.elapsedRealtime()+10000;
+            AppSecrets.BundleContext contextRead=secrets.sshVault().newBundleContext(deadline,()->{});
+            try(SshConnectionMaterial.Snapshot source=SshPasswordManifestValidator.within(deadline,()->secrets.sshVault().sshLibrarySnapshot(contextRead))){
+                assertTrue("KBI must not persist answers or invented accounts",source.manifest.entries.isEmpty()&&source.manifest.accounts.isEmpty());
+                assertTrue(source.manifest.keyBindings.isEmpty());
+            }finally{secrets.sshVault().cancelBundleContext(contextRead);}
+        }catch(Exception|Error failure){primary=failure;throw failure;}
+        finally{
+            keyboardEvents=null;request.remove("password");VaultCodec.wipe(old);
+            try{cleanupKeyFixture(request,null,vaultFile,created,observed,connectedRequest!=null||observedSshTerminal.get());}
+            catch(Exception|Error cleanup){if(primary!=null)primary.addSuppressed(cleanup);else throw cleanup;}
+        }
+    }
+
+    private String syntheticPassword(JSONObject request){
+        try{return request.getString("password");}catch(org.json.JSONException failure){throw new AssertionError("Missing synthetic answer");}
+    }
+    private boolean keyboardAnswer(Map<?,?> event,String request,List<String> answers){
+        CompletableFuture<Object> reply=invoke("ssh.keyboardResponse",VaultCollections.map("requestId",request,
+                "ticketId",event.get("ticketId"),"binding",event.get("binding"),"answers",answers));
+        assertTrue("Answer admission must not enter the blocked native owner",reply.isDone());
+        return (Boolean)map(reply.join()).get("accepted");
+    }
+    private void connectKeyboard(JSONObject request,Map<String,Object> configured)throws Exception{
+        running.set(false);activeRequest=id();
+        Map<String,Object> arguments=configured==null?VaultCollections.map("requestId",activeRequest,
+                "host",request.getString("host"),"port",request.getInt("port"),"username",request.getString("username"),"columns",80,"rows",24)
+                :VaultCollections.map("requestId",activeRequest,"alias",configured.get("alias"),"binding",configured.get("binding"),
+                        "username","","columns",80,"rows",24);
+        Map<String,Object> result=map(call(configured==null?"ssh.keyboardConnect":"ssh.configKeyboardConnect",arguments));
+        assertEquals(activeRequest,result.get("requestId"));assertEquals("connected",result.get("status"));assertTrue(running.get());
+        connectedRequest=activeRequest;activeRequest=null;
+    }
+    private void assertKeyboardConnectFailure(JSONObject request,Map<String,Object> configured,String code)throws Exception{
+        try{connectKeyboard(request,configured);fail("KBI connection must be refused");}
+        catch(java.util.concurrent.ExecutionException rejected){assertEquals("Fixed host failure: "+code,rejected.getCause().getMessage());activeRequest=null;}
+        assertFalse(running.get());waitReleased();
+    }
+    private void assertKeyboardReconnect(String mode,String alias)throws Exception{
+        Object handed=field(ssh,"handedOff");assertNotNull(handed);
+        Map<String,Object> hint=((SshPasswordConnector)field(handed,"connector")).reconnectTarget().wire();
+        assertEquals(mode,hint.get("mode"));assertFalse(hint.containsKey("keyId"));
+        assertEquals(alias==null?java.util.Set.of("mode","host","port","username"):
+                java.util.Set.of("mode","host","port","username","configAlias"),hint.keySet());
+        if(alias!=null)assertEquals(alias,hint.get("configAlias"));
+    }
+
     private JSONObject readHostTrustRequest(String path) throws Exception {
         byte[] ownership = keyShellBytes("stat -c %a:%u:%F " + path, 128);
         try { assertEquals("Fixture request must be a shell-owned0600 regular file", "600:2000:regular file",
@@ -1495,6 +1647,9 @@ public final class SshPasswordConnectPlatformTest {
                 setField(ssh, "sink", new EventChannel.EventSink() {
                     @Override public void success(Object value) {
                         Map<?, ?> event = (Map<?, ?>)value;
+                        if ("keyboardChallenge".equals(event.get("type")) && keyboardEvents != null) {
+                            keyboardEvents.accept(event); return;
+                        }
                         if (!"hostKey".equals(event.get("type"))) return;
                         reviews.incrementAndGet();
                         boolean exact = host.equals(event.get("host"))

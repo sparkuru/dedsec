@@ -38,4 +38,16 @@ public final class SshReconnectTargetTest {
         try { new SshReconnectTarget(profile, null, "alias"); fail("Config reconnect must preserve an exact identity"); }
         catch (VaultException expected) { }
     }
+
+    @Test public void keyboardReconnectContainsNoKeyQuestionAnswerOrOldBinding() throws Exception {
+        SshPasswordProfile profile = new SshPasswordProfile("host.invalid", 22, "user");
+        SshReconnectTarget manual = new SshReconnectTarget(profile, null, "", true);
+        assertEquals("keyboard", manual.mode);
+        assertEquals(Set.of("mode", "host", "port", "username"), manual.wire().keySet());
+        SshReconnectTarget config = new SshReconnectTarget(profile, null, "configured", true);
+        assertEquals("configKeyboard", config.mode);
+        assertEquals(Set.of("mode", "host", "port", "username", "configAlias"), config.wire().keySet());
+        try { new SshReconnectTarget(profile, "key", "configured", true); fail("KBI cannot retain a key selection"); }
+        catch (VaultException expected) { }
+    }
 }

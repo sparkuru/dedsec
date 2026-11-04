@@ -10,9 +10,14 @@ import 'config_editor_page.dart';
 import 'host_trust_page.dart';
 
 class SshLibrarySelection {
-  const SshLibrarySelection({required this.key, this.host});
-  final SshIdentity key;
+  const SshLibrarySelection({
+    this.key,
+    this.host,
+    this.keyboardInteractive = false,
+  });
+  final SshIdentity? key;
   final SshConfigHost? host;
+  final bool keyboardInteractive;
 }
 
 Future<SshLibrarySelection?> showSshLibrary(
@@ -917,12 +922,12 @@ class _SshLibraryPageState extends State<SshLibraryPage>
         .where((key) => host.keyIds.contains(key.id))
         .toList(growable: false);
     final revision = _revision;
-    late final DialogRoute<String> dialog;
-    dialog = DialogRoute<String>(
+    late final DialogRoute<SshLibrarySelection> dialog;
+    dialog = DialogRoute<SshLibrarySelection>(
       context: context,
       builder: (dialogContext) => AlertDialog(
         key: const Key('ssh-config-key-choice'),
-        title: Text('选择 ${host.alias} 的私钥'),
+        title: Text('选择 ${host.alias} 的认证方式'),
         scrollable: true,
         content: SizedBox(
           width: double.maxFinite,
@@ -945,8 +950,31 @@ class _SshLibraryPageState extends State<SshLibraryPage>
               ],
               Text(
                 eligible.isEmpty
-                    ? '尚未导入可用私钥。请先返回导入私钥，再选择此连接。'
-                    : '请选择本次连接使用的已导入私钥。',
+                    ? '尚未导入可用私钥。可选择服务器交互式认证，或返回导入私钥。'
+                    : '请选择本次连接使用的认证方式。',
+              ),
+              const SizedBox(height: 12),
+              OutlinedButton.icon(
+                key: const Key('ssh-config-keyboard-choice'),
+                style: OutlinedButton.styleFrom(
+                  minimumSize: const Size.fromHeight(48),
+                ),
+                onPressed: () {
+                  if (_foreground &&
+                      _healthy &&
+                      revision == _revision &&
+                      identical(_dialog, dialog) &&
+                      dialog.isCurrent) {
+                    Navigator.of(dialogContext).pop(
+                      SshLibrarySelection(
+                        host: host,
+                        keyboardInteractive: true,
+                      ),
+                    );
+                  }
+                },
+                icon: const Icon(Icons.keyboard_outlined),
+                label: const Text('服务器交互式认证'),
               ),
               for (final key in eligible)
                 Padding(
@@ -975,7 +1003,9 @@ class _SshLibraryPageState extends State<SshLibraryPage>
                               revision == _revision &&
                               identical(_dialog, dialog) &&
                               dialog.isCurrent)
-                            Navigator.of(dialogContext).pop(key.id);
+                            Navigator.of(
+                              dialogContext,
+                            ).pop(SshLibrarySelection(key: key, host: host));
                         },
                         child: Text(
                           '使用此私钥',
@@ -1003,9 +1033,13 @@ class _SshLibraryPageState extends State<SshLibraryPage>
         ],
       ),
     );
-    final id = await _show(dialog);
-    if (!_current || revision != _revision || id == null) return;
-    await _select(eligible.singleWhere((key) => key.id == id), host: host);
+    final selection = await _show(dialog);
+    if (!_current || revision != _revision || selection == null) return;
+    _leaving = true;
+    await _retireRead();
+    if (mounted && _route?.isCurrent != false) {
+      Navigator.of(context).pop(selection);
+    }
   }
 
   String _hostDescription(SshConfigHost host) {
@@ -1176,9 +1210,9 @@ class _SshLibraryPageState extends State<SshLibraryPage>
                                 label: const Text('使用此私钥'),
                               ),
                               if (key.hasSavedPassphrase)
-                                TextButton(
+                                OutlinedButton(
                                   key: Key('ssh-forget-passphrase-${key.id}'),
-                                  style: TextButton.styleFrom(
+                                  style: OutlinedButton.styleFrom(
                                     shape: const RoundedRectangleBorder(
                                       borderRadius: BorderRadius.all(
                                         Radius.circular(12),
@@ -1192,9 +1226,9 @@ class _SshLibraryPageState extends State<SshLibraryPage>
                                         ),
                                   child: const Text('忘记此私钥口令'),
                                 ),
-                              TextButton.icon(
+                              OutlinedButton.icon(
                                 key: Key('ssh-key-delete-${key.id}'),
-                                style: TextButton.styleFrom(
+                                style: OutlinedButton.styleFrom(
                                   foregroundColor: Theme.of(
                                     context,
                                   ).colorScheme.error,

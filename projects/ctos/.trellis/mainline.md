@@ -1,5 +1,90 @@
 # ctOS Mainline
 
+## 2026-11-04 KBI及三处界面修正验收通过，按授权提交
+
+用户反馈“验收通过；可以提交”。正式8b6c2a42…对应本轮独立KBI和UI修正人工验收
+通过；沿已完成的377 Flutter/846 JVM、native矩阵、42张最终字体截图及指定板隔离/
+保留数据交付与独立复核记录核对来源，不重新安装或扩写手测场景。
+[验收及提交范围](../design/verification.md#20261104-ssh-kbi-human-acceptance)。
+提交只覆盖本轮56路径，排除既有journal/应用细节TODO和相邻项目；原1008保持
+current/in_progress，完整父AC与MFA方法串联开放，不归档或push。
+
+## 2026-11-03 KBI其他认证体验通过，三处界面反馈修正
+
+用户反馈“其他体验认证通过”，要求认证选择框弹窗及说明下移、保存密码状态背景统一、
+私钥卡片操作协调。原1008/current/in_progress保持，两个页面/两个测试修正完成；
+377 Flutter/analyze、42张实际字体交互状态截图、正常构建/lint/APK审计及独立本地复核PASS。
+正常8b6c2a42…已沿本次同功能更新流程保留数据安装指定板并启动，公开身份保持，
+专用ADB15057退出无监听，43条TIME_WAIT分开保留；
+[验收记录](../design/verification.md#20261103-ssh-ui-feedback)。修正后视觉反馈、
+本增量提交及完整父AC仍开放；不操作真实账号，不归档父任务。
+
+## 2026-11-03 KBI正式交付完成，等待人工体验
+
+用户对保留数据更新并启动正式APK另回复“授权”。正常50614d4d…已install-r安装指定板，
+新旧v2签名相同，实际hash/UID10131/dataDir/首次安装保持；lastUpdate00:07:09，
+MainActivity实际resumed。[交付](../design/verification.md#20261103-ssh-keyboard-interactive-formal-install)
+及独立复核PASS。旧公开5e70已备份，专用ADB15055退出无监听，TIME_WAIT单独保留记录。
+
+current_increment=formal_installed_human_review_pending，原1008保持current/in_progress。
+下一步等待新增Flutter页面人工体验；不重复安装或索取本次已获授权，不操作真实账号/
+正式库、不提交KBI或归档完整父任务。下方待正式更新/授权均为本次交付前历史。
+
+## 2026-11-02 KBI指定板验收通过，等待正式更新确认
+
+用户已授权本次隔离包/合成服务/清理。实际AIO-3568J/API30的KBI方法8.348秒通过，
+status0/OK1，6transport/3auth/3shell及三套3/0/1回应与客户端断言一致，14项清理全true。
+[证据/首轮失败与修正](../design/verification.md#20261102-ssh-keyboard-interactive-device)：
+仅修正Android夹具configRead前置与临时driver空行解析，生产normal50614/fixturefae925/
+其他31源码保持；当前test2ec93，driver80eaa28a…，32最终清单一致。独立源码/产物/设备/
+清理复核PASS，容器/网络/专用端口监听为空，正式5e70/UID10131/安装公开信息保持。
+
+原1008/current/in_progress，current_increment=device_passed_formal_update_pending。
+下一步等待单独保留数据更新正式50614供页面人工体验的确认；本次授权仅隔离验收，
+不操作真实账号/正式库、不提交KBI或归档父任务。重连只验RAM提示合同，未点Android
+Flutter重连；人工体验、正式安装、完整父AC及MFA方法串联保持开放。下方待设备授权为历史。
+
+## 2026-11-02 KBI隔离设备已授权，首轮夹具失败后重测
+
+用户对指定板隔离测试包/合成KBI/清理回复“授权”。第一轮actualAndroid已完成手动
+CHANGED拒绝、忘记后NEW及3/0/1回答/PTY，随后config编辑缺少正常configRead回执而
+VAULT_CHANGED，整体未通过。[首轮与清理](../design/verification.md#20261102-ssh-keyboard-interactive-device)。
+仅补Android夹具两处读取与正文断言，保留无回执拒绝；生产normal50614d4d/fixturefae925
+及全部31项其余源码保持，仅重建测试APK。驱动空reverse列表解析也已修正并有16纯回归。
+首轮临时资源实际已清，reverse RuntimeError原标志/仅换行收据保留；正式5e70公开身份保持。
+同一当前授权内重测，不重复索取授权；无正式更新/真实账号/新提交/父归档授权。
+
+## 2026-11-02 KBI本地通过，等待指定板隔离验收授权
+
+原1008/current/in_progress继续；[KBI合同](../design/ssh-keyboard-interactive.md)的手动/config
+显式方法、多提示/多轮及当次回答已实现。374 Flutter/analyze、846 JVM/57套、reviewed
+2399629 native（含639993 KBI）/7115config及64KiB、28张最终字体布局、normal/fixture
+构建/分别lint与三APK闭包/签名/来源审计、独立源码/产物/文档复核均PASS。
+[实际验证与失败历史](../design/verification.md#20261102-ssh-keyboard-interactive)。
+
+正常50614d4d…、隔离fae92520…/test41dd52c5…均冻结在
+`/tmp/ctos-ssh-kbi-20261102.LE2RQCwF`，32源文件hash前后保持；独立报告`review-kbi.md`。
+指定板Android夹具只编译/打包，设备授权仍false。下一步须本次192.168.9.14:5555隔离
+测试包/合成KBI服务/清理授权；不因历史trust授权直接连接或覆盖正式5e70df40。
+独立Paramiko/OpenSSH双客户端3/0/1及真实PTY自检通过并清理；设备驱动85e3657f…
+已独立静态复核PASS，要求显式authorized-board-run，未执行ADB。最终本地回执见
+`final-local-status.json`，当前可请求新设备授权，无需重复本地实施/规划确认。
+新正式更新、人工体验及KBI提交另行确认，父完整AC与MFA串联未完成，不归档或切旁任务。
+
+## 2026-11-02 主机信任已提交，开始交互式认证
+
+用户对52路径提交清单及下一范围回复“可以”。主机信任工作提交
+`bb8fa225fe44a1eaceef6ce21380c93d1fbef087`已完成，实际只含批准的52路径与六处部分内容；
+旁任务/既有journal/相邻项目和KBI草案均保留在工作区，未push或归档父1008。
+[提交核对](../design/verification.md#20261102-ssh-host-trust-commit)。
+
+原1008保持current/in_progress，当前增量为[独立KBI](../design/ssh-keyboard-interactive.md)：
+手动/config显式选择，多提示/多轮，回答仅当次；MFA方法串联后续交付。
+CSKI/CSKR/CSASkind3、direct-planv2及typed公共通道已冻结，native/Java/Flutter按
+独立文件所有权分派trellis-implement，原host/KEX/期限/取消与SUCCESS-only交接不放宽。
+本地实施/构建/检查已批准，设备/真实账号/本增量提交未获授权，不重装正式应用。
+证据根`/tmp/ctos-ssh-kbi-20261102.LE2RQCwF`，当前未完成测试，不以旧353/828作为新通过。
+
 ## 2026-11-02 主机信任人工验收通过，继续1008
 
 用户在正式5e70df40…交付后回复“通过；可以继续；”，本增量human gate通过，

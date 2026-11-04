@@ -162,11 +162,31 @@ void ctos_config_mark_options(const Options *o) {
             if (current->hostfile_origin[i].object == 0) current->hostfile_origin[i] = here;
     }
 }
+static int direct_authentication_list(const char *list, const char *wanted) {
+    int found = 0;
+    if (list == NULL) return wanted != NULL;
+    if (*list == '\0') return 0;
+    while (*list != '\0') {
+        const char *end = strchr(list, ',');
+        if (end == NULL) end = list + strlen(list);
+        size_t length = (size_t)(end - list);
+        if (!((length == 9U && memcmp(list, "publickey", length) == 0)
+            || (length == 8U && memcmp(list, "password", length) == 0)
+            || (length == 20U && memcmp(list, "keyboard-interactive", length) == 0))) return 0;
+        if (wanted != NULL && strlen(wanted) == length && memcmp(list, wanted, length) == 0) found = 1;
+        if (*end == '\0') return wanted == NULL || found;
+        list = end + 1;
+        if (*list == '\0') return 0;
+    }
+    return 0;
+}
+
 int ctos_config_direct_keyword(const char *keyword, int active, int count, char **args) {
     if (current == NULL || current->direct_plan == NULL || !active) return 0;
     static const char *const accepted[] = {"host", "match", "include", "hostname", "user", "port",
         "identityfile", "identitiesonly", "userknownhostsfile", "stricthostkeychecking", "connecttimeout",
-        "requesttty", "pubkeyauthentication", "passwordauthentication"};
+        "requesttty", "pubkeyauthentication", "passwordauthentication", "kbdinteractiveauthentication",
+        "challengeresponseauthentication"};
     for (size_t i = 0; i < sizeof(accepted) / sizeof(accepted[0]); i++) if (strcmp(keyword, accepted[i]) == 0) {
         if (count == 1 && ((strcmp(keyword, "requesttty") == 0 &&
                 (strcasecmp(args[0], "no") == 0 || strcasecmp(args[0], "false") == 0)) ||
@@ -181,7 +201,8 @@ int ctos_config_direct_keyword(const char *keyword, int active, int count, char 
             (strcmp(keyword, "proxycommand") == 0 || strcmp(keyword, "localcommand") == 0 ||
              strcmp(keyword, "knownhostscommand") == 0 || strcmp(keyword, "identityagent") == 0 ||
              strcmp(keyword, "globalknownhostsfile") == 0)) return 0;
-    if (count == 1 && strcmp(keyword, "preferredauthentications") == 0 && strcmp(args[0], "publickey") == 0)
+    if (count == 1 && strcmp(keyword, "preferredauthentications") == 0
+        && direct_authentication_list(args[0], NULL))
         return 0;
     return ctos_config_reject(CTOS_CONFIG_UNSUPPORTED, ENOTSUP);
 }
@@ -939,8 +960,12 @@ static int finish_direct_plan(struct ctos_ssh_config_eval *e) {
         return ctos_config_reject(CTOS_CONFIG_UNSUPPORTED, ENOTSUP);
     plan->summary = e->summary;
     plan->identities_only = o->identities_only != 0;
-    plan->pubkey_authentication = (o->pubkey_authentication & SSH_PUBKEY_AUTH_UNBOUND) != 0;
-    plan->password_authentication = o->password_authentication != 0 && o->preferred_authentications == NULL;
+    plan->pubkey_authentication = (o->pubkey_authentication & SSH_PUBKEY_AUTH_UNBOUND) != 0
+        && direct_authentication_list(o->preferred_authentications, "publickey");
+    plan->password_authentication = o->password_authentication != 0
+        && direct_authentication_list(o->preferred_authentications, "password");
+    plan->keyboard_interactive_authentication = o->kbd_interactive_authentication != 0
+        && direct_authentication_list(o->preferred_authentications, "keyboard-interactive");
     plan->connect_timeout_millis = o->connection_timeout > 0 && o->connection_timeout < 60
         ? (unsigned int)o->connection_timeout * 1000U : 60000U;
     plan->strict_host_key_checking = (unsigned int)o->strict_host_key_checking;

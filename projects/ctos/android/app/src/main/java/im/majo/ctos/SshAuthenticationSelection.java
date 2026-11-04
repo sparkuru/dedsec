@@ -38,6 +38,12 @@ final class SshAuthenticationSelection {
                 entryId, "", "", new byte[0], clock);
     }
 
+    static SshAuthenticationSelection keyboardInteractive(SshRoleContext role, String username,
+            SshRoleContext.Clock clock) throws VaultException {
+        return new SshAuthenticationSelection(role, username, SshCredentialBridge.Kind.KEYBOARD_INTERACTIVE,
+                "", "", "", new byte[0], clock);
+    }
+
     static SshAuthenticationSelection privateKey(SshRoleContext role, String username,
             String path, String keyIdentity, byte[] publicKeyBlob, SshRoleContext.Clock clock)
             throws VaultException {
@@ -84,7 +90,8 @@ final class SshAuthenticationSelection {
             wire.putInt(WIRE_MAGIC).putShort((short) (kind == SshCredentialBridge.Kind.PRIVATE_KEY
                     && !entryId.isEmpty() ? 2 : 1)).putShort((short) 0)
                     .putLong(roleToken).putInt(role.hop).put(nonce).put(binding)
-                    .putInt(kind == SshCredentialBridge.Kind.PASSWORD ? 1 : 4);
+                    .putInt(kind == SshCredentialBridge.Kind.PASSWORD ? 1
+                            : kind == SshCredentialBridge.Kind.KEYBOARD_INTERACTIVE ? 3 : 4);
             for (byte[] field : new byte[][] { usernameBytes, entry, privatePath, identity, publicKeyBlob }) {
                 wire.putInt(field.length).put(field);
             }

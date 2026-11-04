@@ -16,12 +16,15 @@ Native reserve/getter names are `reserveProfileDirect` / `profileDirectPlan`.
 `reserveProfileResourceAudit` / `profileResourceAudit` and the separate native
 `CTOS_CONFIG_PROFILE_RESOURCE_AUDIT` policy. Old direct/resource prepare/getters remain strict.
 
-Profile plan CSPP: magic0x43535050/version1; same ordered scalar header, tuple and hostfile
-strings as strict CSCP, with hint_count in the identity_count slot. Max149433 bytes,
+Profile plan CSPP: magic0x43535050/version2; same ordered scalar header, tuple and hostfile
+strings as strict CSCP, with hint_count in the identity_count slot. Max149437 bytes,
 hint_count<=256, each hint<=512 UTF8 bytes; hostfile strings remain managed paths.
+The [KBI extension](ssh-keyboard-interactive.md) adds one u32 keyboardInteractiveAuthentication
+after passwordAuthentication in both CSCP/CSPPv2. Java accepts oldv1 as KBI=false; missing
+policy never grants KBI. Strict/profile distinction remains the magic and selected getter.
 Profile resource CSCR: magic0x43534352/version2/flags3, original nested CSCA and six-u32
 resource rows/caps107328 unchanged. New state6 IDENTITY_HINT only kind1/target0. Original
-CSCRv1/flags1 and CSCPv1 reject profile modes/frames; profile getters reject generic frames.
+CSCRv1/flags1 and CSCP reject profile modes/frames; profile getters reject generic frames.
 
 Public `ssh.library` host adds optional `identityHints:List<String>` default empty. Keep existing
 alias/binding/host/port/username/keyIds fields; configConnect wire remains exact alias/binding/
@@ -59,6 +62,8 @@ Both connector pre-phrase-save and pre-TCP preparation re-evaluate the current p
 configBinding/epoch/revision/pubkey/target/trust. Remove only IdentityFile membership authority.
 Existing Account ownership, actual key/public match, CSAS/host/KEX and final typed release remain.
 Wrong selected key fails auth without trying another key/password. No new saved default-key table.
+The explicit standalone KBI route has no keyId/phrase and instead rechecks the current native
+KBI flag; it does not weaken any key-route eligibility or use hints as identity authority.
 
 ## 4. Validation & Error Matrix
 

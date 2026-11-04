@@ -1,6 +1,7 @@
 package im.majo.ctos;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
@@ -314,6 +315,155 @@ public final class SshNativeSessionTest {
         }
     }
 
+    private static final class KeyboardNative extends ShellNative {
+        byte[] challengeWire, challengeBorrow, responseBorrow, responseCopy;
+        int keyboardBegins, keyboardResponds;
+        @Override public void beginKeyboardInteractiveAuth(long handle) throws IOException {
+            assertEquals(903, handle); keyboardBegins++; invoke("keyboardBegin"); result=1;
+        }
+        @Override public int keyboardInteractiveAuthResult(long handle) throws IOException {
+            assertEquals(903, handle); invoke("keyboardResult"); return result;
+        }
+        @Override public byte[] keyboardInteractiveChallenge(long handle) throws IOException {
+            assertEquals(903, handle); invoke("keyboardChallenge");
+            challengeBorrow=challengeWire.clone(); return challengeBorrow;
+        }
+        @Override public void respondKeyboardInteractive(long handle, byte[] response) throws IOException {
+            assertEquals(903, handle); keyboardResponds++; responseBorrow=response; responseCopy=response.clone();
+            invoke("keyboardResponse"); result=1;
+        }
+    }
+
+    @Test public void keyboardRoundsStayOwnerBoundAndWipeEveryNativeBorrowBeforeSuccessfulShell() throws Exception {
+        KeyboardNative binding=new KeyboardNative(); Setup setup=new Setup(true,binding);
+        try {
+            setup.callback.selectAuthentication(SshAuthenticationSelection.keyboardInteractive(setup.issued.role,"user",setup.clock));
+            setup.session=open(setup);
+            assertCode("SSH_SESSION_PHASE",()->setup.session.beginKeyboardInteractiveAuth());
+            ready(setup,binding); setup.session.beginKeyboardInteractiveAuth();
+            for(int round=1;round<=16;round++){
+                binding.challengeWire=SshKeyboardChallengeTest.frame(round,"server","notice","?"); binding.result=5;
+                setup.session.step();
+                assertEquals(SshNativeSession.KeyboardInteractiveAuthResult.CHALLENGE,setup.session.keyboardInteractiveAuthResult());
+                SshKeyboardChallenge challenge=setup.session.keyboardInteractiveChallenge();
+                assertSame(challenge,setup.session.keyboardInteractiveChallenge());
+                assertArrayEquals(new byte[binding.challengeBorrow.length],binding.challengeBorrow);
+                assertCode("SSH_SESSION_PHASE",()->setup.session.beginShell(80,24));
+                byte[] response=challenge.response(java.util.List.of(""));
+                setup.session.respondKeyboardInteractive(challenge,response);
+                assertArrayEquals(response,binding.responseCopy);
+                assertArrayEquals(new byte[response.length],binding.responseBorrow);
+                assertCode("SSH_SESSION_PHASE",()->setup.session.respondKeyboardInteractive(challenge,response));
+                assertEquals(SshNativeSession.KeyboardInteractiveAuthResult.PENDING,setup.session.keyboardInteractiveAuthResult());
+                assertCode("SSH_SESSION_PHASE",()->setup.session.passwordAuthResult());
+                assertCode("SSH_SESSION_PHASE",()->setup.session.privateKeyAuthResult());
+                VaultCodec.wipe(response);
+            }
+            binding.result=2;setup.session.step();setup.session.beginShell(80,24);
+            assertEquals(1,binding.keyboardBegins);assertEquals(16,binding.keyboardResponds);
+            assertCode("SSH_SESSION_PHASE",()->setup.session.keyboardInteractiveAuthResult());
+        }finally{if(setup.session!=null)setup.session.close();setup.closeRegistry();}
+    }
+
+    @Test public void keyboardMalformedWireReplayPartialAndPrematureSuccessCannotPromote() throws Exception {
+        for(int scenario=0;scenario<5;scenario++){
+            KeyboardNative binding=new KeyboardNative();Setup setup=new Setup(true,binding);
+            try{
+                setup.callback.selectAuthentication(SshAuthenticationSelection.keyboardInteractive(setup.issued.role,"user",setup.clock));
+                setup.session=open(setup);ready(setup,binding);setup.session.beginKeyboardInteractiveAuth();
+                if(scenario<3){
+                    binding.result=5;binding.challengeWire=SshKeyboardChallengeTest.frame(scenario==0?2:1,"","","?");
+                    if(scenario==1)binding.challengeWire[4]=1;
+                    setup.session.step();
+                    if(scenario<2)assertCode("SSH_KEYBOARD_CHALLENGE",()->setup.session.keyboardInteractiveChallenge());
+                    else{
+                        setup.session.keyboardInteractiveChallenge();binding.result=2;
+                        assertCode("SSH_KEYBOARD_AUTH",()->setup.session.step());
+                    }
+                }else{
+                    binding.result=scenario==3?4:3;setup.session.step();
+                    assertEquals(scenario==3?SshNativeSession.KeyboardInteractiveAuthResult.PARTIAL:
+                            SshNativeSession.KeyboardInteractiveAuthResult.REJECTED,setup.session.keyboardInteractiveAuthResult());
+                }
+                assertCode(scenario<2?"SSH_KEYBOARD_CHALLENGE":scenario==2?"SSH_KEYBOARD_AUTH":"SSH_SESSION_PHASE",
+                        ()->setup.session.beginShell(80,24));
+                assertEquals(0,binding.keyboardResponds);
+            }finally{setup.session.close();setup.closeRegistry();}
+        }
+    }
+
+    @Test public void keyboardResponseFailureStillWipesBytesAndCancellationOutranksNativeFailure() throws Exception {
+        for(boolean cancelled:new boolean[]{false,true}){
+            KeyboardNative binding=new KeyboardNative();Setup setup=new Setup(true,binding);
+            try{
+                setup.callback.selectAuthentication(SshAuthenticationSelection.keyboardInteractive(setup.issued.role,"user",setup.clock));
+                setup.session=open(setup);ready(setup,binding);setup.session.beginKeyboardInteractiveAuth();
+                binding.challengeWire=SshKeyboardChallengeTest.frame(1,"","","?");binding.result=5;setup.session.step();
+                SshKeyboardChallenge challenge=setup.session.keyboardInteractiveChallenge();
+                byte[] response=challenge.response(java.util.List.of("private"));
+                binding.failOperation="keyboardResponse";
+                if(cancelled)binding.protocolHook=()->{try{setup.session.cancel();}catch(VaultException failure){throw new AssertionError(failure);}};
+                assertCode(cancelled?"SSH_SESSION_CANCELLED":"SSH_KEYBOARD_CHALLENGE",
+                        ()->setup.session.respondKeyboardInteractive(challenge,response));
+                assertArrayEquals(new byte[response.length],binding.responseBorrow);
+                assertArrayEquals(response,binding.responseCopy);VaultCodec.wipe(response);
+            }finally{setup.session.close();setup.closeRegistry();}
+        }
+    }
+
+    @Test public void keyboardOwnerViewAndExpiryGuardsRunBeforeOrAfterEveryNativeRead() throws Exception {
+        KeyboardNative binding=new KeyboardNative();Setup setup=new Setup(true,binding);
+        try{
+            setup.callback.selectAuthentication(SshAuthenticationSelection.keyboardInteractive(setup.issued.role,"user",setup.clock));
+            setup.session=open(setup);ready(setup,binding);
+            AtomicReference<Throwable> wrong=new AtomicReference<>();
+            Thread other=new Thread(()->{try{setup.session.beginKeyboardInteractiveAuth();}
+                catch(Throwable failure){wrong.set(failure);}});other.start();other.join();
+            assertTrue(wrong.get() instanceof VaultException);assertEquals("SSH_SESSION_THREAD",((VaultException)wrong.get()).code);
+            assertEquals(0,binding.keyboardBegins);setup.session.beginKeyboardInteractiveAuth();
+            binding.challengeWire=SshKeyboardChallengeTest.frame(1,"","","?");binding.result=5;setup.session.step();
+            binding.protocolHook=()->setup.clock.value=setup.issued.role.deadline;
+            assertCode("SSH_SESSION_EXPIRED",()->setup.session.keyboardInteractiveChallenge());
+            assertArrayEquals(new byte[binding.challengeBorrow.length],binding.challengeBorrow);
+            assertEquals(0,binding.keyboardResponds);
+        }finally{setup.session.close();setup.closeRegistry();}
+        KeyboardNative expired=new KeyboardNative();Setup invalid=new Setup(true,expired);
+        try{
+            invalid.callback.selectAuthentication(SshAuthenticationSelection.keyboardInteractive(invalid.issued.role,"user",invalid.clock));
+            invalid.session=open(invalid);ready(invalid,expired);invalid.session.beginKeyboardInteractiveAuth();
+            invalid.view.active=false;
+            assertCode("SSH_FILE_VIEW",()->invalid.session.keyboardInteractiveAuthResult());
+        }finally{invalid.session.close();invalid.closeRegistry();}
+    }
+
+    @Test public void keyboardNativeErrorsAreTerminalAndCannotRepeatAnAnswer() throws Exception {
+        for(String operation:new String[]{"keyboardResult","keyboardChallenge","keyboardResponse"}){
+            KeyboardNative binding=new KeyboardNative();Setup setup=new Setup(true,binding);
+            try{
+                setup.callback.selectAuthentication(SshAuthenticationSelection.keyboardInteractive(setup.issued.role,"user",setup.clock));
+                setup.session=open(setup);ready(setup,binding);setup.session.beginKeyboardInteractiveAuth();
+                binding.challengeWire=SshKeyboardChallengeTest.frame(1,"","","?");binding.result=5;setup.session.step();
+                SshKeyboardChallenge challenge=operation.equals("keyboardChallenge")?null:setup.session.keyboardInteractiveChallenge();
+                byte[] response=challenge==null?null:challenge.response(java.util.List.of("private"));
+                binding.failOperation=operation;binding.failureKind=3;
+                try{
+                    if(operation.equals("keyboardResult"))setup.session.keyboardInteractiveAuthResult();
+                    else if(operation.equals("keyboardChallenge"))setup.session.keyboardInteractiveChallenge();
+                    else setup.session.respondKeyboardInteractive(challenge,response);
+                    fail("Native Error must propagate after cleanup");
+                }catch(AssertionError expected){assertEquals("synthetic native Error",expected.getMessage());}
+                String code=operation.equals("keyboardResult")?"SSH_KEYBOARD_AUTH":"SSH_KEYBOARD_CHALLENGE";
+                assertCode(code,()->setup.session.keyboardInteractiveAuthResult());
+                if(binding.responseBorrow!=null){
+                    assertArrayEquals(new byte[binding.responseBorrow.length],binding.responseBorrow);
+                    assertCode(code,()->setup.session.respondKeyboardInteractive(challenge,response));
+                    assertEquals(1,binding.keyboardResponds);
+                }
+                VaultCodec.wipe(response);
+            }finally{setup.session.close();setup.closeRegistry();}
+        }
+    }
+
     private static final class ManagedShellNative extends ShellNative {
         int managedOpenCalls;
         String expectedKnownHostsPath = "ssh/known_hosts";
@@ -394,6 +544,18 @@ public final class SshNativeSessionTest {
                 : SshAuthenticationSelection.password(setup.issued.role, " 用户😀 ", "password", setup.clock);
         setup.callback.selectAuthentication(selection);
         return selection;
+    }
+
+    @Test public void keyboardSelectionCannotUseGenericOrSelectedSavedCredentialCallback() throws Exception {
+        Setup setup=new Setup(true);
+        try{
+            SshAuthenticationSelection selection=SshAuthenticationSelection.keyboardInteractive(setup.issued.role,"user",setup.clock);
+            setup.callback.selectAuthentication(selection);
+            assertEquals(null,setup.callback.onNativeCredentialBytes(SshNativeCallbackAdapter.CREDENTIAL_KEYBOARD_INTERACTIVE,selection));
+            assertEquals("SSH_AUTH_SELECTION",setup.callback.lastFailureCode());
+            assertEquals(null,setup.callback.onNativeCredentialBytes(SshNativeCallbackAdapter.CREDENTIAL_PASSWORD));
+            assertEquals("SSH_AUTH_SELECTION",setup.callback.lastFailureCode());
+        }finally{setup.callback.close();setup.closeRegistry();}
     }
 
     @Test public void managedDefaultFailsClosedWithoutCallingPinnedOrConsumingClaim() throws Exception {

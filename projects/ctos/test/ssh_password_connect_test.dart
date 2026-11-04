@@ -753,6 +753,10 @@ void main() {
       );
       await host.advance();
       await tester.ensureVisible(use);
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.ensureVisible(use);
+      await tester.pump();
+      expect(use.hitTestable(), findsOneWidget);
       await tester.tap(use);
       await tester.pump();
       expect(

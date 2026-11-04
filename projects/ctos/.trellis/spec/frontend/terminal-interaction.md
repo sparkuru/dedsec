@@ -1,8 +1,41 @@
 # Terminal interaction contract
 
+2026-11-03: the manual authentication choice is one labeled `ssh-authentication` field,
+showing the current method and an expand icon. Open `ssh-authentication-dialog` for the three
+explicit choices; cancel/back retains the original choice, and mode-specific help follows the
+closed field. Use an owned route and original revision guards: background, coverage, leaving,
+busy or stale completion cannot change the method or revive cleared sensitive state.
+Keep narrow/large-text options scrollable and the selector keyboard/screen-reader operable.
+An outlined InputDecorator's floating label paints across its bounds: keep the selector's
+Material unclipped and bound InkWell feedback with borderRadius instead of clipping the label.
+Saved password/passphrase option tiles have their own 12 dp rounded, clipped Material with
+theme field fill, 8 dp separation and normal visible hover/focus/press feedback. Rounding only
+the checkbox does not bound the row's state layer. Verify actual hovered/focused renders, not
+just the static checkbox tree; selecting a new method must preserve existing secret clearing.
+
+2026-11-02: [standalone KBI](../backend/ssh-keyboard-interactive.md) adds explicit manual/config
+authentication choice and current-round `keyboardChallenge`/`keyboardChallengeDismissed` events.
+A config profile with no key may choose KBI; key authentication still requires an explicit key.
+Display all bounded server prompts together in the protected connection page, including
+name/instruction and actual target; honor echo independently, disable suggestions/autofill and
+save controls, preserve empty answers, and require explicit continue for zero prompts.
+Typed payload validation owns UTF8/count/round/total limits. Remote text is labeled body text,
+not App status/actions. Never fill from saved passwords, key phrases, TOTP or clipboard.
+Clear controllers on round dismissal/retirement; fence late events by original attempt/ticket.
+Cancel/back/background/lock/stream failure and forced route destruction keep protection until
+original connection cleanup/late-handoff cancellation completes, using route-external lifetime
+ownership. Healthy own-trust epoch advance before a challenge must not fabricate a new request.
+Coalesce only an active cleanup future. Clear its cached reference on completion with an
+identity guard: after completed cleanup and a later retain(), finish() must await that later
+connection and its late-handoff cancellation rather than return the old completed future.
+RAM reconnect modes keyboard/configKeyboard retain only the public target/alias and open the
+fresh protected flow; there is no keyId, old binding, saved answer or automatic response.
+Local tests and real-font layout checks passed; native/device evidence stays separately scoped.
+
 Private-key card actions use content-width controls in a wrapping action group, with at least
 8 dp between runs and 48 dp touch targets. Use the current 12 dp control corner shape for
-local forget/delete text buttons as well as the outlined use action, including hover/focus.
+the outlined use/forget/delete actions, including hover/focus. Match control height and outline
+style while retaining destructive text/icon color; use theme state feedback for enabled/disabled.
 Do not stretch each card action into full-width banners. Keep destructive error color and
 the existing exact impact confirmation; layout must support clear and saved-phrase keys.
 

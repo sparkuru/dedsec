@@ -460,6 +460,68 @@ JNIEXPORT jint JNICALL Java_im_majo_ctos_SshNativeSession_00024Native_passwordAu
     return result;
 }
 
+JNIEXPORT void JNICALL Java_im_majo_ctos_SshNativeSession_00024Native_beginKeyboardInteractiveAuth(
+    JNIEnv *env, jclass type, jlong handle) {
+    (void)type;
+    struct session_slot *slot = lock_session(env, handle);
+    if (slot == NULL) return;
+    int result = ctos_ssh_native_client_begin_keyboard_interactive_auth(slot->client);
+    pthread_mutex_unlock(&sessions_lock);
+    if (result != 0) fail(env);
+}
+
+JNIEXPORT jint JNICALL Java_im_majo_ctos_SshNativeSession_00024Native_keyboardInteractiveAuthResult(
+    JNIEnv *env, jclass type, jlong handle) {
+    (void)type;
+    struct session_slot *slot = lock_session(env, handle);
+    if (slot == NULL) return -1;
+    enum ctos_ssh_native_client_keyboard_interactive_auth_result outcome = CTOS_SSH_KEYBOARD_AUTH_NOT_STARTED;
+    int status = ctos_ssh_native_client_keyboard_interactive_auth_result(slot->client, &outcome);
+    pthread_mutex_unlock(&sessions_lock);
+    if (status != 0 || (unsigned int)outcome > 5U) { fail(env); return -1; }
+    return (jint)outcome;
+}
+
+JNIEXPORT jbyteArray JNICALL Java_im_majo_ctos_SshNativeSession_00024Native_keyboardInteractiveChallenge(
+    JNIEnv *env, jclass type, jlong handle) {
+    (void)type;
+    unsigned char *bytes = calloc(1, CTOS_SSH_NATIVE_CLIENT_KBI_WIRE_BYTES);
+    size_t length = 0;
+    jbyteArray result = NULL;
+    if (bytes == NULL) { fail(env); return NULL; }
+    struct session_slot *slot = lock_session(env, handle);
+    if (slot != NULL) {
+        if (ctos_ssh_native_client_keyboard_interactive_challenge(slot->client, bytes,
+                CTOS_SSH_NATIVE_CLIENT_KBI_WIRE_BYTES, &length) != 0
+            || length < 24U || length > CTOS_SSH_NATIVE_CLIENT_KBI_WIRE_BYTES) fail(env);
+        else {
+            result = (*env)->NewByteArray(env, (jsize)length);
+            if (result != NULL) (*env)->SetByteArrayRegion(env, result, 0, (jsize)length, (jbyte *)bytes);
+        }
+        pthread_mutex_unlock(&sessions_lock);
+    }
+    wipe_bytes(bytes, CTOS_SSH_NATIVE_CLIENT_KBI_WIRE_BYTES);
+    free(bytes);
+    return result;
+}
+
+JNIEXPORT void JNICALL Java_im_majo_ctos_SshNativeSession_00024Native_respondKeyboardInteractive(
+    JNIEnv *env, jclass type, jlong handle, jbyteArray input) {
+    (void)type;
+    unsigned char *bytes = NULL;
+    size_t length = 0;
+    if (copy_array(env, input, CTOS_SSH_NATIVE_CLIENT_KBI_WIRE_BYTES, &bytes, &length) != 0) {
+        fail(env); return;
+    }
+    struct session_slot *slot = lock_session(env, handle);
+    if (slot != NULL) {
+        if (ctos_ssh_native_client_respond_keyboard_interactive(slot->client, bytes, length) != 0) fail(env);
+        pthread_mutex_unlock(&sessions_lock);
+    }
+    wipe_bytes(bytes, length);
+    free(bytes);
+}
+
 JNIEXPORT void JNICALL Java_im_majo_ctos_SshNativeSession_00024Native_beginPrivateKeyAuth(
     JNIEnv *env, jclass type, jlong handle) {
     struct session_slot *slot;

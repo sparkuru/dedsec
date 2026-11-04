@@ -1,5 +1,74 @@
 # 初步规划检查
 
+## 2026-11-04 人工验收通过，提交前来源核对
+
+用户反馈“验收通过；可以提交”，正式8b6c2a42…对应独立KBI及三处UI修正人工验收
+通过。原验证/交付证据保留，不扩写用户逐项手测内容；本次只更新验收状态与提交。
+提交范围为本轮56路径；既有journal、应用细节TODO及相邻项目改动排除，原1008
+继续in_progress，完整父AC及MFA串联开放。
+
+## 2026-11-03 KBI体验后的三处UI修正交付
+
+用户确认其他认证体验通过，选择框弹窗及下方说明、四个保存/复用选项圆角状态、
+私钥操作描边/尺寸/对齐已修正。仅两个页面/两个测试变化，原32项清单其余28项
+（含全部24项Android）hash保持。相关SSH110、最终KBI24、全量Flutter377/analyze、
+42张实际字体/大字/hover/键盘focus截图、正常构建47.2秒/lint38秒0错误4旧警告及
+最终APK来源/签名/闭包审计、独立本地trellis-check均PASS；失败历史保留。
+正式8b6c2a42…已沿本次同功能保留数据更新流程install-r指定板并启动，实际hash与候选
+一致，UID10131/dataDir/首次安装保持；最后更新23:06:48，MainActivity实际resumed。
+只备份公开旧50614 APK，专用ADB15057退出无监听、43条TIME_WAIT分开保留。
+[本轮验证](../../../design/verification.md#20261103-ssh-ui-feedback)。修正后视觉反馈、
+实际Flutter点击重连及本增量提交仍待对应验证/授权，不归档父1008或操作真实账号。
+
+## 2026-11-03 正式KBI保留数据更新并启动
+
+用户另回复“授权”后，实际AIO-3568J/API30已install-r更新正常50614d4d…并启动。
+实际APK与已审阅候选一致，新旧v2 signer8d36…相同，UID10131/dataDir/首次安装保持，
+lastUpdate=2026-11-03 00:07:09，MainActivity实际resumed。只备份公开旧5e70 APK，未
+卸载/清数据/读取正式秘密库或真实账号。专用ADB15055退出无监听，43条TIME_WAIT原始
+收据保留为短暂连接状态，不当作监听残留；独立交付复核PASS。
+[证据](../../../design/verification.md#20261103-ssh-keyboard-interactive-formal-install)，
+`/tmp/ctos-ssh-kbi-install-20261103.HQhAhckU/formal-install-review.md`。
+本轮无源码变化/测试重跑，32项源码仍匹配；人工体验与KBI提交仍待反馈/批准，父不归档。
+
+## 2026-11-02 KBI指定板实际验收与清理通过
+
+用户“授权”后，最终`device-b565983f4d8d`实际AIO-3568J/API30方法status0/OK1，
+JUnit8.348秒/驱动壁钟10.587秒：6transport、3auth/3PTY-shell，三套实际3/0/1回应，
+另取消一轮未回答问题；双信任组CHANGED无问题/回答、NEW审阅、config KNOWN/禁用政策、
+旧/跨/重放拒绝通过。重连只验RAM元数据，未点击Android Flutter重连或人工体验页面。
+14项cleanup全部true，三份独立空容器/网络/监听收据及秘密文件缺失核对通过；正式
+5e70/UID10131/数据路径/首次与最后安装时间保持，未读取正式库/真实账号。
+[设备证据及首轮失败](../../../design/verification.md#20261102-ssh-keyboard-interactive-device)。
+
+首轮`device-b5adea1a2461`仍失败：缺少编辑configRead回执的VAULT_CHANGED及空reverse
+解析RuntimeError保留。只补夹具读取/正文/缺失回执负断言及驱动空行解析16纯回归；
+正常50614/隔离fae925及其他31源码未变，新test2ec93仅13秒重建/签名审计后通过。
+独立source/candidate/板上/清理复核PASS；正式安装、页面人工体验和本增量提交仍待批准。
+
+## 2026-11-02 KBI本地与独立复核通过（设备授权前记录）
+
+用户“可以”后按冻结合同实施：手动/config独立KBI，多提示/多轮、空回答/零提示明确继续、
+不保存回答，不自动切方法或MFA串联。最终374 Flutter/analyze、846 JVM/57套、reviewed
+2399629 native（含KBI639993）、7115config/64KiB、28张真实字体布局均通过。
+normal/fixture完整构建与分别lint通过，0错误及4/6原有警告；三个APK签名/包名/arm64/
+Java-Dart-JNI闭包/测试类隔离通过，32源码前后hash保持。正常50614d4d…未安装。
+`/tmp/ctos-ssh-kbi-20261102.LE2RQCwF`保存分层报告/原始失败/红绿回归及
+`apk-audit.json`、`all-changed-sources.sha256`、lint原XML；
+[完整验证](../../../design/verification.md#20261102-ssh-keyboard-interactive)说明当前与历史计数。
+独立产物/源码/文档复核PASS，设备执行驱动仅准备未运行；Android平台方法只编译/打包，
+未安装或运行，新设备授权、正式更新、人工体验、本增量提交均未自动取得。
+准备驱动的精确资源责任/失败清理也已独立静态复核PASS；32源码/三APK与driver最终hash
+重核保持，`final-local-status.json`为本地收尾回执，不代表设备执行成功。
+
+## 2026-11-02 批准提交并开始KBI
+
+用户“可以”批准52路径主机信任提交清单与手动/config独立KBI范围。工作提交为
+`bb8fa225fe44a1eaceef6ce21380c93d1fbef087`，52路径精确核对、六处部分内容与排除项保持；
+初次底层索引路径解释错误被集合断言拦截，恢复本次索引后完整前缀重建，最终无ctOS外路径。
+当前KBI实现中，不把前序353 Flutter/828 JVM/设备结果用于新认证；本轮设备/真实账号
+与新提交未授权。父1008仍in_progress，不归档。
+
 ## 2026-11-02 主机信任人工验收通过并继续
 
 正式5e70df40交付后，用户回复“通过；可以继续；”，本增量人工体验门通过。

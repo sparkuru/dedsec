@@ -1,5 +1,24 @@
 # SSH 终端规划入口
 
+2026-11-04：用户确认正式8b6c2a42…[验收通过并授权提交](verification.md#20261104-ssh-kbi-human-acceptance)。
+本轮独立KBI及界面修正完成验收；原1008完整父范围继续，不归档。
+
+2026-11-03：KBI正式50614体验后，用户确认其他认证体验通过，并提出
+[三处UI细节](verification.md#20261103-ssh-ui-feedback)。认证选择/说明位置、保存选项状态及
+私钥操作样式已修正；377 Flutter/analyze、42张字体截图及构建/lint/审计通过，正式
+8b6c2a42…已保留数据更新指定板并启动。修正后视觉体验待反馈，原认证合同保持。
+
+2026-11-03：正常KBI50614d4d…已另获授权[保留数据更新指定板并启动](verification.md#20261103-ssh-keyboard-interactive-formal-install)。
+手动SSH页或config主机显式选“服务器交互式认证”，新增页面人工体验待反馈；不自动作答。
+以下正式未更新为本次交付前历史，父1008未归档、KBI未提交。
+
+2026-11-02 当前：[服务器交互式认证](ssh-keyboard-interactive.md)手动/config显式选择，
+多提示/多轮与默认当次回答已本地实现；374 Flutter/846 JVM、真实native矩阵、布局/
+构建审计通过，[本地证据](verification.md#20261102-ssh-keyboard-interactive)与
+[指定板实际3/0/1/PTY通过及清理](verification.md#20261102-ssh-keyboard-interactive-device)分列；
+新增页面人工体验待验。
+正常50614d4d…未安装，开发板正式仍为前序已验收的主机信任5e70df40…，未提交KBI或归档父1008。
+
 2026-11-02 接续：[主机信任管理](ssh-host-trust-management.md)已本地实现。入口为终端→
 SSH连接→私钥与配置→主机信任，输入实际host/port查询两组旧指纹；按组新预览确认后
 忘记普通旧记录，再由用户主动连接并核对实际新键。共享/通配/受保护记录不强删。

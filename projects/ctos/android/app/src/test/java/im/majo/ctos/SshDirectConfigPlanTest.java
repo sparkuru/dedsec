@@ -111,12 +111,33 @@ public final class SshDirectConfigPlanTest {
             assertEquals(List.of(".ssh/id_ed25519"), plan.identityFiles);
             assertEquals(List.of(".ssh/known_hosts"), plan.userKnownHostsFiles);
             assertTrue(plan.identitiesOnly); assertTrue(plan.pubkeyAuthentication); assertFalse(plan.passwordAuthentication);
+            assertFalse(plan.keyboardInteractiveAuthentication);
             assertFalse(plan.userRequired); assertEquals(3000, plan.connectTimeoutMillis);
             assertEquals(0, plan.requestTty); assertEquals(3, plan.strictHostKeyChecking);
             try { plan.identityFiles.add("other"); fail(); } catch (UnsupportedOperationException expected) { }
             assertEquals(1, binding.reserved); assertEquals(1, binding.loaded); binding.clean();
         }
         assertEquals(1, binding.closed); assertEquals(1, binding.destroyed);
+    }
+    @Test public void versionTwoCarriesIndependentKeyboardPolicyAndOldVersionNeverGuessesIt() throws Exception {
+        for (boolean profile : List.of(false,true)) for (int flag : new int[]{0,1,2}) {
+            Binding binding=new Binding(); byte[] old=frame("remote");
+            binding.response=ByteBuffer.allocate(old.length+4).put(old,0,24).putInt(flag)
+                    .put(old,24,old.length-24).array();
+            ByteBuffer.wrap(binding.response).putInt(4,2);
+            if(profile)ByteBuffer.wrap(binding.response).putInt(0,0x43535050);
+            try(SshConfigEvaluator evaluator=profile?SshConfigEvaluator.prepareProfileDirectDetached(()->{},binding):prepare(binding)){
+                evaluator.loadDetached(source(),0,31000,request());evaluator.run();
+                if(flag==2){if(profile)rejected(evaluator::profileDirectPlan);else rejected(evaluator::directPlan);}
+                else{
+                    SshConfigEvaluator.DirectPlan plan=profile?evaluator.profileDirectPlan():evaluator.directPlan();
+                    assertEquals(flag==1,plan.keyboardInteractiveAuthentication);
+                    assertTrue(plan.pubkeyAuthentication);assertFalse(plan.passwordAuthentication);
+                    assertEquals("remote",plan.user);assertEquals(3000,plan.connectTimeoutMillis);
+                }
+                binding.clean();
+            }
+        }
     }
     @Test public void malformedCountsFlagsPathsAndTrailingDataRejectWithWireCleanup() throws Exception {
         byte[] good = frame("remote", ".ssh/id");

@@ -15,6 +15,10 @@
 #define CTOS_SSH_NATIVE_CLIENT_MAX_HOST_KEY_BLOB_BYTES (1024U * 1024U)
 #define CTOS_SSH_NATIVE_CLIENT_MAX_SELECTION_WIRE_BYTES (1024U * 1024U + 2048U)
 #define CTOS_SSH_NATIVE_CLIENT_MAX_PASSWORD_BYTES 8192U
+#define CTOS_SSH_NATIVE_CLIENT_KBI_WIRE_BYTES 32768U
+#define CTOS_SSH_NATIVE_CLIENT_KBI_TEXT_BYTES 4096U
+#define CTOS_SSH_NATIVE_CLIENT_KBI_PROMPTS 16U
+#define CTOS_SSH_NATIVE_CLIENT_KBI_ROUNDS 16U
 
 enum ctos_ssh_native_client_password_auth_result {
     CTOS_SSH_PASSWORD_AUTH_NOT_STARTED = 0,
@@ -31,6 +35,15 @@ enum ctos_ssh_native_client_private_key_auth_result {
     CTOS_SSH_PRIVATE_KEY_AUTH_SUCCESS = 2,
     CTOS_SSH_PRIVATE_KEY_AUTH_REJECTED = 3,
     CTOS_SSH_PRIVATE_KEY_AUTH_PARTIAL = 4
+};
+
+enum ctos_ssh_native_client_keyboard_interactive_auth_result {
+    CTOS_SSH_KEYBOARD_AUTH_NOT_STARTED = 0,
+    CTOS_SSH_KEYBOARD_AUTH_PENDING = 1,
+    CTOS_SSH_KEYBOARD_AUTH_SUCCESS = 2,
+    CTOS_SSH_KEYBOARD_AUTH_REJECTED = 3,
+    CTOS_SSH_KEYBOARD_AUTH_PARTIAL = 4,
+    CTOS_SSH_KEYBOARD_AUTH_CHALLENGE = 5
 };
 
 enum ctos_ssh_native_shell_phase {
@@ -172,6 +185,18 @@ int ctos_ssh_native_client_begin_private_key_auth(struct ctos_ssh_native_client 
 int ctos_ssh_native_client_private_key_auth_result(
     const struct ctos_ssh_native_client *,
     enum ctos_ssh_native_client_private_key_auth_result *);
+
+/* Explicit keyboard-interactive only; no stored-credential callback. Challenge
+ * is a bounded CSKIv1 public copy. CSKRv1 answers consume exactly the current
+ * round once, under the original selected role/KEX/view/deadline proof. */
+int ctos_ssh_native_client_begin_keyboard_interactive_auth(struct ctos_ssh_native_client *);
+int ctos_ssh_native_client_keyboard_interactive_auth_result(
+    const struct ctos_ssh_native_client *,
+    enum ctos_ssh_native_client_keyboard_interactive_auth_result *);
+int ctos_ssh_native_client_keyboard_interactive_challenge(
+    const struct ctos_ssh_native_client *, unsigned char *, size_t, size_t *);
+int ctos_ssh_native_client_respond_keyboard_interactive(
+    struct ctos_ssh_native_client *, const unsigned char *, size_t);
 
 /* Explicitly continue a proved initial KEX into fixed ssh-userauth service
  * negotiation. No username or credential is sent; ready is not authentication.

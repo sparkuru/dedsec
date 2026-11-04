@@ -1,11 +1,31 @@
 # ctOS 产品与实施规划
 
+2026-11-04：用户对正式8b6c2a42…反馈“验收通过；可以提交”，
+[本轮KBI与界面修正人工验收通过](verification.md#20261104-ssh-kbi-human-acceptance)，
+按授权提交该增量。原1008/current/in_progress保持，完整父AC及MFA方法串联不由此关闭。
+
+2026-11-03：用户确认其他认证体验通过，沿原1008完成
+[三处界面反馈](verification.md#20261103-ssh-ui-feedback)：认证单选择框弹窗及下方说明、
+保存选项状态与私钥操作一致性。377 Flutter/analyze、42张字体截图及构建/lint/审计通过；
+正常8b6c2a42…已保留数据更新指定板并启动。协议/存储范围保持，修正后视觉反馈及提交仍开放。
+
+2026-11-03：用户另授权保留数据更新正式KBI APK并启动，正常50614d4d…已交付指定板，
+[实际包/签名/身份/启动与清理](verification.md#20261103-ssh-keyboard-interactive-formal-install)
+及独立复核通过。新增页面人工体验待反馈，父1008完整AC/KBI提交仍开放；下方待正式更新为历史。
+
 2026-11-02 接续1008：[主机信任管理](ssh-host-trust-management.md)经用户“开始”后完成
 本地实现与检查，353 Flutter／828 JVM及native/布局/构建lint/三APK审计通过。实际目标
 查询双组、单组精确忘记，不批准新键或自动重连；[指定板隔离验收通过](verification.md#20261102-ssh-host-trust-device)，
 正式5e70df40…已另获授权保留数据安装并启动，用户反馈“通过；可以继续；”，
 [新页面人工验收通过](verification.md#20261102-ssh-host-trust-human-acceptance)，沿原1008推进下一增量。
 无目录/路径适配、跳板/转发、CA/吊销管理或完整恢复扩展，父完整AC保持开放。
+主机信任已按批准52路径提交`bb8fa22`。当前获用户“可以”批准开始
+[服务器交互式认证](ssh-keyboard-interactive.md)：手动/config显式选择、真实多提示/多轮，
+回答仅当次；方法串联MFA另行推进。当前374 Flutter/846 JVM及reviewed2399629 native/
+7115config/28张字体布局/正常隔离构建lint及三APK审计及独立复核通过；
+[本地证据与边界](verification.md#20261102-ssh-keyboard-interactive)。用户随后授权，
+[指定板隔离验收8.348秒通过并清理](verification.md#20261102-ssh-keyboard-interactive-device)，
+含3/0/1与三次实际PTY；新页面人工体验及正式50614更新待确认，正式5e70保持。
 
 2026-11-02 后续修正：用户实际config.bin含电脑绝对IdentityFile而无法导入，明确批准
 [config先导入Host、连接时选择受管key](ssh-config-identity-selection.md)。身份路径只为

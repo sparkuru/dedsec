@@ -8,7 +8,12 @@ final class SshReconnectTarget {
     final int port;
 
     SshReconnectTarget(SshPasswordProfile profile, String keyId, String configAlias) throws VaultException {
-        if (profile == null || configAlias == null || keyId == null && !configAlias.isEmpty())
+        this(profile, keyId, configAlias, false);
+    }
+
+    SshReconnectTarget(SshPasswordProfile profile, String keyId, String configAlias, boolean keyboardInteractive) throws VaultException {
+        if (profile == null || configAlias == null || !keyboardInteractive && keyId == null && !configAlias.isEmpty()
+                || keyboardInteractive && keyId != null)
             throw SshPasswordProfile.parameters();
         if (keyId != null) VaultManifest.identifier(keyId);
         if (!configAlias.isEmpty()) {
@@ -17,7 +22,8 @@ final class SshReconnectTarget {
             byte[] checked = VaultCodec.sshText(configAlias, 255);
             VaultCodec.wipe(checked);
         }
-        mode = keyId == null ? "password" : configAlias.isEmpty() ? "key" : "config";
+        mode = keyboardInteractive ? configAlias.isEmpty() ? "keyboard" : "configKeyboard"
+                : keyId == null ? "password" : configAlias.isEmpty() ? "key" : "config";
         host = profile.host;
         port = profile.port;
         username = profile.username;

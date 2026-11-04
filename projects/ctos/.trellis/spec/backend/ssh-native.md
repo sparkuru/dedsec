@@ -1,5 +1,12 @@
 # SSH Native Gates
 
+2026-11-02: [standalone keyboard-interactive](ssh-keyboard-interactive.md) adds an explicit
+CSASv1 kind3 with no stored credential fields and method-aware INFO_REQUEST/RESPONSE.
+CSKI/CSKR bind owned bounded current rounds, original host/KEX/role/view and one response.
+CSCP/CSPPv2 expose the actual fixed Options KBI policy. Local implementation/checks passed;
+older sections excluding KBI describe their earlier password/key gate, not a prohibition on
+the new approved method. Chained-method MFA remains separate and PARTIAL grants no shell.
+
 2026-11-02: negative host-key diagnostics remain separate from trust authority.
 `verify_host_key` still rejects actual issuer CHANGED/REVOKED/CERTIFICATE before any managed
 host-evidence callback, proposal or proof. Record only a terminal `host_key_rejection` enum

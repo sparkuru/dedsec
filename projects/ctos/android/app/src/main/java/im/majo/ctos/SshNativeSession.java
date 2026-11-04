@@ -63,6 +63,16 @@ final class SshNativeSession implements AutoCloseable {
         }
     }
 
+    enum KeyboardInteractiveAuthResult {
+        NOT_STARTED(0), PENDING(1), SUCCESS(2), REJECTED(3), PARTIAL(4), CHALLENGE(5);
+        final int tag;
+        KeyboardInteractiveAuthResult(int tag) { this.tag = tag; }
+        private static KeyboardInteractiveAuthResult fromNative(int tag) throws IOException {
+            for (KeyboardInteractiveAuthResult result : values()) if (result.tag == tag) return result;
+            throw new IOException("invalid SSH keyboard-interactive authentication result");
+        }
+    }
+
     enum ShellPhase {
         DISABLED(0), OPENING(1), PTY_PENDING(2), SHELL_PENDING(3), RUNNING(4), CLOSED(5), REJECTED(6);
 
@@ -112,7 +122,7 @@ final class SshNativeSession implements AutoCloseable {
     }
 
     private enum Phase { KEX_ONLY, SERVICE_PENDING, SERVICE_READY, PASSWORD_PENDING,
-        PRIVATE_KEY_PENDING, FINISHED }
+        PRIVATE_KEY_PENDING, KEYBOARD_PENDING, FINISHED }
 
     /** A public-only view token with deferred cleanup support. */
     interface ViewBinding {
@@ -160,6 +170,18 @@ final class SshNativeSession implements AutoCloseable {
         }
         default int privateKeyAuthResult(long handle) throws IOException {
             throw new IOException("SSH private-key authentication is unavailable");
+        }
+        default void beginKeyboardInteractiveAuth(long handle) throws IOException {
+            throw new IOException("SSH keyboard-interactive authentication is unavailable");
+        }
+        default int keyboardInteractiveAuthResult(long handle) throws IOException {
+            throw new IOException("SSH keyboard-interactive authentication is unavailable");
+        }
+        default byte[] keyboardInteractiveChallenge(long handle) throws IOException {
+            throw new IOException("SSH keyboard-interactive authentication is unavailable");
+        }
+        default void respondKeyboardInteractive(long handle, byte[] response) throws IOException {
+            throw new IOException("SSH keyboard-interactive authentication is unavailable");
         }
         default void beginShell(long handle, int columns, int rows) throws IOException {
             throw new IOException("SSH shell is unavailable");
@@ -285,6 +307,18 @@ final class SshNativeSession implements AutoCloseable {
         @Override public int privateKeyAuthResult(long handle) throws IOException {
             return Native.privateKeyAuthResult(handle);
         }
+        @Override public void beginKeyboardInteractiveAuth(long handle) throws IOException {
+            Native.beginKeyboardInteractiveAuth(handle);
+        }
+        @Override public int keyboardInteractiveAuthResult(long handle) throws IOException {
+            return Native.keyboardInteractiveAuthResult(handle);
+        }
+        @Override public byte[] keyboardInteractiveChallenge(long handle) throws IOException {
+            return Native.keyboardInteractiveChallenge(handle);
+        }
+        @Override public void respondKeyboardInteractive(long handle, byte[] response) throws IOException {
+            Native.respondKeyboardInteractive(handle, response);
+        }
 
         @Override public void beginShell(long handle, int columns, int rows) throws IOException {
             Native.beginShell(handle, columns, rows);
@@ -346,6 +380,10 @@ final class SshNativeSession implements AutoCloseable {
         static native int passwordAuthResult(long handle) throws IOException;
         static native void beginPrivateKeyAuth(long handle) throws IOException;
         static native int privateKeyAuthResult(long handle) throws IOException;
+        static native void beginKeyboardInteractiveAuth(long handle) throws IOException;
+        static native int keyboardInteractiveAuthResult(long handle) throws IOException;
+        static native byte[] keyboardInteractiveChallenge(long handle) throws IOException;
+        static native void respondKeyboardInteractive(long handle, byte[] response) throws IOException;
         static native void beginShell(long handle, int columns, int rows) throws IOException;
         static native int[] shellStatus(long handle) throws IOException;
         static native int writeShell(long handle, byte[] bytes) throws IOException;
@@ -384,6 +422,10 @@ final class SshNativeSession implements AutoCloseable {
     private PasswordAuthResult authenticationResult = PasswordAuthResult.NOT_STARTED;
     private PrivateKeyAuthResult privateKeyResult = PrivateKeyAuthResult.NOT_STARTED;
     private boolean privateKeyAuthentication;
+    private boolean keyboardInteractiveAuthentication;
+    private KeyboardInteractiveAuthResult keyboardResult = KeyboardInteractiveAuthResult.NOT_STARTED;
+    private SshKeyboardChallenge keyboardChallenge;
+    private int keyboardRound;
     private volatile boolean cancellationRequested;
     private volatile String terminalFailure;
 
@@ -642,6 +684,7 @@ final class SshNativeSession implements AutoCloseable {
                 else if (phase == Phase.SERVICE_PENDING) queryServiceReady();
                 else if (phase == Phase.PASSWORD_PENDING) queryPasswordResult();
                 else if (phase == Phase.PRIVATE_KEY_PENDING) queryPrivateKeyResult();
+                else if (phase == Phase.KEYBOARD_PENDING) queryKeyboardInteractiveResult();
             }
             return result;
         } catch (VaultException failure) {
@@ -715,7 +758,7 @@ final class SshNativeSession implements AutoCloseable {
         enterNative();
         try {
             requireProtocolState();
-            if (privateKeyAuthentication) throw phaseFailure();
+            if (privateKeyAuthentication || keyboardInteractiveAuthentication) throw phaseFailure();
             if (phase != Phase.SERVICE_READY && phase != Phase.PASSWORD_PENDING
                     && phase != Phase.FINISHED) throw phaseFailure();
             requireProtocolLive();
@@ -820,11 +863,121 @@ final class SshNativeSession implements AutoCloseable {
         }
     }
 
+    void beginKeyboardInteractiveAuth() throws VaultException {
+        requireOwnerThread();
+        enterNative();
+        try {
+            requireProtocolState();
+            if (phase != Phase.SERVICE_READY) throw phaseFailure();
+            if (expectedSelectionReceipt == null) throw SshAuthenticationSelection.invalid();
+            requireProtocolLive();
+            try {
+                nativeBinding.beginKeyboardInteractiveAuth(nativeHandle);
+                requireProtocolLive();
+                keyboardInteractiveAuthentication = true;
+                keyboardResult = KeyboardInteractiveAuthResult.PENDING;
+                phase = Phase.KEYBOARD_PENDING;
+            } catch (IOException | LinkageError | RuntimeException nativeFailure) {
+                throw protocolNativeFailure("SSH_KEYBOARD_AUTH");
+            } catch (Error nativeFailure) { terminalFailure = "SSH_KEYBOARD_AUTH"; throw nativeFailure; }
+        } finally { NATIVE_ENTRY.remove(); }
+    }
+
+    KeyboardInteractiveAuthResult keyboardInteractiveAuthResult() throws VaultException {
+        requireOwnerThread();
+        enterNative();
+        try {
+            requireProtocolState();
+            if (!keyboardInteractiveAuthentication || phase != Phase.KEYBOARD_PENDING && phase != Phase.FINISHED)
+                throw phaseFailure();
+            requireProtocolLive();
+            return queryKeyboardInteractiveResult();
+        } finally { NATIVE_ENTRY.remove(); }
+    }
+
+    private KeyboardInteractiveAuthResult queryKeyboardInteractiveResult() throws VaultException {
+        try {
+            KeyboardInteractiveAuthResult result = KeyboardInteractiveAuthResult.fromNative(
+                    nativeBinding.keyboardInteractiveAuthResult(nativeHandle));
+            requireProtocolLive();
+            if (phase == Phase.KEYBOARD_PENDING) {
+                if (result == KeyboardInteractiveAuthResult.NOT_STARTED
+                        || keyboardResult == KeyboardInteractiveAuthResult.CHALLENGE
+                        && (result == KeyboardInteractiveAuthResult.PENDING || result == KeyboardInteractiveAuthResult.SUCCESS))
+                    throw new IOException("SSH keyboard-interactive state regressed");
+                keyboardResult = result;
+                if (result != KeyboardInteractiveAuthResult.PENDING && result != KeyboardInteractiveAuthResult.CHALLENGE) {
+                    keyboardChallenge = null;
+                    phase = Phase.FINISHED;
+                }
+            } else if (phase != Phase.FINISHED || result != keyboardResult) {
+                throw new IOException("SSH keyboard-interactive state regressed");
+            }
+            return result;
+        } catch (IOException | LinkageError | RuntimeException nativeFailure) {
+            throw protocolNativeFailure("SSH_KEYBOARD_AUTH");
+        } catch (Error nativeFailure) {
+            terminalFailure = "SSH_KEYBOARD_AUTH";
+            throw nativeFailure;
+        }
+    }
+
+    SshKeyboardChallenge keyboardInteractiveChallenge() throws VaultException {
+        requireOwnerThread();
+        enterNative();
+        byte[] wire = null;
+        try {
+            requireProtocolState(); requireProtocolLive();
+            if (phase != Phase.KEYBOARD_PENDING || keyboardResult != KeyboardInteractiveAuthResult.CHALLENGE)
+                throw phaseFailure();
+            if (keyboardChallenge != null) return keyboardChallenge;
+            try {
+                wire = nativeBinding.keyboardInteractiveChallenge(nativeHandle);
+                requireProtocolLive();
+                SshKeyboardChallenge challenge = SshKeyboardChallenge.decode(wire);
+                if (challenge.round != keyboardRound + 1) throw new IOException("SSH challenge round regressed");
+                keyboardRound = challenge.round;
+                keyboardChallenge = challenge;
+                return challenge;
+            } catch (IOException | LinkageError | RuntimeException malformed) {
+                throw protocolNativeFailure("SSH_KEYBOARD_CHALLENGE");
+            } catch (Error nativeFailure) {
+                terminalFailure = "SSH_KEYBOARD_CHALLENGE";
+                throw nativeFailure;
+            }
+        } finally { VaultCodec.wipe(wire); NATIVE_ENTRY.remove(); }
+    }
+
+    void respondKeyboardInteractive(SshKeyboardChallenge challenge, byte[] response) throws VaultException {
+        requireOwnerThread();
+        enterNative();
+        byte[] owned = null;
+        try {
+            requireProtocolState(); requireProtocolLive();
+            if (phase != Phase.KEYBOARD_PENDING || keyboardResult != KeyboardInteractiveAuthResult.CHALLENGE
+                    || challenge == null || keyboardChallenge != challenge) throw phaseFailure();
+            try {
+                challenge.requireResponse(response);
+                owned = response.clone();
+                nativeBinding.respondKeyboardInteractive(nativeHandle, owned);
+                requireProtocolLive();
+                keyboardChallenge = null;
+                keyboardResult = KeyboardInteractiveAuthResult.PENDING;
+            } catch (IOException | LinkageError | RuntimeException malformed) {
+                throw protocolNativeFailure("SSH_KEYBOARD_CHALLENGE");
+            } catch (Error nativeFailure) {
+                terminalFailure = "SSH_KEYBOARD_CHALLENGE";
+                throw nativeFailure;
+            }
+        } finally { VaultCodec.wipe(owned); NATIVE_ENTRY.remove(); }
+    }
+
     void beginShell(int columns, int rows) throws VaultException {
         shellEntry("SSH_SESSION_SHELL", () -> {
             if (phase != Phase.FINISHED || shellPhase != ShellPhase.DISABLED
                     || expectedSelectionReceipt == null
-                    || (privateKeyAuthentication ? privateKeyResult != PrivateKeyAuthResult.SUCCESS
+                    || (keyboardInteractiveAuthentication ? keyboardResult != KeyboardInteractiveAuthResult.SUCCESS
+                            : privateKeyAuthentication ? privateKeyResult != PrivateKeyAuthResult.SUCCESS
                             : authenticationResult != PasswordAuthResult.SUCCESS)) throw phaseFailure();
             requireDimensions(columns, rows);
             nativeBinding.beginShell(nativeHandle, columns, rows);

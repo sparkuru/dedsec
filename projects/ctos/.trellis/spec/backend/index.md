@@ -27,6 +27,7 @@ general database. Use these guides for work below the Flutter presentation layer
 | [Encrypted Private-key Connection](./ssh-encrypted-key-connect.md) | Original encrypted import, actual phrase/public proof, one-use or atomic saved key phrase, exact CSASv2/CSKB release and forget |
 | [Private-key Deletion](./ssh-key-deletion.md) | Exact reviewed bundle removal, retained CONFIG bytes, absent-identity refusal and atomic reimport reference repair |
 | [Host-trust Management](./ssh-host-trust-management.md) | Supplied-body real-parser query, exact endpoint row forgetting, preserved policy/bytes and source-bound once bundle tickets |
+| [Keyboard-interactive Authentication](./ssh-keyboard-interactive.md) | Explicit standalone KBI, method-aware challenge/response, original one-round ownership, transient answers and config policy; Android acceptance remains separate |
 | [Error Handling](./error-handling.md) | Typed snapshot states, channel errors, and runtime failures |
 | [Logging](./logging-guidelines.md) | Protocol stdout, bounded HFTP diagnostics, and secret-safe logs |
 | [Quality](./quality-guidelines.md) | Layer-specific checks and tests |

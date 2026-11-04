@@ -40,6 +40,23 @@ public final class SshAuthenticationSelectionTest {
         rejected(() -> selection.encode(-1, clock));
     }
 
+    @Test public void keyboardInteractiveSelectionHasNoStoredEntryOrKeyFields() throws Exception {
+        SshRoleContext role = role(4);
+        SshAuthenticationSelection selection = SshAuthenticationSelection.keyboardInteractive(role, "用户", clock);
+        java.nio.ByteBuffer wire = java.nio.ByteBuffer.wrap(selection.encode(9, clock));
+        assertEquals(SshAuthenticationSelection.WIRE_MAGIC, wire.getInt());
+        assertEquals(1, wire.getShort()); assertEquals(0, wire.getShort());
+        wire.position(84); assertEquals(3, wire.getInt());
+        byte[] username = new byte[wire.getInt()]; wire.get(username);
+        assertArrayEquals("用户".getBytes(StandardCharsets.UTF_8), username);
+        for (int index=0; index<4; index++) assertEquals(0, wire.getInt());
+        assertEquals(0, wire.remaining());
+        assertEquals("", selection.entryId); assertEquals("", selection.path);
+        selection.requireMatches(role, SshCredentialBridge.Kind.KEYBOARD_INTERACTIVE, clock);
+        rejected(() -> selection.requireMatches(role, SshCredentialBridge.Kind.PASSWORD, clock));
+        rejected(() -> SshAuthenticationSelection.keyboardInteractive(role, "\ud800", clock));
+    }
+
     @Test public void canonicalPrivateRecordPreservesAllFiveFieldLengthsAndBytes() throws Exception {
         byte[] blob = new byte[] { 0, (byte) 0xff, 4 };
         SshAuthenticationSelection selection = SshAuthenticationSelection.privateKey(role(2), "用户😀",

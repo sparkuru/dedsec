@@ -1,10 +1,20 @@
 # Architecture
 
+2026-11-02：[独立KBI](ssh-keyboard-interactive.md)在同一native owner/实际host/KEX上新增
+method-aware挑战状态与CSKI/CSKR；CSASkind3无entry/path，不进入generic密码释放。
+Java以原role/KEX/source/期限绑定当前轮邮箱，一次交付给owner；Flutter只持typed公共
+问题与当次输入，跨route寿命等待清理/迟到handoff后才释放保护。CSCP/CSPPv2消费实际
+KBI政策，无key config可显式选择；RAM重连不带旧回答或自动提交。无vault schema迁移。
+[本地完整检查/构建](verification.md#20261102-ssh-keyboard-interactive)及
+[指定板隔离实际3/0/1/PTY](verification.md#20261102-ssh-keyboard-interactive-device)通过并清理，
+正式50614已于2026-11-03另获授权保留数据更新并启动，人工体验待反馈；
+[安装证据](verification.md#20261103-ssh-keyboard-interactive-formal-install)。
+
 2026-11-02：[主机信任管理](ssh-host-trust-management.md)由supplied-body native真实parser/
 CSHTv1提供公开记录与byte-span候选，Java选择两种精确对象并复用原bundle事务；Flutter
 只持typed metadata/opaque票据，不持replacement正文或新信任权威。公共session事件broker
 下沉secrets层供SSH/TOTP共享；流级outcome跨页面销毁保留终态与保护，旧引擎/schema保持。
-[本地与指定板JNI/KEX验收](verification.md#20261102-ssh-host-trust-device)通过，人工体验待验。
+[本地与指定板JNI/KEX验收](verification.md#20261102-ssh-host-trust-device)及人工体验通过，已提交bb8fa22。
 原生实际负主机键仍在host批准回调前拒绝，受owner/role/view约束的终态enum只经固定类型
 JNI异常提供诊断；Java不依赖异常文本猜测，取消/过期/失效优先，不成为新信任权威。
 

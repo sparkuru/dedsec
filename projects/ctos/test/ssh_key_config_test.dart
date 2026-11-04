@@ -295,7 +295,7 @@ void main() {
         findsOneWidget,
       );
       await ui.tap('ssh-config-host-demo');
-      expect(find.text('尚未导入可用私钥。请先返回导入私钥，再选择此连接。'), findsOneWidget);
+      expect(find.text('尚未导入可用私钥。可选择服务器交互式认证，或返回导入私钥。'), findsOneWidget);
       await ui.tap('ssh-config-key-cancel');
       await ui.tap('ssh-library-cancel');
       expect(ui.releases, hasLength(1));
@@ -327,7 +327,7 @@ void main() {
     await ui.open();
     await ui.reveal('ssh-key-delete-key_a');
     final press = tester
-        .widget<TextButton>(find.byKey(const Key('ssh-key-delete-key_a')))
+        .widget<OutlinedButton>(find.byKey(const Key('ssh-key-delete-key_a')))
         .onPressed!;
     press();
     press();
@@ -518,7 +518,7 @@ void main() {
     await ui.tap('ssh-import-acknowledge');
     expect(ui.arguments('ssh.importCommit'), hasLength(1));
     await ui.tap('ssh-config-host-demo');
-    expect(find.text('尚未导入可用私钥。请先返回导入私钥，再选择此连接。'), findsOneWidget);
+    expect(find.text('尚未导入可用私钥。可选择服务器交互式认证，或返回导入私钥。'), findsOneWidget);
     expect(find.text('/home/source/.ssh/id_rsa'), findsOneWidget);
     expect(find.byKey(const Key('ssh-config-key-key_a')), findsNothing);
     await ui.tap('ssh-config-key-cancel');

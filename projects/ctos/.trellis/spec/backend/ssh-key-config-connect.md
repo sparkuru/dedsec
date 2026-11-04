@@ -1,5 +1,10 @@
 # Config and private-key connections
 
+2026-11-02: [standalone KBI](ssh-keyboard-interactive.md) extends CSCP/CSPP to v2 with an
+actual keyboardInteractiveAuthentication flag. Explicit config KBI has no selected key,
+retains current source/effective target/trust checks and never falls back to key/password.
+Existing private-key authentication and its key/public ownership proofs remain required.
+
 2026-11-02: the later [explicit config identity selection](ssh-config-identity-selection.md)
 supersedes product IdentityFile path eligibility below: user CONFIG imports before keys, original
 paths are hints, and the user explicitly chooses a managed key at connection. Generic native

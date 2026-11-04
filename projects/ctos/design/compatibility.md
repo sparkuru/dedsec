@@ -1,10 +1,22 @@
 # Compatibility
 
+2026-11-02：[独立KBI](ssh-keyboard-interactive.md)保留原密码/私钥/信任/服务模型，新增
+CSASv1 kind3、CSKI/CSKR及CSCP/CSPPv2；旧plan v1仅解码为KBI=false，不猜测权限。
+实际KbdInteractiveAuthentication和支持的方法列表决定资格；非默认submethods/复杂选项
+仍明确拒绝。网络boolean非零规范成内部0/1，内部frame仍严格；0/多问题、空回答及16轮/
+16问题/4096字节字段/32768字节frame边界有真实加密peer矩阵。374 Flutter/846 JVM、
+reviewed2399629 native及7115config/64KiB、28字体布局、构建与三APK审计通过，
+[本地验证](verification.md#20261102-ssh-keyboard-interactive)与
+[指定AIO-3568J/API30实际3/0/1/PTY及清理](verification.md#20261102-ssh-keyboard-interactive-device)
+分别通过；不推广为所有ROM、实际Flutter点击重连或完整MFA支持。
+正常50614d4d…仅arm64，已于2026-11-03另获授权保留数据安装同一指定板并启动，
+[实际包与身份核对](verification.md#20261103-ssh-keyboard-interactive-formal-install)通过；新增页面人工体验待反馈。
+
 2026-11-02：[主机信任管理](ssh-host-trust-management.md)兼容现有password/config两套精确
 信任对象及合法literal/hash记录，不迁移schema或旧库；共享/通配/匹配CA或吊销/不支持类型
 只允许查看，整组忘记拒绝。沿原NEW/CHANGED/REVOKED/CERTIFICATE核验，不因忘记放行新键。
 353 Flutter／828 JVM和native/布局/构建审计通过；指定AIO-3568J/API30实际JNI/CHANGED/
-NEW/KNOWN/PTY已通过并清理，新增页面人工体验待验；最终正常5e70df40…仅arm64，
+NEW/KNOWN/PTY已通过并清理，新增页面人工体验通过且提交bb8fa22；最终正常5e70df40…仅arm64，
 [验证边界](verification.md#20261102-ssh-host-trust-device)不推广为所有ROM或证书认证验收。
 
 2026-10-30 接续：[私钥删除](ssh-key-deletion.md)不改变库格式、依赖或原生 wire。

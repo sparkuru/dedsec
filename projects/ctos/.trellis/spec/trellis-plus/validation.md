@@ -47,6 +47,13 @@ installation solely because this cleanup probe failed, or kill a shared server
 to make it pass. The 2026-11-02 host-trust formal installation records this case in
 [verification](../../../design/verification.md#20261102-ssh-host-trust-formal-install).
 
+Record task-owned cleanup intent before invoking a mutating external command: Docker network
+creation or ADB reverse may take effect before its CLI times out. Pin the generated network
+label and the reverse port's prior absence first. Cleanup is exact and absence-aware: if a
+resource exists, require its ownership label; if it is absent, verify absence rather than
+claiming any inspect/daemon failure means absent. Remove only the owned reverse and verify its
+absence even when remove reports that the listener never existed. Never prune shared resources.
+
 ## Checks by changed surface
 
 | Surface | Focused check | Wider check when relevant |
@@ -70,6 +77,11 @@ task; earlier access does not grant it. Android 11 board and Android 16
 phone conclusions remain separate. Native UI visual quality, permissions,
 Root or Vector behavior, and hardware-dependent paths may require targeted
 human review after automated checks.
+
+Normal and opt-in secrets-fixture variants have different task names. With
+`-PctosSecretsUiFixture=true`, use `:app:lintSecretsFixtureRelease`; run normal
+`:app:lintRelease` separately with that property omitted. Adding `lintRelease`
+to the fixture invocation is ambiguous, not a completed normal-variant check.
 
 The Flutter application remains native, without a Flutter-web build or a
 repository Playwright dependency. HFTP now exposes a small browser interface;

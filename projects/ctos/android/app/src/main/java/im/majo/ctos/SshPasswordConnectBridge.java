@@ -86,6 +86,25 @@ final class SshPasswordConnectBridge implements AutoCloseable {
                 case "ssh.passwordConnect": connect(call, result); break;
                 case "ssh.keyConnect": connectKey(call, result, false); break;
                 case "ssh.configConnect": connectKey(call, result, true); break;
+                case "ssh.keyboardConnect": connectKeyboard(call, result, false); break;
+                case "ssh.configKeyboardConnect": connectKeyboard(call, result, true); break;
+                case "ssh.keyboardResponse": {
+                    exact(call, "requestId", "ticketId", "binding", "answers");
+                    String id = id(call), ticket = text(call, "ticketId"), binding = text(call, "binding");
+                    Object value = call.argument("answers");
+                    if (!ticket.matches("[A-Za-z0-9_-]{1,128}") || !binding.matches("[0-9a-f]{64}")
+                            || !(value instanceof java.util.List) || ((java.util.List<?>)value).size() > SshKeyboardChallenge.MAX_PROMPTS)
+                        throw parameters();
+                    for (Object answer : (java.util.List<?>)value)
+                        if (!(answer instanceof String) || ((String)answer).length() > SshKeyboardChallenge.MAX_FIELD_BYTES)
+                            throw parameters();
+                    boolean accepted = false;
+                    if (active != null && active.id.equals(id)) {
+                        secrets.requireSshConsumer();
+                        accepted = active.connector.respondKeyboard(ticket, binding, (java.util.List<?>)value);
+                    }
+                    result.success(VaultCollections.map("accepted", accepted)); break;
+                }
                 case "ssh.cancel": {
                     exact(call, "requestId"); String id = id(call);
                     boolean cancelled = profiles.cancel(id);
@@ -372,6 +391,28 @@ final class SshPasswordConnectBridge implements AutoCloseable {
         } finally { VaultCodec.wipe(phrase); }
     }
 
+    private void connectKeyboard(MethodCall call, MethodChannel.Result result, boolean configured) throws VaultException {
+        if (configured) exact(call, "requestId", "alias", "binding", "username", "columns", "rows");
+        else exact(call, "requestId", "host", "port", "username", "columns", "rows");
+        String id = id(call);
+        secrets.requireSshConsumer();
+        if (active != null || mutating != null || profiles.busy() || idle != null && idle.loading) throw failure("BUSY");
+        if (sink == null) throw failure("SSH_CANCELLED");
+        String alias = configured ? text(call, "alias") : "";
+        String binding = configured ? text(call, "binding") : "";
+        String username = text(call, "username");
+        if (configured && (alias.isEmpty() || alias.length() > 255 || !binding.matches("[0-9a-f]{64}"))) throw parameters();
+        if (!username.isEmpty()) VaultCodec.wipe(VaultCodec.sshText(username, 255));
+        SshPasswordProfile manual = configured ? null : new SshPasswordProfile(text(call, "host"),
+                integer(call, "port", 1, 65535), username);
+        int columns = integer(call, "columns", 1, 4096), rows = integer(call, "rows", 1, 4096);
+        admit(id); retireIdle(); profiles.cancelReads();
+        SshPasswordConnector connector = new SshPasswordConnector(vault, manual, alias, binding, username,
+                SystemClock.elapsedRealtime() + 60_000,
+                () -> { if (closed) throw failure("SSH_CANCELLED"); secrets.requireSshConsumer(); }, events(id));
+        attach(id, connector, columns, rows, result);
+    }
+
     boolean onActivityResult(int requestCode, int resultCode, android.content.Intent data) {
         return profiles.onActivityResult(requestCode, resultCode, data);
     }
@@ -435,6 +476,29 @@ final class SshPasswordConnectBridge implements AutoCloseable {
                         }
                         @Override public void dismiss(SshHostKeyReviewMailbox.Ticket ticket) {
                             main.post(() -> emit(VaultCollections.map("type", "hostKeyDismissed", "requestId", id,
+                                    "ticketId", ticket.id)));
+                        }
+                        @Override public void present(SshKeyboardMailbox.Ticket ticket) throws VaultException {
+                            if (closed) throw failure("SSH_CANCELLED");
+                            main.post(() -> {
+                                if (active == null || !active.id.equals(id) || sink == null) return;
+                                try {
+                                    secrets.requireSshConsumer();
+                                    if (!active.connector.keyboardPending(ticket)) return;
+                                    long remaining = ticket.deadline - SystemClock.elapsedRealtime();
+                                    if (remaining <= 0) { active.connector.cancel(); return; }
+                                    java.util.List<Map<String, Object>> prompts = new java.util.ArrayList<>();
+                                    for (SshKeyboardChallenge.Prompt prompt : ticket.challenge.prompts)
+                                        prompts.add(VaultCollections.map("text", prompt.text, "echo", prompt.echo));
+                                    emit(VaultCollections.map("type", "keyboardChallenge", "requestId", id,
+                                            "ticketId", ticket.id, "binding", ticket.binding, "round", ticket.challenge.round,
+                                            "name", ticket.challenge.name, "instruction", ticket.challenge.instruction,
+                                            "prompts", prompts, "remainingMillis", Math.min(60_000L, remaining)));
+                                } catch (VaultException | RuntimeException failure) { active.connector.cancel(); }
+                            });
+                        }
+                        @Override public void dismiss(SshKeyboardMailbox.Ticket ticket) {
+                            main.post(() -> emit(VaultCollections.map("type", "keyboardChallengeDismissed", "requestId", id,
                                     "ticketId", ticket.id)));
                         }
                     };

@@ -1,5 +1,40 @@
 # Changelog
 
+## 2026-11-04 KBI及界面修正验收通过
+
+- 用户反馈“验收通过；可以提交”，正式8b6c2a42…的独立交互式认证与三处UI修正
+  人工验收通过，授权提交本增量。
+- 已审阅源码与冻结验证清单核对，未新增产品变更、重装或扩写用户手测范围；
+  [验收与提交范围](verification.md#20261104-ssh-kbi-human-acceptance)。父1008保持进行中。
+
+## 2026-11-03 SSH表单及私钥操作体验修正
+
+- 用户确认其他认证体验通过；认证方式收为单选择框弹窗，当前方式明确，说明紧跟下方。
+- 保存密码/口令四个同类选项统一圆角Material状态；私钥使用/忘记口令/删除统一描边
+  操作与触控尺寸，保留破坏性提示及原删除确认。
+- 新增三项选择框回归，全量377 Flutter/analyze、42张真实字体及hover/focus截图、
+  正常构建/lint/来源签名审计和独立本地复核通过；首轮标签裁剪失败证据单独保留。
+- 正式8b6c2a42…已保留数据更新指定板并启动，身份核对及专用ADB退出通过；
+  [修正与交付证据](verification.md#20261103-ssh-ui-feedback)。修正后视觉反馈待验，父1008继续。
+
+## 2026-11-03 KBI正式更新与启动
+
+- 用户在隔离验收后单独授权，正常50614d4d…已install-r保留数据更新指定板并启动。
+- 实际APK与已审阅候选一致，新旧v2签名相同，UID/数据路径/首次安装保持；旧公开包已备份。
+- MainActivity实际resumed、专用ADB15055退出无监听，独立复核PASS；
+  [交付证据](verification.md#20261103-ssh-keyboard-interactive-formal-install)。新增页面人工体验待反馈。
+
+## 2026-11-02 主机信任提交，交互式认证通过隔离验收
+
+- 用户批准52路径清单，主机信任工作提交为`bb8fa22`，父1008继续，不push/归档。
+- 下一增量[服务器交互式认证](ssh-keyboard-interactive.md)已获“可以”批准本地实施：
+  手动/config显式独立KBI、多提示/多轮、回答仅当次，MFA方法串联另行推进。
+  当前374 Flutter/846 JVM、reviewed2399629 native/7115config、28字体布局、normal/fixture
+  构建lint及三APK来源审计、独立复核通过；[本地验证与失败历史](verification.md#20261102-ssh-keyboard-interactive)。
+  用户随后授权，[指定板实际3/0/1/CHANGED/NEW/KNOWN/PTY](verification.md#20261102-ssh-keyboard-interactive-device)
+  8.348秒通过并清理，独立复核PASS。首轮夹具缺少configRead的失败及驱动空行错误保留；
+  仅修正测试包/驱动，生产源码未改。正常50614d4d…未安装，正式更新/人工体验待确认。
+
 ## 2026-11-02 主机信任管理正式更新与人工验收
 
 - SSH资料页增加受保护“主机信任”：按实际host/port查询密码与配置/私钥两组完整旧指纹，

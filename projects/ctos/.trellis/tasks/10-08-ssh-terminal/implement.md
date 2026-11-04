@@ -1,5 +1,40 @@
 # SSH 终端实施计划
 
+## 2026-11-03 KBI体验后的界面修正
+
+用户确认其他认证体验通过，沿原1008完成三处视觉反馈，不新建/提交/归档。
+
+1. [x] 记录反馈与局部设计，保留原认证和存储合同。
+2. [x] trellis-implement修正认证弹窗选择及下方说明、保存选项状态、私钥操作一致性。
+3. [x] 相关SSH110/最终KBI24、全量377 Flutter/analyze；42张实际字体/大字/窄横屏/
+   hover/实际键盘focus，独立trellis-check本地复核PASS。
+4. [x] 正常arm64构建47.2秒/lint38秒、来源/v2签名审计PASS；8b6c2a42…已沿本次
+   同功能更新流程install-r交付指定板并启动，UID/数据路径/首次安装保持，ADB15057退出。
+5. [x] 更新design验证/索引/变更记录及当前状态。
+6. [x] 2026-11-04用户反馈“验收通过；可以提交”，修正后人工验收及本轮提交授权已获。
+   按本轮明确范围提交，完整父AC与MFA串联保持开放，不归档父任务。
+
+## 2026-11-02 当前增量：KBI实施
+
+[KBI合同](../../../design/ssh-keyboard-interactive.md)与
+[源码研究](research/next-increment-20261102.md)已准备，原1008继续in_progress。
+用户“可以”已批准入口覆盖与MFA拆分；本轮按冻结合同分派本地实现，不扩展设备权限。
+
+1. [x] 核对真实KBI缺口，区分已有Include单文件入口、major direct options及恢复关卡。
+2. [x] 用户确认手动/config独立KBI、回答仅当次及方法串联MFA另行交付。
+3. [x] 固定协议/源码研究、wire/限额/原期限/生命周期设计与spec上下文已收敛，
+   分派trellis-implement（禁止子代理再分派），依native→Java/JNI→Flutter接口依赖推进。
+4. [x] 专项及相关全量回归、实际字体布局、normal/fixture构建lint/签名/来源审计；
+   trellis-check独立复核、spec/设计/证据更新。设备/真实账号只按当轮授权。
+   本地374 Flutter/846 JVM、reviewed2399629 native/7115config及28字体布局/三APK审计通过，
+   独立源码/产物/文档复核PASS，设备驱动仅准备；[实际证据](../../../design/verification.md#20261102-ssh-keyboard-interactive)。
+5. [x] 用户另回复“授权”后，实际运行KBI桥接3/0/1、双信任组/取消/NEW/KNOWN/
+   config/PTY及完整资源清理，8.348秒通过；正式5e70公开身份保持。
+   重连只检查RAM目标mode/keyset/configAlias，未操作Android Flutter点击重连。
+6. [x] 2026-11-03用户另授权保留数据更新正式50614d4d…并启动；实际APK/签名/UID/
+   数据路径/首次安装及resumed核对通过，旧公开APK备份、专用ADB15055退出无监听。
+7. [x] 2026-11-04人工体验通过并获用户明确提交授权；父完整AC及MFA串联保持开放，不归档父任务。
+
 ## 2026-11-02 接续：主机信任管理
 
 状态：本地与指定板隔离JNI3/真实换键KEX/PTY及独立检查通过；用户“通过；可以继续；”
