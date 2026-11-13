@@ -9,6 +9,9 @@ Local source/tests/build audit and authorized isolated Android runtime passed; h
 remains pending. Android RAM reconnect metadata is not an actual Flutter reconnect-click test.
 This spec is not a device acceptance receipt; dated evidence lives in design/verification.md.
 Do not confuse KBI's multiple prompt rounds with chained publickey/password→KBI MFA.
+The separately approved [MFA continuation contract](ssh-mfa-authentication.md) extends
+only opted-in immutable two-stage plans. Standalone kind3 and legacy plans keep the
+single-method rules here; no global relaxation of selected credentials or partial success.
 
 ## 2. Signatures
 

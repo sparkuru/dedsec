@@ -35,8 +35,10 @@ public final class SshReconnectTargetTest {
             try { new SshReconnectTarget(profile, "key_1", alias); fail("Malformed alias must be rejected"); }
             catch (VaultException expected) { }
         }
-        try { new SshReconnectTarget(profile, null, "alias"); fail("Config reconnect must preserve an exact identity"); }
-        catch (VaultException expected) { }
+        SshReconnectTarget configured = new SshReconnectTarget(profile, null, "alias", false, true);
+        assertEquals("configPassword", configured.mode);
+        assertEquals("alias", configured.wire().get("configAlias"));
+        assertEquals(true, configured.wire().get("continueKeyboardInteractive"));
     }
 
     @Test public void keyboardReconnectContainsNoKeyQuestionAnswerOrOldBinding() throws Exception {
@@ -48,6 +50,8 @@ public final class SshReconnectTargetTest {
         assertEquals("configKeyboard", config.mode);
         assertEquals(Set.of("mode", "host", "port", "username", "configAlias"), config.wire().keySet());
         try { new SshReconnectTarget(profile, "key", "configured", true); fail("KBI cannot retain a key selection"); }
+        catch (VaultException expected) { }
+        try { new SshReconnectTarget(profile, null, "configured", true, true); fail("Standalone KBI has no continuation"); }
         catch (VaultException expected) { }
     }
 }

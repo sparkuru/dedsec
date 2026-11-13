@@ -181,6 +181,20 @@ static int direct_authentication_list(const char *list, const char *wanted) {
     return 0;
 }
 
+static int direct_authentication_before(const char *list, const char *first, const char *second) {
+    int seen_first = 0;
+    if (list == NULL) return 1;
+    while (*list != '\0') {
+        const char *end = strchr(list, ',');
+        if (end == NULL) end = list + strlen(list);
+        size_t length = (size_t)(end - list);
+        if (strlen(second) == length && memcmp(list, second, length) == 0) return seen_first;
+        if (strlen(first) == length && memcmp(list, first, length) == 0) seen_first = 1;
+        list = *end == '\0' ? end : end + 1;
+    }
+    return 0;
+}
+
 int ctos_config_direct_keyword(const char *keyword, int active, int count, char **args) {
     if (current == NULL || current->direct_plan == NULL || !active) return 0;
     static const char *const accepted[] = {"host", "match", "include", "hostname", "user", "port",
@@ -966,6 +980,12 @@ static int finish_direct_plan(struct ctos_ssh_config_eval *e) {
         && direct_authentication_list(o->preferred_authentications, "password");
     plan->keyboard_interactive_authentication = o->kbd_interactive_authentication != 0
         && direct_authentication_list(o->preferred_authentications, "keyboard-interactive");
+    plan->password_then_keyboard_allowed = plan->password_authentication
+        && plan->keyboard_interactive_authentication
+        && direct_authentication_before(o->preferred_authentications, "password", "keyboard-interactive");
+    plan->publickey_then_keyboard_allowed = plan->pubkey_authentication
+        && plan->keyboard_interactive_authentication
+        && direct_authentication_before(o->preferred_authentications, "publickey", "keyboard-interactive");
     plan->connect_timeout_millis = o->connection_timeout > 0 && o->connection_timeout < 60
         ? (unsigned int)o->connection_timeout * 1000U : 60000U;
     plan->strict_host_key_checking = (unsigned int)o->strict_host_key_checking;

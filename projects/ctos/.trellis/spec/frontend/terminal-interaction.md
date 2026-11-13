@@ -1,5 +1,19 @@
 # Terminal interaction contract
 
+2026-11-04: [MFA continuation](../backend/ssh-mfa-authentication.md) adds the explicit default-off
+`continueKeyboardInteractive` option for password/key, including configPassword/config-key.
+Keep the accepted single authentication chooser and rounded option row. Changing method clears
+the option; standalone KBI hides it. Config-password retains actual alias/binding/User policy
+and uses its dedicated API rather than turning into a manual target. During same-config key-only
+refresh, preserve a user-entered missing-User override; a nonempty current config User wins.
+All continuing modes use KBI stream readiness/challenge/route-external lifetime, including saved
+password and saving variants. A connected event before the original RPC completes does not
+release protection; forced disposal cancels a late exact handoff before cleanup resolves.
+RAM reconnect accepts strict optional bool and configPassword mode, resolves current config and
+starts a fresh first method. It carries no question, answer, old binding or stage receipt.
+Phase-A review fixed the missing-User override regression; actual-font/scoped tests and full396
+passed. Android IME/device and final cross-layer acceptance remain separate evidence gates.
+
 2026-11-03: the manual authentication choice is one labeled `ssh-authentication` field,
 showing the current method and an expand icon. Open `ssh-authentication-dialog` for the three
 explicit choices; cancel/back retains the original choice, and mode-specific help follows the
@@ -65,9 +79,18 @@ after onChanged before reading rebuilt checkbox state.
 ## 1. Scope / Trigger
 
 Use this contract when changing the Flutter terminal page, its IME input, PTY shortcuts, output selection, or the `ctos/native` terminal method calls. App and Root PTYs remain separate from the persistent Root collector. ctOS no longer has a Vector bridge.
+The SSH form hierarchy and changed-host recovery also follow this contract and the
+[host-trust transaction contract](../backend/ssh-host-trust-management.md).
 
 ## 2. Signatures
 
+- `SshHostKeyConflictDialog(host, port, onAction)` reports `view`, `forget` or `cancel`;
+  it is an explanation of a failed connection, never a host-key approval ticket.
+- `showSshHostTrust(..., initialTarget: ({String host, int port})?,
+  initialForgetGroup: SshHostTrustGroup?, returnAfterForget: bool,
+  selectGroupForForget: bool, directForget: bool)` can open the existing protected trust flow for an exact
+  target. Automatic query waits for the unlocked foreground session handshake; automatic
+  preview is permitted only for a known group and an eligible fresh result.
 - `TerminalCommandInput(onWrite: ValueChanged<String>, focusNode?: FocusNode)` emits committed input bytes as Dart strings.
 - `TerminalCommandHistory` stores at most 100 commands submitted through the current PTY input field, preserving an unsubmitted draft while navigating.
 - `terminalOutputSnapshot(Terminal) -> String` copies the active xterm buffer into selectable plain text.
@@ -85,6 +108,37 @@ Use this contract when changing the Flutter terminal page, its IME input, PTY sh
 
 ## 3. Contracts
 
+- Organize the SSH form in order: connection target, login authentication, current-connection
+  options, primary Connect, then a collapsed connection/password-management section. Keep
+  private-key selection reachable within its authentication flow and place destructive password
+  management behind the secondary section. Wide screens may place host and port in one row;
+  narrow screens, enlarged text and keyboard insets must keep all controls usable.
+- On `SSH_HOSTKEY_CHANGED` or `SSH_HOST_KEY_CHANGED`, wait for the original request to settle,
+  clear transient secrets and show the exact endpoint with View old fingerprints / Forget old
+  fingerprints / Cancel. View opens the exact target; Forget opens an in-place protected
+  confirmation over the connection form, without navigating to the trust-management page.
+  It still requires a fresh source-bound preview and separate explicit confirmation. Direct password and direct keyboard use the
+  password trust group, direct private key uses the config trust group. A config alias can use
+  another known-hosts file: show the available sources and require an explicit group choice,
+  never infer it from the auth method. Protected/shared records remain blocked.
+- Forget success returns only after the protected receipt is acknowledged; it does not connect
+  or approve a new key. A subsequent user-started connection performs ordinary new-key review.
+  Keep the target, not passwords or passphrases; revalidate a restored config/key binding. Route
+  coverage, background, lock, stale revision or a contradictory late connected event must not
+  revive the failed attempt, the recovery action or a prior approval. In particular, the actual
+  confirmation route must synchronously mark itself invalid when another route covers it;
+  returning from that route must never revive its captured confirmation callback or ticket.
+  Commit additionally requires the current confirmation button's one-shot approval; a bare
+  `Navigator.pop(true)` is not an explicit user confirmation. The success and uncertain-outcome
+  receipts likewise require their own actual acknowledgement button. A forged route result must
+  retain and re-present the pending receipt while its owner remains live; route or Navigator
+  destruction must keep the existing cleanup and protection lifetime guarantees.
+- A generic native `SSH_SESSION_STEP` failure reports SSH negotiation or communication failure
+  and suggests checking server state and network. Do not present a changed-host dialog unless
+  the connection reports a corresponding host-key change code. The current host authority also
+  uses `SSH_HOST_KEY_CHANGED` for proof-binding mismatches; those are fail-closed and have not
+  been reproduced through the normal UI in this validation. Distinguishing those causes remains
+  follow-up work and must not be represented as already implemented.
 - With no session, show `应用 Shell`, `Root PTY`, and the production `SSH 连接` entry. Root is unavailable unless the current Root capability is online. Start/stop transitions are guarded against duplicate actions; switching closes the current PTY before another is offered.
 - The upper `TerminalView` is `readOnly: true`. It may render, scroll, and resize, but must not open the IME or become a second keyboard path. Text selection belongs to the separate output snapshot page. The bottom input is the sole keyboard target; the Shell prompt and edited command appear through PTY echo above.
 - The bottom input requests `TextInputType.text` and `TextInputAction.send`, with no password input or automatic command rewriting. It visibly shows text currently typed into the field while sending committed edits to PTY, so Shell echo above may temporarily show the same text. Keep the IME editing value intact until Enter, including committed text, because some vendor IMEs commit pinyin before replacing it with a selected Hanzi. Compare the current committed Unicode text against the last text sent to PTY: erase the changed suffix with `\x7f` per code point, then send the replacement suffix. Hold active composing text until commit. Its invisible anchor exists only to make soft-keyboard delete observable; never forward the anchor to PTY. An empty-field delete emits `\x7f`; Enter/send flushes any visible composing text, emits `\r`, and resets the editing value.
@@ -128,6 +182,10 @@ Use this contract when changing the Flutter terminal page, its IME input, PTY sh
 
 | Condition | Required behavior |
 | --- | --- |
+| Host key changes | Stop the connection; offer exact-target view/forget/cancel, with no approval or automatic retry. |
+| Connection is refused or the SSH handshake is interrupted | Explain the corresponding connection or negotiation/communication failure; neither implies a host-key change. |
+| Config source is not known | Query available groups; require a user choice before the fresh preview, and never guess which group to mutate. |
+| Recovery is backgrounded or the original request sends a late connected result | Retire its authority and any pending dialog; do not enter a terminal or reuse its secrets. |
 | Root capability unavailable | Root item explains that authorization is needed and cannot start a PTY. |
 | Start fails or exits immediately | Return to session picker; do not label the dead PTY as connected. |
 | Input arrives with no active session or during stop | Do not send it to native. |
@@ -143,12 +201,20 @@ Use this contract when changing the Flutter terminal page, its IME input, PTY sh
 
 ## 5. Good / Base / Bad Cases
 
+- Good: View the changed endpoint's old fingerprints, or confirm a fresh exact-group preview;
+  reconnect deliberately and review the new fingerprint as a new host key.
+- Bad: Treat the changed-host error itself as permission to delete a record, infer a config
+  source, automatically reconnect, or convert a late connected event into a running session.
 - Good: Type `ec`, tap Tab, see Shell expand it to `echo` in both the terminal and the bottom input; edit and send from the bottom input. Tap Up after a completed command and see that session command in both places, with keyboard focus below.
 - Base: Type `id` in App Shell and use the keyboard send key; output shows an app UID. Open Root PTY with existing authorization; `id` shows UID 0. Open and return from output selection without losing the PTY.
 - Bad: Make xterm editable while also showing a bottom `TextField`; one input path may accept characters while the other owns Enter, reproducing the original unreliable interaction.
 
 ## 6. Tests Required
 
+- SSH form/conflict: assert hierarchy and action placement, wide/narrow/large-text/keyboard
+  reachability, exact target, cancellation without mutation, fresh preview before commit,
+  protected groups, config source selection, background and late-event fences. Real-device
+  evidence must separately exercise a synthetic key change and actual new-key review.
 - Flutter widget test: picker entries and unavailable Root, read-only `TerminalView`, exactly five shortcuts with correct writes, visible bottom text, committed input/IME composing/delete/paste, candidate replacement after committed pinyin, one Enter, Tab line synchronization followed by edit/delete/send, bounded per-session Up/Down history and draft restoration, Ctrl-C/Esc reset, output selection and return, and start/stop state.
 - Flutter widget test: a 320×568 screen with a keyboard inset does not overflow; terminal status chips may collapse while the keyboard is visible.
 - Flutter widget test: protected-before-form, masked/cleared password, explicit endpoint/fingerprint review, reject/cancel/late-event handling, foreground recovery, visible errors and review actions with keyboard/large text, and successful terminal handoff. Independent SSH and Android runtime evidence remain separate from widget tests.

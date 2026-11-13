@@ -7,6 +7,7 @@ import '../secrets/flows.dart';
 import '../secrets/api.dart';
 import '../ui/ctos_components.dart';
 import 'api.dart';
+import 'host_trust_page.dart';
 import 'library_page.dart';
 import 'keyboard_challenge_form.dart';
 
@@ -150,13 +151,16 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
   ModalRoute<dynamic>? _route;
   DialogRoute<bool>? _reviewRoute;
   DialogRoute<bool>? _forgetRoute;
+  DialogRoute<SshHostKeyConflictAction>? _hostConflictRoute;
   DialogRoute<_AuthenticationMode>? _authenticationRoute;
   Timer? _statusDebounce;
   SshHostKeyEvent? _review;
   String? _defaultsId, _attemptId, _reconnectReadId, _error;
+  String? _hostChangedAttemptId;
   int _revision = 0;
   int _statusRevision = 0;
   bool _loading = true, _ready = false, _busy = false;
+  bool _recoveringTrust = false;
   bool _foreground = true, _streamHealthy = true;
   bool _leaving = false, _established = false;
   bool _savedPassword = false, _useSavedPassword = false, _savePassword = false;
@@ -171,8 +175,11 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
   SshConfigHost? _configHost;
   bool _identityMode = false, _managing = false;
   bool _keyboardMode = false;
+  bool _continueKeyboardInteractive = false;
   bool _connectOnOpenPending = false;
   SshAttemptState _state = SshAttemptState.connecting;
+
+  bool get _keyboardCapable => _keyboardMode || _continueKeyboardInteractive;
 
   bool get _exposed =>
       mounted &&
@@ -180,6 +187,7 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
       (_route?.isCurrent != false ||
           _reviewRoute?.isCurrent == true ||
           _forgetRoute?.isCurrent == true ||
+          _hostConflictRoute?.isCurrent == true ||
           _authenticationRoute?.isCurrent == true);
 
   @override
@@ -215,7 +223,9 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     _foreground = state == AppLifecycleState.resumed;
-    if (!_foreground && _managing) {
+    if (!_foreground && _recoveringTrust) {
+      _invalidate('已隐藏连接信息，请回到前台后重新打开连接。');
+    } else if (!_foreground && _managing) {
       _password.clear();
       _clearPassphrase();
       if (mounted) setState(() {});
@@ -242,7 +252,10 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
     }
   }
 
-  Future<void> _loadDefaults({bool applyReconnect = true}) async {
+  Future<void> _loadDefaults({
+    bool applyReconnect = true,
+    SshReconnectTarget? restore,
+  }) async {
     final connectOnReady = _connectOnOpenPending;
     _connectOnOpenPending = false;
     if (_leaving || _established || !_foreground || !_streamHealthy) return;
@@ -262,6 +275,7 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
       _savedPassword = _useSavedPassword = _savePassword = false;
       _identityMode = false;
       _keyboardMode = false;
+      _continueKeyboardInteractive = false;
       _identity = null;
       _configHost = null;
       _statusLoading = false;
@@ -275,7 +289,14 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
           _leaving ||
           _closing)
         return;
-      final reconnect = applyReconnect ? widget.reconnect : null;
+      final reconnect = restore ?? (applyReconnect ? widget.reconnect : null);
+      if (reconnect?.continueKeyboardInteractive == true &&
+          (reconnect!.mode == SshReconnectMode.keyboard ||
+              reconnect.mode == SshReconnectMode.configKeyboard)) {
+        throw const FormatException('SSH 重连认证方式无效');
+      }
+      _continueKeyboardInteractive =
+          reconnect?.continueKeyboardInteractive ?? false;
       _host.text = reconnect?.host ?? defaults.host;
       _port.text = (reconnect?.port ?? defaults.port).toString();
       _username.text = reconnect?.username ?? defaults.username;
@@ -302,7 +323,9 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
             _closing)
           return;
         _keyboardMode = reconnect.mode == SshReconnectMode.configKeyboard;
-        _identityMode = !_keyboardMode;
+        _identityMode =
+            reconnect.mode == SshReconnectMode.key ||
+            reconnect.mode == SshReconnectMode.config;
         final keys = library.keys.where((key) => key.id == reconnect.keyId);
         final identity = keys.isEmpty ? null : keys.single;
         if (reconnect.mode == SshReconnectMode.key) {
@@ -313,15 +336,15 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
             (host) => host.alias == reconnect.configAlias,
           );
           final config = hosts.isEmpty ? null : hosts.single;
-          if ((!_keyboardMode && identity == null) ||
+          if ((_identityMode && identity == null) ||
               config == null ||
               config.error != null ||
               config.host != reconnect.host ||
               config.port != reconnect.port ||
               (config.username.isNotEmpty &&
                   config.username != reconnect.username) ||
-              (!_keyboardMode && !config.keyIds.contains(reconnect.keyId))) {
-            _error = _keyboardMode
+              (_identityMode && !config.keyIds.contains(reconnect.keyId))) {
+            _error = !_identityMode
                 ? '上次的配置目标已变化，请在“私钥与配置”中重新选择。'
                 : '上次的配置目标或私钥选择已变化，请在“私钥与配置”中重新选择。';
           } else {
@@ -329,14 +352,28 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
             _configHost = config;
           }
         }
-        if (_keyboardMode) _startKeyboardSession();
       }
+      if (_keyboardCapable) _startKeyboardSession();
       setState(() {
         _loading = false;
-        _ready = true;
+        final invalidRecoveryConfig =
+            restore != null &&
+            (reconnect?.mode == SshReconnectMode.config ||
+                reconnect?.mode == SshReconnectMode.configPassword ||
+                reconnect?.mode == SshReconnectMode.configKeyboard) &&
+            _configHost == null;
+        _ready =
+            !invalidRecoveryConfig &&
+            (reconnect?.mode != SshReconnectMode.configPassword ||
+                _configHost != null);
+        if (invalidRecoveryConfig) {
+          _error = '配置目标或私钥已变化，请返回并重新选择。';
+        }
         _savedPassword = reconnect == null && defaults.savedPassword;
       });
-      if (reconnect?.mode == SshReconnectMode.password)
+      if (_ready &&
+          (reconnect?.mode == SshReconnectMode.password ||
+              reconnect?.mode == SshReconnectMode.configPassword))
         await _loadPasswordStatus();
       if (connectOnReady &&
           reconnect != null &&
@@ -388,7 +425,7 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
     _keyboardSession = widget.api.vault.sessionEvents.listen(
       (event) {
         _keyboardHandshake?.cancel();
-        if (!mounted || _leaving || _established || !_keyboardMode) return;
+        if (!mounted || _leaving || _established || !_keyboardCapable) return;
         final changed = _keyboardEpoch != null && _keyboardEpoch != event.epoch;
         _keyboardEpoch = event.epoch;
         _keyboardSessionReady = event.unlocked && event.foreground;
@@ -428,6 +465,7 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
         (_saveCompletion != null && !_saveCompletion!.isCompleted))
       return;
     final host = _host.text, port = _port.text, username = _username.text;
+    final previousConfig = _configHost;
     final idle = _defaultsId;
     _defaultsId = null;
     _statusRevision++;
@@ -456,19 +494,53 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
       return;
     await _loadDefaults(applyReconnect: false);
     if (!mounted || !_ready || !_exposed || _leaving) return;
+    if (keysOnly && selection != null && previousConfig != null) {
+      final readId = widget.api.newRequestId();
+      _reconnectReadId = readId;
+      try {
+        final library = await widget.api.library(readId);
+        if (!mounted || !_ready || !_exposed || _leaving || _closing) return;
+        final matching = library.hosts.where(
+          (value) => value.alias == previousConfig.alias,
+        );
+        final current = matching.isEmpty ? null : matching.single;
+        if (current == null ||
+            current.error != null ||
+            current.host != previousConfig.host ||
+            current.port != previousConfig.port ||
+            current.username != previousConfig.username ||
+            !current.keyIds.contains(selection.key?.id)) {
+          _invalidate('配置目标或私钥已变化，请在“私钥与配置”中重新选择。');
+          return;
+        }
+        selection = SshLibrarySelection(key: selection.key, host: current);
+      } catch (error) {
+        if (mounted) _invalidate(sshMaterialError(error));
+        return;
+      } finally {
+        if (_reconnectReadId == readId) _reconnectReadId = null;
+        unawaited(_cancelId(readId));
+      }
+    }
     _host.text = selection?.host?.host ?? host;
     _port.text = selection?.host?.port.toString() ?? port;
-    _username.text = selection?.host?.username ?? username;
+    _username.text =
+        keysOnly &&
+            previousConfig != null &&
+            selection?.host?.username.isEmpty == true
+        ? username
+        : selection?.host?.username ?? username;
     final chosen = selection;
     if (chosen != null) {
       setState(() {
         _keyboardMode = chosen.keyboardInteractive;
-        _identityMode = !_keyboardMode;
+        _identityMode = !_keyboardMode && !chosen.password;
         _identity = chosen.key;
         _configHost = chosen.host;
         _savedPassword = _useSavedPassword = _savePassword = false;
       });
       if (_keyboardMode) _startKeyboardSession();
+      if (chosen.password && _validTuple) await _loadPasswordStatus();
     } else if (_validTuple) {
       await _loadPasswordStatus();
     }
@@ -494,7 +566,7 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
       _identityMode = selected == _AuthenticationMode.privateKey;
       _keyboardMode = selected == _AuthenticationMode.keyboard;
       _identity = null;
-      if (selected == _AuthenticationMode.password) _configHost = null;
+      _continueKeyboardInteractive = false;
       _useSavedPassword = _savePassword = false;
       _error = null;
     });
@@ -508,6 +580,21 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
       : _identityMode
       ? _AuthenticationMode.privateKey
       : _AuthenticationMode.password;
+
+  void _continuationChanged(bool? value) {
+    if (!_ready ||
+        !_exposed ||
+        _busy ||
+        _statusLoading ||
+        _closing ||
+        _leaving ||
+        _established ||
+        _keyboardMode)
+      return;
+    _stopKeyboardSession();
+    setState(() => _continueKeyboardInteractive = value == true);
+    if (_keyboardCapable) _startKeyboardSession();
+  }
 
   Future<void> _chooseAuthentication() async {
     if (!_ready ||
@@ -566,6 +653,15 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
   void _dismissAuthentication() {
     final route = _authenticationRoute;
     _authenticationRoute = null;
+    if (route == null) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (route.isActive) route.navigator?.removeRoute(route);
+    });
+  }
+
+  void _dismissHostConflict() {
+    final route = _hostConflictRoute;
+    _hostConflictRoute = null;
     if (route == null) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (route.isActive) route.navigator?.removeRoute(route);
@@ -774,15 +870,170 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
     }
   }
 
+  bool _isHostKeyConflict(Object error) =>
+      error is PlatformException &&
+      (error.code == 'SSH_HOSTKEY_CHANGED' ||
+          error.code == 'SSH_HOST_KEY_CHANGED');
+
+  SshReconnectTarget _currentConnectionTarget() {
+    final config = _configHost;
+    final mode = config == null
+        ? _keyboardMode
+              ? SshReconnectMode.keyboard
+              : _identityMode
+              ? SshReconnectMode.key
+              : SshReconnectMode.password
+        : _keyboardMode
+        ? SshReconnectMode.configKeyboard
+        : _identityMode
+        ? SshReconnectMode.config
+        : SshReconnectMode.configPassword;
+    return SshReconnectTarget(
+      mode: mode,
+      host: config?.host ?? _host.text,
+      port: config?.port ?? int.parse(_port.text),
+      username: _username.text,
+      keyId: _identityMode ? _identity?.id : null,
+      configAlias: config?.alias,
+      continueKeyboardInteractive:
+          !_keyboardMode && _continueKeyboardInteractive,
+    );
+  }
+
+  Future<void> _showHostKeyConflict(
+    SshReconnectTarget target,
+    int revision,
+  ) async {
+    if (!_exposed || _busy || _closing || _leaving || !_streamHealthy) return;
+    late final DialogRoute<SshHostKeyConflictAction> route;
+    route = DialogRoute<SshHostKeyConflictAction>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => SshHostKeyConflictDialog(
+        host: target.host,
+        port: target.port,
+        onAction: (action) {
+          if (mounted &&
+              _foreground &&
+              revision == _revision &&
+              identical(_hostConflictRoute, route) &&
+              route.isCurrent) {
+            Navigator.of(dialogContext).pop(action);
+          }
+        },
+      ),
+    );
+    _hostConflictRoute = route;
+    final action = await Future.any([
+      Navigator.of(context).push(route),
+      route.completed,
+    ]);
+    await route.completed;
+    if (identical(_hostConflictRoute, route)) _hostConflictRoute = null;
+    if (!mounted ||
+        !_foreground ||
+        !_exposed ||
+        _closing ||
+        _leaving ||
+        _established ||
+        !_streamHealthy ||
+        revision != _revision ||
+        action == null ||
+        action == SshHostKeyConflictAction.cancel) {
+      return;
+    }
+    await _openHostTrustRecovery(target, action, revision);
+  }
+
+  Future<void> _openHostTrustRecovery(
+    SshReconnectTarget target,
+    SshHostKeyConflictAction action,
+    int revision,
+  ) async {
+    if (!_ready || _busy || _managing || !_exposed || _closing || _leaving)
+      return;
+    final idle = _defaultsId;
+    _defaultsId = null;
+    _statusRevision++;
+    _statusDebounce?.cancel();
+    _password.clear();
+    _clearPassphrase();
+    FocusManager.instance.primaryFocus?.unfocus();
+    final directForget = action == SshHostKeyConflictAction.forget;
+    setState(() {
+      _managing = true;
+      _recoveringTrust = true;
+      _ready = directForget;
+      _statusLoading = false;
+    });
+    Object? failure;
+    try {
+      await _cancelId(idle);
+      if (!mounted ||
+          !_foreground ||
+          _closing ||
+          _leaving ||
+          revision != _revision)
+        return;
+      final forgetGroup = action != SshHostKeyConflictAction.forget
+          ? null
+          : switch (target.mode) {
+              SshReconnectMode.password ||
+              SshReconnectMode.keyboard => SshHostTrustGroup.password,
+              SshReconnectMode.key => SshHostTrustGroup.config,
+              _ => null,
+            };
+      await showSshHostTrust(
+        context,
+        api: widget.api,
+        initialTarget: (host: target.host, port: target.port),
+        initialForgetGroup: forgetGroup,
+        returnAfterForget: true,
+        selectGroupForForget:
+            action == SshHostKeyConflictAction.forget &&
+            target.configAlias != null,
+        directForget: directForget,
+        canOpen: () =>
+            mounted &&
+            _foreground &&
+            !_closing &&
+            !_leaving &&
+            !_established &&
+            _streamHealthy &&
+            revision == _revision &&
+            widget.canConnect?.call() != false,
+      );
+    } catch (error) {
+      failure = error;
+    } finally {
+      _managing = false;
+      _recoveringTrust = false;
+    }
+    if (!mounted ||
+        !_foreground ||
+        _closing ||
+        _leaving ||
+        _established ||
+        !_streamHealthy ||
+        revision != _revision)
+      return;
+    await _loadDefaults(applyReconnect: false, restore: target);
+    if (failure != null && mounted && _ready && _exposed) {
+      setState(() => _error = sshMaterialError(failure!));
+      _revealMessage();
+    }
+  }
+
   Future<void> _connect() async {
     if (!_ready ||
         _busy ||
+        _managing ||
         _statusLoading ||
         !_exposed ||
         _leaving ||
         _closing ||
         (_saveCompletion != null && !_saveCompletion!.isCompleted) ||
-        (_keyboardMode && !_keyboardSessionReady) ||
+        (_keyboardCapable && !_keyboardSessionReady) ||
         !_streamHealthy)
       return;
     if (widget.canConnect?.call() == false) {
@@ -795,13 +1046,15 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
       _revealMessage();
       return;
     }
+    final attemptedTarget = _currentConnectionTarget();
     FocusScope.of(context).unfocus();
     final revision = ++_revision;
     final requestId = widget.api.newRequestId();
     _defaultsId =
         null; // The host retires the idle guard before this request writes.
     _attemptId = requestId;
-    final keyboard = _keyboardMode;
+    _hostChangedAttemptId = null;
+    final keyboard = _keyboardCapable;
     _lastKeyboardRound = 0;
     _challenge = null;
     final saving = _savePassword || _identityMode;
@@ -818,7 +1071,7 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
     });
     try {
       final configHost = _configHost;
-      final connected = keyboard
+      final connected = _keyboardMode
           ? configHost == null
                 ? widget.api.keyboardConnect(
                     requestId: requestId,
@@ -847,6 +1100,7 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
                     passphrase: _passphrase.text,
                     useSavedPassphrase: _useSavedPassphrase,
                     savePassphrase: _savePassphrase,
+                    continueKeyboardInteractive: _continueKeyboardInteractive,
                     columns: widget.columns,
                     rows: widget.rows,
                   )
@@ -858,10 +1112,24 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
                     passphrase: _passphrase.text,
                     useSavedPassphrase: _useSavedPassphrase,
                     savePassphrase: _savePassphrase,
+                    continueKeyboardInteractive: _continueKeyboardInteractive,
                     username: configHost.username.isEmpty ? _username.text : '',
                     columns: widget.columns,
                     rows: widget.rows,
                   )
+          : configHost != null
+          ? widget.api.configPasswordConnect(
+              requestId: requestId,
+              alias: configHost.alias,
+              binding: configHost.binding,
+              username: configHost.username.isEmpty ? _username.text : '',
+              password: _password.text,
+              useSavedPassword: _useSavedPassword,
+              savePassword: _savePassword,
+              continueKeyboardInteractive: _continueKeyboardInteractive,
+              columns: widget.columns,
+              rows: widget.rows,
+            )
           : widget.api.connect(
               requestId: requestId,
               host: _host.text,
@@ -870,6 +1138,7 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
               password: _password.text,
               useSavedPassword: _useSavedPassword,
               savePassword: _savePassword,
+              continueKeyboardInteractive: _continueKeyboardInteractive,
               columns: widget.columns,
               rows: widget.rows,
             );
@@ -877,13 +1146,19 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
       _clearPassphrase();
       if (keyboard) _lifetime.retain(requestId, connected);
       await connected;
+      if (_hostChangedAttemptId == requestId) {
+        await _cancelId(requestId, repeat: true);
+        throw PlatformException(code: 'SSH_HOSTKEY_CHANGED');
+      }
+      if (saving) {
+        _saveReceipt = _identityMode ? '本次私钥连接已完成。' : '密码已保存到秘密库。';
+      }
       if (keyboard &&
           (!mounted || _closing || _leaving || revision != _revision)) {
         await _cancelId(requestId, repeat: true);
         return;
       }
       if (saving) {
-        _saveReceipt = _identityMode ? '本次私钥连接已完成。' : '密码已保存到秘密库。';
         if (_closing) {
           // Success may have handed the session off before the first cancel arrived.
           await _cancelId(requestId, repeat: true);
@@ -900,6 +1175,10 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
         _saveReceipt = _connectionError(error);
       }
       if (!mounted || revision != _revision || _established || _leaving) return;
+      final hostChanged =
+          _isHostKeyConflict(error) ||
+          (_hostChangedAttemptId == requestId && !sshRequiresReopen(error));
+      _hostChangedAttemptId = null;
       _password.clear();
       _clearPassphrase();
       _dismissReview();
@@ -907,10 +1186,14 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
       _attemptId = null;
       setState(() {
         _busy = false;
-        _error = _connectionError(error);
+        _error = hostChanged ? '服务器主机密钥已变化，本次连接已停止。' : _connectionError(error);
         if (sshRequiresReopen(error)) _ready = false;
       });
-      _revealMessage();
+      if (hostChanged) {
+        unawaited(_showHostKeyConflict(attemptedTarget, revision));
+      } else {
+        _revealMessage();
+      }
     } finally {
       completion?.complete();
     }
@@ -937,7 +1220,11 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
     }
     if (event is SshStateEvent) {
       if (event.state == SshAttemptState.connected) {
-        _finishConnected();
+        if (_hostChangedAttemptId == event.requestId) {
+          unawaited(_cancelId(event.requestId, repeat: true));
+        } else if (!_keyboardCapable) {
+          _finishConnected();
+        }
       } else if (event.state == SshAttemptState.failed ||
           event.state == SshAttemptState.cancelled) {
         final error = PlatformException(
@@ -947,6 +1234,15 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
                   ? 'SSH_CANCELLED'
                   : 'SSH_FAILED'),
         );
+        if (_isHostKeyConflict(error)) {
+          _hostChangedAttemptId = event.requestId;
+          _password.clear();
+          _clearPassphrase();
+          _dismissReview();
+          _challenge = null;
+          setState(() => _state = SshAttemptState.failed);
+          return;
+        }
         _revision++;
         _password.clear();
         _clearPassphrase();
@@ -963,7 +1259,7 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
         setState(() => _state = event.state);
       }
     } else if (event is SshKeyboardChallenge) {
-      if (!_keyboardMode ||
+      if (!_keyboardCapable ||
           !_keyboardSessionReady ||
           _review != null ||
           event.remainingMillis <= 0 ||
@@ -1012,7 +1308,7 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
         _closing ||
         _leaving ||
         !_exposed ||
-        !_keyboardMode ||
+        !_keyboardCapable ||
         !_keyboardSessionReady ||
         !_streamHealthy ||
         !identical(_challenge, ticket) ||
@@ -1111,6 +1407,7 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
     _password.clear();
     _clearPassphrase();
     _dismissReview();
+    _dismissHostConflict();
     _challenge = null;
     _stopKeyboardSession();
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -1132,18 +1429,22 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
     _statusRevision++;
     _statusDebounce?.cancel();
     _attemptId = _defaultsId = null;
+    _hostChangedAttemptId = null;
     _host.clear();
     _username.clear();
     _password.clear();
     _clearPassphrase();
     _dismissReview();
     _challenge = null;
+    _stopKeyboardSession();
     _dismissForget();
     _dismissAuthentication();
+    _dismissHostConflict();
     setState(() {
       _loading = _busy = _ready = false;
       _statusLoading = _forgetting = false;
       _savedPassword = _useSavedPassword = _savePassword = false;
+      _continueKeyboardInteractive = false;
       _error = message;
     });
     _revealMessage();
@@ -1163,6 +1464,7 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
     _clearPassphrase();
     _dismissReview();
     _dismissAuthentication();
+    _dismissHostConflict();
     await _cancelId(_reconnectReadId);
     _reconnectReadId = null;
     await _cancelId(_attemptId);
@@ -1246,6 +1548,7 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
     _dismissReview();
     _dismissForget();
     _dismissAuthentication();
+    _dismissHostConflict();
     _host.dispose();
     _port.dispose();
     _username.dispose();
@@ -1264,6 +1567,348 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (route.isActive) route.navigator?.removeRoute(route);
     });
+  }
+
+  Widget _sectionHeading(String title) => Padding(
+    padding: const EdgeInsets.only(bottom: 12),
+    child: Semantics(
+      header: true,
+      child: Text(title, style: Theme.of(context).textTheme.titleMedium),
+    ),
+  );
+
+  Widget _targetFields() => LayoutBuilder(
+    builder: (context, constraints) {
+      final sideBySide =
+          constraints.maxWidth >= 560 &&
+          MediaQuery.textScalerOf(context).scale(14) <= 18;
+      final portWidth = sideBySide ? 128.0 : constraints.maxWidth;
+      final hostWidth = sideBySide
+          ? constraints.maxWidth - portWidth - 16
+          : constraints.maxWidth;
+      return Wrap(
+        spacing: 16,
+        runSpacing: 16,
+        children: [
+          SizedBox(
+            width: hostWidth,
+            child: TextFormField(
+              key: const Key('ssh-host'),
+              controller: _host,
+              enabled: !_busy,
+              readOnly: _configHost != null,
+              autocorrect: false,
+              enableSuggestions: false,
+              keyboardType: TextInputType.url,
+              textInputAction: TextInputAction.next,
+              decoration: const InputDecoration(
+                labelText: '主机',
+                hintText: '主机名或 IP 地址，不含端口',
+              ),
+              validator: (value) => sshHostError(value ?? ''),
+              onChanged: _tupleChanged,
+            ),
+          ),
+          SizedBox(
+            width: portWidth,
+            child: TextFormField(
+              key: const Key('ssh-port'),
+              controller: _port,
+              enabled: !_busy,
+              readOnly: _configHost != null,
+              keyboardType: TextInputType.number,
+              textInputAction: TextInputAction.next,
+              decoration: const InputDecoration(labelText: '端口'),
+              validator: (value) => sshPortError(value ?? ''),
+              onChanged: _tupleChanged,
+            ),
+          ),
+        ],
+      );
+    },
+  );
+
+  Widget _authenticationSelector() => Semantics(
+    button: true,
+    enabled: !_busy && !_statusLoading,
+    label: '认证方式',
+    value: _authenticationLabel(_authenticationMode),
+    child: Material(
+      color: Theme.of(context).inputDecorationTheme.fillColor,
+      borderRadius: BorderRadius.circular(12),
+      child: InkWell(
+        key: const Key('ssh-authentication'),
+        borderRadius: BorderRadius.circular(12),
+        onTap: _busy || _statusLoading
+            ? null
+            : () => unawaited(_chooseAuthentication()),
+        child: ExcludeSemantics(
+          child: InputDecorator(
+            decoration: InputDecoration(
+              labelText: '认证方式',
+              filled: false,
+              enabled: !_busy && !_statusLoading,
+              suffixIcon: const Icon(Icons.expand_more),
+            ),
+            child: Text(_authenticationLabel(_authenticationMode)),
+          ),
+        ),
+      ),
+    ),
+  );
+
+  List<Widget> _credentialFields() => [
+    TextFormField(
+      key: const Key('ssh-username'),
+      controller: _username,
+      enabled: !_busy,
+      readOnly: _configHost?.username.isNotEmpty == true,
+      autocorrect: false,
+      enableSuggestions: false,
+      enableIMEPersonalizedLearning: false,
+      textInputAction: TextInputAction.next,
+      decoration: const InputDecoration(labelText: '用户名'),
+      validator: (value) => sshUsernameError(value ?? ''),
+      onChanged: _tupleChanged,
+    ),
+    if (_identityMode) ...[
+      const SizedBox(height: 16),
+      if (_identity != null)
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(_identity!.label),
+                const SizedBox(height: 8),
+                Text(_identity!.algorithm),
+                const SizedBox(height: 8),
+                SelectableText(_identity!.fingerprint),
+              ],
+            ),
+          ),
+        ),
+      Align(
+        alignment: AlignmentDirectional.centerStart,
+        child: OutlinedButton.icon(
+          key: const Key('ssh-select-private-key'),
+          onPressed: _busy
+              ? null
+              : () => unawaited(_manageIdentities(keysOnly: true)),
+          icon: const Icon(Icons.key),
+          label: Text(_identity == null ? '选择或导入私钥' : '更换私钥'),
+        ),
+      ),
+      const SizedBox(height: 8),
+      const Text('服务端需要已授权此私钥对应的公钥。'),
+      if (_identity?.encrypted == true) ...[
+        const SizedBox(height: 16),
+        TextFormField(
+          key: const Key('ssh-key-passphrase'),
+          controller: _passphrase,
+          enabled: !_busy && !_useSavedPassphrase,
+          obscureText: true,
+          autocorrect: false,
+          enableSuggestions: false,
+          enableIMEPersonalizedLearning: false,
+          keyboardType: TextInputType.visiblePassword,
+          textInputAction: TextInputAction.done,
+          decoration: const InputDecoration(labelText: '私钥口令'),
+          validator: (value) =>
+              _useSavedPassphrase ? null : sshPassphraseError(value ?? ''),
+          onFieldSubmitted: (_) => unawaited(_connect()),
+        ),
+        if (_identity!.hasSavedPassphrase)
+          _credentialOption(
+            CheckboxListTile(
+              key: const Key('ssh-use-saved-passphrase'),
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 12,
+                vertical: 4,
+              ),
+              controlAffinity: ListTileControlAffinity.leading,
+              title: const Text('使用已保存私钥口令'),
+              value: _useSavedPassphrase,
+              onChanged: _busy
+                  ? null
+                  : (value) {
+                      _passphrase.clear();
+                      setState(() {
+                        _useSavedPassphrase = value == true;
+                        _savePassphrase = false;
+                      });
+                    },
+            ),
+          ),
+      ],
+    ] else if (!_keyboardMode) ...[
+      const SizedBox(height: 16),
+      TextFormField(
+        key: const Key('ssh-password'),
+        controller: _password,
+        enabled: !_busy && !_useSavedPassword,
+        obscureText: true,
+        autocorrect: false,
+        enableSuggestions: false,
+        enableIMEPersonalizedLearning: false,
+        keyboardType: TextInputType.visiblePassword,
+        textInputAction: TextInputAction.done,
+        decoration: const InputDecoration(labelText: '登录密码'),
+        validator: (value) =>
+            _useSavedPassword ? null : sshPasswordError(value ?? ''),
+        onFieldSubmitted: (_) => unawaited(_connect()),
+      ),
+      if (_statusLoading) ...[
+        const SizedBox(height: 12),
+        const Text('正在检查已保存密码…'),
+      ],
+      if (_savedPassword)
+        _credentialOption(
+          CheckboxListTile(
+            key: const Key('ssh-use-saved-password'),
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: 12,
+              vertical: 4,
+            ),
+            controlAffinity: ListTileControlAffinity.leading,
+            title: const Text('使用已保存密码'),
+            value: _useSavedPassword,
+            onChanged: _busy || _statusLoading
+                ? null
+                : (value) {
+                    _password.clear();
+                    _clearPassphrase();
+                    setState(() {
+                      _useSavedPassword = value == true;
+                      _savePassword = false;
+                    });
+                  },
+          ),
+        ),
+    ],
+  ];
+
+  List<Widget> _connectionOptions() => [
+    if (!_keyboardMode) ...[
+      const SizedBox(height: 24),
+      _sectionHeading('本次连接'),
+      if (_identityMode && _identity?.encrypted == true)
+        _credentialOption(
+          CheckboxListTile(
+            key: const Key('ssh-save-passphrase'),
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: 12,
+              vertical: 4,
+            ),
+            controlAffinity: ListTileControlAffinity.leading,
+            title: const Text('连接时保存私钥口令'),
+            subtitle: const Text('加密保存到秘密库；连接失败也会保留。'),
+            value: _savePassphrase,
+            onChanged: _busy || _useSavedPassphrase
+                ? null
+                : (value) => setState(() => _savePassphrase = value == true),
+          ),
+        ),
+      if (!_identityMode)
+        _credentialOption(
+          CheckboxListTile(
+            key: const Key('ssh-save-password'),
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: 12,
+              vertical: 4,
+            ),
+            controlAffinity: ListTileControlAffinity.leading,
+            title: const Text('连接时保存密码'),
+            subtitle: const Text('加密保存到秘密库；连接失败也会保留。'),
+            value: _savePassword,
+            onChanged: _busy || _useSavedPassword || _statusLoading
+                ? null
+                : (value) => setState(() => _savePassword = value == true),
+          ),
+        ),
+      _credentialOption(
+        CheckboxListTile(
+          key: const Key('ssh-continue-keyboard-interactive'),
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 12,
+            vertical: 4,
+          ),
+          controlAffinity: ListTileControlAffinity.leading,
+          title: const Text('按服务器要求继续交互式认证'),
+          subtitle: const Text('密码或私钥通过后，如服务器仍需认证，再回答服务器问题。'),
+          value: _continueKeyboardInteractive,
+          onChanged: _busy || _statusLoading ? null : _continuationChanged,
+        ),
+      ),
+    ],
+    if (_keyboardCapable && !_keyboardSessionReady) ...[
+      const SizedBox(height: 12),
+      const Text('正在确认秘密库状态…'),
+    ],
+  ];
+
+  Widget _connectionManagement() {
+    final enabled = _ready && !_busy && !_statusLoading && !_managing;
+    final forgetStyle = TextButton.styleFrom(
+      foregroundColor: Theme.of(context).colorScheme.error,
+      backgroundColor: Colors.transparent,
+      minimumSize: const Size(0, 48),
+    );
+    return ExpansionTile(
+      key: const Key('ssh-connection-management'),
+      enabled: enabled,
+      onExpansionChanged: (expanded) {
+        if (expanded) FocusScope.of(context).unfocus();
+      },
+      tilePadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      childrenPadding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      collapsedShape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+      ),
+      clipBehavior: Clip.antiAlias,
+      leading: const Icon(Icons.settings_outlined),
+      title: const Text('连接资料与密码管理'),
+      children: [
+        Align(
+          alignment: AlignmentDirectional.centerStart,
+          child: Wrap(
+            spacing: 12,
+            runSpacing: 8,
+            children: [
+              OutlinedButton.icon(
+                key: const Key('ssh-manage-identities'),
+                onPressed: enabled
+                    ? () => unawaited(_manageIdentities())
+                    : null,
+                icon: const Icon(Icons.folder_open_outlined),
+                label: const Text('私钥与配置'),
+              ),
+              if (!_identityMode && !_keyboardMode) ...[
+                if (_savedPassword)
+                  TextButton(
+                    key: const Key('ssh-forget-password'),
+                    style: forgetStyle,
+                    onPressed: _busy || _statusLoading
+                        ? null
+                        : () => unawaited(_forgetPassword(all: false)),
+                    child: const Text('忘记此连接密码'),
+                  ),
+                TextButton(
+                  key: const Key('ssh-forget-all-passwords'),
+                  style: forgetStyle,
+                  onPressed: _busy || _statusLoading
+                      ? null
+                      : () => unawaited(_forgetPassword(all: true)),
+                  child: const Text('忘记全部 SSH 密码'),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ],
+    );
   }
 
   @override
@@ -1287,15 +1932,6 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
             controller: _scroll,
             padding: const EdgeInsets.fromLTRB(20, 16, 20, 32),
             children: [
-              OutlinedButton.icon(
-                key: const Key('ssh-manage-identities'),
-                onPressed: _ready && !_busy && !_statusLoading && !_managing
-                    ? () => unawaited(_manageIdentities())
-                    : null,
-                icon: const Icon(Icons.folder_open_outlined),
-                label: const Text('私钥与配置'),
-              ),
-              const SizedBox(height: 20),
               if (_loading) const LinearProgressIndicator(),
               if (_error != null) ...[
                 Semantics(liveRegion: true, child: Text(_error!)),
@@ -1317,299 +1953,67 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
                 const SizedBox(height: 16),
               ],
               if (_ready && _challenge == null)
-                Form(
-                  key: _form,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Semantics(
-                        button: true,
-                        enabled: !_busy && !_statusLoading,
-                        label: '认证方式',
-                        value: _authenticationLabel(_authenticationMode),
-                        child: Material(
-                          color: Theme.of(
-                            context,
-                          ).inputDecorationTheme.fillColor,
-                          borderRadius: BorderRadius.circular(12),
-                          child: InkWell(
-                            key: const Key('ssh-authentication'),
-                            borderRadius: BorderRadius.circular(12),
-                            onTap: _busy || _statusLoading
-                                ? null
-                                : () => unawaited(_chooseAuthentication()),
-                            child: ExcludeSemantics(
-                              child: InputDecorator(
-                                decoration: InputDecoration(
-                                  labelText: '认证方式',
-                                  filled: false,
-                                  enabled: !_busy && !_statusLoading,
-                                  suffixIcon: const Icon(Icons.expand_more),
-                                ),
-                                child: Text(
-                                  _authenticationLabel(_authenticationMode),
-                                ),
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        _keyboardMode
-                            ? '核验目标主机后，回答服务器的认证问题。'
-                            : _identityMode
-                            ? '使用秘密库中的私钥，并核验目标主机密钥。'
-                            : '保存主机信息；密码默认仅本次使用。',
-                        key: const Key('ssh-authentication-help'),
-                        style: Theme.of(context).textTheme.bodySmall,
-                      ),
-                      const SizedBox(height: 20),
-                      if (_configHost != null) ...[
-                        InputDecorator(
-                          decoration: const InputDecoration(labelText: '配置主机'),
-                          child: Text(_configHost!.alias),
-                        ),
-                        TextButton(
-                          key: const Key('ssh-config-manual'),
-                          onPressed: _busy
-                              ? null
-                              : () => setState(() {
-                                  _configHost = null;
-                                  _clearPassphrase();
-                                }),
-                          child: const Text('切换到手动连接'),
-                        ),
-                        const SizedBox(height: 12),
-                      ],
-                      TextFormField(
-                        key: const Key('ssh-host'),
-                        controller: _host,
-                        enabled: !_busy,
-                        readOnly: _configHost != null,
-                        autocorrect: false,
-                        enableSuggestions: false,
-                        keyboardType: TextInputType.url,
-                        textInputAction: TextInputAction.next,
-                        decoration: const InputDecoration(
-                          labelText: '主机',
-                          hintText: '主机名或 IP 地址，不含端口',
-                        ),
-                        validator: (value) => sshHostError(value ?? ''),
-                        onChanged: _tupleChanged,
-                      ),
-                      const SizedBox(height: 16),
-                      TextFormField(
-                        key: const Key('ssh-port'),
-                        controller: _port,
-                        enabled: !_busy,
-                        readOnly: _configHost != null,
-                        keyboardType: TextInputType.number,
-                        textInputAction: TextInputAction.next,
-                        decoration: const InputDecoration(labelText: '端口'),
-                        validator: (value) => sshPortError(value ?? ''),
-                        onChanged: _tupleChanged,
-                      ),
-                      const SizedBox(height: 16),
-                      TextFormField(
-                        key: const Key('ssh-username'),
-                        controller: _username,
-                        enabled: !_busy,
-                        readOnly: _configHost?.username.isNotEmpty == true,
-                        autocorrect: false,
-                        enableSuggestions: false,
-                        enableIMEPersonalizedLearning: false,
-                        textInputAction: TextInputAction.next,
-                        decoration: const InputDecoration(labelText: '用户名'),
-                        validator: (value) => sshUsernameError(value ?? ''),
-                        onChanged: _tupleChanged,
-                      ),
-                      const SizedBox(height: 16),
-                      if (_identityMode) ...[
-                        if (_identity != null)
-                          Card(
-                            child: Padding(
-                              padding: const EdgeInsets.all(16),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(_identity!.label),
-                                  const SizedBox(height: 8),
-                                  Text(_identity!.algorithm),
-                                  const SizedBox(height: 8),
-                                  SelectableText(_identity!.fingerprint),
-                                ],
-                              ),
-                            ),
-                          ),
-                        OutlinedButton.icon(
-                          key: const Key('ssh-select-private-key'),
-                          onPressed: _busy
-                              ? null
-                              : () => unawaited(
-                                  _manageIdentities(keysOnly: true),
-                                ),
-                          icon: const Icon(Icons.key),
-                          label: Text(_identity == null ? '选择或导入私钥' : '更换私钥'),
-                        ),
-                        const SizedBox(height: 8),
-                        const Text('服务端需要已授权此私钥对应的公钥。'),
-                        if (_identity?.encrypted == true) ...[
-                          const SizedBox(height: 16),
-                          TextFormField(
-                            key: const Key('ssh-key-passphrase'),
-                            controller: _passphrase,
-                            enabled: !_busy && !_useSavedPassphrase,
-                            obscureText: true,
-                            autocorrect: false,
-                            enableSuggestions: false,
-                            enableIMEPersonalizedLearning: false,
-                            keyboardType: TextInputType.visiblePassword,
-                            textInputAction: TextInputAction.done,
+                AbsorbPointer(
+                  absorbing: _managing,
+                  child: Form(
+                    key: _form,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        _sectionHeading('连接目标'),
+                        if (_configHost != null) ...[
+                          InputDecorator(
                             decoration: const InputDecoration(
-                              labelText: '私钥口令',
+                              labelText: '配置主机',
                             ),
-                            validator: (value) => _useSavedPassphrase
-                                ? null
-                                : sshPassphraseError(value ?? ''),
-                            onFieldSubmitted: (_) => unawaited(_connect()),
+                            child: Text(_configHost!.alias),
                           ),
-                          if (_identity!.hasSavedPassphrase)
-                            _credentialOption(
-                              CheckboxListTile(
-                                key: const Key('ssh-use-saved-passphrase'),
-                                contentPadding: const EdgeInsets.symmetric(
-                                  horizontal: 12,
-                                  vertical: 4,
-                                ),
-                                controlAffinity:
-                                    ListTileControlAffinity.leading,
-                                title: const Text('使用已保存私钥口令'),
-                                value: _useSavedPassphrase,
-                                onChanged: _busy
-                                    ? null
-                                    : (value) {
-                                        _passphrase.clear();
-                                        setState(() {
-                                          _useSavedPassphrase = value == true;
-                                          _savePassphrase = false;
-                                        });
-                                      },
-                              ),
-                            ),
-                          _credentialOption(
-                            CheckboxListTile(
-                              key: const Key('ssh-save-passphrase'),
-                              contentPadding: const EdgeInsets.symmetric(
-                                horizontal: 12,
-                                vertical: 4,
-                              ),
-                              controlAffinity: ListTileControlAffinity.leading,
-                              title: const Text('连接时保存私钥口令'),
-                              subtitle: const Text('加密保存到秘密库；连接失败也会保留。'),
-                              value: _savePassphrase,
-                              onChanged: _busy || _useSavedPassphrase
+                          Align(
+                            alignment: AlignmentDirectional.centerStart,
+                            child: TextButton(
+                              key: const Key('ssh-config-manual'),
+                              onPressed: _busy
                                   ? null
-                                  : (value) => setState(
-                                      () => _savePassphrase = value == true,
-                                    ),
-                            ),
-                          ),
-                        ],
-                      ] else if (!_keyboardMode) ...[
-                        TextFormField(
-                          key: const Key('ssh-password'),
-                          controller: _password,
-                          enabled: !_busy && !_useSavedPassword,
-                          obscureText: true,
-                          autocorrect: false,
-                          enableSuggestions: false,
-                          enableIMEPersonalizedLearning: false,
-                          keyboardType: TextInputType.visiblePassword,
-                          textInputAction: TextInputAction.done,
-                          decoration: const InputDecoration(labelText: '登录密码'),
-                          validator: (value) => _useSavedPassword
-                              ? null
-                              : sshPasswordError(value ?? ''),
-                          onFieldSubmitted: (_) => unawaited(_connect()),
-                        ),
-                        if (_statusLoading) ...[
-                          const SizedBox(height: 12),
-                          const Text('正在检查已保存密码…'),
-                        ],
-                        if (_savedPassword)
-                          _credentialOption(
-                            CheckboxListTile(
-                              key: const Key('ssh-use-saved-password'),
-                              contentPadding: const EdgeInsets.symmetric(
-                                horizontal: 12,
-                                vertical: 4,
-                              ),
-                              controlAffinity: ListTileControlAffinity.leading,
-                              title: const Text('使用已保存密码'),
-                              value: _useSavedPassword,
-                              onChanged: _busy || _statusLoading
-                                  ? null
-                                  : (value) {
-                                      _password.clear();
+                                  : () => setState(() {
+                                      _configHost = null;
                                       _clearPassphrase();
-                                      setState(() {
-                                        _useSavedPassword = value == true;
-                                        _savePassword = false;
-                                      });
-                                    },
+                                    }),
+                              child: const Text('切换到手动连接'),
                             ),
                           ),
-                        _credentialOption(
-                          CheckboxListTile(
-                            key: const Key('ssh-save-password'),
-                            contentPadding: const EdgeInsets.symmetric(
-                              horizontal: 12,
-                              vertical: 4,
-                            ),
-                            controlAffinity: ListTileControlAffinity.leading,
-                            title: const Text('连接时保存密码'),
-                            subtitle: const Text('加密保存到秘密库；连接失败也会保留。'),
-                            value: _savePassword,
-                            onChanged:
-                                _busy || _useSavedPassword || _statusLoading
-                                ? null
-                                : (value) => setState(
-                                    () => _savePassword = value == true,
-                                  ),
-                          ),
+                          const SizedBox(height: 12),
+                        ],
+                        _targetFields(),
+                        const SizedBox(height: 24),
+                        _sectionHeading('登录认证'),
+                        _authenticationSelector(),
+                        const SizedBox(height: 8),
+                        Text(
+                          _keyboardMode
+                              ? '核验目标主机后，回答服务器的认证问题。'
+                              : _identityMode
+                              ? '使用秘密库中的私钥，并核验目标主机密钥。'
+                              : '使用登录密码验证身份；密码默认仅本次使用。',
+                          key: const Key('ssh-authentication-help'),
+                          style: Theme.of(context).textTheme.bodySmall,
                         ),
-                        if (_savedPassword)
-                          TextButton(
-                            key: const Key('ssh-forget-password'),
-                            onPressed: _busy || _statusLoading
-                                ? null
-                                : () => unawaited(_forgetPassword(all: false)),
-                            child: const Text('忘记此连接密码'),
-                          ),
-                        TextButton(
-                          key: const Key('ssh-forget-all-passwords'),
-                          onPressed: _busy || _statusLoading
+                        const SizedBox(height: 16),
+                        ..._credentialFields(),
+                        ..._connectionOptions(),
+                        const SizedBox(height: 24),
+                        FilledButton.icon(
+                          key: const Key('ssh-connect'),
+                          onPressed:
+                              _busy ||
+                                  _statusLoading ||
+                                  (_keyboardCapable && !_keyboardSessionReady)
                               ? null
-                              : () => unawaited(_forgetPassword(all: true)),
-                          child: const Text('忘记全部 SSH 密码'),
+                              : () => unawaited(_connect()),
+                          icon: const Icon(Icons.login),
+                          label: const Text('连接'),
                         ),
                       ],
-                      if (_keyboardMode && !_keyboardSessionReady)
-                        const Text('正在确认秘密库状态…'),
-                      const SizedBox(height: 24),
-                      FilledButton.icon(
-                        key: const Key('ssh-connect'),
-                        onPressed:
-                            _busy ||
-                                _statusLoading ||
-                                (_keyboardMode && !_keyboardSessionReady)
-                            ? null
-                            : () => unawaited(_connect()),
-                        icon: const Icon(Icons.login),
-                        label: const Text('连接'),
-                      ),
-                    ],
+                    ),
                   ),
                 ),
               if (_busy) ...[
@@ -1639,21 +2043,21 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
                   child: const Text('重新读取连接信息'),
                 ),
               ],
-              const SizedBox(height: 12),
-              if (_challenge == null)
+              if (_busy && _challenge == null) ...[
+                const SizedBox(height: 12),
                 TextButton(
                   key: const Key('ssh-cancel'),
                   onPressed: _leaving || _closing
                       ? null
                       : () => unawaited(_leave()),
-                  child: Text(
-                    _forgetting
-                        ? '取消操作'
-                        : _busy
-                        ? '取消连接'
-                        : '返回',
-                  ),
+                  child: Text(_forgetting ? '取消操作' : '取消连接'),
                 ),
+              ],
+              if (_challenge == null) ...[
+                const SizedBox(height: 24),
+                const Divider(),
+                _connectionManagement(),
+              ],
             ],
           ),
         ),

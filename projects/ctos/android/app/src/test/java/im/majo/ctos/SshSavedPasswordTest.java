@@ -42,14 +42,20 @@ public final class SshSavedPasswordTest {
             this(null, new byte[0]);
         }
         Fixture(SshPasswordProfile profile, byte[] knownHosts) throws Exception {
+            this(initial(profile, knownHosts));
+        }
+        private static VaultManifest initial(SshPasswordProfile profile, byte[] knownHosts) throws Exception {
             List<VaultManifest.FileObject> files = profile == null ? List.of() : List.of(
                     new VaultManifest.FileObject(VaultManifest.FileType.CONFIG, SshPasswordProfile.CONFIG_ID,
                             SshPasswordProfile.CONFIG_PATH, SshPasswordProfile.CONFIG_IDENTITY, profile.configBytes(),
                             List.of(SshPasswordProfile.HOSTS_PATH)),
                     new VaultManifest.FileObject(VaultManifest.FileType.KNOWN_HOSTS, SshPasswordProfile.HOSTS_ID,
                             SshPasswordProfile.HOSTS_PATH, SshPasswordProfile.HOSTS_IDENTITY, knownHosts, List.of()));
-            try (VaultManifest source = new VaultManifest(List.of(new VaultManifest.Entry(VaultManifest.EntryType.TOTP,
-                    "otp", "otp:fixture", "Fixture", "SHA1", 6, 30, OTP)), files)) {
+            return new VaultManifest(List.of(new VaultManifest.Entry(VaultManifest.EntryType.TOTP,
+                    "otp", "otp:fixture", "Fixture", "SHA1", 6, 30, OTP)), files);
+        }
+        Fixture(VaultManifest supplied) throws Exception {
+            try (VaultManifest source = supplied) {
                 byte[] plain = source.encode();
                 try { store.bytes = VaultEnvelope.encrypt(UUID.randomUUID(), 1, new byte[16], KEY, plain).encode(); }
                 finally { VaultCodec.wipe(plain); }
@@ -84,6 +90,79 @@ public final class SshSavedPasswordTest {
         @Override public void close() { vault.session.lock(); VaultCodec.wipe(store.bytes); }
     }
     private interface Action { void run() throws Exception; }
+
+    private static VaultManifest importedConfig() throws Exception {
+        byte[] algorithm = "ssh-ed25519".getBytes(StandardCharsets.US_ASCII);
+        byte[] blob = ByteBuffer.allocate(4 + algorithm.length + 4 + 32).putInt(algorithm.length).put(algorithm)
+                .putInt(32).put(new byte[32]).array();
+        String identity = "ctos-key-" + SshConnectionMaterial.hex(VaultCodec.digest(blob));
+        String key = ".ssh/kept-key", child = ".ssh/child";
+        java.util.ArrayList<VaultManifest.FileObject> files = new java.util.ArrayList<>();
+        files.add(new VaultManifest.FileObject(VaultManifest.FileType.CONFIG, SshConnectionMaterial.id("config",SshConnectionMaterial.ROOT),
+                SshConnectionMaterial.ROOT,SshConnectionMaterial.id("config-owner",SshConnectionMaterial.ROOT),
+                "Include ~/.ssh/child\nHost two\n HostName other.invalid\n User other\n".getBytes(StandardCharsets.UTF_8),
+                List.of(SshConnectionMaterial.HOSTS,child)));
+        files.add(new VaultManifest.FileObject(VaultManifest.FileType.CONFIG,SshConnectionMaterial.id("config",child),child,
+                SshConnectionMaterial.id("config-owner",child),
+                "Host mfa\n HostName actual.invalid\n Port 2200\n User actual\n IdentityFile ~/.ssh/kept-key\n".getBytes(StandardCharsets.UTF_8),
+                List.of(SshConnectionMaterial.HOSTS,key)));
+        files.add(new VaultManifest.FileObject(VaultManifest.FileType.KNOWN_HOSTS,SshConnectionMaterial.id("hosts",SshConnectionMaterial.HOSTS),
+                SshConnectionMaterial.HOSTS,SshConnectionMaterial.id("hosts-owner",SshConnectionMaterial.HOSTS),
+                "# existing config trust bytes\n".getBytes(StandardCharsets.UTF_8),List.of()));
+        files.add(new VaultManifest.FileObject(VaultManifest.FileType.PRIVATE_KEY,SshConnectionMaterial.id("private",key),key,identity,
+                "-----BEGIN RSA PRIVATE KEY-----\nProc-Type: 4,ENCRYPTED\nsynthetic-shape-only\n-----END RSA PRIVATE KEY-----\n".getBytes(StandardCharsets.US_ASCII),List.of()));
+        files.add(new VaultManifest.FileObject(VaultManifest.FileType.PUBLIC_KEY,SshConnectionMaterial.id("public",key),key+".pub",identity,
+                ("ssh-ed25519 "+java.util.Base64.getEncoder().encodeToString(blob)+"\n").getBytes(StandardCharsets.US_ASCII),List.of()));
+        return new VaultManifest(List.of(new VaultManifest.Entry(VaultManifest.EntryType.TOTP,"otp","otp:fixture","OTP","SHA1",6,30,OTP)),
+                files,List.of(new VaultSshMetadata.KeyBinding(SshConnectionMaterial.bindingId(key,identity),
+                SshConnectionMaterial.id("private",key),SshConnectionMaterial.id("public",key),List.of(),null)),List.of());
+    }
+
+    private static void sameImportedGraph(VaultManifest before, VaultManifest after) {
+        assertEquals(before.files.size(),after.files.size());
+        for (VaultManifest.FileObject file : before.files) {
+            VaultManifest.FileObject actual = SshConnectionMaterial.file(after,file.path);
+            assertNotNull(actual); assertEquals(file.type,actual.type); assertEquals(file.id,actual.id);
+            assertEquals(file.identity,actual.identity); assertEquals(file.references,actual.references);
+            assertArrayEquals(file.content,actual.content);
+        }
+        assertEquals(before.keyBindings.size(),after.keyBindings.size());
+        for (int i=0;i<before.keyBindings.size();i++) {
+            VaultSshMetadata.KeyBinding first=before.keyBindings.get(i), second=after.keyBindings.get(i);
+            assertEquals(first.id,second.id); assertEquals(first.privateFileId,second.privateFileId);
+            assertEquals(first.publicFileId,second.publicFileId); assertEquals(first.passphraseEntryId,second.passphraseEntryId);
+            assertEquals(first.certificateFileIds,second.certificateFileIds);
+        }
+        assertArrayEquals(OTP,after.entries.stream().filter(e -> e.type==VaultManifest.EntryType.TOTP).findFirst().get().secret);
+        assertNull(SshConnectionMaterial.file(after,SshPasswordProfile.CONFIG_PATH));
+        assertNull(SshConnectionMaterial.file(after,SshPasswordProfile.HOSTS_PATH));
+    }
+
+    @Test public void importedConfigPasswordSaveStatusSelectedReadAndForgetPreserveEveryFileAndKeyBinding() throws Exception {
+        try (Fixture f = new Fixture(importedConfig()); VaultManifest original = f.read()) {
+            SshPasswordProfile target = profile("actual.invalid",2200,"actual");
+            SshSavedPassword saved = new SshSavedPassword(target);
+            f.save(target,SECRET);
+            try (VaultManifest actual = f.read()) { sameImportedGraph(original,actual); assertTrue(saved.present(actual.accounts)); }
+            AppSecrets.BundleContext snapshotContext = f.vault.newBundleContext(31000,()->{});
+            try (SshPasswordProfile.Snapshot status = f.vault.passwordProfile(snapshotContext)) {
+                assertNull(status.profile); assertTrue(saved.present(status.accounts));
+            } finally { f.vault.cancelBundleContext(snapshotContext); }
+            SshRoleContext role = role(f,saved);
+            SshAuthenticationSelection selection = SshAuthenticationSelection.password(role,target.username,saved.entryId,f.clock)
+                    .withKeyboardContinuation(f.clock);
+            AppSecrets.SshSecretReadContext context = f.vault.newSavedPasswordReadContext(31000,()->{},selection);
+            VaultOperation operation = f.vault.beginSshCredential(saved.entryId,saved.target,"connection",VaultManifest.EntryType.SSH_PASSWORD,context);
+            try {
+                f.vault.sshCredential(operation,saved.entryId,saved.target,"connection",VaultManifest.EntryType.SSH_PASSWORD,
+                        ()->{},bytes -> assertArrayEquals(SECRET,bytes));
+            } finally { f.vault.cancelOperation(operation); context.cancel(); }
+            f.forget(target,false);
+            try (VaultManifest actual = f.read()) { sameImportedGraph(original,actual); assertFalse(saved.present(actual.accounts)); }
+            f.save(target,SECRET); f.forget(null,true);
+            try (VaultManifest actual = f.read()) { sameImportedGraph(original,actual); assertTrue(actual.accounts.isEmpty()); }
+        }
+    }
     private static void code(String expected, Action action) throws Exception {
         try { action.run(); fail("Expected " + expected); }
         catch (VaultException failure) { assertEquals(expected, failure.code); }

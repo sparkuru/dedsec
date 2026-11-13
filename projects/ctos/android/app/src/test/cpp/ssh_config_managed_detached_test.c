@@ -340,9 +340,9 @@ static void profile_plans(void) {
         CHECK(load(token, &source, 0, &request, NULL) == 0); int32_t outcome[5]; CHECK(ctos_ssh_config_handle_run(token, outcome) == 0 && outcome[0] == 0);
         CHECK(ctos_ssh_config_handle_direct_plan(token, out, &n) == -1 && n == 0);
         CHECK(ctos_ssh_config_handle_profile_direct_plan(token, out, &n) == 0);
-        CHECK(value(out) == 0x43535050 && value(out + 4) == 2 && value(out + 8) == 2200 + i);
-        CHECK(value(out + 16) == 1 && value(out + 24) == 1 && value(out + 44) == 1 && value(out + 48) == 1);
-        const unsigned char *cursor = out + 52;
+        CHECK(value(out) == 0x43535050 && value(out + 4) == 3 && value(out + 8) == 2200 + i);
+        CHECK(value(out + 16) == 1 && value(out + 24) == 1 && value(out + 52) == 1 && value(out + 56) == 1);
+        const unsigned char *cursor = out + 60;
         direct_text(&cursor, alias); direct_text(&cursor, host); direct_text(&cursor, user);
         direct_text(&cursor, hints[i % 2]); direct_text(&cursor, ".ssh/known_hosts");
         CHECK((size_t)(cursor - out) == n);
@@ -361,7 +361,7 @@ static void profile_plans(void) {
         CHECK(ctos_ssh_config_handle_run(token, outcome) == 0);
         if (i < 4) {
             CHECK(outcome[0] == 0 && ctos_ssh_config_handle_profile_direct_plan(token, out, &n) == 0);
-            CHECK(value(out + 44) == (i == 2 ? 2 : 0));
+            CHECK(value(out + 52) == (i == 2 ? 2 : 0));
             if (i == 3) CHECK(value(out + 16) == 0);
         } else CHECK(outcome[0] != 0 && ctos_ssh_config_handle_profile_direct_plan(token, out, &n) == -1 && n == 0);
         finish_handle(token); drop(&source); drop(&request);
@@ -392,12 +392,12 @@ static void direct_plans(void) {
     int32_t outcome[5];
     CHECK(ctos_ssh_config_handle_run(token, outcome) == 0 && outcome[0] == 0);
     CHECK(ctos_ssh_config_handle_direct_plan(token, plan, &size) == 0);
-    CHECK(value(plan) == 0x43534350U && value(plan + 4) == 2 && value(plan + 8) == 2207);
+    CHECK(value(plan) == 0x43534350U && value(plan + 4) == 3 && value(plan + 8) == 2207);
     CHECK(value(plan + 12) == 1 && value(plan + 16) == 1 && value(plan + 20) == 0);
-    CHECK(value(plan + 24) == 1 && value(plan + 28) == 5000 && value(plan + 32) == 3
-        && value(plan + 36) == 2 && value(plan + 40) == 0);
-    CHECK(value(plan + 44) == 3 && value(plan + 48) == 1);
-    const unsigned char *cursor = plan + 52;
+    CHECK(value(plan + 24) == 1 && value(plan + 36) == 5000 && value(plan + 40) == 3
+        && value(plan + 44) == 2 && value(plan + 48) == 0);
+    CHECK(value(plan + 52) == 3 && value(plan + 56) == 1);
+    const unsigned char *cursor = plan + 60;
     direct_text(&cursor, "target"); direct_text(&cursor, "target.example"); direct_text(&cursor, "remote");
     direct_text(&cursor, ".ssh/id_include"); direct_text(&cursor, ".ssh/id_one"); direct_text(&cursor, ".ssh/id_two");
     direct_text(&cursor, ".ssh/known_hosts"); CHECK((size_t)(cursor - plan) == size);
@@ -431,8 +431,8 @@ static void direct_plans(void) {
     CHECK(load(token, &w, 0, &request, NULL) == 0);
     CHECK(ctos_ssh_config_handle_run(token, outcome) == 0 && outcome[0] == 0);
     CHECK(ctos_ssh_config_handle_direct_plan(token, plan, &size) == 0);
-    CHECK(value(plan + 44) == 1 && value(plan + 48) == 1);
-    cursor = plan + 52;
+    CHECK(value(plan + 52) == 1 && value(plan + 56) == 1);
+    cursor = plan + 60;
     direct_text(&cursor, "target"); direct_text(&cursor, "target.example"); direct_text(&cursor, "remote");
     direct_text(&cursor, ".ssh/key 'single' \"double\" space");
     direct_text(&cursor, ".ssh/known_hosts"); CHECK((size_t)(cursor - plan) == size);
@@ -443,6 +443,29 @@ static void direct_plans(void) {
     CHECK(ctos_ssh_config_handle_run(token, outcome) == 0 && outcome[0] == 0);
     CHECK(ctos_ssh_config_handle_direct_plan(token, plan, &size) == -1 && errno == EINVAL && size == 0);
     finish_handle(token); drop(&request); drop(&w); free(plan);
+}
+
+static void mfa_direct_policy(void) {
+    const char *options[] = {"", "PreferredAuthentications password,keyboard-interactive,publickey",
+        "PreferredAuthentications publickey,password,keyboard-interactive",
+        "PreferredAuthentications keyboard-interactive,password,publickey", "PasswordAuthentication no",
+        "PubkeyAuthentication no", "KbdInteractiveAuthentication no", "PreferredAuthentications password,publickey"};
+    const unsigned int password[] = {1,1,1,0,0,1,0,0}, key[] = {1,0,1,0,1,0,0,0};
+    for (unsigned int profile = 0; profile < 2U; profile++) for (unsigned int i = 0; i < 8U; i++) {
+        char body[1024];
+        snprintf(body, sizeof(body), "Host target\n HostName target.example\n User remote\n %s\n", options[i]);
+        struct source_wire source = one(body), request = direct_request("target", "");
+        ctos_ssh_config_token token = 0;
+        CHECK((profile ? ctos_ssh_config_handle_reserve_profile_direct(&token)
+            : ctos_ssh_config_handle_reserve_direct(&token)) == 0);
+        CHECK(load(token, &source, 0, &request, NULL) == 0);
+        int32_t outcome[5]; CHECK(ctos_ssh_config_handle_run(token, outcome) == 0 && outcome[0] == 0);
+        unsigned char plan[CTOS_SSH_CONFIG_DIRECT_BYTES]; size_t length = 0;
+        CHECK((profile ? ctos_ssh_config_handle_profile_direct_plan(token, plan, &length)
+            : ctos_ssh_config_handle_direct_plan(token, plan, &length)) == 0);
+        CHECK(value(plan + 4) == 3 && value(plan + 28) == password[i] && value(plan + 32) == key[i]);
+        finish_handle(token); drop(&request); drop(&source);
+    }
 }
 
 static void keyboard_direct_policy(void) {
@@ -469,7 +492,7 @@ static void keyboard_direct_policy(void) {
                 : ctos_ssh_config_handle_direct_plan(token, plan, &length);
             if (index >= 8 && index <= 10) CHECK(outcome[0] != 0 && got != 0 && length == 0);
             else {
-                CHECK(outcome[0] == 0 && got == 0 && value(plan + 4) == 2);
+                CHECK(outcome[0] == 0 && got == 0 && value(plan + 4) == 3);
                 CHECK(value(plan + 24) == (index != 1 && index != 3 && index != 5 && index != 11 && index != 12));
                 CHECK(value(plan + 16) == (index != 4 && index != 6 && index != 11));
                 CHECK(value(plan + 20) == (index != 4));
@@ -512,8 +535,8 @@ static void low_memlock_child(void) {
     CHECK(load(token, &w, 0, &selected, NULL) == 0);
     CHECK(ctos_ssh_config_handle_run(token, outcome) == 0 && outcome[0] == 0);
     CHECK(ctos_ssh_config_handle_direct_plan(token, result, &length) == 0);
-    CHECK(value(result + 8) == 22 && value(result + 24) == 1 && value(result + 44) == 1 && value(result + 48) == 1);
-    const unsigned char *cursor = result + 52;
+    CHECK(value(result + 8) == 22 && value(result + 24) == 1 && value(result + 52) == 1 && value(result + 56) == 1);
+    const unsigned char *cursor = result + 60;
     direct_text(&cursor, "ctos-key"); direct_text(&cursor, "fixture.example"); direct_text(&cursor, "fixture");
     direct_text(&cursor, ".ssh/id_rsa"); direct_text(&cursor, ".ssh/known_hosts");
     CHECK((size_t)(cursor - result) == length);
@@ -578,7 +601,7 @@ static void reservations(void) {
 int main(void) {
     CHECK(ctos_detached_baseline_main() == 0);
     unsigned int before = fd_count(); observe = 1;
-    basic_registry(); malformed_wire(); request_modes(); budgets(); staged_declarations(); failures_and_cancel(); result_lifetime(); direct_plans(); profile_plans(); keyboard_direct_policy(); low_memlock(); reservations();
+    basic_registry(); malformed_wire(); request_modes(); budgets(); staged_declarations(); failures_and_cancel(); result_lifetime(); direct_plans(); profile_plans(); keyboard_direct_policy(); mfa_direct_policy(); low_memlock(); reservations();
     CHECK(fd_count() == before && capabilities == 0 && effects == 0 && owned_mapping == NULL);
     for (unsigned int i = 0; i < 256; i++) CHECK(managed[i].p == NULL);
     observe = 0;

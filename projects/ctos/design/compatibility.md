@@ -1,5 +1,15 @@
 # Compatibility
 
+2026-11-04：[两阶段MFA](ssh-mfa-authentication.md)保持原单方法及vault格式；旧CSASv1/v2、
+旧config plan v1/v2和缺省continuation均无续接权。新CSASv3正确区分无口令和有entry的
+加密私钥，CSCP/CSPPv3严格方法／顺序能力，packet60始终按实际当前方法解释。
+只支持password／publickey→KBI一次续接，不提供任意顺序或第三方法。新configPassword
+仅允许缺失User时显式补充；已有key／独立KBI的raw override语义未扩改。
+当前Flutter396／JVM856、真实ARM/config专项及本地合成服务器验证分列；最终构建与
+同输入来源审计通过，[本地证据](verification.md#20261104-ssh-mfa-local)。随后另授权的
+[AIO-3568J／API30实际MFA方法10.415秒通过](verification.md#20261104-ssh-mfa-device)，
+不推广为其他ROM、真实IME／SAF／Flutter重连点击或完整MFA范围；正式应用尚未更新。
+
 2026-11-02：[独立KBI](ssh-keyboard-interactive.md)保留原密码/私钥/信任/服务模型，新增
 CSASv1 kind3、CSKI/CSKR及CSCP/CSPPv2；旧plan v1仅解码为KBI=false，不猜测权限。
 实际KbdInteractiveAuthentication和支持的方法列表决定资格；非默认submethods/复杂选项

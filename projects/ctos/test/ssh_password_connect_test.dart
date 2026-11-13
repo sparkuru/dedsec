@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:ctos/main.dart';
 import 'package:ctos/ssh/api.dart';
+import 'package:ctos/ssh/host_trust_page.dart';
 import 'package:ctos/ssh/password_connect_page.dart';
 import 'package:ctos/ui/ctos_theme.dart';
 import 'package:flutter/material.dart';
@@ -574,7 +575,7 @@ void main() {
       expect(field.autocorrect, isFalse);
       expect(field.enableSuggestions, isFalse);
       expect(field.enableIMEPersonalizedLearning, isFalse);
-      expect(find.text('保存主机信息；密码默认仅本次使用。'), findsOneWidget);
+      expect(find.text('使用登录密码验证身份；密码默认仅本次使用。'), findsOneWidget);
       await host.leave();
       expect(host.releases, ['protected-ssh']);
       expect(find.byKey(const Key('ssh-password')), findsNothing);
@@ -820,10 +821,12 @@ void main() {
         final host = _SshHost(tester)..saved = true;
         await host.open();
         await host.fill();
+        await host.openManagement();
         final action = find.byKey(
           Key(all ? 'ssh-forget-all-passwords' : 'ssh-forget-password'),
         );
         await tester.ensureVisible(action);
+        await host.advance();
         await tester.tap(action);
         await host.advance();
         expect(host.forgetCalls, isEmpty);
@@ -831,6 +834,10 @@ void main() {
         await host.advance();
         expect(host.forgetCalls, isEmpty);
         await tester.ensureVisible(action);
+        await host.advance();
+        await tester.ensureVisible(action);
+        await tester.pump();
+        expect(action.hitTestable(), findsOneWidget);
         await tester.tap(action);
         await host.advance();
         await tester.tap(find.byKey(const Key('ssh-forget-confirm')));
@@ -868,8 +875,10 @@ void main() {
       final host = _SshHost(tester)..saved = true;
       await host.open();
       await host.fill();
+      await host.openManagement();
       final action = find.byKey(const Key('ssh-forget-password'));
       await tester.ensureVisible(action);
+      await host.advance();
       await tester.tap(action);
       await host.advance();
       final confirm = tester
@@ -919,8 +928,10 @@ void main() {
         ..forgetError = PlatformException(code: 'VAULT_COMMIT_UNCERTAIN');
       await host.open();
       await host.fill();
+      await host.openManagement();
       final action = find.byKey(const Key('ssh-forget-password'));
       await tester.ensureVisible(action);
+      await host.advance();
       await tester.tap(action);
       await host.advance();
       await tester.tap(find.byKey(const Key('ssh-forget-confirm')));
@@ -937,6 +948,7 @@ void main() {
   ) async {
     final host = _SshHost(tester);
     await host.open();
+    await host.openManagement();
     final action = find.byKey(const Key('ssh-forget-all-passwords'));
     await tester.ensureVisible(action);
     await host.advance();
@@ -966,8 +978,10 @@ void main() {
         ..pendingForget = Completer<Map<String, Object>>();
       await host.open();
       await host.fill();
+      await host.openManagement();
       final action = find.byKey(const Key('ssh-forget-password'));
       await tester.ensureVisible(action);
+      await host.advance();
       await tester.tap(action);
       await host.advance();
       await tester.tap(find.byKey(const Key('ssh-forget-confirm')));
@@ -1224,16 +1238,23 @@ void main() {
         'state': 'failed',
         'reason': 'SSH_HOSTKEY_CHANGED',
       });
-      expect(
-        find.text('主机密钥与已保存记录不同，连接已拒绝。可在“私钥与配置 → 主机信任”核对并管理旧记录。'),
-        findsOneWidget,
-      );
+      expect(find.text('服务器主机密钥已变化'), findsNothing);
       expect(find.text('信任并保存'), findsNothing);
       expect(host.decisions, isEmpty);
       host.completeConnect(
         error: PlatformException(code: 'SSH_HOSTKEY_CHANGED'),
       );
       await host.advance();
+      expect(find.text('服务器主机密钥已变化'), findsOneWidget);
+      expect(find.text('server.invalid:2222'), findsOneWidget);
+      expect(find.byKey(const Key('ssh-host-changed-view')), findsOneWidget);
+      expect(find.byKey(const Key('ssh-host-changed-forget')), findsOneWidget);
+      await tester.tap(find.byKey(const Key('ssh-host-changed-cancel')));
+      await host.advance();
+      expect(
+        host.calls.where((call) => call.method.startsWith('ssh.hostTrust')),
+        isEmpty,
+      );
       await tester.enterText(
         find.byKey(const Key('ssh-password')),
         'retry password',
@@ -1252,6 +1273,250 @@ void main() {
       host.completeConnect(
         error: PlatformException(code: 'SSH_HOSTKEY_REVOKED'),
       );
+      await host.remove();
+    },
+  );
+
+  testWidgets(
+    'changed-host failure remains closed if a connected event and reply arrive later',
+    (tester) async {
+      final host = _SshHost(tester);
+      await host.open();
+      await host.fill();
+      await host.tapConnect();
+      final request = host.connectCalls.single['requestId'] as String;
+      await host.emit({
+        'type': 'state',
+        'requestId': request,
+        'state': 'failed',
+        'reason': 'SSH_HOSTKEY_CHANGED',
+      });
+      await host.emit({
+        'type': 'state',
+        'requestId': request,
+        'state': 'connected',
+      });
+      host.completeConnect();
+      await host.advance();
+      expect(host.cancelled, contains(request));
+      expect(find.text('服务器主机密钥已变化'), findsOneWidget);
+      expect(find.text('信任并保存'), findsNothing);
+      expect(host.decisions, isEmpty);
+      expect(find.byType(SshPasswordConnectPage), findsOneWidget);
+      await tester.tap(find.byKey(const Key('ssh-host-changed-cancel')));
+      await host.advance();
+      await host.leave();
+      await host.remove();
+    },
+  );
+
+  testWidgets('config conflict never infers which trust file to forget', (
+    tester,
+  ) async {
+    final host = _SshHost(tester)..libraryValues = _reconnectLibrary();
+    await host.mount(
+      reconnect: const SshReconnectTarget(
+        mode: SshReconnectMode.config,
+        host: 'server.invalid',
+        port: 2222,
+        username: 'alice',
+        keyId: 'key_a',
+        configAlias: 'fixture',
+      ),
+    );
+    await tester.tap(find.text('Open SSH'));
+    await host.advance();
+    await host.tapConnect();
+    host.completeConnect(error: PlatformException(code: 'SSH_HOSTKEY_CHANGED'));
+    await host.advance();
+    await tester.tap(find.byKey(const Key('ssh-host-changed-forget')));
+    await host.advance();
+    await host.advance();
+    expect(find.text('配置可能使用其他信任文件；请核对来源后选择要忘记的记录。'), findsOneWidget);
+    expect(
+      host.calls.where((call) => call.method == 'ssh.hostTrustForgetPreview'),
+      isEmpty,
+    );
+    expect(
+      host.calls.where((call) => call.method == 'ssh.hostTrustForgetCommit'),
+      isEmpty,
+    );
+    host.libraryValues = _reconnectLibrary(configHost: 'other.invalid');
+    expect(find.byKey(const Key('ssh-trust-direct-dialog')), findsOneWidget);
+    expect(find.text('主机信任'), findsNothing);
+    await tester.tap(find.byKey(const Key('ssh-trust-close')));
+    await host.advance();
+    await host.advance();
+    expect(host.identityCalls, hasLength(1));
+    expect(find.text('配置目标或私钥已变化，请返回并重新选择。'), findsOneWidget);
+    expect(find.byKey(const Key('ssh-connect')), findsNothing);
+    await host.leave();
+    await host.remove();
+  });
+
+  testWidgets(
+    'changed host can view the exact saved fingerprints without forgetting',
+    (tester) async {
+      final host = _SshHost(tester);
+      await host.open();
+      await host.fill();
+      await host.tapConnect();
+      host.completeConnect(
+        error: PlatformException(code: 'SSH_HOST_KEY_CHANGED'),
+      );
+      await host.advance();
+      await tester.tap(find.byKey(const Key('ssh-host-changed-view')));
+      await host.advance();
+      await host.advance();
+      expect(find.text('主机信任'), findsOneWidget);
+      expect(find.text(_trustFingerprint), findsOneWidget);
+      final query = host.calls.singleWhere(
+        (call) => call.method == 'ssh.hostTrustQuery',
+      );
+      expect(query.arguments, containsPair('host', 'server.invalid'));
+      expect(query.arguments, containsPair('port', 2222));
+      expect(
+        host.calls.where((call) => call.method == 'ssh.hostTrustForgetPreview'),
+        isEmpty,
+      );
+      await tester.tap(
+        find.descendant(
+          of: find.byType(SshHostTrustPage),
+          matching: find.byTooltip('返回'),
+        ),
+      );
+      await host.advance();
+      await host.advance();
+      expect(find.byType(SshPasswordConnectPage), findsOneWidget);
+      expect(
+        tester
+            .widget<TextFormField>(find.byKey(const Key('ssh-host')))
+            .controller!
+            .text,
+        'server.invalid',
+      );
+      expect(host.passwordController.text, isEmpty);
+      expect(host.connectCalls, hasLength(1));
+      await host.leave();
+      await host.remove();
+    },
+  );
+
+  testWidgets(
+    'changed host forget requires fresh preview and explicit confirmation',
+    (tester) async {
+      final host = _SshHost(tester);
+      await host.open();
+      await host.fill();
+      await host.tapConnect();
+      host.completeConnect(
+        error: PlatformException(code: 'SSH_HOSTKEY_CHANGED'),
+      );
+      await host.advance();
+      await tester.tap(find.byKey(const Key('ssh-host-changed-forget')));
+      await host.advance();
+      await host.advance();
+      expect(find.text('忘记这些旧指纹？'), findsOneWidget);
+      expect(find.byType(SshPasswordConnectPage), findsOneWidget);
+      expect(find.byKey(const Key('ssh-host')), findsOneWidget);
+      expect(find.text('主机信任'), findsNothing);
+      expect(
+        find.descendant(
+          of: find.byType(AlertDialog),
+          matching: find.text(_trustFingerprint),
+        ),
+        findsOneWidget,
+      );
+      final preview = host.calls.singleWhere(
+        (call) => call.method == 'ssh.hostTrustForgetPreview',
+      );
+      expect(preview.arguments, containsPair('host', 'server.invalid'));
+      expect(preview.arguments, containsPair('port', 2222));
+      expect(preview.arguments, containsPair('group', 'password'));
+      expect(
+        host.calls.where((call) => call.method == 'ssh.hostTrustForgetCommit'),
+        isEmpty,
+      );
+      await tester.tap(find.byKey(const Key('ssh-trust-confirm')));
+      await host.advance();
+      expect(
+        host.calls.where((call) => call.method == 'ssh.hostTrustForgetCommit'),
+        hasLength(1),
+      );
+      expect(find.text('已忘记旧指纹，请重新连接并核对新指纹。'), findsOneWidget);
+      await tester.tap(find.byKey(const Key('ssh-trust-acknowledge')));
+      await host.advance();
+      await host.advance();
+      expect(find.byType(SshPasswordConnectPage), findsOneWidget);
+      expect(host.connectCalls, hasLength(1));
+      expect(host.passwordController.text, isEmpty);
+      await host.leave();
+      await host.remove();
+    },
+  );
+
+  testWidgets(
+    'backgrounding host recovery cannot restore its old target or credentials',
+    (tester) async {
+      final host = _SshHost(tester);
+      await host.open();
+      await host.fill();
+      await host.tapConnect();
+      host.completeConnect(
+        error: PlatformException(code: 'SSH_HOSTKEY_CHANGED'),
+      );
+      await host.advance();
+      await tester.tap(find.byKey(const Key('ssh-host-changed-view')));
+      await host.advance();
+      await host.advance();
+      expect(find.byType(SshHostTrustPage), findsOneWidget);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      await host.advance();
+      _resumeApp(tester);
+      await host.advance();
+      await tester.tap(
+        find.descendant(
+          of: find.byType(SshHostTrustPage),
+          matching: find.byTooltip('返回'),
+        ),
+      );
+      await host.advance();
+      await host.advance();
+      expect(find.byKey(const Key('ssh-host')), findsNothing);
+      expect(find.byKey(const Key('ssh-password')), findsNothing);
+      expect(find.byKey(const Key('ssh-reload')), findsOneWidget);
+      expect(host.connectCalls, hasLength(1));
+      await host.leave();
+      await host.remove();
+    },
+  );
+
+  testWidgets(
+    'background invalidates a changed-host dialog and its stale actions',
+    (tester) async {
+      final host = _SshHost(tester);
+      await host.open();
+      await host.fill();
+      await host.tapConnect();
+      host.completeConnect(
+        error: PlatformException(code: 'SSH_HOSTKEY_CHANGED'),
+      );
+      await host.advance();
+      final stale = tester
+          .widget<FilledButton>(
+            find.byKey(const Key('ssh-host-changed-forget')),
+          )
+          .onPressed!;
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      await host.advance();
+      stale();
+      await host.advance();
+      expect(find.text('服务器主机密钥已变化'), findsNothing);
+      expect(
+        host.calls.where((call) => call.method.startsWith('ssh.hostTrust')),
+        isEmpty,
+      );
+      _resumeApp(tester);
       await host.remove();
     },
   );
@@ -1368,6 +1633,87 @@ void main() {
     },
   );
 
+  testWidgets('connection form keeps management after its primary flow', (
+    tester,
+  ) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(1200, 1400);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    addTearDown(tester.view.resetPhysicalSize);
+    final host = _SshHost(tester);
+    await host.open();
+    expect(find.byKey(const Key('ssh-manage-identities')), findsNothing);
+    expect(find.byKey(const Key('ssh-forget-all-passwords')), findsNothing);
+    expect(find.byKey(const Key('ssh-cancel')), findsNothing);
+    expect(find.byTooltip('返回'), findsOneWidget);
+    expect(
+      tester.getTopLeft(find.text('连接目标')).dy,
+      lessThan(tester.getTopLeft(find.text('登录认证')).dy),
+    );
+    expect(
+      tester.getTopLeft(find.text('登录认证')).dy,
+      lessThan(tester.getTopLeft(find.text('本次连接')).dy),
+    );
+    final connect = find.byKey(const Key('ssh-connect'));
+    final management = find.byKey(const Key('ssh-connection-management'));
+    expect(
+      tester.getBottomRight(connect).dy,
+      lessThan(tester.getTopLeft(management).dy),
+    );
+    expect(tester.getSize(connect).height, greaterThanOrEqualTo(48));
+    await host.openManagement();
+    final managementTitle = find.text('连接资料与密码管理');
+    final identities = find.byKey(const Key('ssh-manage-identities'));
+    expect(
+      tester.getTopLeft(identities).dy -
+          tester.getBottomRight(managementTitle).dy,
+      greaterThanOrEqualTo(16),
+    );
+    expect(tester.getSize(identities).height, greaterThanOrEqualTo(48));
+    final all = find.byKey(const Key('ssh-forget-all-passwords'));
+    expect(all.hitTestable(), findsOneWidget);
+    expect(
+      tester.getSize(all).width,
+      lessThan(tester.getSize(find.byKey(const Key('ssh-host'))).width),
+    );
+    expect(find.byKey(const Key('ssh-forget-password')), findsNothing);
+    expect(host.connectCalls, isEmpty);
+    expect(host.forgetCalls, isEmpty);
+    await host.leave();
+    await host.remove();
+  });
+
+  testWidgets('target fields adapt without losing the entered credential', (
+    tester,
+  ) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(1200, 1000);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    addTearDown(tester.view.resetPhysicalSize);
+    final host = _SshHost(tester);
+    await host.open();
+    await host.fill();
+    final hostField = find.byKey(const Key('ssh-host'));
+    final portField = find.byKey(const Key('ssh-port'));
+    expect(tester.getTopLeft(hostField).dy, tester.getTopLeft(portField).dy);
+    tester.view.physicalSize = const Size(320, 700);
+    await host.advance();
+    expect(
+      tester.getTopLeft(portField).dy,
+      greaterThan(tester.getBottomRight(hostField).dy),
+    );
+    expect(
+      tester.widget<TextFormField>(hostField).controller!.text,
+      'server.invalid',
+    );
+    expect(tester.widget<TextFormField>(portField).controller!.text, '2222');
+    expect(host.passwordController.text, 'synthetic password');
+    expect(host.connectCalls, isEmpty);
+    expect(tester.takeException(), isNull);
+    await host.leave();
+    await host.remove();
+  });
+
   testWidgets(
     'saved controls and review remain reachable with narrow keyboard landscape and large text',
     (tester) async {
@@ -1386,8 +1732,7 @@ void main() {
         for (final key in [
           'ssh-use-saved-password',
           'ssh-save-password',
-          'ssh-forget-password',
-          'ssh-forget-all-passwords',
+          'ssh-connect',
         ]) {
           final control = find.byKey(Key(key));
           await tester.ensureVisible(control);
@@ -1395,6 +1740,18 @@ void main() {
           await tester.ensureVisible(control);
           await tester.pump();
           expect(control.hitTestable(), findsOneWidget);
+          expect(
+            tester.getBottomRight(control).dx,
+            lessThanOrEqualTo(size.width),
+          );
+        }
+        await host.openManagement();
+        for (final key in ['ssh-forget-password', 'ssh-forget-all-passwords']) {
+          final control = find.byKey(Key(key));
+          await tester.ensureVisible(control);
+          await tester.pump(const Duration(milliseconds: 300));
+          expect(control.hitTestable(), findsOneWidget);
+          expect(tester.getSize(control).height, greaterThanOrEqualTo(48));
           expect(
             tester.getBottomRight(control).dx,
             lessThanOrEqualTo(size.width),
@@ -1467,6 +1824,48 @@ Map<String, Object> _ticket(String id) => {
   'keyType': 'ssh-ed25519',
   'fingerprint': 'SHA256:${List.filled(43, 'A').join()}',
   'remainingMillis': 30000,
+};
+
+final _trustFingerprint = 'SHA256:${List.filled(43, 'C').join()}';
+
+Map<String, Object> _trustRow() => {
+  'line': 1,
+  'algorithm': 'ssh-ed25519',
+  'fingerprint': _trustFingerprint,
+  'marker': 'none',
+  'selector': 'literal',
+  'reason': 'none',
+};
+
+Map<String, Object> _trustQuery() => {
+  'host': 'server.invalid',
+  'port': 2222,
+  'groups': [
+    {
+      'group': 'password',
+      'path': 'ssh/known_hosts',
+      'exists': true,
+      'records': [_trustRow()],
+      'canForget': true,
+    },
+    {
+      'group': 'config',
+      'path': '.ssh/known_hosts',
+      'exists': false,
+      'records': <Object>[],
+      'canForget': false,
+    },
+  ],
+};
+
+Map<String, Object> _trustPreview() => {
+  'ticketId': 'trust_ticket',
+  'binding': List.filled(64, 'd').join(),
+  'host': 'server.invalid',
+  'port': 2222,
+  'group': 'password',
+  'path': 'ssh/known_hosts',
+  'records': [_trustRow()],
 };
 
 Map<String, Object> _reconnectLibrary({
@@ -1596,6 +1995,14 @@ class _SshHost {
         return {...defaultValues, 'savedPassword': saved};
       case 'ssh.library':
         return pendingLibrary?.future ?? libraryValues;
+      case 'ssh.hostTrustQuery':
+        return _trustQuery();
+      case 'ssh.hostTrustForgetPreview':
+        return _trustPreview();
+      case 'ssh.hostTrustForgetCommit':
+        return {'forgotten': true};
+      case 'ssh.hostTrustForgetCancel':
+        return {'cancelled': true};
       case 'secrets.cancel':
         return null;
       case 'ssh.passwordStatus':
@@ -1665,6 +2072,26 @@ class _SshHost {
       const MethodChannel('ctos/terminal'),
       (_) async => null,
     );
+    messenger.setMockMethodCallHandler(const MethodChannel('ctos/secrets'), (
+      call,
+    ) async {
+      if (call.method == 'listen') {
+        scheduleMicrotask(
+          () => unawaited(
+            messenger.handlePlatformMessage(
+              'ctos/secrets',
+              const StandardMethodCodec().encodeSuccessEnvelope({
+                'epoch': 1,
+                'unlocked': true,
+                'foreground': true,
+              }),
+              (_) {},
+            ),
+          ),
+        );
+      }
+      return null;
+    });
     addTearDown(() {
       _resumeApp(tester);
       messenger.setMockMethodCallHandler(
@@ -1674,6 +2101,10 @@ class _SshHost {
       messenger.setMockMethodCallHandler(const MethodChannel('ctos/ssh'), null);
       messenger.setMockMethodCallHandler(
         const MethodChannel('ctos/terminal'),
+        null,
+      );
+      messenger.setMockMethodCallHandler(
+        const MethodChannel('ctos/secrets'),
         null,
       );
     });
@@ -1762,8 +2193,35 @@ class _SshHost {
     await tester.pump();
   }
 
+  Future<void> openManagement() async {
+    final management = find.byKey(const Key('ssh-connection-management'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.scrollUntilVisible(
+      management,
+      150,
+      scrollable: find
+          .descendant(
+            of: find.byType(SshPasswordConnectPage),
+            matching: find.byType(Scrollable),
+          )
+          .first,
+    );
+    await tester.ensureVisible(management);
+    await advance();
+    if (find.byKey(const Key('ssh-manage-identities')).evaluate().isEmpty) {
+      await tester.tap(find.text('连接资料与密码管理'));
+      await advance();
+    }
+  }
+
   Future<void> leave() async {
     final action = find.byKey(const Key('ssh-cancel'));
+    if (action.evaluate().isEmpty) {
+      await tester.tap(find.byTooltip('返回').last);
+      await advance();
+      return;
+    }
     await tester.scrollUntilVisible(
       action,
       150,

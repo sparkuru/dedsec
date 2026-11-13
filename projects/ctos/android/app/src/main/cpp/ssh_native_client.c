@@ -90,6 +90,11 @@ struct ctos_ssh_native_client {
     unsigned char authentication_selection_receipt[32];
     int authentication_selection_kind;
     unsigned int authentication_selection_version;
+    int active_authentication_kind;
+    unsigned int authentication_stage;
+    int keyboard_continuation;
+    int authentication_key_bundle;
+    char continuation_methods[1025];
     int selected_credential_attempted;
     size_t authentication_username_offset;
     size_t authentication_username_length;
@@ -213,7 +218,7 @@ static int copy_authentication_selection(struct ctos_ssh_native_client *client,
     size_t length = config->authentication_selection_wire_length;
     struct selection_cursor cursor;
     struct ctos_ssh_slice fields[5];
-    uint32_t magic, version_flags, token_high, token_low, hop, kind;
+    uint32_t magic, version_flags, token_high, token_low, hop, kind, continuation = 0;
     uint64_t token;
 
     if (wire == NULL && length == 0) return 0;
@@ -222,7 +227,7 @@ static int copy_authentication_selection(struct ctos_ssh_native_client *client,
     cursor = (struct selection_cursor){wire, length};
     if (selection_u32(&cursor, &magic) != 0 || magic != 0x43534153U
         || selection_u32(&cursor, &version_flags) != 0
-        || (version_flags != 0x00010000U && version_flags != 0x00020000U)
+        || (version_flags != 0x00010000U && version_flags != 0x00020000U && version_flags != 0x00030000U)
         || selection_u32(&cursor, &token_high) != 0
         || selection_u32(&cursor, &token_low) != 0
         || selection_u32(&cursor, &hop) != 0) goto invalid;
@@ -240,14 +245,17 @@ static int copy_authentication_selection(struct ctos_ssh_native_client *client,
     for (size_t index = 0; index < 5U; index++) {
         if (selection_field(&cursor, &fields[index]) != 0) goto invalid;
     }
+    if (version_flags == 0x00030000U
+        && (selection_u32(&cursor, &continuation) != 0 || continuation != 3U || kind == 3U)) goto invalid;
     if (cursor.remaining != 0 || selection_text(fields[0], 255U) != 0) goto invalid;
     if (kind == 1U) {
-        if (version_flags != 0x00010000U || selection_identifier(fields[1]) != 0 || fields[2].length != 0
+        if (version_flags == 0x00020000U || selection_identifier(fields[1]) != 0 || fields[2].length != 0
             || fields[3].length != 0 || fields[4].length != 0) goto invalid;
     } else if (kind == 3U) {
         if (version_flags != 0x00010000U || fields[1].length != 0 || fields[2].length != 0
             || fields[3].length != 0 || fields[4].length != 0) goto invalid;
-    } else if ((version_flags == 0x00010000U ? fields[1].length != 0 : selection_identifier(fields[1]) != 0)
+    } else if ((version_flags == 0x00010000U ? fields[1].length != 0
+            : version_flags == 0x00020000U || fields[1].length != 0 ? selection_identifier(fields[1]) != 0 : 0)
         || selection_text(fields[2], 512U) != 0
         || ctos_ssh_view_path(fields[2].data, fields[2].length, 0) != 0
         || selection_text(fields[3], 512U) != 0 || fields[4].length == 0
@@ -263,6 +271,10 @@ static int copy_authentication_selection(struct ctos_ssh_native_client *client,
     }
     client->authentication_selection_kind = (int)kind;
     client->authentication_selection_version = version_flags >> 16;
+    client->active_authentication_kind = (int)kind;
+    client->authentication_stage = 1U;
+    client->keyboard_continuation = continuation == 3U;
+    client->authentication_key_bundle = kind == 4U && fields[1].length != 0;
     client->authentication_username_offset = (size_t)(fields[0].data - wire);
     client->authentication_username_length = fields[0].length;
     client->authentication_public_offset = (size_t)(fields[4].data - wire);
@@ -281,6 +293,11 @@ static void clear_authentication_selection(struct ctos_ssh_native_client *client
     wipe_bytes(client->authentication_selection_receipt, sizeof(client->authentication_selection_receipt));
     client->authentication_selection_kind = 0;
     client->authentication_selection_version = 0;
+    client->active_authentication_kind = 0;
+    client->authentication_stage = 0;
+    client->keyboard_continuation = 0;
+    client->authentication_key_bundle = 0;
+    wipe_bytes(client->continuation_methods, sizeof(client->continuation_methods));
     client->authentication_username_offset = 0;
     client->authentication_username_length = 0;
     client->authentication_public_offset = 0;
@@ -770,6 +787,7 @@ static int terminal_error(struct ctos_ssh_native_client *client, int error) {
             (void)abort_handed_off_candidate(client);
         client->failed = 1;
         clear_keyboard_challenge(client);
+        wipe_bytes(client->continuation_methods, sizeof(client->continuation_methods));
     }
     errno = error;
     return -1;
@@ -817,6 +835,7 @@ static int selected_credential_is_live(struct ctos_ssh_native_client *client) {
         || client->completion_cycle == 0 || client->completion_cycle > INT64_MAX
         || client->service_phase != USERAUTH_SERVICE_READY
         || client->authentication_selection_wire == NULL
+        || client->authentication_stage != 1U
         || (client->authentication_selection_kind != CTOS_SSH_CALLBACK_CREDENTIAL_PASSWORD
             && client->authentication_selection_kind != CTOS_SSH_CALLBACK_CREDENTIAL_PRIVATE_KEY)
         || client->ssh == NULL || client->ssh->kex == NULL
@@ -905,7 +924,11 @@ static int auth_proof(const struct ctos_ssh_native_client *client, int kind) {
     if (view_borrow_is_live(client->managed_view_borrow) != 0) return -1;
     if (now_millis(&current) != 0) return -1;
     if (current >= client->deadline) { errno = ETIMEDOUT; return -1; }
-    if (client->authentication_selection_kind != kind
+    if (client->active_authentication_kind != kind
+        || (client->authentication_stage != 1U && client->authentication_stage != 2U)
+        || (client->authentication_stage == 1U && kind != client->authentication_selection_kind)
+        || (client->authentication_stage == 2U
+            && (!client->keyboard_continuation || kind != CTOS_SSH_CALLBACK_CREDENTIAL_KEYBOARD_INTERACTIVE))
         || (kind != CTOS_SSH_CALLBACK_CREDENTIAL_PASSWORD
             && kind != CTOS_SSH_CALLBACK_CREDENTIAL_KEYBOARD_INTERACTIVE
             && kind != CTOS_SSH_CALLBACK_CREDENTIAL_PRIVATE_KEY)
@@ -942,7 +965,7 @@ out:
 }
 
 static int auth_is_live(struct ctos_ssh_native_client *client, int cancelled) {
-    if (auth_proof(client, client->authentication_selection_kind) != 0) {
+    if (auth_proof(client, client->active_authentication_kind) != 0) {
         int error = errno;
         return error == EPERM ? -1 : terminal_error(client, error);
     }
@@ -1122,20 +1145,7 @@ out:
     return result;
 }
 
-int ctos_ssh_native_client_begin_keyboard_interactive_auth(struct ctos_ssh_native_client *client) {
-    if (client == NULL) { errno = EINVAL; return -1; }
-    if (client->closed) { errno = ENOENT; return -1; }
-    if (client->failed) { errno = EALREADY; return -1; }
-    if (ctos_ssh_callback_check_live(client->callback, client->callback_environment) != 0) {
-        int error = errno;
-        return error == EPERM ? -1 : terminal_error(client, error);
-    }
-    if (client->auth_phase != AUTH_DISABLED || client->selected_credential_attempted) {
-        errno = EALREADY; return -1;
-    }
-    if (client->authentication_selection_kind != CTOS_SSH_CALLBACK_CREDENTIAL_KEYBOARD_INTERACTIVE
-        || client->service_phase != USERAUTH_SERVICE_READY) { errno = EACCES; return -1; }
-    if (auth_is_live(client, 0) != 0 || auth_output_is_clear(client) != 0) return -1;
+static int send_keyboard_auth_request(struct ctos_ssh_native_client *client) {
     if (sshpkt_start(client->ssh, SSH2_MSG_USERAUTH_REQUEST) != 0
         || sshpkt_put_string(client->ssh, client->authentication_selection_wire
             + client->authentication_username_offset, client->authentication_username_length) != 0
@@ -1150,6 +1160,61 @@ int ctos_ssh_native_client_begin_keyboard_interactive_auth(struct ctos_ssh_nativ
     client->auth_phase = AUTH_REQUEST_PENDING;
     client->auth_result = CTOS_SSH_KEYBOARD_AUTH_PENDING;
     return 0;
+}
+
+static int advertised_algorithm(const char *, const char *);
+
+int ctos_ssh_native_client_continue_keyboard_interactive_auth(struct ctos_ssh_native_client *client,
+    const unsigned char expected_plan_receipt[32], unsigned char stage_receipt[92]) {
+    unsigned char *p;
+    if (stage_receipt != NULL) wipe_bytes(stage_receipt, 92U);
+    if (client == NULL || expected_plan_receipt == NULL || stage_receipt == NULL) { errno = EINVAL; return -1; }
+    if (client->closed) { errno = ENOENT; return -1; }
+    if (client->failed) { errno = EALREADY; return -1; }
+    /* Owner check precedes every state check or mutation. */
+    if (ctos_ssh_callback_check_live(client->callback, client->callback_environment) != 0) {
+        int error = errno;
+        return error == EPERM ? -1 : terminal_error(client, error);
+    }
+    if (client->authentication_stage != 1U || !client->keyboard_continuation
+        || (client->authentication_selection_kind != 1 && client->authentication_selection_kind != 4)
+        || client->auth_phase != AUTH_FINISHED || client->auth_result != CTOS_SSH_PASSWORD_AUTH_PARTIAL
+        || !client->selected_credential_attempted
+        || memcmp(expected_plan_receipt, client->authentication_selection_receipt, 32U) != 0
+        || !advertised_algorithm(client->continuation_methods, "keyboard-interactive")) {
+        errno = EACCES; return -1;
+    }
+    if (auth_is_live(client, 0) != 0 || auth_output_is_clear(client) != 0) return -1;
+    client->authentication_stage = 2U;
+    client->active_authentication_kind = CTOS_SSH_CALLBACK_CREDENTIAL_KEYBOARD_INTERACTIVE;
+    wipe_bytes(client->continuation_methods, sizeof(client->continuation_methods));
+    if (send_keyboard_auth_request(client) != 0) return -1;
+    p = stage_receipt;
+    keyboard_u32(&p, 0x43534150U); keyboard_u32(&p, 0x00010000U);
+    keyboard_u32(&p, 2U); keyboard_u32(&p, (uint32_t)client->authentication_selection_kind);
+    keyboard_u32(&p, 3U);
+    memcpy(p, client->authentication_selection_receipt, 32U); p += 32U;
+    keyboard_u32(&p, (uint32_t)(client->completion_cycle >> 32));
+    keyboard_u32(&p, (uint32_t)client->completion_cycle);
+    memcpy(p, client->completion_session_digest, 32U);
+    return 0;
+}
+
+int ctos_ssh_native_client_begin_keyboard_interactive_auth(struct ctos_ssh_native_client *client) {
+    if (client == NULL) { errno = EINVAL; return -1; }
+    if (client->closed) { errno = ENOENT; return -1; }
+    if (client->failed) { errno = EALREADY; return -1; }
+    if (ctos_ssh_callback_check_live(client->callback, client->callback_environment) != 0) {
+        int error = errno;
+        return error == EPERM ? -1 : terminal_error(client, error);
+    }
+    if (client->auth_phase != AUTH_DISABLED || client->selected_credential_attempted) {
+        errno = EALREADY; return -1;
+    }
+    if (client->authentication_selection_kind != CTOS_SSH_CALLBACK_CREDENTIAL_KEYBOARD_INTERACTIVE
+        || client->service_phase != USERAUTH_SERVICE_READY) { errno = EACCES; return -1; }
+    if (auth_is_live(client, 0) != 0 || auth_output_is_clear(client) != 0) return -1;
+    return send_keyboard_auth_request(client);
 }
 
 int ctos_ssh_native_client_keyboard_interactive_auth_result(
@@ -1195,7 +1260,7 @@ int ctos_ssh_native_client_respond_keyboard_interactive(struct ctos_ssh_native_c
     if (auth_is_live(client, 0) != 0) return -1;
     if (client->auth_phase != AUTH_WAIT_INPUT || client->keyboard_challenge == NULL
         || client->auth_result != CTOS_SSH_KEYBOARD_AUTH_CHALLENGE
-        || client->authentication_selection_kind != CTOS_SSH_CALLBACK_CREDENTIAL_KEYBOARD_INTERACTIVE) {
+        || client->active_authentication_kind != CTOS_SSH_CALLBACK_CREDENTIAL_KEYBOARD_INTERACTIVE) {
         errno = EACCES; return -1;
     }
     if (selection_u32(&cursor, &magic) != 0 || magic != 0x43534b52U
@@ -1260,12 +1325,15 @@ static int auth_packet(struct ctos_ssh_native_client *client, int packet_type) {
                     || (text[index] == ',' && (index == 0U || index + 1U == length
                         || text[index - 1U] == ','))) return terminal_error(client, EPROTO);
             }
+            wipe_bytes(client->continuation_methods, sizeof(client->continuation_methods));
+            if (partial && client->authentication_stage == 1U && client->keyboard_continuation)
+                memcpy(client->continuation_methods, text, length);
             outcome = partial ? CTOS_SSH_PASSWORD_AUTH_PARTIAL : CTOS_SSH_PASSWORD_AUTH_REJECTED;
             break;
         case SSH2_MSG_USERAUTH_PASSWD_CHANGEREQ:
-            if (client->authentication_selection_kind == CTOS_SSH_CALLBACK_CREDENTIAL_KEYBOARD_INTERACTIVE)
+            if (client->active_authentication_kind == CTOS_SSH_CALLBACK_CREDENTIAL_KEYBOARD_INTERACTIVE)
                 return keyboard_request(client);
-            if (client->authentication_selection_kind != CTOS_SSH_CALLBACK_CREDENTIAL_PASSWORD)
+            if (client->active_authentication_kind != CTOS_SSH_CALLBACK_CREDENTIAL_PASSWORD)
                 return terminal_error(client, EPROTO);
             if (packet_bounded_text(client->ssh, 8192U, &text, &length) != 0
                 || packet_bounded_text(client->ssh, 128U, &language, &language_length) != 0)
@@ -1378,7 +1446,7 @@ int ctos_ssh_native_client_begin_private_key_auth(struct ctos_ssh_native_client 
     if (ctos_ssh_native_client_selected_credential_bytes(client, secret,
             CTOS_SSH_VIEW_FILE_BYTES, &secret_length) != 0) goto out;
     key_bytes = (struct ctos_ssh_slice){secret, secret_length};
-    if (client->authentication_selection_version == 2U) {
+    if (client->authentication_key_bundle) {
         if (key_bundle(secret, secret_length, &key_bytes, &passphrase_bytes) != 0) {
             terminal_error(client, errno);
             goto out;
@@ -1397,7 +1465,7 @@ int ctos_ssh_native_client_begin_private_key_auth(struct ctos_ssh_native_client 
     if (status != 0) {
         terminal_error(client, status == SSH_ERR_ALLOC_FAIL ? ENOMEM
             : status == SSH_ERR_KEY_WRONG_PASSPHRASE
-                ? (client->authentication_selection_version == 2U ? EACCES : ENOTSUP)
+                ? (client->authentication_key_bundle ? EACCES : ENOTSUP)
             : status == SSH_ERR_FEATURE_UNSUPPORTED || status == SSH_ERR_KEY_TYPE_UNKNOWN ? ENOTSUP : EINVAL);
         goto out;
     }
@@ -1575,7 +1643,7 @@ static int shell_proof(const struct ctos_ssh_native_client *client) {
     if (client->closed) { errno = ENOENT; return -1; }
     if (client->failed) { errno = EALREADY; return -1; }
     return client->established ? established_proof(client)
-        : auth_proof(client, client->authentication_selection_kind);
+        : auth_proof(client, client->active_authentication_kind);
 }
 
 static int shell_live(struct ctos_ssh_native_client *client) {

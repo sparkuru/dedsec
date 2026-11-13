@@ -139,6 +139,55 @@ public final class SshDirectConfigPlanTest {
             }
         }
     }
+    @Test public void versionThreeCarriesStrictConsumedChainPolicyAndLegacyNeverAuthorizesIt() throws Exception {
+        for (boolean profile : List.of(false,true)) for (int flags = 0; flags < 8; flags++) {
+            Binding binding = new Binding(); byte[] old = frame("remote");
+            binding.response = ByteBuffer.allocate(old.length + 12).put(old,0,24)
+                    .putInt(1).putInt((flags & 1) != 0 ? 1 : 0).putInt((flags & 2) != 0 ? 1 : 0)
+                    .put(old,24,old.length - 24).array();
+            ByteBuffer.wrap(binding.response).putInt(4,3).putInt(20,(flags & 4) != 0 ? 1 : 0);
+            if (profile) ByteBuffer.wrap(binding.response).putInt(0,0x43535050);
+            try (SshConfigEvaluator evaluator = profile ? SshConfigEvaluator.prepareProfileDirectDetached(() -> {},binding) : prepare(binding)) {
+                evaluator.loadDetached(source(),0,31000,request()); evaluator.run();
+                if ((flags & 1) != 0 && (flags & 4) == 0) {
+                    if (profile) rejected(evaluator::profileDirectPlan); else rejected(evaluator::directPlan);
+                } else {
+                    SshConfigEvaluator.DirectPlan plan = profile ? evaluator.profileDirectPlan() : evaluator.directPlan();
+                    assertEquals((flags & 1) != 0,plan.passwordThenKeyboardAllowed);
+                    assertEquals((flags & 2) != 0,plan.publickeyThenKeyboardAllowed);
+                }
+                binding.clean();
+            }
+        }
+        for (int version : new int[]{1,2}) {
+            Binding binding = new Binding(); byte[] old = frame("remote");
+            binding.response = version == 1 ? old : ByteBuffer.allocate(old.length + 4).put(old,0,24).putInt(1)
+                    .put(old,24,old.length - 24).array();
+            ByteBuffer.wrap(binding.response).putInt(4,version);
+            try (SshConfigEvaluator evaluator = prepare(binding)) {
+                evaluator.loadDetached(source(),0,31000,request()); evaluator.run();
+                assertFalse(evaluator.directPlan().passwordThenKeyboardAllowed);
+                assertFalse(evaluator.directPlan().publickeyThenKeyboardAllowed);
+            }
+        }
+    }
+
+    @Test public void configPasswordUsesCallerUserOnlyWhenActualConfigPlanRequiresIt() throws Exception {
+        for (String configured : new String[]{"remote",""}) {
+            Binding binding = new Binding(); binding.response = frame(configured);
+            try (SshConfigEvaluator evaluator = prepare(binding)) {
+                evaluator.loadDetached(source(),0,31000,request()); evaluator.run();
+                SshConfigEvaluator.DirectPlan plan = evaluator.directPlan();
+                assertEquals("",SshPasswordConnector.configPasswordUserOverride(plan,""));
+                if (configured.isEmpty()) assertEquals("typed",SshPasswordConnector.configPasswordUserOverride(plan,"typed"));
+                else {
+                    try { SshPasswordConnector.configPasswordUserOverride(plan,"foreign"); fail("Fixed config user must not be overridden"); }
+                    catch (VaultException expected) { assertEquals("PARAMETERS",expected.code); }
+                }
+            }
+        }
+    }
+
     @Test public void malformedCountsFlagsPathsAndTrailingDataRejectWithWireCleanup() throws Exception {
         byte[] good = frame("remote", ".ssh/id");
         List<byte[]> invalid = new ArrayList<>();

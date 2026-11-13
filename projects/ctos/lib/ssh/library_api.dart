@@ -465,10 +465,12 @@ extension SshLibraryApi on SshPasswordApi {
     String passphrase = '',
     bool useSavedPassphrase = false,
     bool savePassphrase = false,
+    bool continueKeyboardInteractive = false,
   }) => _connectIdentity(this, requestId, 'ssh.keyConnect', {
     ..._tuple(requestId, host, port, username),
     'keyId': _identifier(keyId),
     ..._sshPassphraseArguments(passphrase, useSavedPassphrase, savePassphrase),
+    if (continueKeyboardInteractive) 'continueKeyboardInteractive': true,
     ..._sshSize(columns, rows),
   });
 
@@ -483,6 +485,7 @@ extension SshLibraryApi on SshPasswordApi {
     String passphrase = '',
     bool useSavedPassphrase = false,
     bool savePassphrase = false,
+    bool continueKeyboardInteractive = false,
   }) {
     if (username.isNotEmpty && sshUsernameError(username) != null)
       throw _invalid();
@@ -492,11 +495,43 @@ extension SshLibraryApi on SshPasswordApi {
       'binding': _sshBinding(binding),
       'keyId': _identifier(keyId),
       'username': username,
+      if (continueKeyboardInteractive) 'continueKeyboardInteractive': true,
       ..._sshPassphraseArguments(
         passphrase,
         useSavedPassphrase,
         savePassphrase,
       ),
+      ..._sshSize(columns, rows),
+    });
+  }
+
+  Future<void> configPasswordConnect({
+    required String requestId,
+    required String alias,
+    required String binding,
+    String username = '',
+    required String password,
+    bool useSavedPassword = false,
+    bool savePassword = false,
+    bool continueKeyboardInteractive = false,
+    required int columns,
+    required int rows,
+  }) {
+    if (username.isNotEmpty && sshUsernameError(username) != null ||
+        (useSavedPassword
+            ? password.isNotEmpty || savePassword
+            : sshPasswordError(password) != null)) {
+      throw _invalid();
+    }
+    return _connectIdentity(this, requestId, 'ssh.configPasswordConnect', {
+      'requestId': _identifier(requestId),
+      'alias': _sshAlias(alias),
+      'binding': _sshBinding(binding),
+      'username': username,
+      'password': password,
+      'useSavedPassword': useSavedPassword,
+      'savePassword': savePassword,
+      if (continueKeyboardInteractive) 'continueKeyboardInteractive': true,
       ..._sshSize(columns, rows),
     });
   }

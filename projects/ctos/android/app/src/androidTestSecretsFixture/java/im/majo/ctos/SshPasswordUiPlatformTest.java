@@ -351,7 +351,7 @@ public final class SshPasswordUiPlatformTest {
         private static boolean contains(CharSequence value, String expected) {
             return value != null && value.toString().contains(expected);
         }
-        private void sweep(int attempt) {
+        void sweep(int attempt) {
             if (attempt % 5 != 0) return;
             AccessibilityNodeInfo.AccessibilityAction action = attempt % 30 == 0
                     ? AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_BACKWARD

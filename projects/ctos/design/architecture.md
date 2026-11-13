@@ -1,5 +1,15 @@
 # Architecture
 
+2026-11-04：[MFA续接](ssh-mfa-authentication.md)保留原selection／role／owner／host／KEX及
+一次秘密消费；CSASv3预先固定续接许可，原生只将真实首阶段PARTIAL切换一次到KBI。
+Java严格核对CSAPv1后保留私有阶段标记，回执临时byte[]擦除；公共问题wire保持。
+CSCP/CSPPv3消费实际Options的两条相对顺序能力，legacy无新权限。configPassword独立
+接入当前配置目标／信任和同一实际账号密码，不调用manual CONFIG写入；schema不迁移。
+Flutter全体续接模式复用受保护提问寿命，RAM重连只带公开选择并重新解析配置。
+[本地验证与最终同输入APK闭包](verification.md#20261104-ssh-mfa-local)通过，Android与人工体验不由此推定通过。
+随后另获当前授权的[实际Android bridge／JNI／同连接MFA／PTY方法](verification.md#20261104-ssh-mfa-device)
+10.415秒通过并清理；独立运行复核通过，正式应用及人工体验另行交付，不关闭完整父AC。
+
 2026-11-02：[独立KBI](ssh-keyboard-interactive.md)在同一native owner/实际host/KEX上新增
 method-aware挑战状态与CSKI/CSKR；CSASkind3无entry/path，不进入generic密码释放。
 Java以原role/KEX/source/期限绑定当前轮邮箱，一次交付给owner；Flutter只持typed公共

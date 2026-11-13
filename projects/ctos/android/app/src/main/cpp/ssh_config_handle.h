@@ -12,7 +12,7 @@
 #define CTOS_SSH_CONFIG_CATALOG_BYTES 70424U
 #define CTOS_SSH_CONFIG_RESOURCE_BYTES 107328U
 #define CTOS_SSH_CONFIG_AUDIT_BYTES 82732U
-#define CTOS_SSH_CONFIG_DIRECT_BYTES (52U + 3U * 259U + (256U + 32U) * 516U)
+#define CTOS_SSH_CONFIG_DIRECT_BYTES (60U + 3U * 259U + (256U + 32U) * 516U)
 
 /* Positive signed-64-bit opaque identity; never an address or reusable slot. */
 typedef uint64_t ctos_ssh_config_token;

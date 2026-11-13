@@ -1,5 +1,27 @@
 # ctOS 产品与实施规划
 
+2026-11-13：用户反馈本轮 SSH 表单及指纹恢复体验“可以；目前能够接受了”，
+[人工反馈](verification.md#20261113-ssh-feedback-human-acceptance)已记录；不据此推定
+MFA 串联具体人工流程或完整 SSH 父验收通过。
+
+2026-11-06：用户确认设备恢复并要求继续，已沿既有授权将MFA正常418f6d13…
+[保留数据更新指定板并启动](verification.md#20261106-ssh-mfa-formal-install)，实际APK／签名及
+保留身份核对通过，自有ADB已清理。人工体验／提交／完整父AC仍开放；下方不可达为历史。
+
+2026-11-05：正式MFA保留数据更新及启动已另获“授权”，交付控制器／本地检查与独立复核
+完成；[实际预检及一次同址重试](verification.md#20261105-ssh-mfa-formal-install)均因
+`192.168.9.14:5555`返回`No route to host`停止，未安装／启动，自有ADB已清理。
+待设备恢复可达后沿既有授权交付正常418f6d13…；人工体验／提交／完整父AC保持开放。
+下方待正式更新授权为此前状态。
+
+2026-11-04 接续：独立KBI已提交`bc933b5`，原1008恢复current/in_progress。
+用户回复“开始”，已批准[密码／私钥后继续KBI](ssh-mfa-authentication.md)，覆盖手动／config、
+显式默认关闭的续接选项及同连接两阶段；已完成本地实现／分层测试／字体布局／构建lint／
+三APK来源审计及独立复核。[结果与工件](verification.md#20261104-ssh-mfa-local)，
+用户另回复“授权”后，[指定板实际方法10.415秒通过](verification.md#20261104-ssh-mfa-device)，
+5auth／5实际PTY、取消／重放／保存保持和全部清理及独立运行复核通过；正式8b6c2a42…
+保持，正常418f6d13…正式更新及人工体验待后续授权，父完整AC保持开放。
+
 2026-11-04：用户对正式8b6c2a42…反馈“验收通过；可以提交”，
 [本轮KBI与界面修正人工验收通过](verification.md#20261104-ssh-kbi-human-acceptance)，
 按授权提交该增量。原1008/current/in_progress保持，完整父AC及MFA方法串联不由此关闭。

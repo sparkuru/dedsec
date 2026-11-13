@@ -295,7 +295,7 @@ void main() {
         findsOneWidget,
       );
       await ui.tap('ssh-config-host-demo');
-      expect(find.text('尚未导入可用私钥。可选择服务器交互式认证，或返回导入私钥。'), findsOneWidget);
+      expect(find.text('尚未导入可用私钥。可选择密码或服务器交互式认证，或返回导入私钥。'), findsOneWidget);
       await ui.tap('ssh-config-key-cancel');
       await ui.tap('ssh-library-cancel');
       expect(ui.releases, hasLength(1));
@@ -518,7 +518,7 @@ void main() {
     await ui.tap('ssh-import-acknowledge');
     expect(ui.arguments('ssh.importCommit'), hasLength(1));
     await ui.tap('ssh-config-host-demo');
-    expect(find.text('尚未导入可用私钥。可选择服务器交互式认证，或返回导入私钥。'), findsOneWidget);
+    expect(find.text('尚未导入可用私钥。可选择密码或服务器交互式认证，或返回导入私钥。'), findsOneWidget);
     expect(find.text('/home/source/.ssh/id_rsa'), findsOneWidget);
     expect(find.byKey(const Key('ssh-config-key-key_a')), findsNothing);
     await ui.tap('ssh-config-key-cancel');
@@ -1760,6 +1760,18 @@ class _Ui {
   }
 
   Future<void> tap(String key) async {
+    if (key == 'ssh-manage-identities') {
+      if (find.byKey(Key(key)).evaluate().isEmpty) {
+        await reveal('ssh-connection-management');
+        await tester.tap(find.byKey(const Key('ssh-connection-management')));
+        await pump();
+      }
+      await tester.ensureVisible(find.byKey(Key(key)));
+      await pump();
+      await tester.tap(find.byKey(Key(key)));
+      await pump();
+      return;
+    }
     await reveal(key);
     await tester.tap(find.byKey(Key(key)));
     await pump();

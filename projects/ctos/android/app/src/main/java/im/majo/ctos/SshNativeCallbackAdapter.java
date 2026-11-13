@@ -937,6 +937,16 @@ final class SshNativeCallbackAdapter implements AutoCloseable {
     }
     long roleToken() { return issued.token; }
 
+    void requireKeyboardContinuation() throws VaultException {
+        synchronized (stateLock) {
+            requireAuthenticationSelectionLive();
+            if (authenticationSelection == null || !authenticationSelection.continueKeyboardInteractive
+                    || authenticationSelection.kind != SshCredentialBridge.Kind.PASSWORD
+                        && authenticationSelection.kind != SshCredentialBridge.Kind.PRIVATE_KEY)
+                throw SshAuthenticationSelection.invalid();
+        }
+    }
+
     /** Only this adapter may export its frozen plan; session callers supply no wire. */
     byte[] authenticationSelectionWire() throws VaultException {
         synchronized (stateLock) {

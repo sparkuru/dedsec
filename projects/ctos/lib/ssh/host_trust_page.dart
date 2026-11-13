@@ -8,22 +8,120 @@ import '../secrets/flows.dart';
 import '../ui/ctos_components.dart';
 import 'api.dart';
 
+enum SshHostKeyConflictAction { view, forget, cancel }
+
+class SshHostKeyConflictDialog extends StatelessWidget {
+  const SshHostKeyConflictDialog({
+    super.key,
+    required this.host,
+    required this.port,
+    required this.onAction,
+  });
+
+  final String host;
+  final int port;
+  final ValueChanged<SshHostKeyConflictAction> onAction;
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    title: const Text('服务器主机密钥已变化'),
+    scrollable: true,
+    content: Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SelectableText('$host:$port'),
+        const SizedBox(height: 12),
+        const Text('服务器提供的密钥与已保存的指纹不同，本次连接已停止。'),
+        const SizedBox(height: 8),
+        const Text('可查看或忘记旧指纹；重新连接时仍需核对服务器的新指纹。'),
+      ],
+    ),
+    actions: [
+      TextButton(
+        key: const Key('ssh-host-changed-cancel'),
+        onPressed: () => onAction(SshHostKeyConflictAction.cancel),
+        child: const Text('取消'),
+      ),
+      TextButton(
+        key: const Key('ssh-host-changed-view'),
+        onPressed: () => onAction(SshHostKeyConflictAction.view),
+        child: const Text('查看旧指纹'),
+      ),
+      FilledButton.tonal(
+        key: const Key('ssh-host-changed-forget'),
+        onPressed: () => onAction(SshHostKeyConflictAction.forget),
+        child: const Text('忘记原有指纹'),
+      ),
+    ],
+  );
+}
+
 Future<void> showSshHostTrust(
   BuildContext context, {
   required SshPasswordApi api,
   bool Function()? canOpen,
+  ({String host, int port})? initialTarget,
+  SshHostTrustGroup? initialForgetGroup,
+  bool returnAfterForget = false,
+  bool selectGroupForForget = false,
+  bool directForget = false,
 }) async {
+  if (initialTarget == null && initialForgetGroup != null ||
+      directForget &&
+          (initialTarget == null ||
+              !returnAfterForget ||
+              initialForgetGroup == null && !selectGroupForForget) ||
+      initialTarget != null &&
+          (sshHostError(initialTarget.host) != null ||
+              sshPortError(initialTarget.port.toString()) != null)) {
+    throw ArgumentError('Invalid host trust target');
+  }
   final flow = _HostTrustFlow(api);
   final navigator = Navigator.of(context);
   final origin = ModalRoute.of(context);
   try {
-    await showSensitiveSecretRoute<void>(
-      context,
-      api: api.vault,
-      canOpen: canOpen,
-      builder: (_) => SshHostTrustPage._(api: api, flow: flow),
-      onPopped: (_) => flow.finish(context, navigator, origin),
+    Widget buildTrustPage(BuildContext _) => SshHostTrustPage._(
+      api: api,
+      flow: flow,
+      initialTarget: initialTarget,
+      initialForgetGroup: initialForgetGroup,
+      returnAfterForget: returnAfterForget,
+      selectGroupForForget: selectGroupForForget,
+      directForget: directForget,
     );
+    if (!directForget) {
+      await showSensitiveSecretRoute<void>(
+        context,
+        api: api.vault,
+        canOpen: canOpen,
+        builder: buildTrustPage,
+        onPopped: (_) => flow.finish(context, navigator, origin),
+      );
+    } else {
+      if (origin?.isCurrent == false || canOpen?.call() == false) return;
+      final owner = await api.vault.acquireProtection();
+      DialogRoute<void>? route;
+      try {
+        if (!context.mounted ||
+            !navigator.mounted ||
+            origin?.isCurrent == false ||
+            canOpen?.call() == false)
+          return;
+        route = DialogRoute<void>(
+          context: context,
+          barrierDismissible: false,
+          themes: InheritedTheme.capture(from: context, to: navigator.context),
+          builder: buildTrustPage,
+        );
+        await Future.any([navigator.push(route), route.completed]);
+        await flow.finish(context, navigator, origin);
+      } finally {
+        if (route != null) await route.completed;
+        await WidgetsBinding.instance.endOfFrame;
+        await api.vault.releaseProtection(owner);
+      }
+    }
   } finally {
     flow.dispose();
   }
@@ -76,6 +174,7 @@ class _HostTrustFlow with WidgetsBindingObserver {
         if (!foreground.value || !context.mounted || !navigator.mounted) return;
       }
       final message = receipt;
+      var acknowledgedByButton = false;
       late final DialogRoute<bool> dialog;
       dialog = DialogRoute<bool>(
         context: context,
@@ -94,8 +193,12 @@ class _HostTrustFlow with WidgetsBindingObserver {
                   onPressed: !ready
                       ? null
                       : () {
-                          if (foreground.value && dialog.isCurrent)
+                          if (foreground.value &&
+                              dialog.isCurrent &&
+                              !acknowledgedByButton) {
+                            acknowledgedByButton = true;
                             Navigator.of(dialogContext).pop(true);
+                          }
                         },
                   child: const Text('知道了'),
                 ),
@@ -109,7 +212,8 @@ class _HostTrustFlow with WidgetsBindingObserver {
         dialog.completed,
       ]);
       await dialog.completed;
-      if (accepted == true && receipt == message) receipt = null;
+      if (accepted == true && acknowledgedByButton && receipt == message)
+        receipt = null;
     }
   }
 
@@ -120,11 +224,29 @@ class _HostTrustFlow with WidgetsBindingObserver {
 }
 
 class SshHostTrustPage extends StatefulWidget {
-  const SshHostTrustPage({super.key, required this.api}) : _flow = null;
-  const SshHostTrustPage._({required this.api, required _HostTrustFlow flow})
-    : _flow = flow;
+  const SshHostTrustPage({super.key, required this.api})
+    : _flow = null,
+      initialTarget = null,
+      initialForgetGroup = null,
+      returnAfterForget = false,
+      selectGroupForForget = false,
+      directForget = false;
+  const SshHostTrustPage._({
+    required this.api,
+    required _HostTrustFlow flow,
+    this.initialTarget,
+    this.initialForgetGroup,
+    this.returnAfterForget = false,
+    this.selectGroupForForget = false,
+    this.directForget = false,
+  }) : _flow = flow;
   final SshPasswordApi api;
   final _HostTrustFlow? _flow;
+  final ({String host, int port})? initialTarget;
+  final SshHostTrustGroup? initialForgetGroup;
+  final bool returnAfterForget;
+  final bool selectGroupForForget;
+  final bool directForget;
   @override
   State<SshHostTrustPage> createState() => _SshHostTrustPageState();
 }
@@ -152,7 +274,9 @@ class _SshHostTrustPageState extends State<SshHostTrustPage>
   int _revision = 0;
   bool _querying = false, _previewing = false, _working = false;
   bool _foreground = true, _healthy = true, _closing = false, _leaving = false;
-  bool _sessionReady = false;
+  bool _sessionReady = false, _acknowledging = false;
+  bool _autoQueryPending = false;
+  SshHostTrustGroup? _autoForgetGroup;
 
   bool get _busy => _querying || _previewing || _working || _closing;
   bool get _canAct => _healthy && _sessionReady;
@@ -166,6 +290,13 @@ class _SshHostTrustPageState extends State<SshHostTrustPage>
         WidgetsBinding.instance.lifecycleState == null ||
         WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
     WidgetsBinding.instance.addObserver(this);
+    final target = widget.initialTarget;
+    if (target != null) {
+      _host.text = target.host;
+      _port.text = target.port.toString();
+      _autoQueryPending = true;
+      _autoForgetGroup = widget.initialForgetGroup;
+    }
     _host.addListener(_targetChanged);
     _port.addListener(_targetChanged);
     _events = widget.api.events.listen(
@@ -203,6 +334,7 @@ class _SshHostTrustPageState extends State<SshHostTrustPage>
           _invalidate('秘密库已变化，请重新查看指纹。');
         } else {
           setState(() {});
+          _scheduleAutoLookup();
         }
       },
       onError: (Object error) => _sessionFailed(),
@@ -216,6 +348,19 @@ class _SshHostTrustPageState extends State<SshHostTrustPage>
     _route = ModalRoute.of(context);
     if (_route?.isCurrent == false && _dialog == null && !_leaving)
       _invalidate('页面已隐藏，请重新查看指纹。');
+    else
+      _scheduleAutoLookup();
+  }
+
+  void _scheduleAutoLookup() {
+    if (!_autoQueryPending || !_sessionReady || !_foreground || !_healthy)
+      return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!_autoQueryPending || !_current || !_canAct || _busy || _leaving)
+        return;
+      _autoQueryPending = false;
+      unawaited(_lookup());
+    });
   }
 
   @override
@@ -253,6 +398,16 @@ class _SshHostTrustPageState extends State<SshHostTrustPage>
       });
   }
 
+  void _closePreviewDialog(_TrustPreviewRoute dialog) {
+    if (!identical(_dialog, dialog)) return;
+    _dialog = null;
+    if (!dialog.isActive) return;
+    if (dialog.isCurrent)
+      dialog.navigator?.pop();
+    else
+      dialog.navigator?.removeRoute(dialog);
+  }
+
   void _targetChanged() {
     if (!mounted || _leaving) return;
     _invalidate(null);
@@ -261,6 +416,8 @@ class _SshHostTrustPageState extends State<SshHostTrustPage>
   void _invalidate(String? error) {
     if (!mounted || _leaving) return;
     ++_revision;
+    _autoQueryPending = false;
+    _autoForgetGroup = null;
     _previewExpiry?.cancel();
     final preview = _preview;
     _preview = null;
@@ -304,6 +461,9 @@ class _SshHostTrustPageState extends State<SshHostTrustPage>
     if (!_current || _closing) return;
     final revision = ++_revision;
     final host = _host.text, port = int.parse(_port.text);
+    final autoForgetGroup = _autoForgetGroup;
+    _autoForgetGroup = null;
+    SshHostTrustEntries? autoForget;
     final id = widget.api.newRequestId();
     _requestId = id;
     setState(() {
@@ -320,6 +480,12 @@ class _SshHostTrustPageState extends State<SshHostTrustPage>
       if (!_current || revision != _revision || _closing || _requestId != id)
         return;
       setState(() => _query = query);
+      if (autoForgetGroup != null) {
+        final entries = query.groups.firstWhere(
+          (entry) => entry.group == autoForgetGroup,
+        );
+        if (entries.canForget) autoForget = entries;
+      }
     } catch (failure) {
       if (mounted && revision == _revision && !_leaving) {
         if (sshRequiresReopen(failure))
@@ -332,6 +498,15 @@ class _SshHostTrustPageState extends State<SshHostTrustPage>
       if (_requestId == id) _requestId = null;
       if (mounted) setState(() => _querying = false);
     }
+    if (autoForget != null &&
+        _current &&
+        _canAct &&
+        !_closing &&
+        !_leaving &&
+        revision == _revision &&
+        _query != null) {
+      await _forget(autoForget);
+    }
   }
 
   Future<void> _forget(SshHostTrustEntries entries) async {
@@ -342,6 +517,8 @@ class _SshHostTrustPageState extends State<SshHostTrustPage>
     final id = widget.api.newRequestId();
     _requestId = id;
     SshHostTrustForgetPreview? preview;
+    var forgotten = false;
+    var closeAfterDecline = false;
     setState(() {
       _previewing = true;
       _error = null;
@@ -361,10 +538,21 @@ class _SshHostTrustPageState extends State<SshHostTrustPage>
       if (!_current || revision != _revision || _closing || _leaving) return;
       _preview = preview;
       final reviewed = preview;
-      late final DialogRoute<bool> dialog;
-      dialog = DialogRoute<bool>(
+      final decision = Completer<bool>();
+      var confirmedByButton = false;
+      late final _TrustPreviewRoute dialog;
+      dialog = _TrustPreviewRoute(
         context: context,
-        barrierDismissible: false,
+        onCovered: () {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted &&
+                revision == _revision &&
+                identical(_dialog, dialog) &&
+                identical(_preview, reviewed)) {
+              _invalidate('指纹审阅已中断，请重新查看。');
+            }
+          });
+        },
         builder: (dialogContext) => AlertDialog(
           title: const Text('忘记这些旧指纹？'),
           scrollable: true,
@@ -386,7 +574,13 @@ class _SshHostTrustPageState extends State<SshHostTrustPage>
           actions: [
             TextButton(
               key: const Key('ssh-trust-decline'),
-              onPressed: () => Navigator.of(dialogContext).pop(false),
+              onPressed: () {
+                if (!dialog.wasCovered &&
+                    identical(_dialog, dialog) &&
+                    dialog.isCurrent &&
+                    !decision.isCompleted)
+                  decision.complete(false);
+              },
               child: const Text('取消'),
             ),
             FilledButton(
@@ -400,22 +594,56 @@ class _SshHostTrustPageState extends State<SshHostTrustPage>
                     revision == _revision &&
                     identical(_preview, reviewed) &&
                     identical(_dialog, dialog) &&
-                    dialog.isCurrent)
-                  Navigator.of(dialogContext).pop(true);
+                    !dialog.wasCovered &&
+                    dialog.isCurrent &&
+                    !decision.isCompleted) {
+                  confirmedByButton = true;
+                  decision.complete(true);
+                }
               },
               child: const Text('忘记旧指纹'),
             ),
           ],
         ),
       );
-      final accepted = await _show(dialog);
+      _dialog = dialog;
+      final accepted = await Future.any<bool?>([
+        Navigator.of(context).push(dialog),
+        dialog.completed,
+        decision.future,
+      ]);
+      if ((dialog.wasCovered || accepted == true && !confirmedByButton) &&
+          mounted &&
+          revision == _revision &&
+          identical(_preview, reviewed)) {
+        _invalidate('指纹审阅已中断，请重新查看。');
+      }
       if (accepted != true ||
-          !_current ||
+          !confirmedByButton ||
+          dialog.wasCovered ||
+          !mounted ||
+          !_foreground ||
+          !_canAct ||
+          _route?.isActive == false ||
+          !dialog.isCurrent ||
+          !identical(_dialog, dialog) ||
           revision != _revision ||
           _closing ||
           _leaving ||
-          !identical(_preview, reviewed))
+          !identical(_preview, reviewed)) {
+        closeAfterDecline =
+            widget.directForget &&
+            accepted != true &&
+            mounted &&
+            _foreground &&
+            !dialog.wasCovered &&
+            (dialog.isCurrent || _current) &&
+            revision == _revision &&
+            !_closing &&
+            !_leaving;
+        _closePreviewDialog(dialog);
         return;
+      }
       final commitId = widget.api.newRequestId();
       _requestId = commitId;
       final completion = Completer<void>();
@@ -424,11 +652,14 @@ class _SshHostTrustPageState extends State<SshHostTrustPage>
       _flow.operationId = commitId;
       setState(() => _working = true);
       try {
-        await widget.api.hostTrustForgetCommit(
+        final commit = widget.api.hostTrustForgetCommit(
           requestId: commitId,
           ticketId: reviewed.ticketId,
           binding: reviewed.binding,
         );
+        _closePreviewDialog(dialog);
+        await commit;
+        forgotten = true;
         _receipt = '已忘记旧指纹，请重新连接并核对新指纹。';
         if (mounted) setState(() => _query = null);
       } catch (failure) {
@@ -442,6 +673,7 @@ class _SshHostTrustPageState extends State<SshHostTrustPage>
             _error = sshMaterialError(failure);
           });
       } finally {
+        _closePreviewDialog(dialog);
         _flow.operationId = null;
         if (_requestId == commitId) _requestId = null;
         if (mounted) setState(() => _working = false);
@@ -464,38 +696,61 @@ class _SshHostTrustPageState extends State<SshHostTrustPage>
       await _cancel(id);
       if (_requestId == id) _requestId = null;
       if (mounted) setState(() => _previewing = false);
+      if (closeAfterDecline && _current && !_closing && !_leaving)
+        unawaited(_leave());
     }
-    if (_current && !_closing && !_leaving && _receipt != null)
-      await _acknowledge();
+    if (_current && !_closing && !_leaving && _receipt != null) {
+      final acknowledged = await _acknowledge();
+      if (acknowledged && forgotten && widget.returnAfterForget && _current) {
+        await _leave();
+      }
+    }
   }
 
   Future<bool> _acknowledge() async {
     if (_receipt == null) return true;
-    if (!_current || _dialog != null) return false;
-    final receipt = _receipt;
-    late final DialogRoute<bool> dialog;
-    dialog = DialogRoute<bool>(
-      context: context,
-      barrierDismissible: false,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('主机信任操作结果'),
-        scrollable: true,
-        content: Text(receipt!),
-        actions: [
-          TextButton(
-            key: const Key('ssh-trust-acknowledge'),
-            onPressed: () {
-              if (_foreground && identical(_dialog, dialog) && dialog.isCurrent)
-                Navigator.of(dialogContext).pop(true);
-            },
-            child: const Text('知道了'),
+    if (!_current || _dialog != null || _acknowledging) return false;
+    _acknowledging = true;
+    try {
+      while (_receipt != null && _current && _dialog == null) {
+        final receipt = _receipt;
+        var acknowledgedByButton = false;
+        late final DialogRoute<bool> dialog;
+        dialog = DialogRoute<bool>(
+          context: context,
+          barrierDismissible: false,
+          builder: (dialogContext) => AlertDialog(
+            title: const Text('主机信任操作结果'),
+            scrollable: true,
+            content: Text(receipt!),
+            actions: [
+              TextButton(
+                key: const Key('ssh-trust-acknowledge'),
+                onPressed: () {
+                  if (_foreground &&
+                      identical(_dialog, dialog) &&
+                      dialog.isCurrent &&
+                      !acknowledgedByButton) {
+                    acknowledgedByButton = true;
+                    Navigator.of(dialogContext).pop(true);
+                  }
+                },
+                child: const Text('知道了'),
+              ),
+            ],
           ),
-        ],
-      ),
-    );
-    if (await _show(dialog) != true) return false;
-    if (_receipt == receipt) _receipt = null;
-    return true;
+        );
+        final accepted = await _show(dialog);
+        if (accepted == true && acknowledgedByButton && _receipt == receipt) {
+          _receipt = null;
+        } else {
+          await dialog.completed;
+        }
+      }
+      return _receipt == null;
+    } finally {
+      _acknowledging = false;
+    }
   }
 
   Future<void> _leave() async {
@@ -536,7 +791,105 @@ class _SshHostTrustPageState extends State<SshHostTrustPage>
   }
 
   @override
-  Widget build(BuildContext context) => PopScope(
+  Widget build(BuildContext context) =>
+      widget.directForget ? _directForgetDialog() : _trustPage();
+
+  Widget _directForgetDialog() {
+    final query = _query;
+    final group = widget.initialForgetGroup;
+    final groups = query?.groups.where(
+      (entries) => group == null || entries.group == group,
+    );
+    return PopScope(
+      canPop: _leaving,
+      onPopInvokedWithResult: (didPop, result) {
+        if (!didPop) unawaited(_leave());
+      },
+      child: Form(
+        key: _form,
+        child: AlertDialog(
+          key: const Key('ssh-trust-direct-dialog'),
+          title: const Text('忘记原有指纹'),
+          scrollable: true,
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              SelectableText(
+                '${widget.initialTarget!.host}:${widget.initialTarget!.port}',
+              ),
+              if (_error != null) ...[
+                const SizedBox(height: 16),
+                Semantics(liveRegion: true, child: Text(_error!)),
+              ] else if (_busy || query == null) ...[
+                const SizedBox(height: 16),
+                const LinearProgressIndicator(),
+                const SizedBox(height: 12),
+                Text(_working ? '正在忘记旧指纹…' : '正在准备旧指纹审阅…'),
+              ] else ...[
+                const SizedBox(height: 16),
+                if (widget.selectGroupForForget)
+                  const Text('配置可能使用其他信任文件；请核对来源后选择要忘记的记录。'),
+                for (final entries in groups!)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Text(
+                          entries.group.label,
+                          style: Theme.of(context).textTheme.titleSmall,
+                        ),
+                        const SizedBox(height: 4),
+                        Text(entries.group.path),
+                        if (!entries.exists || entries.records.isEmpty)
+                          const Padding(
+                            padding: EdgeInsets.only(top: 8),
+                            child: Text('此目标没有已保存的指纹。'),
+                          )
+                        else ...[
+                          for (final row in entries.records)
+                            _TrustRecord(row: row),
+                          if (!entries.canForget)
+                            const Padding(
+                              padding: EdgeInsets.only(top: 12),
+                              child: Text('此组含受保护或共享记录，不能在此忘记。'),
+                            )
+                          else ...[
+                            const SizedBox(height: 12),
+                            Align(
+                              alignment: AlignmentDirectional.centerStart,
+                              child: OutlinedButton(
+                                key: Key(
+                                  'ssh-trust-forget-${entries.group.name}',
+                                ),
+                                onPressed: _canAct && !_busy
+                                    ? () => unawaited(_forget(entries))
+                                    : null,
+                                child: const Text('审阅并忘记'),
+                              ),
+                            ),
+                          ],
+                        ],
+                      ],
+                    ),
+                  ),
+              ],
+            ],
+          ),
+          actions: [
+            TextButton(
+              key: const Key('ssh-trust-close'),
+              onPressed: _closing ? null : () => unawaited(_leave()),
+              child: Text(_working ? '取消操作' : '取消'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _trustPage() => PopScope(
     canPop: _leaving,
     onPopInvokedWithResult: (didPop, result) {
       if (!didPop) unawaited(_leave());
@@ -560,6 +913,10 @@ class _SshHostTrustPageState extends State<SshHostTrustPage>
                 const SizedBox(height: 16),
               ],
               const Text('查看实际连接主机和端口已保存的指纹。配置中的别名不一定是实际主机名。'),
+              if (widget.selectGroupForForget) ...[
+                const SizedBox(height: 8),
+                const Text('配置可能使用其他信任文件；请核对来源后选择要忘记的记录。'),
+              ],
               const SizedBox(height: 20),
               Form(
                 key: _form,
@@ -570,6 +927,7 @@ class _SshHostTrustPageState extends State<SshHostTrustPage>
                       key: const Key('ssh-trust-host'),
                       controller: _host,
                       enabled: !_busy && _foreground && _canAct,
+                      readOnly: widget.initialTarget != null,
                       autocorrect: false,
                       enableSuggestions: false,
                       keyboardType: TextInputType.url,
@@ -583,6 +941,7 @@ class _SshHostTrustPageState extends State<SshHostTrustPage>
                       key: const Key('ssh-trust-port'),
                       controller: _port,
                       enabled: !_busy && _foreground && _canAct,
+                      readOnly: widget.initialTarget != null,
                       keyboardType: TextInputType.number,
                       decoration: const InputDecoration(labelText: '端口'),
                       validator: (value) => sshPortError(value ?? ''),
@@ -685,6 +1044,26 @@ class _SshHostTrustPageState extends State<SshHostTrustPage>
       ),
     ),
   );
+}
+
+class _TrustPreviewRoute extends DialogRoute<bool> {
+  _TrustPreviewRoute({
+    required super.context,
+    required super.builder,
+    required this.onCovered,
+  }) : super(barrierDismissible: false);
+
+  final VoidCallback onCovered;
+  bool _wasCovered = false;
+  bool get wasCovered => _wasCovered;
+
+  @override
+  void didChangeNext(Route<dynamic>? nextRoute) {
+    super.didChangeNext(nextRoute);
+    if (nextRoute == null || _wasCovered) return;
+    _wasCovered = true;
+    onCovered();
+  }
 }
 
 class _TrustRecord extends StatelessWidget {

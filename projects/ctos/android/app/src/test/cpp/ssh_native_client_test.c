@@ -705,6 +705,7 @@ struct fixture {
     struct wire selection_wire;
     unsigned char selection_receipt[32];
     int password_expected;
+    int keyboard_continuation;
     unsigned int password_requests;
     unsigned int password_pending_banner_writes;
     enum password_reply password_reply;
@@ -1009,6 +1010,10 @@ static void finish_fixture_setup_selected_mode(struct fixture *fixture,
         }
         make_selection_wire(&fixture->selection_wire, &snapshot, selection_kind, fields);
         if (fixture->encrypted_identity) fixture->selection_wire.bytes[5] = 2U;
+        if (fixture->keyboard_continuation) {
+            fixture->selection_wire.bytes[5] = 3U;
+            wire_u32(&fixture->selection_wire, 3U);
+        }
         if (fixture->password_expected || fixture->private_expected) {
             fixture->password_username = (const unsigned char *)" 用户😀 ";
             fixture->password_username_length = sizeof(" 用户😀 ") - 1U;
@@ -1018,6 +1023,17 @@ static void finish_fixture_setup_selected_mode(struct fixture *fixture,
         config.authentication_selection_wire = fixture->selection_wire.bytes;
         config.authentication_selection_wire_length = fixture->selection_wire.length;
         if (admission_matrix) exercise_selection_admission(fixture, &config, &snapshot);
+        if (fixture->keyboard_continuation) {
+            for (unsigned int bad = 0; bad < 5U; bad++) {
+                struct wire invalid = fixture->selection_wire;
+                if (bad == 0U) invalid.bytes[invalid.length - 1U] = 4U;
+                if (bad == 1U) invalid.bytes[87] = 3U;
+                if (bad == 2U) invalid.bytes[5] = 2U;
+                if (bad == 3U) invalid.length--;
+                if (bad == 4U) wire_u32(&invalid, 0U);
+                reject_selection_open(fixture, &config, invalid.bytes, invalid.length, EINVAL);
+            }
+        }
         memset(&snapshot, 0, sizeof(snapshot));
     }
     if (fixture->private_expected) {
@@ -3287,10 +3303,11 @@ static void expect_password_result_error(const struct fixture *fixture, int expe
     CHECK(fixture->callback.selected_calls == calls);
 }
 
-static void setup_password_fixture_mode(struct fixture *fixture, int new_host,
-    unsigned int lifetime_ms, enum ctos_ssh_native_host_key_mode mode) {
+static void setup_password_fixture_continuation(struct fixture *fixture, int new_host,
+    unsigned int lifetime_ms, enum ctos_ssh_native_host_key_mode mode, int continuation) {
     memset(fixture, 0, sizeof(*fixture));
     fixture->password_expected = 1;
+    fixture->keyboard_continuation = continuation;
     fixture->password_methods = (const unsigned char *)"publickey,password";
     fixture->password_methods_length = sizeof("publickey,password") - 1U;
     fixture->password_text_length = 3U;
@@ -3317,6 +3334,11 @@ static void setup_password_fixture_mode(struct fixture *fixture, int new_host,
     CHECK(ctos_ssh_native_client_begin_userauth_service(fixture->client) == 0);
     drive_service(fixture, 0);
     assert_password_result(fixture, CTOS_SSH_PASSWORD_AUTH_NOT_STARTED);
+}
+
+static void setup_password_fixture_mode(struct fixture *fixture, int new_host,
+    unsigned int lifetime_ms, enum ctos_ssh_native_host_key_mode mode) {
+    setup_password_fixture_continuation(fixture, new_host, lifetime_ms, mode, 0);
 }
 
 static void setup_password_fixture(struct fixture *fixture, int new_host,
@@ -3714,7 +3736,8 @@ static void setup_private_fixture_version_mode(struct fixture *fixture, int new_
     enum ctos_ssh_native_host_key_mode mode) {
     memset(fixture, 0, sizeof(*fixture));
     fixture->private_expected = 1;
-    fixture->encrypted_identity = version == 2;
+    fixture->encrypted_identity = version == 2 || version == 4;
+    fixture->keyboard_continuation = version == 3 || version == 4;
     fixture->identity = identity;
     fixture->identity_blob = expected;
     fixture->identity_blob_length = expected_length;
@@ -4949,7 +4972,141 @@ static void test_keyboard_answer_ownership(void) {
     }
 }
 
+static void mfa_keyboard_result(struct fixture *fixture, int expected) {
+    for (unsigned int turn = 0; turn < 200000U; turn++) {
+        CHECK(shell_turn(fixture) == 0);
+        enum ctos_ssh_native_client_keyboard_interactive_auth_result result;
+        CHECK(ctos_ssh_native_client_keyboard_interactive_auth_result(fixture->client, &result) == 0);
+        if (result != CTOS_SSH_KEYBOARD_AUTH_PENDING) { CHECK((int)result == expected); return; }
+    }
+    CHECK(0);
+}
+
+struct mfa_owner_attempt { struct ctos_ssh_native_client *client; unsigned char plan[32]; };
+static void *mfa_wrong_owner(void *opaque) {
+    struct mfa_owner_attempt *attempt = opaque;
+    unsigned char stage[92]; memset(stage, 0xa5, sizeof(stage));
+    CHECK(ctos_ssh_native_client_continue_keyboard_interactive_auth(attempt->client, attempt->plan, stage) != 0
+        && errno == EPERM);
+    for (size_t i = 0; i < sizeof(stage); i++) CHECK(stage[i] == 0);
+    return NULL;
+}
+
+static void test_mfa_continuation(void) {
+    for (unsigned int kind = 0; kind < 3U; kind++) for (unsigned int scenario = 0; scenario < 13U; scenario++) {
+        struct fixture fixture;
+        struct sshkey *key = NULL;
+        struct sshbuf *file = NULL, *bundle = NULL;
+        unsigned char *blob = NULL;
+        size_t blob_length = 0;
+        if (kind == 0) {
+            setup_password_fixture_continuation(&fixture, scenario % 2U, 60000U,
+                CTOS_SSH_HOST_KEY_MANAGED, scenario != 10U);
+        } else {
+            file = sshbuf_new(); CHECK(file != NULL && sshkey_generate(KEY_ED25519, 0, &key) == 0);
+            CHECK(sshkey_to_blob(key, &blob, &blob_length) == 0);
+            CHECK(sshkey_private_to_fileblob(key, file, kind == 2U ? "synthetic-passphrase" : "",
+                "mfa", SSHKEY_PRIVATE_OPENSSH, NULL, 1) == 0);
+            if (kind == 2U) bundle = private_bundle(file, "synthetic-passphrase");
+            setup_private_fixture_version_mode(&fixture, scenario % 2U, key, bundle == NULL ? file : bundle,
+                blob, blob_length, NULL, 0, scenario == 10U ? (kind == 2U ? 2 : 1) : kind == 2U ? 4 : 3,
+                CTOS_SSH_HOST_KEY_MANAGED);
+        }
+        fixture.password_reply = scenario == 5U ? PASSWORD_REPLY_REJECTED
+            : scenario == 6U ? PASSWORD_REPLY_SUCCESS : PASSWORD_REPLY_PARTIAL;
+        const char *methods = scenario == 3U ? "password,publickey" : scenario == 4U
+            ? "xkeyboard-interactivex" : "keyboard-interactive";
+        fixture.password_methods = (const unsigned char *)methods;
+        fixture.password_methods_length = strlen(methods);
+        if (kind == 0) {
+            CHECK(ctos_ssh_native_client_begin_password_auth(fixture.client) == 0);
+            drive_password(&fixture, scenario == 5U ? CTOS_SSH_PASSWORD_AUTH_REJECTED
+                : scenario == 6U ? CTOS_SSH_PASSWORD_AUTH_SUCCESS : CTOS_SSH_PASSWORD_AUTH_PARTIAL, 0);
+        } else {
+            CHECK(ctos_ssh_native_client_begin_private_key_auth(fixture.client) == 0);
+            drive_private(&fixture, scenario == 5U ? CTOS_SSH_PRIVATE_KEY_AUTH_REJECTED
+                : scenario == 6U ? CTOS_SSH_PRIVATE_KEY_AUTH_SUCCESS : CTOS_SSH_PRIVATE_KEY_AUTH_PARTIAL, 0);
+        }
+        CHECK(fixture.callback.selected_calls == 1U && fixture.service_requests == 1U
+            && fixture.callback.kex_complete_calls == 1U);
+        unsigned char stage[92], plan[32];
+        memcpy(plan, fixture.selection_receipt, 32U);
+        if (scenario == 7U) {
+            plan[0] ^= 1U;
+            CHECK(ctos_ssh_native_client_continue_keyboard_interactive_auth(fixture.client, plan, stage) != 0);
+            for (size_t i = 0; i < sizeof(stage); i++) CHECK(stage[i] == 0);
+            plan[0] ^= 1U;
+        }
+        if (scenario == 8U) {
+            struct mfa_owner_attempt attempt = {.client = fixture.client}; memcpy(attempt.plan, plan, 32U);
+            pthread_t thread;
+            CHECK(pthread_create(&thread, NULL, mfa_wrong_owner, &attempt) == 0);
+            CHECK(pthread_join(thread, NULL) == 0);
+        }
+        if (scenario == 9U) CHECK(ctos_ssh_callback_cancel(fixture.callback_token) == 0);
+        if (scenario == 11U) fixture.view->valid = 0;
+        if (scenario == 12U) fixture.view->deadline = deadline_after(0);
+        int transitioned = ctos_ssh_native_client_continue_keyboard_interactive_auth(fixture.client, plan, stage);
+        if ((scenario >= 3U && scenario <= 6U) || scenario >= 9U) {
+            CHECK(transitioned != 0);
+            for (size_t i = 0; i < sizeof(stage); i++) CHECK(stage[i] == 0);
+            CHECK(fixture.keyboard_requests == 0U);
+            if (scenario != 6U) CHECK(ctos_ssh_native_client_begin_shell(fixture.client, 80, 24) != 0);
+            else {
+                fixture.shell_expected = 1; fixture.shell_window = 65536U; fixture.shell_maxpacket = 32768U;
+                CHECK(ctos_ssh_native_client_begin_shell(fixture.client, 80, 24) == 0);
+                for (unsigned int turn = 0; turn < 100000U && fixture.shell_stage != 3; turn++) CHECK(shell_turn(&fixture) == 0);
+                CHECK(fixture.shell_stage == 3 && fixture.callback.kex_complete_calls == 1U);
+            }
+        } else {
+            CHECK(transitioned == 0 && read_u32(stage) == 0x43534150U
+                && read_u32(stage + 4U) == 0x00010000U && read_u32(stage + 8U) == 2U
+                && read_u32(stage + 12U) == (kind == 0U ? 1U : 4U) && read_u32(stage + 16U) == 3U);
+            CHECK(memcmp(stage + 20U, plan, 32U) == 0
+                && read_u32(stage + 52U) == 0U && read_u32(stage + 56U) == fixture.callback.last_kex_cycle
+                && memcmp(stage + 60U, fixture.callback.last_kex_digest, 32U) == 0);
+            unsigned char secret[32]; size_t secret_length = 99;
+            CHECK(ctos_ssh_native_client_selected_credential_bytes(fixture.client, secret, sizeof(secret), &secret_length) != 0
+                && secret_length == 0 && fixture.callback.selected_calls == 1U);
+            CHECK(ctos_ssh_native_client_begin_password_auth(fixture.client) != 0);
+            CHECK(ctos_ssh_native_client_begin_private_key_auth(fixture.client) != 0);
+            CHECK(ctos_ssh_native_client_begin_keyboard_interactive_auth(fixture.client) != 0);
+            CHECK(ctos_ssh_native_client_continue_keyboard_interactive_auth(fixture.client, plan, stage) != 0);
+            fixture.password_expected = fixture.private_expected = 0;
+            fixture.keyboard_expected = 1;
+            for (unsigned int turn = 0; turn < 100000U && fixture.keyboard_requests == 0; turn++) CHECK(shell_turn(&fixture) == 0);
+            CHECK(fixture.keyboard_requests == 1U);
+            for (unsigned int round = 1; round <= 3U; round++) {
+                unsigned int count = round == 1U ? 2U : round == 2U ? 0U : 1U;
+                keyboard_challenge_packet(&fixture, count, 0);
+                mfa_keyboard_result(&fixture, CTOS_SSH_KEYBOARD_AUTH_CHALLENGE);
+                for (unsigned int i = 0; i < count; i++) fixture.keyboard_answers[i] = (struct ctos_ssh_slice){(const unsigned char *)"", 0};
+                keyboard_answer(&fixture, round);
+            }
+            keyboard_finish_packet(&fixture, scenario == 1U ? 3U : scenario == 2U ? 4U : 2U);
+            mfa_keyboard_result(&fixture, scenario == 1U ? CTOS_SSH_KEYBOARD_AUTH_REJECTED
+                : scenario == 2U ? CTOS_SSH_KEYBOARD_AUTH_PARTIAL : CTOS_SSH_KEYBOARD_AUTH_SUCCESS);
+            if (scenario == 1U || scenario == 2U) CHECK(ctos_ssh_native_client_begin_shell(fixture.client, 80, 24) != 0);
+            else {
+                fixture.shell_expected = 1; fixture.shell_window = 65536U; fixture.shell_maxpacket = 32768U;
+                CHECK(ctos_ssh_native_client_begin_shell(fixture.client, 80, 24) == 0);
+                for (unsigned int turn = 0; turn < 100000U && fixture.shell_stage != 3; turn++) CHECK(shell_turn(&fixture) == 0);
+                CHECK(fixture.shell_stage == 3 && fixture.callback.kex_complete_calls == 1U);
+            }
+            CHECK(fixture.callback.selected_calls == 1U && fixture.callback.credential_calls == 0U
+                && fixture.callback.credential_bytes_calls == 0U && fixture.keyboard_responses == 3U);
+        }
+        cleanup_fixture(&fixture, 1);
+        sshbuf_free(bundle); sshbuf_free(file); free(blob); sshkey_free(key);
+    }
+}
+
 int main(int argc, char **argv) {
+    if (argc == 2 && strcmp(argv[1], "--mfa-only") == 0) {
+        test_mfa_continuation();
+        printf("SSH_NATIVE_MFA checks=%u gate=pass runtime=synthetic\n", checks);
+        return 0;
+    }
     if (argc == 2 && strcmp(argv[1], "--keyboard-only") == 0) {
         test_keyboard_rounds_and_outcomes();
         test_keyboard_wire_echo_booleans();
@@ -5033,6 +5190,7 @@ int main(int argc, char **argv) {
     test_keyboard_protocol_limits();
     test_keyboard_negative_host();
     test_keyboard_answer_ownership();
+    test_mfa_continuation();
     test_shell_roundtrip();
     test_shell_rejection_and_auth_gate();
     test_shell_window_and_backpressure();

@@ -116,7 +116,14 @@ final class SshHostKeyDismissed extends SshEvent {
   final String ticketId;
 }
 
-enum SshReconnectMode { password, key, config, keyboard, configKeyboard }
+enum SshReconnectMode {
+  password,
+  key,
+  config,
+  configPassword,
+  keyboard,
+  configKeyboard,
+}
 
 /// Public selection hints only; every retry reads current vault metadata again.
 final class SshReconnectTarget {
@@ -127,6 +134,7 @@ final class SshReconnectTarget {
     required this.username,
     this.keyId,
     this.configAlias,
+    this.continueKeyboardInteractive = false,
   });
 
   factory SshReconnectTarget.parse(Object? raw) {
@@ -135,21 +143,36 @@ final class SshReconnectTarget {
       'password' => SshReconnectMode.password,
       'key' => SshReconnectMode.key,
       'config' => SshReconnectMode.config,
+      'configPassword' => SshReconnectMode.configPassword,
       'keyboard' => SshReconnectMode.keyboard,
       'configKeyboard' => SshReconnectMode.configKeyboard,
       _ => throw _invalid(),
     };
-    _keys(value, {
-      'mode',
-      'host',
-      'port',
-      'username',
-      if (mode == SshReconnectMode.key || mode == SshReconnectMode.config)
-        'keyId',
-      if (mode == SshReconnectMode.config ||
-          mode == SshReconnectMode.configKeyboard)
-        'configAlias',
-    });
+    _keys(
+      value,
+      {
+        'mode',
+        'host',
+        'port',
+        'username',
+        if (mode == SshReconnectMode.key || mode == SshReconnectMode.config)
+          'keyId',
+        if (mode == SshReconnectMode.config ||
+            mode == SshReconnectMode.configPassword ||
+            mode == SshReconnectMode.configKeyboard)
+          'configAlias',
+      },
+      {'continueKeyboardInteractive'},
+    );
+    final continuation = _sshOptionalBoolean(
+      value,
+      'continueKeyboardInteractive',
+    );
+    if (continuation &&
+        (mode == SshReconnectMode.keyboard ||
+            mode == SshReconnectMode.configKeyboard)) {
+      throw _invalid();
+    }
     final username = value['username'];
     if (username is! String || sshUsernameError(username) != null)
       throw _invalid();
@@ -163,9 +186,11 @@ final class SshReconnectTarget {
           : null,
       configAlias:
           mode == SshReconnectMode.config ||
+              mode == SshReconnectMode.configPassword ||
               mode == SshReconnectMode.configKeyboard
           ? _sshAlias(value['configAlias'])
           : null,
+      continueKeyboardInteractive: continuation,
     );
   }
 
@@ -173,6 +198,7 @@ final class SshReconnectTarget {
   final String host, username;
   final int port;
   final String? keyId, configAlias;
+  final bool continueKeyboardInteractive;
 }
 
 class SshConnectionDefaults {
@@ -252,6 +278,7 @@ class SshPasswordApi {
     required int rows,
     bool useSavedPassword = false,
     bool savePassword = false,
+    bool continueKeyboardInteractive = false,
   }) {
     _identifier(requestId);
     if (sshHostError(host) != null ||
@@ -277,6 +304,7 @@ class SshPasswordApi {
           'password': password,
           'useSavedPassword': useSavedPassword,
           'savePassword': savePassword,
+          if (continueKeyboardInteractive) 'continueKeyboardInteractive': true,
           'columns': columns,
           'rows': rows,
         })
@@ -416,11 +444,15 @@ String sshConnectionError(Object error) {
     'SSH_DNS' || 'SSH_RESOLVE' => '无法解析主机地址，请检查后重试。',
     'SSH_DNS_BUSY' => '地址解析仍在进行，请稍后重试。',
     'SSH_CONNECT' || 'SSH_CONNECT_FAILED' => '无法连接到主机，请检查地址、端口和网络。',
+    'SSH_SESSION_STEP' => 'SSH 连接协商或通信失败，请检查服务器状态和网络后重试。',
     'SSH_AUTHENTICATION' ||
     'SSH_PASSWORD_AUTH' ||
     'SSH_AUTH_REJECTED' => 'SSH 登录被拒绝，请检查用户名和密码。',
     'SSH_KEYBOARD_AUTH' => '服务器交互式认证未完成或被拒绝，请重新连接后回答服务器问题。',
     'SSH_KEYBOARD_POLICY' => '此配置未允许服务器交互式认证，请检查配置中的认证方式。',
+    'SSH_PASSWORD_POLICY' => '此配置未允许密码认证，请检查配置中的认证方式。',
+    'SSH_MFA_POLICY' => '此配置未允许所选的认证顺序，请检查认证方式和配置。',
+    'SSH_MFA_AUTH' => '后续服务器交互式认证未完成，请重新连接。',
     'SSH_KEYBOARD_CHALLENGE' => '服务器问题或回答已失效，请重新连接。',
     'SSH_UNSUPPORTED' ||
     'SSH_PROFILE_UNSUPPORTED' ||

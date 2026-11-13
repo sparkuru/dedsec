@@ -315,7 +315,7 @@ public final class SshNativeSessionTest {
         }
     }
 
-    private static final class KeyboardNative extends ShellNative {
+    private static class KeyboardNative extends ShellNative {
         byte[] challengeWire, challengeBorrow, responseBorrow, responseCopy;
         int keyboardBegins, keyboardResponds;
         @Override public void beginKeyboardInteractiveAuth(long handle) throws IOException {
@@ -331,6 +331,102 @@ public final class SshNativeSessionTest {
         @Override public void respondKeyboardInteractive(long handle, byte[] response) throws IOException {
             assertEquals(903, handle); keyboardResponds++; responseBorrow=response; responseCopy=response.clone();
             invoke("keyboardResponse"); result=1;
+        }
+    }
+
+    private static final class MfaNative extends KeyboardNative {
+        int continuationCalls, receiptMutation;
+        byte[] borrowedPlan, borrowedStage;
+        @Override public byte[] continueKeyboardInteractiveAuth(long handle, byte[] plan) throws IOException {
+            continuationCalls++; borrowedPlan = plan; invoke("continuation");
+            java.nio.ByteBuffer stage = java.nio.ByteBuffer.allocate(92).putInt(0x43534150)
+                    .putShort((short)1).putShort((short)0).putInt(2).putInt(keyBegins > 0 ? 4 : 1)
+                    .putInt(3).put(digest).putLong(1).put(filled(32,7));
+            borrowedStage = stage.array();
+            if (receiptMutation >= 0 && receiptMutation < 92) borrowedStage[receiptMutation] ^= 1;
+            if (receiptMutation == 92) borrowedStage = java.util.Arrays.copyOf(borrowedStage, 93);
+            result = 1; return borrowedStage;
+        }
+    }
+
+    private static void mfaReady(Setup setup, MfaNative binding, boolean key, boolean continuation) throws Exception {
+        SshAuthenticationSelection selection = key ? SshAuthenticationSelection.privateKey(setup.issued.role,
+                "user", "keys/key", "identity", bytes("public"), setup.clock)
+                : SshAuthenticationSelection.password(setup.issued.role, "user", "password", setup.clock);
+        if (continuation) selection = selection.withKeyboardContinuation(setup.clock);
+        setup.callback.selectAuthentication(selection);
+        setup.session = open(setup);
+        assertTrue(setup.callback.onNativeHostKey(SshNativeCallbackAdapter.HOST_KNOWN, "ssh-ed25519",
+                "SHA256:" + java.util.Base64.getEncoder().withoutPadding().encodeToString(filled(32,7)),
+                filled(32,2), filled(32,3)));
+        assertTrue(setup.callback.onNativeKexComplete(1, filled(32,7)));
+        ready(setup, binding);
+        if (key) setup.session.beginPrivateKeyAuth(); else setup.session.beginPasswordAuth();
+    }
+
+    @Test public void mfaTransitionRetainsPlanAndKexAndIsSingleUseBeforeFinalShell() throws Exception {
+        for (boolean key : new boolean[]{false,true}) {
+            MfaNative binding = new MfaNative(); binding.receiptMutation = -1;
+            Setup setup = new Setup(true, binding);
+            try {
+                mfaReady(setup, binding, key, true);
+                binding.result = 4; setup.session.step();
+                assertCode("SSH_SESSION_PHASE", () -> setup.session.beginShell(80,24));
+                setup.session.continueKeyboardInteractiveAuth();
+                assertArrayEquals(new byte[32], binding.borrowedPlan);
+                assertArrayEquals(new byte[92], binding.borrowedStage);
+                Object stage = setup.session.keyboardStage(); setup.session.requireKeyboardStageLive(stage);
+                assertCode("SSH_SESSION_PHASE", () -> setup.session.requireKeyboardStageLive(new Object()));
+                assertCode("SSH_SESSION_PHASE", setup.session::continueKeyboardInteractiveAuth);
+                assertCode("SSH_SESSION_PHASE", setup.session::beginPasswordAuth);
+                assertCode("SSH_SESSION_PHASE", setup.session::beginPrivateKeyAuth);
+                binding.challengeWire = SshKeyboardChallengeTest.frame(1,"server","notice","Code"); binding.result = 5;
+                setup.session.step(); SshKeyboardChallenge challenge = setup.session.keyboardInteractiveChallenge();
+                setup.session.respondKeyboardInteractive(challenge, challenge.response(List.of("")));
+                binding.result = 2; setup.session.step(); setup.session.beginShell(80,24);
+                assertEquals(1,binding.continuationCalls); assertEquals(key ? 1 : 0,binding.keyBegins);
+                assertEquals(key ? 0 : 1,binding.authBegins); assertEquals(0,binding.keyboardBegins);
+            } finally { if (setup.session != null) setup.session.close(); setup.closeRegistry(); }
+        }
+    }
+
+    @Test public void mfaReceiptsRejectEveryBindingFieldAndWipeNativeOwnedBytes() throws Exception {
+        for (int mutation : new int[]{0,4,6,8,12,16,20,51,52,59,60,91,92}) {
+            MfaNative binding = new MfaNative(); binding.receiptMutation = mutation;
+            Setup setup = new Setup(true, binding);
+            try {
+                mfaReady(setup,binding,false,true); binding.result = 4; setup.session.step();
+                assertCode("SSH_MFA_AUTH",setup.session::continueKeyboardInteractiveAuth);
+                assertCode("SSH_MFA_AUTH",setup.session::continueKeyboardInteractiveAuth);
+                assertArrayEquals(new byte[32],binding.borrowedPlan);
+                assertArrayEquals(new byte[binding.borrowedStage.length],binding.borrowedStage);
+                assertEquals(1,binding.continuationCalls);
+            } finally { if (setup.session != null) setup.session.close(); setup.closeRegistry(); }
+        }
+    }
+
+    @Test public void mfaNeedsExplicitPlanPartialAndOriginalLiveOwner() throws Exception {
+        for (int mode = 0; mode < 6; mode++) {
+            MfaNative binding = new MfaNative(); binding.receiptMutation = -1;
+            Setup setup = new Setup(true,binding);
+            try {
+                mfaReady(setup,binding,false,mode != 0); binding.result = mode == 1 ? 3 : mode == 2 ? 2 : 4;
+                setup.session.step();
+                if (mode == 3) setup.session.cancel();
+                if (mode == 4) setup.clock.value = setup.issued.role.deadline;
+                if (mode == 5) {
+                    AtomicReference<Throwable> observed = new AtomicReference<>();
+                    Thread thread = new Thread(() -> { try { setup.session.continueKeyboardInteractiveAuth(); }
+                        catch (Throwable failure) { observed.set(failure); } });
+                    thread.start(); thread.join();
+                    assertEquals("SSH_SESSION_THREAD",((VaultException)observed.get()).code);
+                    setup.session.continueKeyboardInteractiveAuth(); assertEquals(1,binding.continuationCalls);
+                } else {
+                    String code = mode == 0 ? "SSH_AUTH_SELECTION" : mode == 3 ? "SSH_SESSION_CANCELLED"
+                        : mode == 4 ? "SSH_SESSION_EXPIRED" : "SSH_SESSION_PHASE";
+                    assertCode(code,setup.session::continueKeyboardInteractiveAuth); assertEquals(0,binding.continuationCalls);
+                }
+            } finally { if (setup.session != null) setup.session.close(); setup.closeRegistry(); }
         }
     }
 

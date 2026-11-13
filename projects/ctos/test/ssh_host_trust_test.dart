@@ -13,6 +13,770 @@ import 'package:flutter_test/flutter_test.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
+  testWidgets(
+    'changed-host dialog offers view, forget and cancel for the exact target',
+    (tester) async {
+      final actions = <SshHostKeyConflictAction>[];
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SshHostKeyConflictDialog(
+              host: 'server.example',
+              port: 2222,
+              onAction: actions.add,
+            ),
+          ),
+        ),
+      );
+      expect(find.text('server.example:2222'), findsOneWidget);
+      expect(find.text('服务器主机密钥已变化'), findsOneWidget);
+      for (final key in [
+        'ssh-host-changed-view',
+        'ssh-host-changed-forget',
+        'ssh-host-changed-cancel',
+      ]) {
+        await tester.tap(find.byKey(Key(key)));
+        await tester.pump();
+      }
+      expect(actions, [
+        SshHostKeyConflictAction.view,
+        SshHostKeyConflictAction.forget,
+        SshHostKeyConflictAction.cancel,
+      ]);
+    },
+  );
+
+  for (final size in [const Size(320, 568), const Size(568, 320)]) {
+    testWidgets('changed-host actions fit $size at double text size', (
+      tester,
+    ) async {
+      await tester.binding.setSurfaceSize(size);
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(
+        MaterialApp(
+          builder: (context, child) => MediaQuery(
+            data: MediaQuery.of(
+              context,
+            ).copyWith(textScaler: const TextScaler.linear(2)),
+            child: child!,
+          ),
+          home: Scaffold(
+            body: SshHostKeyConflictDialog(
+              host: 'server.example',
+              port: 2222,
+              onAction: (_) {},
+            ),
+          ),
+        ),
+      );
+      for (final key in [
+        'ssh-host-changed-view',
+        'ssh-host-changed-forget',
+        'ssh-host-changed-cancel',
+      ]) {
+        final action = find.byKey(Key(key));
+        await tester.ensureVisible(action);
+        expect(action.hitTestable(), findsOneWidget);
+        expect(tester.getSize(action).height, greaterThanOrEqualTo(48));
+      }
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  testWidgets(
+    'direct forget confirms the fresh preview above the originating route and cancel closes it',
+    (tester) async {
+      final ui = _Ui(tester);
+      await ui.open(
+        initialTarget: (host: 'server.example', port: 2222),
+        initialForgetGroup: SshHostTrustGroup.password,
+        returnAfterForget: true,
+        directForget: true,
+      );
+      expect(find.text('Open'), findsOneWidget);
+      expect(find.byKey(const Key('ssh-trust-direct-dialog')), findsOneWidget);
+      expect(find.byKey(const Key('ssh-trust-host')), findsNothing);
+      expect(find.text('主机信任'), findsNothing);
+      expect(find.text('忘记这些旧指纹？'), findsOneWidget);
+      expect(find.text(_reviewedFingerprint), findsOneWidget);
+      expect(ui.arguments('ssh.hostTrustForgetPreview'), hasLength(1));
+      expect(ui.arguments('ssh.hostTrustForgetCommit'), isEmpty);
+      await ui.tap('ssh-trust-decline');
+      await ui.pump();
+      expect(find.byType(SshHostTrustPage), findsNothing);
+      expect(ui.arguments('ssh.hostTrustForgetCommit'), isEmpty);
+      expect(ui.arguments('ssh.hostTrustForgetCancel'), isNotEmpty);
+      expect(ui.releases, hasLength(1));
+      await ui.remove();
+    },
+  );
+
+  testWidgets('direct forget keeps protected records and refuses preview', (
+    tester,
+  ) async {
+    final ui = _Ui(tester)
+      ..queryValue = _query(
+        password: {
+          ..._group(),
+          'records': [_row(marker: 'revoked', reason: 'policy')],
+          'canForget': false,
+        },
+      );
+    await ui.open(
+      initialTarget: (host: 'server.example', port: 2222),
+      initialForgetGroup: SshHostTrustGroup.password,
+      returnAfterForget: true,
+      directForget: true,
+    );
+    expect(find.byKey(const Key('ssh-trust-direct-dialog')), findsOneWidget);
+    expect(find.text('吊销记录受保护，不能在此忘记。'), findsOneWidget);
+    expect(ui.arguments('ssh.hostTrustForgetPreview'), isEmpty);
+    expect(ui.arguments('ssh.hostTrustForgetCommit'), isEmpty);
+    await ui.tap('ssh-trust-close');
+    await ui.remove();
+  });
+
+  testWidgets('direct forget blocks shared selectors without a preview', (
+    tester,
+  ) async {
+    final ui = _Ui(tester)
+      ..queryValue = _query(
+        password: {
+          ..._group(),
+          'records': [_row(selector: 'shared', reason: 'shared')],
+          'canForget': false,
+        },
+      );
+    await ui.open(
+      initialTarget: (host: 'server.example', port: 2222),
+      initialForgetGroup: SshHostTrustGroup.password,
+      returnAfterForget: true,
+      directForget: true,
+    );
+    expect(find.text('共享或通配记录影响多个目标，不能在此忘记。'), findsOneWidget);
+    expect(ui.arguments('ssh.hostTrustForgetPreview'), isEmpty);
+    expect(ui.arguments('ssh.hostTrustForgetCommit'), isEmpty);
+    await ui.tap('ssh-trust-close');
+    await ui.remove();
+  });
+
+  for (final direct in [false, true]) {
+    testWidgets(
+      '${direct ? 'direct' : 'page'} forget confirmation cannot revive after route coverage',
+      (tester) async {
+        final ui = _Ui(tester);
+        if (direct) {
+          await ui.open(
+            initialTarget: (host: 'server.example', port: 2222),
+            initialForgetGroup: SshHostTrustGroup.password,
+            returnAfterForget: true,
+            directForget: true,
+          );
+        } else {
+          await ui.open();
+          await ui.lookup();
+          await ui.tap('ssh-trust-forget-password');
+        }
+        final confirm = find.byKey(const Key('ssh-trust-confirm'));
+        final stale = tester.widget<FilledButton>(confirm).onPressed!;
+        final staleDecline = tester
+            .widget<TextButton>(find.byKey(const Key('ssh-trust-decline')))
+            .onPressed!;
+        final navigator = Navigator.of(tester.element(confirm));
+        unawaited(
+          navigator.push<void>(
+            MaterialPageRoute<void>(
+              builder: (_) => const Scaffold(body: Text('Covered route')),
+            ),
+          ),
+        );
+        await ui.pump();
+        expect(find.text('Covered route'), findsOneWidget);
+        staleDecline();
+        await ui.pump();
+        expect(find.text('Covered route'), findsOneWidget);
+        navigator.pop();
+        await ui.pump();
+        stale();
+        await ui.pump();
+        expect(ui.arguments('ssh.hostTrustForgetCommit'), isEmpty);
+        expect(ui.arguments('ssh.hostTrustForgetCancel'), isNotEmpty);
+        expect(find.text('忘记这些旧指纹？'), findsNothing);
+        await ui.remove();
+      },
+    );
+  }
+
+  testWidgets('direct preview stays invalid after same-frame route cover', (
+    tester,
+  ) async {
+    final ui = _Ui(tester);
+    await ui.open(
+      initialTarget: (host: 'server.example', port: 2222),
+      initialForgetGroup: SshHostTrustGroup.password,
+      returnAfterForget: true,
+      directForget: true,
+    );
+    final confirm = find.byKey(const Key('ssh-trust-confirm'));
+    final stale = tester.widget<FilledButton>(confirm).onPressed!;
+    final navigator = Navigator.of(tester.element(confirm));
+    unawaited(
+      navigator.push<void>(
+        MaterialPageRoute<void>(
+          builder: (_) => const Scaffold(body: Text('Covered route')),
+        ),
+      ),
+    );
+    navigator.pop();
+    stale();
+    await ui.pump();
+    await ui.pump();
+    expect(ui.arguments('ssh.hostTrustForgetCommit'), isEmpty);
+    expect(ui.arguments('ssh.hostTrustForgetCancel'), isNotEmpty);
+    expect(find.text('指纹审阅已中断，请重新查看。'), findsOneWidget);
+    expect(find.text('忘记这些旧指纹？'), findsNothing);
+    await ui.remove();
+  });
+
+  testWidgets('covered preview cannot commit from a direct navigator result', (
+    tester,
+  ) async {
+    final ui = _Ui(tester);
+    await ui.open(
+      initialTarget: (host: 'server.example', port: 2222),
+      initialForgetGroup: SshHostTrustGroup.password,
+      returnAfterForget: true,
+      directForget: true,
+    );
+    final confirm = find.byKey(const Key('ssh-trust-confirm'));
+    final navigator = Navigator.of(tester.element(confirm));
+    unawaited(
+      navigator.push<void>(
+        MaterialPageRoute<void>(
+          builder: (_) => const Scaffold(body: Text('Covered route')),
+        ),
+      ),
+    );
+    navigator.pop();
+    navigator.pop(true);
+    await ui.pump();
+    await ui.pump();
+    expect(ui.arguments('ssh.hostTrustForgetCommit'), isEmpty);
+    expect(ui.arguments('ssh.hostTrustForgetCancel'), isNotEmpty);
+    expect(find.text('指纹审阅已中断，请重新查看。'), findsOneWidget);
+    expect(find.text('忘记这些旧指纹？'), findsNothing);
+    await ui.remove();
+  });
+
+  testWidgets(
+    'navigator result without the confirmation button cannot commit',
+    (tester) async {
+      final ui = _Ui(tester);
+      await ui.open(
+        initialTarget: (host: 'server.example', port: 2222),
+        initialForgetGroup: SshHostTrustGroup.password,
+        returnAfterForget: true,
+        directForget: true,
+      );
+      final confirm = find.byKey(const Key('ssh-trust-confirm'));
+      Navigator.of(tester.element(confirm)).pop(true);
+      await ui.pump();
+      await ui.pump();
+      expect(ui.arguments('ssh.hostTrustForgetCommit'), isEmpty);
+      expect(ui.arguments('ssh.hostTrustForgetCancel'), isNotEmpty);
+      expect(find.text('指纹审阅已中断，请重新查看。'), findsOneWidget);
+      await ui.remove();
+    },
+  );
+
+  testWidgets(
+    'confirmed preview cannot commit after same-frame origin coverage',
+    (tester) async {
+      final ui = _Ui(tester);
+      await ui.open(
+        initialTarget: (host: 'server.example', port: 2222),
+        initialForgetGroup: SshHostTrustGroup.password,
+        returnAfterForget: true,
+        directForget: true,
+      );
+      final confirm = find.byKey(const Key('ssh-trust-confirm'));
+      final confirmContext = tester.element(confirm);
+      final confirmationRoute = ModalRoute.of(confirmContext)!;
+      final originRoute = ModalRoute.of(
+        tester.element(find.byKey(const Key('ssh-trust-direct-dialog'))),
+      )!;
+      final navigator = Navigator.of(confirmContext);
+      final confirmAction = tester.widget<FilledButton>(confirm).onPressed!;
+      confirmAction();
+      expect(confirmationRoute.isCurrent, isTrue);
+      expect(originRoute.isCurrent, isFalse);
+      unawaited(
+        navigator.push<void>(
+          MaterialPageRoute<void>(
+            builder: (_) => const Scaffold(body: Text('Covered origin')),
+          ),
+        ),
+      );
+      expect(confirmationRoute.isCurrent, isFalse);
+      navigator.pop();
+      expect(confirmationRoute.isCurrent, isTrue);
+      await ui.pump();
+      expect(ui.arguments('ssh.hostTrustForgetCommit'), isEmpty);
+      expect(ui.arguments('ssh.hostTrustForgetCancel'), isNotEmpty);
+      await ui.remove();
+    },
+  );
+
+  testWidgets('covering a successful receipt retains it for acknowledgement', (
+    tester,
+  ) async {
+    final ui = _Ui(tester);
+    await ui.open(
+      initialTarget: (host: 'server.example', port: 2222),
+      initialForgetGroup: SshHostTrustGroup.password,
+      returnAfterForget: true,
+      directForget: true,
+    );
+    await ui.tap('ssh-trust-confirm');
+    expect(ui.arguments('ssh.hostTrustForgetCommit'), hasLength(1));
+    final acknowledge = find.byKey(const Key('ssh-trust-acknowledge'));
+    final navigator = Navigator.of(tester.element(acknowledge));
+    unawaited(
+      navigator.push<void>(
+        MaterialPageRoute<void>(
+          builder: (_) => const Scaffold(body: Text('Covered receipt')),
+        ),
+      ),
+    );
+    await ui.pump();
+    expect(ui.releases, isEmpty);
+    navigator.pop();
+    await ui.pump();
+    expect(find.text('已忘记旧指纹，请重新连接并核对新指纹。'), findsOneWidget);
+    expect(ui.releases, isEmpty);
+    await ui.tap('ssh-trust-acknowledge');
+    await ui.pump();
+    expect(ui.releases, hasLength(1));
+    await ui.remove();
+  });
+
+  for (final removed in [false, true]) {
+    for (final uncertain in [false, true]) {
+      testWidgets(
+        '${removed ? 'removed route' : 'active route'} ${uncertain ? 'uncertain' : 'success'} receipt requires the acknowledgement button',
+        (tester) async {
+          final ui = _Ui(tester)..pendingCommit = Completer<Object?>();
+          await ui.open(
+            initialTarget: (host: 'server.example', port: 2222),
+            initialForgetGroup: SshHostTrustGroup.password,
+            returnAfterForget: true,
+            directForget: true,
+          );
+          await ui.tap('ssh-trust-confirm');
+          if (removed) {
+            final context = tester.element(
+              find.byKey(const Key('ssh-trust-direct-dialog')),
+            );
+            Navigator.of(context).removeRoute(ModalRoute.of(context)!);
+            await ui.pump();
+          }
+          if (uncertain) {
+            ui.pendingCommit!.completeError(
+              PlatformException(code: 'VAULT_COMMIT_UNCERTAIN'),
+            );
+          } else {
+            ui.pendingCommit!.complete({'forgotten': true});
+          }
+          await ui.pump();
+          expect(find.text('主机信任操作结果'), findsOneWidget);
+          expect(ui.releases, isEmpty);
+          final acknowledge = find.byKey(const Key('ssh-trust-acknowledge'));
+          Navigator.of(tester.element(acknowledge)).pop(true);
+          await ui.pump();
+          await ui.pump();
+          expect(ui.releases, isEmpty);
+          expect(find.text('主机信任操作结果'), findsOneWidget);
+          expect(
+            find.text(
+              uncertain
+                  ? '忘记结果未能确认。请重新解锁秘密库并查看此目标的已存指纹。'
+                  : '已忘记旧指纹，请重新连接并核对新指纹。',
+            ),
+            findsOneWidget,
+          );
+          await ui.tap('ssh-trust-acknowledge');
+          await ui.pump();
+          if (uncertain && !removed) {
+            expect(ui.releases, isEmpty);
+            await ui.tap('ssh-trust-close');
+            await ui.pump();
+          }
+          expect(ui.releases, hasLength(1));
+          expect(tester.takeException(), isNull);
+          await ui.remove();
+        },
+      );
+    }
+  }
+
+  testWidgets(
+    'direct config recovery requires an explicit trust-source choice',
+    (tester) async {
+      final ui = _Ui(tester);
+      await ui.open(
+        initialTarget: (host: 'server.example', port: 2222),
+        returnAfterForget: true,
+        selectGroupForForget: true,
+        directForget: true,
+      );
+      expect(ui.arguments('ssh.hostTrustForgetPreview'), isEmpty);
+      expect(find.text('配置可能使用其他信任文件；请核对来源后选择要忘记的记录。'), findsOneWidget);
+      await ui.tap('ssh-trust-forget-password');
+      expect(ui.arguments('ssh.hostTrustForgetPreview'), hasLength(1));
+      expect(
+        ui.arguments('ssh.hostTrustForgetPreview').single['group'],
+        'password',
+      );
+      expect(find.text(_reviewedFingerprint), findsOneWidget);
+      await ui.tap('ssh-trust-decline');
+      await ui.pump();
+      expect(ui.arguments('ssh.hostTrustForgetCommit'), isEmpty);
+      await ui.remove();
+    },
+  );
+
+  testWidgets(
+    'direct forget cannot open after its origin is destroyed during protection acquisition',
+    (tester) async {
+      final ui = _Ui(tester)..pendingProtection = Completer<Object?>();
+      await ui.open(
+        initialTarget: (host: 'server.example', port: 2222),
+        initialForgetGroup: SshHostTrustGroup.password,
+        returnAfterForget: true,
+        directForget: true,
+      );
+      expect(find.byType(SshHostTrustPage), findsNothing);
+      await tester.pumpWidget(const SizedBox.shrink());
+      await ui.pump();
+      ui.pendingProtection!.complete({'owner': 'late_owner'});
+      await ui.pump();
+      expect(find.byType(SshHostTrustPage), findsNothing);
+      expect(ui.arguments('ssh.hostTrustQuery'), isEmpty);
+      expect(ui.releases.map((args) => args['owner']), contains('late_owner'));
+      await ui.remove();
+    },
+  );
+
+  for (final size in [const Size(320, 568), const Size(568, 320)]) {
+    testWidgets('direct preview stays operable at $size and double text', (
+      tester,
+    ) async {
+      await tester.binding.setSurfaceSize(size);
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final ui = _Ui(tester);
+      await ui.open(
+        scale: 2,
+        initialTarget: (host: 'server.example', port: 2222),
+        initialForgetGroup: SshHostTrustGroup.password,
+        returnAfterForget: true,
+        directForget: true,
+      );
+      await ui.reveal('ssh-trust-confirm');
+      expect(find.text(_reviewedFingerprint), findsOneWidget);
+      expect(
+        tester.getSize(find.byKey(const Key('ssh-trust-confirm'))).height,
+        greaterThanOrEqualTo(48),
+      );
+      expect(tester.takeException(), isNull);
+      await ui.tap('ssh-trust-decline');
+      await ui.remove();
+    });
+  }
+
+  testWidgets(
+    'system back cancels the direct preview and returns to the origin',
+    (tester) async {
+      final ui = _Ui(tester);
+      await ui.open(
+        initialTarget: (host: 'server.example', port: 2222),
+        initialForgetGroup: SshHostTrustGroup.password,
+        returnAfterForget: true,
+        directForget: true,
+      );
+      expect(find.text('忘记这些旧指纹？'), findsOneWidget);
+      await tester.binding.handlePopRoute();
+      await ui.pump();
+      await ui.pump();
+      expect(find.byType(SshHostTrustPage), findsNothing);
+      expect(ui.arguments('ssh.hostTrustForgetCommit'), isEmpty);
+      expect(ui.arguments('ssh.hostTrustForgetCancel'), isNotEmpty);
+      await ui.remove();
+    },
+  );
+
+  for (final background in [false, true]) {
+    testWidgets(
+      'direct preview ${background ? 'background' : 'vault lock'} retires its confirmation',
+      (tester) async {
+        final ui = _Ui(tester);
+        await ui.open(
+          initialTarget: (host: 'server.example', port: 2222),
+          initialForgetGroup: SshHostTrustGroup.password,
+          returnAfterForget: true,
+          directForget: true,
+        );
+        final stale = tester
+            .widget<FilledButton>(find.byKey(const Key('ssh-trust-confirm')))
+            .onPressed!;
+        if (background) {
+          tester.binding.handleAppLifecycleStateChanged(
+            AppLifecycleState.inactive,
+          );
+        } else {
+          await ui.sessionEvent(epoch: 2, unlocked: false);
+        }
+        await ui.pump();
+        stale();
+        await ui.pump();
+        expect(ui.arguments('ssh.hostTrustForgetCommit'), isEmpty);
+        expect(ui.arguments('ssh.hostTrustForgetCancel'), isNotEmpty);
+        expect(find.text('忘记这些旧指纹？'), findsNothing);
+        if (background) {
+          tester.binding.handleAppLifecycleStateChanged(
+            AppLifecycleState.resumed,
+          );
+          await ui.pump();
+        }
+        await ui.tap('ssh-trust-close');
+        await ui.remove();
+      },
+    );
+  }
+
+  testWidgets(
+    'closing during a direct pending preview rejects the late ticket',
+    (tester) async {
+      final ui = _Ui(tester)..pendingPreview = Completer<Object?>();
+      await ui.open(
+        initialTarget: (host: 'server.example', port: 2222),
+        initialForgetGroup: SshHostTrustGroup.password,
+        returnAfterForget: true,
+        directForget: true,
+      );
+      await ui.tap('ssh-trust-close');
+      ui.pendingPreview!.complete(_preview());
+      await ui.pump();
+      expect(find.text('忘记这些旧指纹？'), findsNothing);
+      expect(ui.arguments('ssh.hostTrustForgetCommit'), isEmpty);
+      expect(ui.arguments('ssh.hostTrustForgetCancel'), isNotEmpty);
+      await ui.remove();
+    },
+  );
+
+  for (final uncertain in [false, true]) {
+    testWidgets(
+      'direct dialog removal retains protected ${uncertain ? 'uncertain' : 'success'} receipt',
+      (tester) async {
+        final ui = _Ui(tester)..pendingCommit = Completer<Object?>();
+        await ui.open(
+          initialTarget: (host: 'server.example', port: 2222),
+          initialForgetGroup: SshHostTrustGroup.password,
+          returnAfterForget: true,
+          directForget: true,
+        );
+        await ui.tap('ssh-trust-confirm');
+        final context = tester.element(
+          find.byKey(const Key('ssh-trust-direct-dialog')),
+        );
+        Navigator.of(context).removeRoute(ModalRoute.of(context)!);
+        await ui.pump();
+        expect(ui.releases, isEmpty);
+        if (uncertain) {
+          tester.binding.handleAppLifecycleStateChanged(
+            AppLifecycleState.inactive,
+          );
+          await ui.pump();
+          ui.pendingCommit!.completeError(
+            PlatformException(code: 'VAULT_COMMIT_UNCERTAIN'),
+          );
+          await ui.pump();
+          expect(find.text('主机信任操作结果'), findsNothing);
+          expect(ui.releases, isEmpty);
+          tester.binding.handleAppLifecycleStateChanged(
+            AppLifecycleState.resumed,
+          );
+        } else {
+          ui.pendingCommit!.complete({'forgotten': true});
+        }
+        await ui.pump();
+        expect(find.text('主机信任操作结果'), findsOneWidget);
+        expect(ui.releases, isEmpty);
+        expect(
+          find.text(
+            uncertain ? '忘记结果未能确认。请重新解锁秘密库并查看此目标的已存指纹。' : '已忘记旧指纹，请重新连接并核对新指纹。',
+          ),
+          findsOneWidget,
+        );
+        await ui.tap('ssh-trust-acknowledge');
+        await ui.pump();
+        expect(ui.releases, hasLength(1));
+        await ui.remove();
+      },
+    );
+
+    testWidgets(
+      'direct navigator destruction waits for ${uncertain ? 'uncertain' : 'success'} outcome',
+      (tester) async {
+        final ui = _Ui(tester)..pendingCommit = Completer<Object?>();
+        await ui.open(
+          initialTarget: (host: 'server.example', port: 2222),
+          initialForgetGroup: SshHostTrustGroup.password,
+          returnAfterForget: true,
+          directForget: true,
+        );
+        await ui.tap('ssh-trust-confirm');
+        await tester.pumpWidget(const SizedBox.shrink());
+        await ui.pump();
+        expect(ui.releases, isEmpty);
+        if (uncertain)
+          ui.pendingCommit!.completeError(
+            PlatformException(code: 'VAULT_COMMIT_UNCERTAIN'),
+          );
+        else
+          ui.pendingCommit!.complete({'forgotten': true});
+        await ui.pump();
+        expect(ui.releases, hasLength(1));
+        expect(find.text('主机信任操作结果'), findsNothing);
+        expect(tester.takeException(), isNull);
+        await ui.remove();
+      },
+    );
+  }
+
+  testWidgets('closing a direct dialog waits for the pending commit receipt', (
+    tester,
+  ) async {
+    final ui = _Ui(tester)..pendingCommit = Completer<Object?>();
+    await ui.open(
+      initialTarget: (host: 'server.example', port: 2222),
+      initialForgetGroup: SshHostTrustGroup.password,
+      returnAfterForget: true,
+      directForget: true,
+    );
+    await ui.tap('ssh-trust-confirm');
+    await ui.tap('ssh-trust-close');
+    expect(ui.releases, isEmpty);
+    ui.pendingCommit!.complete({'forgotten': true});
+    await ui.pump();
+    expect(find.text('主机信任操作结果'), findsOneWidget);
+    expect(ui.releases, isEmpty);
+    await ui.tap('ssh-trust-acknowledge');
+    await ui.pump();
+    expect(ui.releases, hasLength(1));
+    await ui.remove();
+  });
+
+  testWidgets(
+    'recovery target is prefilled and queried after the vault handshake',
+    (tester) async {
+      final ui = _Ui(tester)..autoHandshake = false;
+      await ui.open(initialTarget: (host: 'server.example', port: 2222));
+      expect(ui.arguments('ssh.hostTrustQuery'), isEmpty);
+      expect(ui.field('ssh-trust-host').text, 'server.example');
+      expect(ui.field('ssh-trust-port').text, '2222');
+      expect(
+        tester
+            .widget<TextField>(
+              find.descendant(
+                of: find.byKey(const Key('ssh-trust-host')),
+                matching: find.byType(TextField),
+              ),
+            )
+            .readOnly,
+        isTrue,
+      );
+      await ui.sessionEvent();
+      await ui.pump();
+      expect(ui.arguments('ssh.hostTrustQuery'), hasLength(1));
+      expect(ui.arguments('ssh.hostTrustQuery').single, {
+        'requestId': 'trust_request_1',
+        'host': 'server.example',
+        'port': 2222,
+      });
+      expect(find.text(_fingerprint), findsOneWidget);
+      expect(ui.arguments('ssh.hostTrustForgetPreview'), isEmpty);
+      await ui.remove();
+    },
+  );
+
+  testWidgets(
+    'direct forget uses a fresh exact-target preview and explicit confirmation',
+    (tester) async {
+      final ui = _Ui(tester);
+      await ui.open(
+        initialTarget: (host: 'server.example', port: 2222),
+        initialForgetGroup: SshHostTrustGroup.password,
+        returnAfterForget: true,
+      );
+      expect(ui.arguments('ssh.hostTrustQuery'), hasLength(1));
+      expect(ui.arguments('ssh.hostTrustForgetPreview'), hasLength(1));
+      expect(ui.arguments('ssh.hostTrustForgetPreview').single, {
+        'requestId': 'trust_request_2',
+        'host': 'server.example',
+        'port': 2222,
+        'group': 'password',
+      });
+      expect(find.text(_reviewedFingerprint), findsOneWidget);
+      expect(ui.arguments('ssh.hostTrustForgetCommit'), isEmpty);
+      await ui.tap('ssh-trust-confirm');
+      expect(ui.arguments('ssh.hostTrustForgetCommit'), hasLength(1));
+      expect(find.text('已忘记旧指纹，请重新连接并核对新指纹。'), findsOneWidget);
+      await ui.tap('ssh-trust-acknowledge');
+      expect(find.byType(SshHostTrustPage), findsNothing);
+      await ui.remove();
+    },
+  );
+
+  testWidgets('direct forget never previews a protected trust group', (
+    tester,
+  ) async {
+    final ui = _Ui(tester)
+      ..queryValue = _query(
+        password: {
+          ..._group(),
+          'records': [_row(marker: 'revoked', reason: 'policy')],
+          'canForget': false,
+        },
+      );
+    await ui.open(
+      initialTarget: (host: 'server.example', port: 2222),
+      initialForgetGroup: SshHostTrustGroup.password,
+    );
+    expect(ui.arguments('ssh.hostTrustForgetPreview'), isEmpty);
+    expect(find.text('吊销记录受保护，不能在此忘记。'), findsOneWidget);
+    expect(ui.arguments('ssh.hostTrustForgetCommit'), isEmpty);
+    await ui.remove();
+  });
+
+  testWidgets(
+    'background before the vault handshake cancels automatic recovery',
+    (tester) async {
+      final ui = _Ui(tester)..autoHandshake = false;
+      await ui.open(
+        initialTarget: (host: 'server.example', port: 2222),
+        initialForgetGroup: SshHostTrustGroup.password,
+      );
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      await ui.pump();
+      await ui.sessionEvent();
+      await ui.pump();
+      expect(ui.arguments('ssh.hostTrustQuery'), isEmpty);
+      expect(ui.arguments('ssh.hostTrustForgetPreview'), isEmpty);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await ui.remove();
+    },
+  );
+
   for (final uncertain in [false, true]) {
     testWidgets(
       'forced route removal retains protected ${uncertain ? 'uncertain' : 'success'} receipt outside disposed State',
@@ -759,6 +1523,11 @@ class _Ui {
     bool library = false,
     double scale = 1,
     double keyboard = 0,
+    ({String host, int port})? initialTarget,
+    SshHostTrustGroup? initialForgetGroup,
+    bool returnAfterForget = false,
+    bool selectGroupForForget = false,
+    bool directForget = false,
   }) async {
     if (tester.binding.lifecycleState != AppLifecycleState.resumed)
       tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
@@ -796,7 +1565,17 @@ class _Ui {
                 if (library)
                   unawaited(showSshLibrary(context, api: api));
                 else
-                  unawaited(showSshHostTrust(context, api: api));
+                  unawaited(
+                    showSshHostTrust(
+                      context,
+                      api: api,
+                      initialTarget: initialTarget,
+                      initialForgetGroup: initialForgetGroup,
+                      returnAfterForget: returnAfterForget,
+                      selectGroupForForget: selectGroupForForget,
+                      directForget: directForget,
+                    ),
+                  );
               },
               child: const Text('Open'),
             ),

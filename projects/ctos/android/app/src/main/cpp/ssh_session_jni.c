@@ -482,6 +482,26 @@ JNIEXPORT jint JNICALL Java_im_majo_ctos_SshNativeSession_00024Native_keyboardIn
     return (jint)outcome;
 }
 
+JNIEXPORT jbyteArray JNICALL Java_im_majo_ctos_SshNativeSession_00024Native_continueKeyboardInteractiveAuth(
+    JNIEnv *env, jclass type, jlong handle, jbyteArray expected) {
+    (void)type;
+    unsigned char plan[32] = {0}, stage[92] = {0};
+    jbyteArray result = NULL;
+    if (expected == NULL || (*env)->GetArrayLength(env, expected) != 32) { fail(env); return NULL; }
+    (*env)->GetByteArrayRegion(env, expected, 0, 32, (jbyte *)plan);
+    if ((*env)->ExceptionCheck(env)) goto out;
+    struct session_slot *slot = lock_session(env, handle);
+    if (slot == NULL) goto out;
+    int status = ctos_ssh_native_client_continue_keyboard_interactive_auth(slot->client, plan, stage);
+    pthread_mutex_unlock(&sessions_lock);
+    if (status != 0) { fail(env); goto out; }
+    result = (*env)->NewByteArray(env, 92);
+    if (result != NULL) (*env)->SetByteArrayRegion(env, result, 0, 92, (jbyte *)stage);
+out:
+    wipe_bytes(plan, sizeof(plan)); wipe_bytes(stage, sizeof(stage));
+    return result;
+}
+
 JNIEXPORT jbyteArray JNICALL Java_im_majo_ctos_SshNativeSession_00024Native_keyboardInteractiveChallenge(
     JNIEnv *env, jclass type, jlong handle) {
     (void)type;

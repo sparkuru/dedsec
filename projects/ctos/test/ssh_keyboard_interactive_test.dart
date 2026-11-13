@@ -188,6 +188,573 @@ void main() {
     );
   }
 
+  test(
+    'MFA reconnect metadata grants only the explicit bounded continuation',
+    () {
+      for (final mode in ['password', 'key', 'config', 'configPassword']) {
+        final value = <String, Object>{
+          'mode': mode,
+          'host': 'server.invalid',
+          'port': 2222,
+          'username': 'alice',
+          if (mode == 'key' || mode == 'config') 'keyId': 'key_a',
+          if (mode == 'config' || mode == 'configPassword')
+            'configAlias': 'fixture',
+        };
+        expect(
+          SshReconnectTarget.parse(value).continueKeyboardInteractive,
+          isFalse,
+        );
+        expect(
+          SshReconnectTarget.parse({
+            ...value,
+            'continueKeyboardInteractive': true,
+          }).continueKeyboardInteractive,
+          isTrue,
+        );
+        for (final bad in <Object?>['true', 1, null]) {
+          expect(
+            () => SshReconnectTarget.parse({
+              ...value,
+              'continueKeyboardInteractive': bad,
+            }),
+            throwsFormatException,
+          );
+        }
+        expect(
+          () => SshReconnectTarget.parse({...value, 'stage': 2}),
+          throwsFormatException,
+        );
+        if (mode == 'configPassword') {
+          expect(
+            () => SshReconnectTarget.parse({...value, 'keyId': 'key_a'}),
+            throwsFormatException,
+          );
+        }
+      }
+      for (final mode in ['keyboard', 'configKeyboard']) {
+        expect(
+          () => SshReconnectTarget.parse({
+            'mode': mode,
+            'host': 'server.invalid',
+            'port': 2222,
+            'username': 'alice',
+            if (mode == 'configKeyboard') 'configAlias': 'fixture',
+            'continueKeyboardInteractive': true,
+          }),
+          throwsFormatException,
+        );
+      }
+    },
+  );
+
+  for (final configured in [false, true]) {
+    for (final key in [false, true]) {
+      testWidgets(
+        '${configured ? 'config' : 'manual'} ${key ? 'key' : 'password'} explicitly continues KBI on original protected attempt',
+        (tester) async {
+          final ui = _Ui(tester)..withKey = key;
+          await ui.open(
+            connectOnOpen: false,
+            reconnect: SshReconnectTarget(
+              mode: configured
+                  ? (key
+                        ? SshReconnectMode.config
+                        : SshReconnectMode.configPassword)
+                  : (key ? SshReconnectMode.key : SshReconnectMode.password),
+              host: 'server.invalid',
+              port: 2222,
+              username: 'alice',
+              keyId: key ? 'key_a' : null,
+              configAlias: configured ? 'fixture' : null,
+            ),
+          );
+          expect(
+            tester
+                .widget<CheckboxListTile>(
+                  find.byKey(const Key('ssh-continue-keyboard-interactive')),
+                )
+                .value,
+            isFalse,
+          );
+          await ui.tap('ssh-continue-keyboard-interactive');
+          expect(
+            tester
+                .widget<FilledButton>(find.byKey(const Key('ssh-connect')))
+                .onPressed,
+            isNull,
+          );
+          await ui.session();
+          if (!key)
+            await tester.enterText(
+              find.byKey(const Key('ssh-password')),
+              'first-method-only',
+            );
+          await ui.tap('ssh-connect');
+          final call = ui.connections.single;
+          expect(
+            call.method,
+            configured
+                ? (key ? 'ssh.configConnect' : 'ssh.configPasswordConnect')
+                : (key ? 'ssh.keyConnect' : 'ssh.passwordConnect'),
+          );
+          expect(
+            call.arguments,
+            containsPair('continueKeyboardInteractive', true),
+          );
+          if (configured) {
+            expect(call.arguments, containsPair('alias', 'fixture'));
+            expect(call.arguments, containsPair('binding', 'a' * 64));
+            expect(call.arguments, isNot(contains('host')));
+            expect(call.arguments, isNot(contains('port')));
+            expect(call.arguments, containsPair('username', ''));
+          }
+          await ui.event(_challenge(ui.connectId));
+          expect(find.byType(SshKeyboardChallengeForm), findsOneWidget);
+          expect(find.byKey(const Key('ssh-password')), findsNothing);
+          await tester.enterText(
+            find.byKey(const Key('ssh-keyboard-answer-1')),
+            'only-current-round',
+          );
+          await ui.tap('ssh-keyboard-submit');
+          expect(ui.answers.single['answers'], ['', 'only-current-round']);
+          expect(ui.connections, hasLength(1));
+          ui.complete();
+          await ui.pump();
+          await ui.close();
+          await ui.remove();
+        },
+      );
+    }
+  }
+
+  testWidgets(
+    'config password selection and method changes retain actual config authority',
+    (tester) async {
+      final ui = _Ui(tester);
+      await ui.open();
+      await ui.tap('ssh-manage-identities');
+      await ui.tap('ssh-config-host-fixture');
+      await ui.tap('ssh-config-password-choice');
+      await ui.pump();
+      expect(
+        find.byKey(const Key('ssh-host')),
+        findsOneWidget,
+        reason: tester
+            .widgetList<Text>(find.byType(Text))
+            .map((text) => text.data)
+            .join(' | '),
+      );
+      expect(
+        tester
+            .widget<TextField>(
+              find.descendant(
+                of: find.byKey(const Key('ssh-host')),
+                matching: find.byType(TextField),
+              ),
+            )
+            .readOnly,
+        isTrue,
+      );
+      expect(
+        ui.arguments('ssh.passwordStatus').last,
+        containsPair('host', 'server.invalid'),
+      );
+      await ui.tap('ssh-continue-keyboard-interactive');
+      await ui.session();
+      await ui.tap('ssh-authentication');
+      await ui.tap('ssh-auth-keyboard');
+      await ui.session();
+      expect(
+        find.byKey(const Key('ssh-continue-keyboard-interactive')),
+        findsNothing,
+      );
+      await ui.tap('ssh-authentication');
+      await ui.tap('ssh-auth-password');
+      expect(
+        tester
+            .widget<CheckboxListTile>(
+              find.byKey(const Key('ssh-continue-keyboard-interactive')),
+            )
+            .value,
+        isFalse,
+      );
+      expect(
+        tester
+            .widget<TextField>(
+              find.descendant(
+                of: find.byKey(const Key('ssh-host')),
+                matching: find.byType(TextField),
+              ),
+            )
+            .readOnly,
+        isTrue,
+      );
+      await tester.enterText(
+        find.byKey(const Key('ssh-password')),
+        'only-first',
+      );
+      await ui.tap('ssh-connect');
+      expect(ui.connections.single.method, 'ssh.configPasswordConnect');
+      expect(
+        ui.connections.single.arguments,
+        containsPair('binding', 'a' * 64),
+      );
+      expect(
+        ui.connections.single.arguments,
+        isNot(contains('continueKeyboardInteractive')),
+      );
+      ui.complete();
+      await ui.pump();
+      await ui.close();
+      await ui.remove();
+    },
+  );
+
+  testWidgets(
+    'changing config password to an explicit key refreshes the same alias binding',
+    (tester) async {
+      final ui = _Ui(tester)..withKey = true;
+      await ui.open(
+        connectOnOpen: false,
+        reconnect: const SshReconnectTarget(
+          mode: SshReconnectMode.configPassword,
+          host: 'server.invalid',
+          port: 2222,
+          username: 'alice',
+          configAlias: 'fixture',
+        ),
+      );
+      await ui.tap('ssh-authentication');
+      await ui.tap('ssh-auth-privateKey');
+      ui.libraryBinding = 'd' * 64;
+      await ui.tap('ssh-select-private-key');
+      await ui.tap('ssh-key-key_a');
+      await ui.pump();
+      expect(
+        tester
+            .widget<TextFormField>(find.byKey(const Key('ssh-host')))
+            .controller!
+            .text,
+        'server.invalid',
+      );
+      await ui.tap('ssh-continue-keyboard-interactive');
+      await ui.session();
+      await ui.tap('ssh-connect');
+      expect(ui.connections.single.method, 'ssh.configConnect');
+      expect(
+        ui.connections.single.arguments,
+        containsPair('binding', 'd' * 64),
+      );
+      expect(ui.connections.single.arguments, containsPair('alias', 'fixture'));
+      expect(ui.connections.single.arguments, containsPair('keyId', 'key_a'));
+      ui.complete();
+      await ui.pump();
+      await ui.close();
+      await ui.remove();
+    },
+  );
+
+  testWidgets(
+    'same-config key refresh preserves an explicit username when config omits User',
+    (tester) async {
+      final ui = _Ui(tester)
+        ..withKey = true
+        ..libraryUsername = '';
+      await ui.open(
+        connectOnOpen: false,
+        reconnect: const SshReconnectTarget(
+          mode: SshReconnectMode.configPassword,
+          host: 'server.invalid',
+          port: 2222,
+          username: 'explicit-user',
+          configAlias: 'fixture',
+        ),
+      );
+      await ui.tap('ssh-authentication');
+      await ui.tap('ssh-auth-privateKey');
+      ui.libraryBinding = 'e' * 64;
+      await ui.tap('ssh-select-private-key');
+      await ui.tap('ssh-key-key_a');
+      await ui.pump();
+      expect(
+        tester
+            .widget<TextFormField>(find.byKey(const Key('ssh-username')))
+            .controller!
+            .text,
+        'explicit-user',
+      );
+      await ui.tap('ssh-connect');
+      expect(ui.connections.single.method, 'ssh.configConnect');
+      expect(
+        ui.connections.single.arguments,
+        containsPair('binding', 'e' * 64),
+      );
+      expect(
+        ui.connections.single.arguments,
+        containsPair('username', 'explicit-user'),
+      );
+      ui.complete();
+      await ui.pump();
+      await ui.close();
+      await ui.remove();
+    },
+  );
+
+  testWidgets(
+    'config password reconnect resolves current binding and never falls back after target drift',
+    (tester) async {
+      final ui = _Ui(tester)..libraryBinding = 'c' * 64;
+      await ui.open(
+        connectOnOpen: false,
+        reconnect: const SshReconnectTarget(
+          mode: SshReconnectMode.configPassword,
+          host: 'server.invalid',
+          port: 2222,
+          username: 'alice',
+          configAlias: 'fixture',
+          continueKeyboardInteractive: true,
+        ),
+      );
+      await ui.session();
+      expect(ui.connections, isEmpty);
+      expect(
+        tester
+            .widget<TextFormField>(find.byKey(const Key('ssh-password')))
+            .controller!
+            .text,
+        isEmpty,
+      );
+      await tester.enterText(
+        find.byKey(const Key('ssh-password')),
+        'fresh-first',
+      );
+      await ui.tap('ssh-connect');
+      expect(
+        ui.connections.single.arguments,
+        containsPair('binding', 'c' * 64),
+      );
+      ui.complete();
+      await ui.pump();
+      await ui.close();
+      await ui.remove();
+
+      final changed = _Ui(tester)..libraryHost = 'changed.invalid';
+      await changed.open(
+        connectOnOpen: false,
+        reconnect: const SshReconnectTarget(
+          mode: SshReconnectMode.configPassword,
+          host: 'server.invalid',
+          port: 2222,
+          username: 'alice',
+          configAlias: 'fixture',
+          continueKeyboardInteractive: true,
+        ),
+      );
+      await changed.session();
+      expect(find.byKey(const Key('ssh-connect')), findsNothing);
+      expect(find.text('上次的配置目标已变化，请在“私钥与配置”中重新选择。'), findsOneWidget);
+      expect(changed.connections, isEmpty);
+      await changed.close();
+      await changed.remove();
+    },
+  );
+
+  for (final removal in ['removeRoute', 'destroyNavigator']) {
+    for (final saving in [false, true]) {
+      testWidgets(
+        '${saving ? 'save' : 'reuse'} password MFA $removal awaits RPC after late connected event',
+        (tester) async {
+          final ui = _Ui(tester);
+          await ui.open();
+          if (saving) {
+            await tester.enterText(
+              find.byKey(const Key('ssh-password')),
+              'first-save-only',
+            );
+            await ui.tap('ssh-save-password');
+          } else {
+            await ui.tap('ssh-use-saved-password');
+          }
+          await ui.tap('ssh-continue-keyboard-interactive');
+          await ui.session();
+          await ui.tap('ssh-connect');
+          expect(
+            ui.connections.single.arguments,
+            containsPair('useSavedPassword', !saving),
+          );
+          expect(
+            ui.connections.single.arguments,
+            containsPair('password', saving ? 'first-save-only' : ''),
+          );
+          await ui.event(_challenge(ui.connectId));
+          await ui.event({
+            'type': 'state',
+            'requestId': ui.connectId,
+            'state': 'connected',
+          });
+          expect(find.byType(SshPasswordConnectPage), findsOneWidget);
+          if (removal == 'removeRoute') {
+            final context = tester.element(find.byType(SshPasswordConnectPage));
+            Navigator.of(context).removeRoute(ModalRoute.of(context)!);
+          } else {
+            await tester.pumpWidget(const SizedBox.shrink());
+          }
+          await ui.pump();
+          expect(ui.releases, isEmpty);
+          expect(ui.cancelled, contains(ui.connectId));
+          ui.complete(success: true);
+          await ui.pump();
+          expect(ui.releases, hasLength(1));
+          expect(
+            ui.cancelled.where((id) => id == ui.connectId).length,
+            greaterThanOrEqualTo(2),
+          );
+          expect(ui.answers, isEmpty);
+          await ui.remove();
+        },
+      );
+    }
+  }
+
+  for (final cause in [
+    'background',
+    'locked',
+    'stream',
+    'expired',
+    'oldRound',
+  ]) {
+    testWidgets(
+      '$cause retires password-to-KBI without late response or protection release',
+      (tester) async {
+        final ui = _Ui(tester);
+        await ui.open();
+        await ui.tap('ssh-use-saved-password');
+        await ui.tap('ssh-continue-keyboard-interactive');
+        await ui.session();
+        await ui.tap('ssh-connect');
+        final id = ui.connectId;
+        await ui.event(
+          _challenge(id, remainingMillis: cause == 'expired' ? 500 : 60000),
+        );
+        await tester.enterText(
+          find.byKey(const Key('ssh-keyboard-answer-1')),
+          'clear-on-retire',
+        );
+        switch (cause) {
+          case 'background':
+            tester.binding.handleAppLifecycleStateChanged(
+              AppLifecycleState.inactive,
+            );
+          case 'locked':
+            await ui.session(unlocked: false);
+          case 'stream':
+            await ui.messenger.handlePlatformMessage(
+              'ctos/ssh',
+              const StandardMethodCodec().encodeErrorEnvelope(code: 'FAILED'),
+              null,
+            );
+          case 'expired':
+            await tester.pump(const Duration(milliseconds: 501));
+          case 'oldRound':
+            await ui.event({
+              'type': 'keyboardChallengeDismissed',
+              'requestId': id,
+              'ticketId': 'ticket_1',
+            });
+            await ui.event(_challenge(id));
+        }
+        await ui.pump();
+        expect(find.byType(SshKeyboardChallengeForm), findsNothing);
+        expect(ui.cancelled, contains(id));
+        expect(ui.releases, isEmpty);
+        if (cause == 'background')
+          tester.binding.handleAppLifecycleStateChanged(
+            AppLifecycleState.resumed,
+          );
+        await ui.event(_challenge(id, round: 2));
+        expect(find.byType(SshKeyboardChallengeForm), findsNothing);
+        expect(ui.answers, isEmpty);
+        ui.complete();
+        await ui.pump();
+        await ui.close();
+        await ui.remove();
+      },
+    );
+  }
+
+  test(
+    'config password API validates source binding and first-method secret modes',
+    () async {
+      expect(
+        sshConnectionError(PlatformException(code: 'SSH_PASSWORD_POLICY')),
+        '此配置未允许密码认证，请检查配置中的认证方式。',
+      );
+      final messenger =
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+      final calls = <MethodCall>[];
+      messenger.setMockMethodCallHandler(const MethodChannel('ctos/native'), (
+        call,
+      ) async {
+        calls.add(call);
+        return {
+          'requestId': (call.arguments as Map)['requestId'],
+          'status': 'connected',
+        };
+      });
+      addTearDown(
+        () => messenger.setMockMethodCallHandler(
+          const MethodChannel('ctos/native'),
+          null,
+        ),
+      );
+      final api = SshPasswordApi();
+      await api.configPasswordConnect(
+        requestId: 'attempt',
+        alias: 'fixture',
+        binding: 'b' * 64,
+        password: '',
+        useSavedPassword: true,
+        continueKeyboardInteractive: true,
+        columns: 80,
+        rows: 24,
+      );
+      expect(calls.single.arguments, {
+        'requestId': 'attempt',
+        'alias': 'fixture',
+        'binding': 'b' * 64,
+        'username': '',
+        'password': '',
+        'useSavedPassword': true,
+        'savePassword': false,
+        'continueKeyboardInteractive': true,
+        'columns': 80,
+        'rows': 24,
+      });
+      for (final value in [
+        ('unbound', '', true, false),
+        ('b' * 64, 'unexpected', true, false),
+        ('b' * 64, '', true, true),
+        ('b' * 64, '', false, false),
+      ]) {
+        expect(
+          () => api.configPasswordConnect(
+            requestId: 'bad',
+            alias: 'fixture',
+            binding: value.$1,
+            password: value.$2,
+            useSavedPassword: value.$3,
+            savePassword: value.$4,
+            columns: 80,
+            rows: 24,
+          ),
+          throwsFormatException,
+        );
+      }
+      expect(calls, hasLength(1));
+    },
+  );
+
   testWidgets(
     'authentication selector cancels without discarding the draft and places help below',
     (tester) async {
@@ -639,6 +1206,10 @@ class _Ui {
   final calls = <MethodCall>[];
   final pending = <Completer<Object?>>[];
   int sequence = 0;
+  bool withKey = false;
+  String libraryBinding = 'a' * 64;
+  String libraryHost = 'server.invalid';
+  String libraryUsername = 'alice';
   late SshPasswordApi api;
 
   List<Map<dynamic, dynamic>> arguments(String method) => calls
@@ -650,6 +1221,10 @@ class _Ui {
         (call) => const {
           'ssh.keyboardConnect',
           'ssh.configKeyboardConnect',
+          'ssh.passwordConnect',
+          'ssh.keyConnect',
+          'ssh.configConnect',
+          'ssh.configPasswordConnect',
         }.contains(call.method),
       )
       .toList();
@@ -700,27 +1275,42 @@ class _Ui {
         };
       case 'ssh.library':
         return {
-          'keys': <Object>[],
+          'keys': <Object>[
+            if (withKey)
+              {
+                'id': 'key_a',
+                'label': 'Fixture key',
+                'path': '.ssh/id_ed25519',
+                'algorithm': 'ssh-ed25519',
+                'fingerprint': 'SHA256:${'A' * 43}',
+              },
+          ],
           'hasConfig': true,
           'hosts': [
             {
               'alias': 'fixture',
-              'binding': 'a' * 64,
-              'host': 'server.invalid',
+              'binding': libraryBinding,
+              'host': libraryHost,
               'port': 2222,
-              'username': 'alice',
-              'keyIds': <String>[],
+              'username': libraryUsername,
+              'keyIds': <String>[if (withKey) 'key_a'],
               'identityHints': ['/computer/key-not-imported'],
             },
           ],
         };
       case 'ssh.keyboardConnect':
       case 'ssh.configKeyboardConnect':
+      case 'ssh.passwordConnect':
+      case 'ssh.keyConnect':
+      case 'ssh.configConnect':
+      case 'ssh.configPasswordConnect':
         final completion = Completer<Object?>();
         pending.add(completion);
         return completion.future;
       case 'ssh.keyboardResponse':
         return {'accepted': true};
+      case 'ssh.passwordStatus':
+        return {'saved': true};
       case 'ssh.cancel':
         return {'cancelled': true};
       default:
@@ -732,6 +1322,7 @@ class _Ui {
     SshReconnectTarget? reconnect,
     double scale = 1,
     double keyboard = 0,
+    bool connectOnOpen = true,
   }) async {
     if (tester.binding.lifecycleState != AppLifecycleState.resumed) {
       tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
@@ -783,7 +1374,7 @@ class _Ui {
                 columns: 80,
                 rows: 24,
                 reconnect: reconnect,
-                connectOnOpen: true,
+                connectOnOpen: connectOnOpen,
               ),
               child: const Text('Open SSH'),
             ),
@@ -802,7 +1393,24 @@ class _Ui {
   }
 
   Future<void> tap(String key) async {
+    if (key == 'ssh-manage-identities' &&
+        find.byKey(Key(key)).evaluate().isEmpty) {
+      final management = find.byKey(const Key('ssh-connection-management'));
+      await tester.scrollUntilVisible(
+        management,
+        150,
+        scrollable: find
+            .descendant(
+              of: find.byType(SshPasswordConnectPage),
+              matching: find.byType(Scrollable),
+            )
+            .first,
+      );
+      await tester.tap(management);
+      await pump();
+    }
     final finder = find.byKey(Key(key));
+    await tester.pump(const Duration(milliseconds: 300));
     await tester.ensureVisible(finder);
     await tester.pump(const Duration(milliseconds: 300));
     await tester.tap(finder);

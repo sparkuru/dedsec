@@ -1,5 +1,494 @@
 # Verification
 
+<a id="20261113-ssh-partial-commit-preparation"></a>
+## 2026-11-13 SSH 部分提交准备
+
+用户反馈当前界面可接受后，明确提出“可以部分提交；然后继续 task”，并计划新开 session。
+本轮提交范围是相互依赖的 SSH 产品、测试、规格与记录；MFA 串联专项人工验收仍待完成，
+SSH 父任务继续。其他项目、Trellis 运行时和应用细节／主题待办不纳入本次提交。
+
+- 独立复核用干净 HEAD 快照叠加两个界面文件，Dart 分析出现 13 项缺失接口错误；叠加完整
+  35 个 SSH 产品、测试及夹具文件后，断网静态分析通过。证据见
+  `/tmp/ctos-ux-standalone-review.jrLSy7Lo/`；快照 Flutter 测试因 SDK 锁及依赖缓存问题
+  没有执行，不记为通过或产品失败。
+- 当前工作区运行 `./hako bash -lc 'cd android && ./gradlew :app:testReleaseUnitTest
+  --offline --console=plain'`，实际执行测试任务，**856 项／58 套、失败／错误／跳过均为 0**，
+  日志 `/tmp/ctos-ssh-feedback-20261113.5egk2B1s/precommit-jvm.log`。此前当前产品的
+  Flutter **438 项**、分析和两种认证的指定板隔离界面测试结果见下节；不同环境、时间分开记。
+- 本轮不更新设备、不访问真实账户或正式私有库，不归档父任务；临时验收服务已按期限退出。
+
+<a id="20261113-ssh-feedback-human-acceptance"></a>
+## 2026-11-13 指纹恢复与连接表单人工反馈
+
+用户在本轮更新和自行测试后反馈：“可以；目前能够接受了”。按反馈范围记录为本次 SSH
+连接表单、管理区和指纹恢复体验可接受；用户未逐项描述具体操作，不据此补写其认证、
+换键或 MFA 串联的实际步骤，也不将完整父任务或提交视为已获验收／授权。
+
+本轮助手先前完成的 Flutter 和指定板隔离界面测试、安装身份与失败记录见
+[上一节](#20261113-ssh-feedback-direct-recovery)。收到反馈时只读核对本轮合成服务仍在
+监听，日志显示共 2 次连接（含助手的 1 次横幅探测）；连接计数不能证明认证或终端结果。
+服务仍按既定 30 分钟期限运行，本次未进行新的设备操作或产品代码变更。
+14:03 再核对：服务日志明确 `Synthetic listener ended: deadline`、`Synthetic endpoint closed`，
+22222 已无监听；未额外终止其他进程。
+
+<a id="20261113-ssh-feedback-direct-recovery"></a>
+## 2026-11-13 再次反馈：原地忘记、间距与错误诊断
+
+用户要求忘记旧指纹直接出确认弹窗、管理区疏朗，并反馈连接失败未弹窗；要求助手先在
+设备操作再交人工验收。原地忘记使用新查询和新预览，展示实际目标、来源及旧指纹，需
+再次确认；取消不写入，成功后仍须用户主动重连并核对新指纹。管理展开区调整留白。
+确认路由被覆盖或伪造 `pop(true)` 均不能提交；成功／不确定回执也须真实点击“知道了”，
+非法弹出时保护和未确认回执仍保留。独立复核未发现该范围的其他明确问题。
+
+- 最终产品源码的 `flutter analyze --no-pub` 无问题，完整 `flutter test --no-pub`
+  **438 项通过**；两个指纹／连接测试文件定向 **110 项通过**，Dart 格式检查无改动。
+  成功／不确定回执、原路由保留／移除的 4 组真实 `Navigator.pop(true)` 用例先红后绿；
+  覆盖系统返回、页面覆盖／销毁、后台和正常确认。实际组件与中英文字体的合成截图审看
+  管理区、冲突提示和忘记确认；这是测试数据的组件渲染，不是设备受保护窗口截图。
+- 截图前的测试服务在反馈后一度已无进程和监听，但没有正常退出回执，不能断言截图时
+  服务是否存活或唯一故障原因。实际 Android 独立测试包证明：连接拒绝显示连接错误；
+  一个接受 TCP 后立即断开、未提供主机密钥的合成服务在旧产品上复现通用错误，改为
+  `SSH_SESSION_STEP` 的协商／通信失败提示后在最终隔离包中通过；两者都不伪造指纹弹窗。
+  旧包红测、一次测试库创建等待失败及重试通过均保留在本轮临时证据目录。
+- AIO-3568J（`192.168.9.14:5555`）独立包使用真实 Flutter 控件和独立回环换键服务。
+  密码认证 **27.741 秒**、独立服务器交互式认证 **22.035 秒**各通过一项完整仪器测试：
+  旧键审阅进入合成终端、变更弹窗取消／查看、直接忘记预览取消／确认、新键审阅和再次
+  进入终端；交互式流程实际回答合成问题。两轮各 6 次连接，且确认忘记没有跳转主机信任页。
+  首轮停在测试库等待；二轮已出现并取消变更弹窗，但测试驱动未滚回顶部而未找到表单
+  标题；增加滚动定位后重跑通过。失败均留存，不计入通过。隔离包不使用真实账号。
+- 隔离主包 SHA-256 `6a32eb3b223bf6eb6e1ede5b371bcd15644901354aa5dd7374aba7af8229f8fa`，
+  最终测试驱动 `7629bb5164028834c84b460222704e39d9759eaa22161ea23b32a045cc3fd4c1`。
+  每次重置前检查自建库无未完成导出 journal 和持久 URI 授权；仅卸载自建测试包，移除
+  自建 reverse 并结束回环 peer。正式数据未读取或清空。阶段与失败日志位于
+  `/tmp/ctos-ssh-feedback-20261113.5egk2B1s/`。
+- 同任务用户已有的同板保留数据更新授权下，验签、备份公开旧 APK 后执行一次 `install -r`。
+  实际正常包 SHA-256 `0888194055b7911b6368c828b95c053df5d1571254f0af5e9a112c5bd2dec106`，
+  v2 签名与旧版一致；UID 10131、数据目录和首次安装时间保持。MainActivity 启动并 resumed；
+  隔离包／reverse 已移除，专用 ADB 15063 已停止。后续人工反馈见上一节，父任务未关闭。
+
+已知边界：现有宿主代码也将主机证明的绑定不匹配编码为 `SSH_HOST_KEY_CHANGED`，与实际
+保存主机键变化共用前端错误码；本轮未通过正常界面复现该异常。它仍拒绝连接、忘记须
+重新查询和确认，但应后续区分提示来源，不将当前测试写成对此边界的完整覆盖。
+
+为用户人工复验，沿本任务已有范围在 `192.168.9.5:22222` 重新启动自测通过的合成服务，
+仅接受 `192.168.9.14` 来源，不执行系统命令。脚本 SHA-256
+`a93960ab98bbfc25de923cdbdb73776b056ca6b5f52e5b9fad126f85777f0ba2`；13:32:50
+（新加坡时间）启动，PID 183845，实际监听已核对；计划 1800 秒或最多 32 次连接后结束，
+每次合成终端最多 300 秒。服务新生成的公开指纹为
+`SHA256:DDed8v8X9DrcvFy43kpS0a7b6ObrTJWt9ia/5QbNlhE`。运行日志会记录结束原因；
+从指定板 TCP 实际读到 `SSH-2.0-paramiko_4.0.0` 横幅，服务端将此次探测计为第 1 次；
+探测未发送客户端 SSH 横幅，服务日志相应记录 banner 读取异常，随后仍在监听。专用 ADB
+再次停止并确认无监听。记录启动时尚未收到人工反馈，也不能预先声称服务已按期退出；
+后续反馈见上一节。
+
+<a id="20261113-ssh-ux-formal-install"></a>
+## 2026-11-13 SSH 表单与指纹恢复：正式更新与人工验收准备
+
+用户对“将已验签候选包保留数据覆盖安装至 `192.168.9.14:5555` 并启动”明确回复“可以”。
+安装前重新确认指定设备在线、AIO-3568J、Android 11／API 30／arm64-v8a；正式包为
+`im.majo.ctos`，实际旧 APK SHA-256 `418f6d133557c6aa554ae30bdf8481aa30c7bec231ac5921e703a48f2e1a2974`，
+与先前备份一致；UID 10131、数据目录 `/data/user/0/im.majo.ctos`、首次安装时间
+`2026-09-24 17:16:04`。候选和旧版同一 v2 开发签名，固定候选 SHA-256
+`160b984540f2de878e4fa34e132a9badb7a6a7abaaf65096fea3294e0d025371`。
+
+精确目标执行一次 `adb install -r` 返回 `Success`；设备实际新 APK 的 SHA-256 与候选
+完全一致，UID／数据目录／版本／首次安装时间前后公开元数据逐字相同。`am start -W`
+返回 `Status: ok`，实际 `mResumedActivity` 与焦点窗口均为 ctOS MainActivity；未读取
+正式私有库或操作真实账户。安装前两条元数据过滤命令因命令引用错误无输出，纠正后重采
+并据有效结果确认；没有将空输出当成通过。专用 ADB 15063 已停止且无监听。
+命令回执及固定回执哈希位于 `/tmp/ctos-host-recovery-ui-20261113.dzkOh38s/formal-install/`，
+旧公开 APK 和候选副本在其上级目录。
+
+为支持用户要求的后续人工验收，沿此前获准范围重启同一合成 SSH 服务：仅绑定
+`192.168.9.5:22222`，只接受开发板 `192.168.9.14`，30分钟／最多8次连接，不执行系统命令。
+脚本 SHA-256 `a2952181b426a730787514554a99eb9491867cc82b0e7dcb44ead141ba827717`；
+12:34:40（新加坡时间）启动，PID 78402，计划约13:04:40结束。新公开指纹为
+`SHA256:HT5wJphRx6rOGTHYleSFtoRfRdTB7QFGfyHoUAxYyC0`；启动和监听已实测，人工连接结果
+尚未反馈。用户可选择独立交互式认证，或在密码后启用继续交互式认证；均为合成账户。
+本次正式包已安装但用户体验尚未验收，先前隔离包成功不替代正式包人工反馈。
+
+后续用户反馈通用错误及未弹窗。12:41核查时该服务的进程和22222监听均已消失，
+日志没有正常结束回执；不能据此断言12:40截图时的服务状态或退出原因。当前正在
+分别用实际连接拒绝及握手中断场景检查错误表现。
+
+<a id="20261113-ssh-form-host-recovery"></a>
+## 2026-11-13 SSH 连接表单与指纹变更恢复
+
+用户要求重排整个连接表单，并在服务器指纹变化时提供查看、忘记原有指纹和取消；要求助手
+先自行操作界面，再交人工验收。本轮实现按目标／认证／本次选项／连接主操作／次级资料与
+密码管理排序。变更弹窗绑定实际目标；查看与忘记复用受保护的主机信任页面、精确查询、
+新预览和再次确认。配置的信任文件不能由认证类型推断时，要求用户选组。受保护及共享记录
+仍阻断，成功忘记不自动连接或批准新指纹。
+
+- `./hako flutter analyze --no-pub` 无问题；`./hako flutter test --no-pub --reporter compact`
+  **408 项通过**。随后新加的 320×568 和 568×320、两倍文字的变更弹窗检查 **2/2 通过**；
+  此两项为全量之后的定向追加，不合称为410项全量。之后补测恢复页后台失效和配置目标
+  变化，各1项通过。覆盖原始失败事件后的迟到 connected、配置来源不明、前后台、取消与
+  预览确认；Dart 格式及 `git diff --check` 通过。
+- 实际大屏表单、管理展开和变更弹窗以 Noto CJK／Roboto／Material Icons 渲染为三张合成
+  快照，人工审看目标、认证、连接、管理顺序和弹窗文案；文件在 `build/ssh-form-ux-review/`。
+  快照使用测试数据，不是受保护设备窗口截图，也不代替人工验收。
+- `-PctosSecretsUiFixture=true :app:assembleSecretsFixtureRelease
+  :app:assembleSecretsFixtureReleaseAndroidTest` 成功。指定板 AIO-3568J／Android 11 上，
+  专用 ADB 与独立包 `im.majo.ctos.secretsfixture` 及 `.test` 使用真实 Flutter 控件和合成
+  回环 SSH peer。精确仪器方法 `SshHostTrustRecoveryUiPlatformTest#changedHostCanBeReviewedForgottenAndRetriedThroughRealUi`
+  **OK 1/1，27.707 秒**：建立测试库、检查次级管理入口、核对并信任旧键／进入合成终端、
+  变更后取消、查看旧指纹、取消忘记、再次预览并确认忘记、确认回执、核对新键并再次进入
+  终端。逐阶段日志为 `/tmp/ctos-host-recovery-ui-20261113.dzkOh38s/device-stages.log`。
+  合成服务器仅监听回环，6次连接，结束后主动停止；没有使用真实账户或实际服务器。
+- 首轮 **失败** 于测试库创建流程后，未进入 SSH：测试等待条件可能把后方“SSH 连接”标题
+  当作表单可用；只读诊断确认自有库已创建、无导出 journal 或持久授权。重装本次自有隔离主包，
+  将等待锚点改为实际表单“连接目标”并增加阶段标记后，第二轮通过。此为测试驱动修正，
+  不是首轮产品通过；未据此推定其他认证模式的实机结果。
+- 本轮隔离主包 SHA-256 `af598aae100787110419401709361e039666c227cdeb5d40ce8aaec99d081a8b`，
+  最终驱动 `0e8755ac6256b6356bb492beff290ab20f7e4ffbfff0ff27fc4c0de93eb9af87`，设备读回
+  一致、独立 UID；成功后只读诊断无 journal／持久授权，卸载这两个此前不存在的包并移除
+  唯一 reverse。自有 ADB 与 peer 监听关闭。正式 `im.majo.ctos` 的公开 APK SHA-256
+  `418f6d133557c6aa554ae30bdf8481aa30c7bec231ac5921e703a48f2e1a2974`、UID 10131、
+  dataDir 和首次安装时间前后一致；未读取或比较正式私有库字节。
+- `./preview.sh` 构建正常 arm64 候选 **36,295,593 字节**，SHA-256
+  `160b984540f2de878e4fa34e132a9badb7a6a7abaaf65096fea3294e0d025371`；正常包与只读备份的
+  旧包均为同一 v2 开发签名 `8d36c8be418174cb4cda0b897ff3e32b2da6f84032819726e8e5671872df52ef`。
+  候选和旧公开 APK 的固定副本位于 `/tmp/ctos-host-recovery-ui-20261113.dzkOh38s/`。
+  测试时正式应用尚未更新，随后按上节更新；人工体验、完整父任务和此前密码→KBI人工验收均保持开放。
+
+<a id="20261113-ssh-manual-fixture-30m"></a>
+## 2026-11-13 延长合成服务人工测试时间
+
+用户表示希望测试时间长一些并可开始测试。此前11:11启动的服务已到期：原进程和监听
+消失，运行回执输出`Synthetic endpoint closed`且退出码0。延长版沿用相同合成认证和
+`192.168.9.5:22222`／`192.168.9.14`来源限制，只将服务寿命由300秒改为1800秒、
+每次合成终端寿命由30秒改为300秒，最多8次连接保持；不执行系统命令。
+
+延长版`/tmp/ctos-mfa-human-20261113.en1phJQu/interactive_30m_fixture.py`的SHA256为
+`a2952181b426a730787514554a99eb9491867cc82b0e7dcb44ead141ba827717`；独立KBI／MFA
+socketpair及回环自测和Ruff通过，测试结束时有两条connection reset提示。
+约11:20（新加坡时间）启动，实际监听仅`192.168.9.5:22222`、PID27133，预定约11:50退出；
+新公开指纹为`SHA256:TSIC2nQ0lCFLRlrqrCN0WdUtmJEWTEFl7WVSWm6vGjY`。
+启动时尚未取得MFA人工体验反馈或自动退出回执；本轮没有ADB、真实账号、系统SSH配置
+或产品代码变更。
+
+后续核对：运行回执为 `Synthetic endpoint closed`、退出码0，原PID不存在且22222无监听。
+用户尚未反馈密码→KBI串联结果，不能把独立KBI通过扩写为MFA人工通过。
+
+<a id="20261113-ssh-mfa-manual-restart"></a>
+## 2026-11-13 MFA串联人工体验：临时服务重启
+
+用户确认独立KBI回答问题后已进入测试终端后，沿同地址／端口／来源／五分钟的现有授权，
+以未改变的`interactive_fixture.py`（SHA256 `dac33d84061a92609c183832fccb99bd59da2d0522871cb6749219d37d07e1e5`）
+重新启动临时服务，供不同的密码→KBI流程体验。约11:11（新加坡时间）实际核对
+`192.168.9.5:22222`由本轮PID24471监听，仅接受来源`192.168.9.14`；设置300秒期限。
+本轮公开主机指纹为`SHA256:SZVpabFEYEjQS4hW6pDAjI2J7IJnyDHE2/Fmcvrj+ZM`。
+
+本次MFA人工体验尚未反馈，不能由独立KBI结果推定通过；没有ADB、真实账号、系统SSH配置
+或产品代码变更。计划约11:16自动退出，建立记录时尚未核对退出回执。
+
+<a id="20261113-ssh-direct-kbi-manual-fixture"></a>
+## 2026-11-13 独立交互式认证：纠正测试并准备人工体验
+
+用户指出独立交互式认证不应要求先输入密码，并提供FileZilla录屏；录屏展示「交互式」
+是独立登录选项，没有展示实际连接。此前助手建议用户切换密码模式并要求先输入密码，
+是把MFA测试服务的限制误用于独立KBI，属于错误的解释和测试设计。
+
+当前ctOS源码的独立KBI分支直接调用`beginKeyboardInteractiveAuth()`，并非先发密码；
+既有Flutter模拟测试也覆盖无密码发起和服务端问题显示，但不能据此判定本次真实界面已通过。
+此前本机SSH配置禁用KBI、下节的合成服务又仅允许密码后续接，均不适合作为独立KBI的
+正向人工测试目标。旧服务已自然退出，实际进程退出码0、输出`Synthetic endpoint closed`，
+端口释放后才启动新服务。
+
+按用户已有的同地址、端口、来源和5分钟测试授权，新脚本
+`/tmp/ctos-mfa-human-20261113.en1phJQu/interactive_fixture.py`同时支持独立KBI与
+密码→KBI。进程内实际加密socketpair自测覆盖无需密码的挑战／回答／合成PTY、错误回答，
+及原MFA路径；回环来源限制／期限和Ruff通过。关闭时有一条connection reset提示。
+脚本SHA256为`dac33d84061a92609c183832fccb99bd59da2d0522871cb6749219d37d07e1e5`。
+
+约11:05启动后，实际监听`192.168.9.5:22222`、PID22238，来源仅允许`192.168.9.14`，
+计划300秒后退出。服务重启生成了新主机密钥，本次公开指纹为
+`SHA256:HplVAMgKFhTe/WX5AGELKYotF4LamUjKt69zX1sK7ug`。实际Android直接KBI体验及
+自动退出在此时待反馈／核对；本轮没有ADB、真实账号、系统SSH配置或产品代码变更。
+
+用户先反馈“这次对了”，随后明确确认“回答问题后进入了测试终端”。因此本次人工反馈
+覆盖独立KBI的问题、回答和合成终端交接；本轮未采集连接协议或服务端逐次日志，不扩写
+其他操作。此反馈不代表密码或私钥后续接KBI的人工验收通过。11:10检查PID和监听均
+已消失，运行回执输出`Synthetic endpoint closed`且退出码0，确认该轮服务已退出。
+
+<a id="20261113-ssh-mfa-manual-fixture"></a>
+## 2026-11-13 临时MFA人工体验服务
+
+用户授权在本机`192.168.9.5:22222`启动此前准备的合成测试服务，仅接收来源`192.168.9.14`，
+计划运行300秒、最多8次连接，不执行操作系统命令。脚本SHA256为
+`b11ebf480d7193b9ebeb4f49d6e6deef552e7e17b13cfa201a8beac2b14a1f5c`，与自测版本一致。
+约10:56（新加坡时间）启动后，`ss`实际显示仅`192.168.9.5:22222`由本轮python PID18301
+监听；每次重启生成新主机密钥。本次公开指纹为
+`SHA256:os/ER6N7Nc6zE8nO9IhAftHu+QwA3H/rXq3e7F4oRaI`。
+
+该服务预定约11:01自动退出；此记录建立时尚未验证自动退出。
+本轮没有ADB操作、正式应用安装、真实账号访问或SSH服务配置变更。收到反馈后再区分
+人工体验与实际连接证据，不能把本地夹具自测当作Android验收。
+
+约10:59用户截图显示目标为本测试端口，但认证方式仍选择独立「服务器交互式认证」，
+反馈没有弹出问题。该夹具仅在密码部分成功后提供KBI，此选择与直接失败的现象一致；
+尚无本次连接的协议回执，也不能将其记为密码→KBI人工验收。10:59只读核对监听仍在。
+
+<a id="20261113-ssh-kbi-recheck"></a>
+## 2026-11-13 人工反馈：独立KBI再次未弹问题
+
+用户截图仍选择独立「服务器交互式认证」，目标`192.168.9.5:22`；随后确认本次没有弹出
+问题就显示错误。只读核对该地址属于本机、22端口正在监听，listener命令为默认配置的
+`/usr/sbin/sshd -D`。当前`/etc/ssh/sshd_config`明确`KbdInteractiveAuthentication no`，
+Include目录为空。使用临时生成的合成主机密钥对当前配置运行`sshd -T`，结果为
+`kbdinteractiveauthentication no`、`passwordauthentication yes`、
+`pubkeyauthentication yes`、`authenticationmethods any`；临时密钥已删除。
+当前配置不要求串联MFA，也不提供独立KBI，与本次现象一致；未抓取此次连接的协议或
+服务端日志，运行中的进程加载状态不能仅凭当前文件推定。
+
+为后续人工体验，在`/tmp/ctos-mfa-human-20261113.en1phJQu/fixture.py`准备了临时合成
+password→KBI夹具；进程内socketpair及短暂127.0.0.1回环自测通过，覆盖错误首因子／
+错误回答／独立KBI拒绝、来源限制、合成PTY请求及空闲期限，Ruff通过。首次sandbox内
+socket通信被拒；允许本机通信后重跑通过，最终运行另有一条断连时的connection reset提示。
+此夹具不执行系统命令，回环测试已退出；该阶段尚未开放局域网监听或连接开发板，临时路径不保证持久。
+本轮未修改SSH服务配置、访问真实账号或重建／安装应用；MFA人工验收仍开放。
+
+<a id="20261113-ssh-mfa-resume"></a>
+## 2026-11-13 接续：MFA Flutter定向回归
+
+接续前Trellis没有选中current；已将仍为in_progress的原1008父任务重新选为current，
+没有新建任务。
+对当前工作树运行`./hako flutter test --no-pub test/ssh_keyboard_interactive_test.dart --reporter expanded`，
+**43项通过**。覆盖手动／config的密码及私钥续接、问题表单、重连元数据和中断清理；
+这些是Flutter测试及模拟交互，不替代实际SSH服务或设备人工验收。
+
+测试前后本地`build/app/outputs/flutter-apk/app-release.apk`均为`418f6d13…`，与11-06
+设备安装记录中的APK哈希一致；`dist/ctos-current-arm64.apk`仍为旧的`b7e67386…`。
+本轮未重新构建、安装或连接设备，不能据本地哈希推断设备当前状态。11-04测试及11-06
+交付记录引用的原始`/tmp`证据目录目前已不存在；当时结果仍以已有项目记录为历史依据，
+本轮没有复验其原始回执。新增MFA人工体验、提交和完整父验收仍开放。
+
+<a id="20261106-ssh-kbi-no-prompt-feedback"></a>
+## 2026-11-06 人工反馈：独立KBI未弹出问题即失败
+
+正式418f6d13…交付后，用户截图选择独立“服务器交互式认证”，目标为本机SSH22端口，
+显示“服务器交互式认证未完成或被拒绝”；用户明确确认完全没有弹出问题。
+这项反馈未验证密码／私钥后续接KBI，也不作为MFA人工验收通过。
+
+本轮只读检查确认截图地址为本机、22端口正在监听、listener为`/usr/sbin/sshd -D`。
+`/etc/ssh/sshd_config:64`明确设置`KbdInteractiveAuthentication no`，`:87`为`UsePAM yes`，
+被Include的sshd_config.d没有文件。非Root的sshd -T因无可读hostkeys失败，未取得有效配置
+转储或这次连接的服务端原始协议／日志，因此将关闭KBI记录为与现象一致的配置原因，
+不冒充实际抓取了本次服务器拒绝包。未登录真实账号或修改sshd／Root／网络设置。
+
+源码核对：`SshPasswordConnector.completeKeyboardAuthentication()`只在CHALLENGE时
+发布问题；在首个问题前直接REJECTED／PARTIAL也返回SSH_KEYBOARD_AUTH，Flutter当前
+与回答后失败使用相同文案。截图错误本身不能证明已发出问题或客户端跳过表单。
+本轮仅诊断，未修改产品代码、重建或重装；新增流程人工反馈和完整父AC保持开放。
+
+<a id="20261106-ssh-mfa-formal-install"></a>
+## 2026-11-06 MFA正式保留数据更新并启动
+
+用户报告“恢复了；继续”，沿11-05已授予的指定板更新／启动授权继续。没有重建APK或
+修改产品源码；冻结控制器ad682e6d…重新核对30源码／21生成输入及正常工件审计和v2签名。
+实际目标`192.168.9.14:5555`确认AIO-3568J／API30／shellUID2000。
+
+证据：`/tmp/ctos-ssh-mfa-install-20261105.zaonKJqL/attempt-h_3qwkpn`。
+先实际pull公开旧APK及核对公开包身份／v2签名，再记录install_intent并执行一次install-r；
+`014-install-preserving-data.log`为Success，无命令失败。安装后再次pull实际APK核对：
+
+- 前APK：`8b6c2a42a43e1b1392f06cdc87f2241da2602bdfd91af73b5c08ec8289f7964e`。
+- 后APK：`418f6d133557c6aa554ae30bdf8481aa30c7bec231ac5921e703a48f2e1a2974`，匹配已审阅正常候选。
+- 前后v2 signer：`8d36c8be418174cb4cda0b897ff3e32b2da6f84032819726e8e5671872df52ef`。
+- UID10131、dataDir`/data/user/0/im.majo.ctos`、首次安装`2026-09-24 17:16:04`保持；
+  最后更新时间变为`2026-11-06 22:40:52`，versionCode1／versionName0.1.0。
+
+`019-launch.log`为Status:ok，精确组件`im.majo.ctos/.MainActivity`；`020-resumed.log`
+的mResumedActivity／ResumedActivity均为该组件，实际启动已验证。随后只停止本轮自有
+前台ADB15061／PID1323422，进程回收、无监听、日志关闭三项均true；42条TIME-WAIT单列。
+`result.json`为passed=true，8项retained_public_invariants全部true。
+
+独立只读复核`formal-delivery-runtime-review-20261106.md`对本次更新／启动范围判PASS：
+23组原始命令、两份实际pull的公开APK／签名／身份、单次安装／当前resumed与精确清理
+及冻结来源均重新核对。48份公开回执清单`formal-delivery-reviewed-evidence-20261106.sha256`
+的SHA256为`b10cedf5a8691704d74e043351ebbc5c40c815157bbdabd00395dae3faa8cedf`。
+
+本轮只备份公开APK／读取公开包身份，没有清空或卸载正式应用、读取正式私有秘密库、
+操作真实账号、修改网络／Root／系统设置。公开身份保持不等于逐字节比较私有库内容。
+入口：终端→SSH连接，选择密码或私钥后可显式开启“按服务器要求继续交互式认证”；
+config主机也有对应入口。新增Flutter页面人工体验、实际IME／重连点击仍待反馈，
+不以本轮安装／启动替代这些验收；提交及完整1008父AC仍开放。
+
+<a id="20261105-ssh-mfa-formal-install"></a>
+## 2026-11-05 MFA正式更新未执行：目标不可达
+
+用户另回复“授权”，批准在`192.168.9.14:5555`备份当前公开APK、保留数据更新已审阅
+正常APK并启动供体验；不包含清空／卸载、Root／系统设置、正式私有库／真实账号或提交／归档。
+候选SHA256仍为`418f6d133557c6aa554ae30bdf8481aa30c7bec231ac5921e703a48f2e1a2974`。
+本轮没有修改产品源码或重建APK，30源码／21生成输入及工件审计保持一致。
+
+证据根：`/tmp/ctos-ssh-mfa-install-20261105.zaonKJqL`。
+交付控制器`formal_delivery.py`冻结SHA256为
+`ad682e6d6d161436bc4a371d4325afa2a3a537e1550657db9465d0637de54bba`；
+6项纯测试、语法检查、本地来源／v2签名核对和独立安全复核通过。控制器先核对实际设备与
+公开旧APK，才允许一次install-r；成功后核对实际新APK及保留的UID／dataDir／首次安装，
+再启动MainActivity。这些是准备好的步骤，**本轮未执行到这些设备操作**。
+
+实际只读预检`preflight-readonly/result.json`与一次同址重试
+`attempt-hmxmopgp/result.json`均返回`No route to host`。本地只读路由显示目标走直连路由，
+该地址邻居项为FAILED；没有更改网络配置或尝试其他地址。重试的`005-connect.log`虽为
+ADB退出0但正文明确连接失败，随后get-state退出1，保留原失败`COMMAND_state`及passed=false。
+未读取本轮设备身份或应用身份，未拉取／备份公开旧APK、未生成install_intent，未安装或启动。
+不能用11-04的正式身份记录代替本轮当前设备核对，也不声称已验证本轮保留数据更新成功。
+
+两次尝试的自有私有ADB15061均已退出并核对无监听；重试cleanup的process_reaped／
+listener_absent／log_closed全部true，5条TIME-WAIT单列。独立只读复核`attempt-review.md`
+核对9组原始回执、停止前控制流、冻结来源及清理，确认安全停止，**不判正式交付PASS**。
+
+正式更新授权保留。待开发板恢复可达或用户提供当前入口后，重新核对冻结候选及实际身份，
+沿既有授权继续交付；不自动改地址或网络。人工体验／提交和完整1008父AC保持开放。
+11-04的隔离运行结果仍按其日期与范围有效，未冒充今日重验。
+
+<a id="20261104-ssh-mfa-device"></a>
+## 2026-11-04 MFA指定板隔离验收通过并清理
+
+用户对明确限定192.168.9.14:5555、两隔离包／合成SSH／精确清理、正式应用保持的问题
+回复“授权”。本轮候选仍为0819dddb…／78e04242…，源码30项、生成输入21项及server源
+重新核对一致。只读预检已确认当前AIO-3568J／API30／shellUID2000，私有前台ADB15059进程
+已停止并核对无监听，证据`preflight-readonly/result.json`。驱动经11项纯测试／独立静态复核
+后执行首轮`platform/device-u3nqq1yw`：实际`pm path im.majo.ctos.secretsfixture`在包不存在时
+退出1且输出0bytes，驱动原先要求退出0，于安装前停止。原始013回执与失败保留；未安装、
+未启动合成服务／reverse／请求／实际方法。全部清理通过，正式公开身份及实际APK前后相同。
+随后只修正这一实测absence约定，严格保留非空错误／超时／超限拒绝；12项纯测试及
+独立差异复核通过，新驱动e07ad901…沿原授权重试，产品源码及两APK保持。
+没有扩展到正式应用更新、真实账号、Root／设置变更或提交／归档。
+
+### 最终实际结果
+
+证据：`/tmp/ctos-ssh-mfa-20261104.BZ6IOgdm/platform/device-6rm2kyp2`。
+同一AIO-3568J／API30／shellUID2000，实际安装隔离0819dddb…／测试78e04242…，
+UID分别10209／10210，与正式10131不同；安装及清理时实际公开APK／v2 signer均匹配。
+精确方法`actualBridgeMfaManualConfigSavedReplayCancelAndPty`实际status1→0、
+`OK (1 test)`，JUnit **10.415秒**。`034-instrumentation.log`保存完整原始结果。
+
+- 手动password、手动key、config-key、config-password显式保存与saved复用，共5次
+  真正最终认证和实际PTY／shell往返；每次真实提示／回答向量为3／0／1，同一transport
+  先完成第一因素、再进入KBI。native原阶段证明与Java/JNI通道由本次实际运行消费。
+- 服务端6条transport：password4／key2、6个已验证第一因素／6次KBI启动；5auth／5PTY
+  的shell均已回收。另1条在首轮3提示后取消、0回答／0shell；旧／跨attempt／重复回答
+  拒绝，最终禁用KBI配置没有产生第7条连接。
+- 实际config密码保存／状态／复用／单条及全部忘记后，原CONFIG／私钥／关联／信任与
+  单独创建的测试TOTP保持；不等于读取或核对正式应用秘密库。RAM重连只核对公开模式／
+  字段，未操作Android Flutter真实点击重连。
+- 11项cleanup全部true：设备请求、reverse15497、两隔离包、服务／owned shell、
+  本地生成秘密请求和文件、日志句柄及私有ADB15059等均清理；原始删除后回执保留。
+  私有ADB与合成服务42015无监听，主会话另做只读ss核对。原收尾137条TIME-WAIT单列，
+  不声称当时TCP表完全空或用重装／杀共享ADB取得通过。
+- 正式公开身份前后完全相同：APK
+  `8b6c2a42a43e1b1392f06cdc87f2241da2602bdfd91af73b5c08ec8289f7964e`，
+  signer8d36c8be…、UID10131、dataDir`/data/user/0/im.majo.ctos`、首次安装
+  `2026-09-24 17:16:04`、最后更新`2026-11-03 23:06:48`、versionCode1／0.1.0。
+  未访问正式private vault，不把公开身份一致扩写为读取比较了全部私有数据。
+
+独立运行证据复核`device-runtime-review.md`为PASS：核对62份原始命令回执及目标／长度／
+超时／截断、实际方法、server每transport、6份实际pull的公开APK及签名／UID、清理与
+30源码／21生成输入。129份公开回执清单`device-runtime-reviewed-evidence.sha256`的
+SHA256为`36e618d5c323ad9552609b0600e45ee3f9a37f4428f0395f5225525810f6591f`。
+驱动SHA256：`e07ad90190708202ce1e021bb07af72d2f97b5fe7604a353d0e7e9ed17b76619`。
+
+正式正常候选仍为已审阅418f6d13…，本轮**未更新正式应用**。新增Flutter页面人工体验、
+实际IME／重连按钮、真实SAF／账号及其他设备／ROM、完整父AC不由这项bridge方法推定
+通过。父1008继续，提交／归档仍未获本轮授权。
+
+<a id="20261104-ssh-mfa-local"></a>
+## 2026-11-04 同连接MFA续接：本地检查与候选构建
+
+用户对[两条MFA链及四种入口合同](ssh-mfa-authentication.md)回复“开始”，随后两次要求
+继续。沿原1008实施，当前基线`bc933b5`加本轮未提交源码；完整父AC保持开放。
+本轮证据根`/tmp/ctos-ssh-mfa-20261104.BZ6IOgdm`。中断前BM2z8Wrk临时目录已不存在，
+不将其作为可复核新证据，也不复用旧KBI设备结果。
+
+已实现手动／config的显式默认关闭password／publickey→KBI单次续接。不可变CSASv3
+固定原选择与许可，实际首方法PARTIAL及当前服务器方法列表才允许原native owner单次
+切换；CSAPv1核对原plan／KEX／session，首方法秘密保持一次消费，packet60按active
+method解释。只有最终SUCCESS及PTY/shell才交接；第一方法直接SUCCESS正常连接。
+configPassword使用实际配置源／目标／用户名／信任对象，保存密码仍绑定实际账号，
+不改写导入config；CSCP/CSPPv3由真实Options消费方法顺序能力，旧版本无续接权。
+问题回答仅当次，所有续接模式均接入原敏感路由、事件流与清理寿命；RAM重连从新首方法开始。
+
+| 层次 | 实际结果 | 证据与边界 |
+| --- | --- | --- |
+| Flutter | **396项通过／29秒**，analyze无问题 | `flutter-full-reviewed.log`；修正前395完整通过保留，最终含19项新增回归 |
+| 定向及布局 | 修正前128通过；独立新增回归red→2green，36PNG刷新通过 | `flutter/`、`review-flutter.md`及最终7源码pin；真实CJK/Material，320dp/2×/键盘、横屏/2×及宽屏，非Android IME截图 |
+| JVM | **856项／58套，0失败／错误／跳过，1分34秒** | `backend/java-full-final.log`、`jvm-final-xml/`、`jvm-final-summary.json`；排除native/Flutter构建的独立JVM，实际MethodCall grammar与加密图保存保持包含在内，非Android Handler/JNI运行 |
+| Native | **最终同归档2687087检查通过，已含MFA专项287236，不相加** | `backend/native-client-shared-final-64k.log`、`shared-final-summary.json`；固定源码加密socketpair协议与ARM/QEMU，非Android运行 |
+| 64KiB | 最终同一归档的全量及MFA专项均通过 | `backend/native-mfa-shared-final-64k.log`；两次均`prlimit --memlock=65536:65536`，未放宽锁页上限 |
+| Config | **7995检查通过，已含1262基线**；64KiB通过 | `backend/native-config-first.log`；真实固定Options／v3／顺序／禁用／legacy，零额外效果 |
+| 独立服务 | 两客户端×两条链，4次真正PTY；错误／取消均无shell | `platform/selfcheck-owned-cleanup.json`、`selfcheck-complete.json`、`server-lifecycle.json`；Paramiko4.0.0与系统OpenSSH，是合成服务自检，不是ctOS Android协议验收 |
+| 正常arm64构建 | 首轮45.3秒、最终同输入打包27秒均通过 | `normal-build.log`、`normal-shared-input-repack.log`、`normal/app-release.apk`；未安装 |
+| Lint／隔离构建 | 正常lint42秒，隔离构建／lint44秒通过 | 分别0错误及4／6既有警告，原XML保留；新平台方法已编译／打包，不等于运行 |
+| 产物审计 | **三APK v2／包名／arm64／Java-Dart-JNI／16KiB／隔离及同生产库通过** | `apk-audit.json`、`audit_artifacts.py`及SDK/实际DEX定义/ELF收据；30源码与21生成输入前后hash保持 |
+| 独立复核 | Flutter已修正一项并通过；全范围源码无额外未决发现 | 最终产物收口见`review-full.md`，设备及人工体验保持未验 |
+
+### 独立复核修正与保留失败
+
+独立Flutter审阅发现：同一config缺失User时，重新选择私钥会把用户显式填写的用户名
+替换为空。新增回归先观察到`explicit-user`→空，再只在同config的key-only刷新保留该值；
+配置非空User仍优先。定向2项与analyze、36字体渲染刷新、完整396均通过，原完整395
+不是最终源码的替代证据。最终7源码见`review-flutter-sources.sha256`。
+
+原生首次sandbox运行open返回EINVAL，`native-sandbox-strace.log`定位为
+`getsockopt(SO_TYPE)`被拒EPERM，发生在selection解析前；提权后的同一二进制可执行，
+最终诊断移除后的原生全量及严格64KiB专项均通过。初次parser/case诊断和失败日志保留，
+没有用放宽生产检查或锁页上限取得通过。
+
+Flutter首轮有测试类型／旧文案期望及滚动动画前置错误，后续均修正；前三次视觉夹具
+遇到lazy／嵌套滚动取图前置错误，原日志保留。JVM首轮仅旧reconnect用例仍把新支持的
+configPassword判非法，更新为本轮合同；随后新增严格stage／真实grammar及保存保持回归。
+
+合成服务首轮sandbox loopback bind EPERM单列；stock OpenSSH的固定`(user@host)`问题
+显示前缀、管道输入PTY的0×0默认尺寸及半关闭／输出排空时序修正只在临时服务器，
+未改生产客户端。最终8条transport：4认证／4实际PTY，三条错误负例，以及一条收到首轮
+3提示后取消、0回答／0shell。owned线程已join、listener已关闭、shell已回收、秘密临时输入已清。
+依赖仅任务私有system-site-packages venv读取现存Paramiko，无全局安装或生产依赖变化。
+
+### 工件与未测范围
+
+最终30项产品／测试源码清单`all-changed-sources.sha256`由22项backend、7项Flutter与
+1项平台夹具组成；主会话在构建前后核对。最终工件：
+
+| 工件 | SHA256 |
+| --- | --- |
+| 正常APK | `418f6d133557c6aa554ae30bdf8481aa30c7bec231ac5921e703a48f2e1a2974` |
+| 隔离APK | `0819dddb922f17ca17970818dcf52e8f36b4ff28e66fbb2ea1172e3eb7982c0e` |
+| 隔离测试APK | `78e04242e8a4b5658045c8c710feacfed89cdf6ce11ecc43272561bc32e9bde6` |
+| 两APK共同生产JNI | `5356b964a2aec777298db14861fbe4412bf7b33881fc3f8c64f6ab0764f09285` |
+| 最终生产归档 | `abf4139f7404bebe9bba72130c58ece40fd941fa7d3e4efc916002b89a92cebd` |
+| 对应实际运行原生binary | `38e642b649c5733737ddd3fa7d4833f216b34d5562f18c49ad54b21902702528` |
+
+三包共同v2 signer为`8d36c8be418174cb4cda0b897ff3e32b2da6f84032819726e8e5671872df52ef`。
+正常／隔离包仅arm64-v8a，测试包无ABI；实际DEX定义隔离fixture Application和平台测试类，
+三包不带auth-peer，生产Java／Dart字段与新JNI入口已包含。测试manifest的targetPackage
+直接以`aapt2 dump xmltree`核对；首轮审计误用badging查该字段的失败保留。
+
+首轮正常85cc2b34…与隔离包虽源码相同，生产库含每次编译随机`/tmp/ctos-production-openssh.*`
+和config-evaluator路径，导致字串及关联偏移不同，审计未放行。已保存首轮APK和失败；
+冻结最终21项archive／config objects／header／raw JNI后，最终正常打包仅排除这三项原生
+生成任务，实际输入hash不变。原始JNI d81de5ab…经标准NDK27 strip与独立复核分别得到
+上表5356b964…，与两APK字节一致，未放宽一致性断言或修改构建脚本。
+原生随后用该**确切最终归档**新构建并在64KiB下重跑全量2687087／专项287236；前一
+同源码2686841仅为保留历史。Config7995为同源码的真实Options检查，最终config对象
+另有冻结输入审计，不将其混称为最终对象的另一次运行。正常lint在同源码上通过，未因
+单纯固定生成输入而重复。五份本轮QEMU失败core已按核验后的0600副本移至私有临时证据，
+不留项目根或加入提交。`initial-core-cleanup.json`记录精确范围。
+
+准备的Android方法为
+`SshPasswordConnectPlatformTest#actualBridgeMfaManualConfigSavedReplayCancelAndPty`，
+覆盖四种入口、实际3/0/1与PTY、config密码保存／复用／忘记、旧／跨连接／重复回答、
+取消及配置禁用、原config/key/信任与TOTP保持。当前**未安装、未运行**，不把上述JVM／
+QEMU／服务自检声称为Android真实bridge、设备键盘、SAF或人工体验。
+本轮未连接开发板／操作真实账号／更新正式应用或dist，未提交／归档父任务。
+待当前授权方案为`platform/device-recipe.md`：仅指定192.168.9.14:5555隔离两包，
+私有ADB15059／reverse15497须重新查无冲突，测试用新生成秘密及独立loopback服务。
+预期实际5认证／5PTY及1取消，禁用配置不产生第7连接；精确清理并核对正式公开身份保持。
+方案及固定候选已准备，不表示端口已保留、设备在线或执行获授权。
+
 <a id="20261104-ssh-kbi-human-acceptance"></a>
 ## 2026-11-04 独立KBI及三处UI修正人工验收通过
 

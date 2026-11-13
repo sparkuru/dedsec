@@ -83,7 +83,8 @@ final class SshPasswordConnectBridge implements AutoCloseable {
                 case "ssh.passwordStatus": passwordStatus(call, result); break;
                 case "ssh.forgetPassword": forgetPassword(call, result); break;
                 case "ssh.forgetKeyPassphrase": forgetKeyPassphrase(call, result); break;
-                case "ssh.passwordConnect": connect(call, result); break;
+                case "ssh.passwordConnect": connect(call, result, false); break;
+                case "ssh.configPasswordConnect": connect(call, result, true); break;
                 case "ssh.keyConnect": connectKey(call, result, false); break;
                 case "ssh.configConnect": connectKey(call, result, true); break;
                 case "ssh.keyboardConnect": connectKeyboard(call, result, false); break;
@@ -324,19 +325,22 @@ final class SshPasswordConnectBridge implements AutoCloseable {
         });
     }
 
-    private void connect(MethodCall call, MethodChannel.Result result) throws VaultException {
+    private void connect(MethodCall call, MethodChannel.Result result, boolean configured) throws VaultException {
         boolean extended = call.arguments instanceof Map && ((Map<?, ?>)call.arguments).containsKey("useSavedPassword");
-        if (extended) exact(call, "requestId", "host", "port", "username", "password", "columns", "rows",
-                "useSavedPassword", "savePassword");
-        else exact(call, "requestId", "host", "port", "username", "password", "columns", "rows");
+        boolean continuation = authenticationContinuation(call);
         boolean useSaved = extended && bool(call, "useSavedPassword"), save = extended && bool(call, "savePassword");
         String id = id(call);
         secrets.requireSshConsumer();
         if (active != null || mutating != null || profiles.busy() || idle != null && idle.loading) throw failure("BUSY");
         if (idle != null && idle.id.equals(id)) throw parameters();
         if (sink == null) throw failure("SSH_CANCELLED");
-        SshPasswordProfile profile = new SshPasswordProfile(text(call, "host"), integer(call, "port", 1, 65535),
-                text(call, "username"));
+        String username = text(call, "username");
+        String alias = configured ? text(call, "alias") : "";
+        String binding = configured ? text(call, "binding") : "";
+        if (configured && (alias.isEmpty() || alias.length() > 255 || !binding.matches("[0-9a-f]{64}"))) throw parameters();
+        if (configured && !username.isEmpty()) VaultCodec.wipe(VaultCodec.sshText(username, 255));
+        SshPasswordProfile profile = configured ? null : new SshPasswordProfile(text(call, "host"),
+                integer(call, "port", 1, 65535), username);
         int columns = integer(call, "columns", 1, 4096), rows = integer(call, "rows", 1, 4096);
         String supplied = text(call, "password");
         if (useSaved ? !supplied.isEmpty() || save : supplied.isEmpty() || supplied.length() > 8192) throw parameters();
@@ -351,22 +355,21 @@ final class SshPasswordConnectBridge implements AutoCloseable {
         try {
             admit(id);
             retireIdle();
-            connector = new SshPasswordConnector(vault, profile, password, useSaved, save, SystemClock.elapsedRealtime() + 60_000,
+            profiles.cancelReads();
+            AppSecrets.EffectGuard guard = () -> { if (closed) throw failure("SSH_CANCELLED"); secrets.requireSshConsumer(); };
+            connector = configured ? new SshPasswordConnector(vault, alias, binding, username, password, useSaved, save,
+                    SystemClock.elapsedRealtime() + 60_000, guard, events(id))
+                    : new SshPasswordConnector(vault, profile, password, useSaved, save, SystemClock.elapsedRealtime() + 60_000,
                     () -> { if (closed) throw failure("SSH_CANCELLED"); secrets.requireSshConsumer(); },
                     events(id));
+            connector.allowKeyboardContinuation(continuation);
         } finally { VaultCodec.wipe(password); }
         attach(id, connector, columns, rows, result);
     }
 
     private void connectKey(MethodCall call, MethodChannel.Result result, boolean configured) throws VaultException {
         boolean extended = call.arguments instanceof Map && ((Map<?, ?>)call.arguments).containsKey("passphrase");
-        if (extended) {
-            if (configured) exact(call, "requestId", "alias", "binding", "keyId", "username", "columns", "rows",
-                    "passphrase", "useSavedPassphrase", "savePassphrase");
-            else exact(call, "requestId", "host", "port", "username", "keyId", "columns", "rows",
-                    "passphrase", "useSavedPassphrase", "savePassphrase");
-        } else if (configured) exact(call, "requestId", "alias", "binding", "keyId", "username", "columns", "rows");
-        else exact(call, "requestId", "host", "port", "username", "keyId", "columns", "rows");
+        boolean continuation = authenticationContinuation(call);
         boolean useSaved = extended && bool(call, "useSavedPassphrase"), save = extended && bool(call, "savePassphrase");
         byte[] phrase = SshKeyPassphrase.bytes(extended ? text(call, "passphrase") : "", true);
         try {
@@ -387,13 +390,13 @@ final class SshPasswordConnectBridge implements AutoCloseable {
         SshPasswordConnector connector = new SshPasswordConnector(vault, manual, keyId, alias, binding, username, phrase, useSaved, save,
                 SystemClock.elapsedRealtime() + 60_000,
                 () -> { if (closed) throw failure("SSH_CANCELLED"); secrets.requireSshConsumer(); }, events(id));
+        connector.allowKeyboardContinuation(continuation);
         attach(id, connector, columns, rows, result);
         } finally { VaultCodec.wipe(phrase); }
     }
 
     private void connectKeyboard(MethodCall call, MethodChannel.Result result, boolean configured) throws VaultException {
-        if (configured) exact(call, "requestId", "alias", "binding", "username", "columns", "rows");
-        else exact(call, "requestId", "host", "port", "username", "columns", "rows");
+        authenticationContinuation(call);
         String id = id(call);
         secrets.requireSshConsumer();
         if (active != null || mutating != null || profiles.busy() || idle != null && idle.loading) throw failure("BUSY");
@@ -557,6 +560,51 @@ final class SshPasswordConnectBridge implements AutoCloseable {
     private static void exact(MethodCall call, String... fields) throws VaultException {
         if (!(call.arguments instanceof Map)) throw parameters();
         Set<String> expected = new HashSet<>(Arrays.asList(fields));
+        if (!((Map<?, ?>)call.arguments).keySet().equals(expected)) throw parameters();
+    }
+    /** Production dispatch grammar, kept Android-independent for strict MethodCall tests. */
+    static boolean authenticationContinuation(MethodCall call) throws VaultException {
+        boolean passwordExtended = call.arguments instanceof Map && ((Map<?, ?>)call.arguments).containsKey("useSavedPassword");
+        boolean keyExtended = call.arguments instanceof Map && ((Map<?, ?>)call.arguments).containsKey("passphrase");
+        switch (call.method) {
+            case "ssh.passwordConnect":
+                if (passwordExtended) exactWithContinuation(call,"requestId","host","port","username","password","columns","rows",
+                        "useSavedPassword","savePassword");
+                else exactWithContinuation(call,"requestId","host","port","username","password","columns","rows");
+                break;
+            case "ssh.configPasswordConnect":
+                exactWithContinuation(call,"requestId","alias","binding","username","password","columns","rows",
+                        "useSavedPassword","savePassword");
+                break;
+            case "ssh.keyConnect":
+                if (keyExtended) exactWithContinuation(call,"requestId","host","port","username","keyId","columns","rows",
+                        "passphrase","useSavedPassphrase","savePassphrase");
+                else exactWithContinuation(call,"requestId","host","port","username","keyId","columns","rows");
+                break;
+            case "ssh.configConnect":
+                if (keyExtended) exactWithContinuation(call,"requestId","alias","binding","username","keyId","columns","rows",
+                        "passphrase","useSavedPassphrase","savePassphrase");
+                else exactWithContinuation(call,"requestId","alias","binding","username","keyId","columns","rows");
+                break;
+            case "ssh.keyboardConnect":
+                exact(call,"requestId","host","port","username","columns","rows"); return false;
+            case "ssh.configKeyboardConnect":
+                exact(call,"requestId","alias","binding","username","columns","rows"); return false;
+            default: throw parameters();
+        }
+        return continuation(call);
+    }
+
+    private static boolean continuation(MethodCall call) throws VaultException {
+        return call.arguments instanceof Map && ((Map<?, ?>)call.arguments).containsKey("continueKeyboardInteractive")
+                && bool(call, "continueKeyboardInteractive");
+    }
+    private static void exactWithContinuation(MethodCall call, String... required) throws VaultException {
+        if (!(call.arguments instanceof Map)) throw parameters();
+        Set<String> expected = new HashSet<>(Arrays.asList(required));
+        if (((Map<?, ?>)call.arguments).containsKey("continueKeyboardInteractive")) {
+            expected.add("continueKeyboardInteractive"); bool(call, "continueKeyboardInteractive");
+        }
         if (!((Map<?, ?>)call.arguments).keySet().equals(expected)) throw parameters();
     }
     private static String id(MethodCall call) throws VaultException {

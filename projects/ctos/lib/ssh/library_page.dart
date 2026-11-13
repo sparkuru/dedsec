@@ -14,10 +14,12 @@ class SshLibrarySelection {
     this.key,
     this.host,
     this.keyboardInteractive = false,
+    this.password = false,
   });
   final SshIdentity? key;
   final SshConfigHost? host;
   final bool keyboardInteractive;
+  final bool password;
 }
 
 Future<SshLibrarySelection?> showSshLibrary(
@@ -950,10 +952,30 @@ class _SshLibraryPageState extends State<SshLibraryPage>
               ],
               Text(
                 eligible.isEmpty
-                    ? '尚未导入可用私钥。可选择服务器交互式认证，或返回导入私钥。'
+                    ? '尚未导入可用私钥。可选择密码或服务器交互式认证，或返回导入私钥。'
                     : '请选择本次连接使用的认证方式。',
               ),
               const SizedBox(height: 12),
+              OutlinedButton.icon(
+                key: const Key('ssh-config-password-choice'),
+                style: OutlinedButton.styleFrom(
+                  minimumSize: const Size.fromHeight(48),
+                ),
+                onPressed: () {
+                  if (_foreground &&
+                      _healthy &&
+                      revision == _revision &&
+                      identical(_dialog, dialog) &&
+                      dialog.isCurrent) {
+                    Navigator.of(
+                      dialogContext,
+                    ).pop(SshLibrarySelection(host: host, password: true));
+                  }
+                },
+                icon: const Icon(Icons.password_outlined),
+                label: const Text('密码'),
+              ),
+              const SizedBox(height: 8),
               OutlinedButton.icon(
                 key: const Key('ssh-config-keyboard-choice'),
                 style: OutlinedButton.styleFrom(

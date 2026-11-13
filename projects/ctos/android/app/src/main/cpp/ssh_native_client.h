@@ -190,6 +190,10 @@ int ctos_ssh_native_client_private_key_auth_result(
  * is a bounded CSKIv1 public copy. CSKRv1 answers consume exactly the current
  * round once, under the original selected role/KEX/view/deadline proof. */
 int ctos_ssh_native_client_begin_keyboard_interactive_auth(struct ctos_ssh_native_client *);
+/* One CSASv3-authorized first-method PARTIAL -> KBI transition on this owner.
+ * CSAPv1 is exactly 92 bytes and binds the immutable plan and original KEX. */
+int ctos_ssh_native_client_continue_keyboard_interactive_auth(struct ctos_ssh_native_client *,
+    const unsigned char expected_plan_receipt[32], unsigned char stage_receipt[92]);
 int ctos_ssh_native_client_keyboard_interactive_auth_result(
     const struct ctos_ssh_native_client *,
     enum ctos_ssh_native_client_keyboard_interactive_auth_result *);

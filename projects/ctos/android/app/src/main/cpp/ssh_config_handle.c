@@ -333,9 +333,10 @@ int ctos_ssh_config_handle_direct_plan(ctos_ssh_config_token token,
     int ret = read_direct_plan(s, &plan), failure = errno;
     if (ret == 0) {
         unsigned char *p = out;
-        put_u32(&p, 0x43534350U); put_u32(&p, 2);
+        put_u32(&p, 0x43534350U); put_u32(&p, 3);
         uint32_t values[] = {plan->summary.port, plan->identities_only, plan->pubkey_authentication,
             plan->password_authentication, plan->keyboard_interactive_authentication,
+            plan->password_then_keyboard_allowed, plan->publickey_then_keyboard_allowed,
             plan->connect_timeout_millis, (uint32_t)plan->summary.request_tty,
             plan->strict_host_key_checking, plan->summary.user_required, plan->identity_count, plan->hostfile_count};
         for (unsigned int i = 0; i < sizeof(values) / sizeof(values[0]); i++) put_u32(&p, values[i]);
@@ -372,9 +373,10 @@ int ctos_ssh_config_handle_profile_direct_plan(ctos_ssh_config_token token,
     int ret = read_profile_direct_plan(s, &plan), failure = errno;
     if (ret == 0) {
         unsigned char *p = out;
-        put_u32(&p, 0x43535050U); put_u32(&p, 2);
+        put_u32(&p, 0x43535050U); put_u32(&p, 3);
         uint32_t values[] = {plan->summary.port, plan->identities_only, plan->pubkey_authentication,
             plan->password_authentication, plan->keyboard_interactive_authentication,
+            plan->password_then_keyboard_allowed, plan->publickey_then_keyboard_allowed,
             plan->connect_timeout_millis, (uint32_t)plan->summary.request_tty,
             plan->strict_host_key_checking, plan->summary.user_required, plan->identity_hint_count, plan->hostfile_count};
         for (unsigned int i = 0; i < sizeof(values) / sizeof(values[0]); i++) put_u32(&p, values[i]);

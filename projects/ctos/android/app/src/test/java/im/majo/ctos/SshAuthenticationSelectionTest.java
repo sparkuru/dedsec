@@ -105,6 +105,24 @@ public final class SshAuthenticationSelectionTest {
                 new byte[]{1}, null, clock));
     }
 
+    @Test public void versionThreeFreezesOnlyExplicitFirstMethodContinuationAndKeepsOriginalFields() throws Exception {
+        SshRoleContext role = role(3);
+        for (SshAuthenticationSelection original : new SshAuthenticationSelection[] {
+                SshAuthenticationSelection.password(role,"user","password",clock),
+                SshAuthenticationSelection.privateKey(role,"user","keys/key","identity",new byte[]{1},clock),
+                SshAuthenticationSelection.privateKey(role,"user","keys/key","identity",new byte[]{1},"phrase",clock)}) {
+            SshAuthenticationSelection plan = original.withKeyboardContinuation(clock);
+            byte[] old = original.encode(9,clock), wire = plan.encode(9,clock);
+            assertEquals(old.length + 4,wire.length); assertEquals(3,wire[5]);
+            assertEquals(3,java.nio.ByteBuffer.wrap(wire).getInt(wire.length - 4));
+            byte[] same = java.util.Arrays.copyOf(wire,old.length); same[5] = old[5];
+            assertArrayEquals(old,same); assertEquals(original.entryId,plan.entryId);
+            assertEquals(original.kind,plan.kind); assertEquals(original.role,plan.role);
+            rejected(() -> plan.withKeyboardContinuation(clock));
+        }
+        rejected(() -> SshAuthenticationSelection.keyboardInteractive(role,"user",clock).withKeyboardContinuation(clock));
+    }
+
     private static byte[] hex(String value) {
         byte[] bytes = new byte[value.length() / 2];
         for (int index = 0; index < bytes.length; index++) {

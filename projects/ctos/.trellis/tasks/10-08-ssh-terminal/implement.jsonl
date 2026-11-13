@@ -1,35 +1,20 @@
-{"file": ".trellis/spec/frontend/terminal-interaction.md", "reason": "复用终端单输入、快捷键、输出选择及 App/Root 回归契约；SSH 按父 R2 发送输入/方向键至远端，不沿用本机历史截获、提示符推断或行回填。"}
-{"file": ".trellis/spec/backend/host-bridge.md", "reason": "MethodChannel、线程、宿主资源所有权及控制事件边界。"}
-{"file": "design/constraints.md", "reason": "App/Root、私有数据、生命周期和设备授权约束。"}
-{"file": "design/portable-workbench.md", "reason": "APK 内运行包、原生执行路径及环境范围。"}
-{"file": ".trellis/tasks/10-08-ssh-terminal/design.md", "reason": "完整 SSH 技术规划：配置/认证契约、禁止本地执行与绕过信任、转发暴露确认、远端输入职责、后台服务和技术关卡；实施前使用获批准版。"}
-{"file": "design/app-authentication.md", "reason": "统一主口令/KDF/密文库/会话/设备快捷/设置/ctOS 完整备份/隐私配套权威契约；先验收底座，再分别接入 TOTP 和 SSH，最新完整规划已于 2026-10-10 批准，公共底座先行实施。"}
-{"file": ".trellis/tasks/10-08-ssh-terminal/prd.md", "reason": "SSH R1–R11/AC1–AC10 保留客户端与信任/输入/转发要求，R10/R11 改为统一秘密库，统一模型最新规划已批准。"}
-{"file": "design/ssh-saved-password.md", "reason": "2026-10-26 用户已选择的直接 R10 切片：默认当次、显式加密保存、精确 tuple Account、proof-bound 复用与单条/全部忘记。"}
-{"file": ".trellis/spec/backend/ssh-password-connect.md", "reason": "正式密码连接、saved metadata API、原请求/原子账号凭据写入、实际 host/KEX 最终交付与取消/uncertain。"}
-{"file": ".trellis/spec/backend/app-secrets.md", "reason": "复用共享 entry mutation/read 生命周期，不复制加密提交实现或放宽 metadata 恢复门。"}
-{"file": ".trellis/spec/frontend/app-secrets.md", "reason": "敏感路由、原请求/回执、异步 mutation 完成前不释放保护。"}
-{"file": "design/ssh-key-config-connect.md", "reason": "用户当前明确的无口令私钥与 config 实际产品闭环，保留密码保存改动及单一正式模型。"}
-{"file": ".trellis/tasks/10-08-ssh-terminal/research/private-key-connection-path.md", "reason": "真实 USERAUTH API、公钥 blob 缺口及私钥/账号最终消费要求。"}
-{"file": ".trellis/tasks/10-08-ssh-terminal/research/config-key-import-connection.md", "reason": "原生完整 Options、SAF 内存读取、逻辑路径与原子 KeyBinding/Account 事务缺口。"}
-{"file": ".trellis/spec/backend/ssh-detached-config-managed.md", "reason": "Android16实际64KiB MEMLOCK兼容修复；单份受保护源、实际数量公开索引和失败清理"}
-{"file": "design/ssh-background-session.md", "reason": "2026-10-26 用户已选择的当前 R8 切片：服务 owner、精确通知 Stop、已认证运行权限与库锁定分离、输出恢复及验证边界。"}
-{"file": ".trellis/tasks/10-08-ssh-terminal/research/ssh-background-lifetime.md", "reason": "当前双重 Activity/vault/native 失效链及最小严格 SUCCESS 权限分离研究；是源码研究而非实测通过。"}
-{"file": ".trellis/spec/backend/ssh-background-session.md", "reason": "2026-10-28新目标：锁屏结束精确owner、清理最终回执和RAM重连提示；用户显式一键私钥/config连接仍经解锁/当前资料/新信任认证；短测真实锁屏/资源释放/无自动重连，不再追求锁屏保活。"}
-{"file": "design/ssh-encrypted-key-connect.md", "reason": "2026-10-30 用户已选择的加密私钥/默认当次/可选口令保存和忘记、当前通道与验证合同。"}
-{"file": ".trellis/spec/backend/ssh-encrypted-key-connect.md", "reason": "加密图准入、原期限解锁、真实口令证明、原子保存忘记和精确CSASv2/CSKB生命周期。"}
-{"file": ".trellis/tasks/10-08-ssh-terminal/research/encrypted-key-path-20261030.md", "reason": "现有生产调用链与加密口令实现边界及验证来源。"}
-{"file": "design/ssh-key-deletion.md", "reason": "用户继续授权的私钥删除：精确影响预览、原子清理、配置保留与缺失阻断／重导入修复。"}
-{"file": ".trellis/spec/backend/ssh-key-deletion.md", "reason": "原票据一次提交、窄stored缺失身份、实际原生审计和全部有效身份拒绝。"}
-{"file": ".trellis/tasks/10-08-ssh-terminal/research/key-deletion-20261030.md", "reason": "现有DELETE／关系图、缺失身份原生语义、重导入和生成manual边界源码证据。"}
-{"file": ".trellis/tasks/10-08-ssh-terminal/research/import-path-portability-20261102.md", "reason": "用户已取消目录功能和路径适配；核对保留的单config多Host及独立私钥现状，不实施研究中的迁移方向。"}
-{"file": "design/ssh-config-identity-selection.md", "reason": "当前已明确批准config-first、IdentityFile提示及显式受管key选择；严格generic模式、旧图兼容与实际证明边界。"}
-{"file": ".trellis/tasks/10-08-ssh-terminal/research/config-independent-identity-20261102.md", "reason": "实际import/stored/library/两处connector/native路径阻断与精确改动接点；不只绕过Java检查。"}
-{"file": ".trellis/spec/backend/ssh-config-identity-selection.md", "reason": "当前产品hint新原生模式/typedwire与generic严格分离；旧STATIC边/实际key/原证明/explicitchooser。"}
-{"file": "design/ssh-host-trust-management.md", "reason": "2026-11-02本地/指定板隔离验证的R5合同：双对象query/精确forget、marker/shared阻断、span/原事务及拒绝诊断；JNI3及真实换键/KEX/PTY、正式5e70保留数据安装启动均通过，用户随后确认页面体验通过并继续原1008。"}
-{"file": ".trellis/tasks/10-08-ssh-terminal/research/trust-recovery-20261102.md", "reason": "已对b1064c7刷新：真实parser/lookup/双对象/票据边界，directory和数字kind已移除；研究不是实现或测试通过。"}
-{"file": ".trellis/spec/backend/ssh-native.md", "reason": "保留实际host evidence、NEW-only trust CAS、固定parser/build closure与native/JNI生命周期。"}
-{"file": ".trellis/spec/backend/ssh-host-trust-management.md", "reason": "已实施CSHTv1/双对象query及精确forget票据、服务互斥、once/uncertain和原字节保留；指定板Android/JNI/实际换键及新增页面人工体验均通过，父完整AC开放。"}
-{"file": "design/ssh-keyboard-interactive.md", "reason": "Approved standalone manual/config KBI; local/authorized board gates PASS, normal8b6 UI refinement delivered with377Flutter/42PNG and independent reviews PASS. User20261104 accepted and authorized commit; full parent/chainedMFA remain open, no real-account/push/archive authority"}
-{"file": ".trellis/tasks/10-08-ssh-terminal/research/next-increment-20261102.md", "reason": "Current real KBI protocol/product gap vs existing single-file Include and broader options/restore; source research, not runtime evidence"}
-{"file": ".trellis/spec/backend/ssh-keyboard-interactive.md", "reason": "Frozen standalone KBI executable contract: kind3 without stored credential release, CSKI/CSKR, exact currentround mailbox, method-aware packets, actual config policy, original lifecycle and separate evidence gates"}
+{"file": "design/ssh-mfa-authentication.md", "reason": "Latest user-approved20261104 two-stage manual/config scope, UI and original lifetime; overrides standalone-only exclusion only for these chains."}
+{"file": ".trellis/spec/backend/host-bridge.md", "reason": "Strict MethodChannel arguments, original request and owned worker/native boundaries."}
+{"file": ".trellis/spec/backend/ssh-password-connect.md", "reason": "Actual host/KEX first, exact target saved/transient password; preserve atomic save and once-only delivery."}
+{"file": ".trellis/spec/backend/ssh-key-config-connect.md", "reason": "Actual config snapshot and effective target/trust, explicit key and original proof-bound native consumption."}
+{"file": ".trellis/spec/backend/ssh-config-identity-selection.md", "reason": "IdentityFile hints and explicit selected key; generic config remains strict."}
+{"file": ".trellis/spec/backend/ssh-encrypted-key-connect.md", "reason": "CSASv2/CSKB precise phrase owner, transient/saved phrase and wiping."}
+{"file": ".trellis/spec/backend/ssh-keyboard-interactive.md", "reason": "Existing method-aware CSKI/CSKR and mailbox/limits/once current round; no generic stored credential for KBI."}
+{"file": ".trellis/spec/backend/ssh-background-session.md", "reason": "Final SUCCESS-only service handoff, original cancellation/lock cleanup, RAM-only fresh reconnect."}
+{"file": ".trellis/spec/frontend/app-secrets.md", "reason": "Sensitive route and original cleanup lifetime, session stream and guarded outcome."}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "Accepted chooser and rounded option controls; 48dp, dynamic font, keyboard, actual-font QA."}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "Strict shared typed continuation/reconnect decoder; omitted flag false, illegal combination rejection."}
+{"file": ".trellis/spec/frontend/terminal-interaction.md", "reason": "Shared terminal single input, raw remote data, original KBI protected UI and local shell regressions."}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Container-native checks, real protocol vs JVM vs Android separation."}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "Bounded safe diagnostics; no answers/secrets in logs."}
+{"file": ".trellis/spec/trellis-plus/validation.md", "reason": "Exact checks, task-owned fixtures, no historical device/account authority."}
+{"file": "design/constraints.md", "reason": "Project-only scope and existing changed files preservation, no current device/install/account authority."}
+{"file": ".trellis/tasks/10-08-ssh-terminal/research/mfa-contract-20261104.md", "reason": "Exact same-owner selection/CSASv3/CSAP/config-plan v3 and configPassword seams"}
+{"file": ".trellis/spec/backend/ssh-mfa-authentication.md", "reason": "Frozen executable two-stage plan/transition/configPassword contracts; implementation-in-progress, not acceptance"}
+{"file": "design/ssh-host-trust-management.md", "reason": "Reuse exact-target trust query, protected preview and explicit confirmation for changed-host recovery."}
+{"file": ".trellis/spec/backend/ssh-host-trust-management.md", "reason": "Preserve fail-closed CHANGED and exact source-bound forget rules."}

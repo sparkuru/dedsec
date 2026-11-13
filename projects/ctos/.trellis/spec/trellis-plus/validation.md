@@ -54,6 +54,22 @@ resource exists, require its ownership label; if it is absent, verify absence ra
 claiming any inspect/daemon failure means absent. Remove only the owned reverse and verify its
 absence even when remove reports that the listener never existed. Never prune shared resources.
 
+### Exact package absence and installation ownership
+
+On the current Android11 board, `adb ... shell pm path <exact-package>` for an absent package
+returns exit1 with **zero bytes**. Normalize only exit0/1 plus byte-empty output, with no timeout,
+capture failure or truncation, as this specific command's absence result. A nonempty path requires
+exit0 and strict path parsing; nonempty errors, newline-only output, other exit codes and failed
+transport never become absence. Keep raw argv/status/output receipts and require current online
+target identity first. Do not apply this rule to generic commands.
+
+Record each exact isolated package's prior absence, install intent and reviewed APK identity
+before installation. A timeout can follow a successful effect: inspect the installed public APK
+hash/signer and distinct expected UID before classifying it owned for cleanup. Mismatch or
+unprovable identity does not permit uninstall. Preserve the primary failure even if cleanup
+succeeds. Formal before/after public APK/UID/dataDir/version/install-time equality establishes
+only public identity; it does not claim a private-vault byte comparison.
+
 ## Checks by changed surface
 
 | Surface | Focused check | Wider check when relevant |

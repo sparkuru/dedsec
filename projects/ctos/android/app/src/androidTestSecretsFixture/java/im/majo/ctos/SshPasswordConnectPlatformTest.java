@@ -1371,6 +1371,288 @@ public final class SshPasswordConnectPlatformTest {
         }
     }
 
+    /**
+     * Prepared-only MFA gate. ctosSshMfaRequestFile is a shell-owned0600 regular file at
+     * /data/local/tmp/ctos-ssh-mfa-NAME.json with host,port,username,password,keyboardAnswer,
+     * fingerprint and base64 privateKey. The independent server requires the selected first
+     * method followed by 3/0/1 KBI rounds on that same transport, then provides a real PTY.
+     */
+    @Test public void actualBridgeMfaManualConfigSavedReplayCancelAndPty() throws Exception {
+        String path = InstrumentationRegistry.getArguments().getString("ctosSshMfaRequestFile");
+        Assume.assumeTrue("Explicit synthetic MFA fixture request was not provided", path != null);
+        assertTrue("Invalid MFA fixture request path",
+                path.matches("/data/local/tmp/ctos-ssh-mfa-[A-Za-z0-9_-]{1,64}\\.json"));
+        Context context = instrumentation.getTargetContext();
+        assertEquals("im.majo.ctos.secretsfixture", context.getPackageName());
+        assertTrue(context.getApplicationContext() instanceof SecretsFixtureApplication);
+        assertFalse(context.getSharedPreferences("root_access", Context.MODE_PRIVATE).getBoolean("auto_start", true));
+        try { assertNotEquals("Fixture UID must be isolated", android.os.Process.myUid(),
+                context.getPackageManager().getApplicationInfo("im.majo.ctos", 0).uid); }
+        catch (android.content.pm.PackageManager.NameNotFoundException absent) { }
+        assertFalse("Fixture cannot interrupt another SSH service", SshSessionService.active());
+        File vaultFile = new File(context.getNoBackupFilesDir(), "app-secrets.bin");
+        for (String suffix : new String[] {"", ".bak", ".new"})
+            assertFalse("Fresh isolated fixture data required", new File(vaultFile.getPath() + suffix).exists());
+        JSONObject request = readMfaRequest(path);
+        byte[] privateKey = null;
+        boolean created = false, observed = false;
+        Throwable primary = null;
+        AtomicInteger rounds = new AtomicInteger(), expectedReviews = new AtomicInteger(1);
+        AtomicBoolean cancelling = new AtomicBoolean();
+        java.util.concurrent.atomic.AtomicReference<Map<?, ?>> previous = new java.util.concurrent.atomic.AtomicReference<>();
+        try {
+            try { privateKey = java.util.Base64.getDecoder().decode(request.getString("privateKey")); }
+            finally { request.remove("privateKey"); }
+            assertTrue("Bounded synthetic private key required", privateKey.length > 0
+                    && privateKey.length <= SshKeyMaterial.MAX_BYTES);
+            activity = (MainActivity)instrumentation.startActivitySync(
+                    new Intent(context, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            dispatch = MainActivity.class.getDeclaredMethod("call", MethodCall.class, MethodChannel.Result.class);
+            dispatch.setAccessible(true);
+            ssh = (SshPasswordConnectBridge)field(activity, "sshPasswordConnect");
+            AppSecretsBridge secrets = (AppSecretsBridge)field(activity, "appSecrets");
+            protection = (String)map(call("secrets.protect", VaultCollections.map("action", "acquire"))).get("owner");
+            String master = "Fixture-" + UUID.randomUUID();
+            created = true;
+            call("secrets.create", VaultCollections.map("requestId", id(), "password", master, "confirmation", master));
+            seedHostTrustFixture(secrets.sshVault(), new SshPasswordProfile(request.getString("host"),
+                    request.getInt("port"), request.getString("username")), new byte[0]);
+            Map<String, Object> totp = map(call("secrets.totpManualPreview", VaultCollections.map("requestId", id(),
+                    "issuer", "MFA preservation", "account", "fixture", "secret", "JBSWY3DPEHPK3PXP")));
+            String totpPreview = (String)totp.get("previewId");
+            try { call("secrets.totpCommit", VaultCollections.map("requestId", id(), "previewId", totpPreview,
+                    "candidateId", map(((List<?>)totp.get("candidates")).get(0)).get("candidateId"))); }
+            finally { call("secrets.totpCancel", VaultCollections.map("previewId", totpPreview)); }
+            Map<String, Object> imported = pickImport("privateKey", ".ssh/id_fixture", "id_fixture", privateKey);
+            assertPreview(imported, "privateKey", ".ssh/id_fixture", "id_fixture", false);
+            commitImport(imported);
+            Map<String, Object> library = map(call("ssh.library", VaultCollections.map("requestId", id())));
+            List<?> keys = (List<?>)library.get("keys");
+            assertEquals(1, keys.size());
+            String keyId = (String)map(keys.get(0)).get("id");
+            keyboardEvents = event -> {
+                assertEquals(activeRequest, event.get("requestId"));
+                int round = ((Number)event.get("round")).intValue();
+                assertEquals(rounds.incrementAndGet(), round);
+                assertEquals("Current actual host approval must precede MFA answers", expectedReviews.get(), reviews.get());
+                assertTrue(((Number)event.get("remainingMillis")).longValue() > 0);
+                assertTrue(((Number)event.get("remainingMillis")).longValue() <= 60000);
+                List<String> answers = mfaRoundAnswers(event, request);
+                if (cancelling.get()) {
+                    assertEquals(1, round);
+                    assertEquals(true, map(invoke("ssh.cancel", VaultCollections.map("requestId", activeRequest)).join()).get("cancelled"));
+                    assertEquals(false, keyboardAnswer(event, activeRequest, answers));
+                    previous.set(event);
+                    return;
+                }
+                assertEquals(false, keyboardAnswer(event, id(), answers));
+                if (previous.get() != null) assertEquals(false, keyboardAnswer(previous.get(), activeRequest, answers));
+                assertEquals(true, keyboardAnswer(event, activeRequest, answers));
+                assertEquals(false, keyboardAnswer(event, activeRequest, answers));
+                previous.set(event);
+            };
+            installObservers(request.getString("host"), request.getInt("port"), request.getString("fingerprint"));
+            observed = true;
+
+            connectMfa(request, null, null, false, false);
+            assertEquals(3, rounds.get()); assertEquals(1, reviews.get());
+            assertMfaReconnect("password", null, null);
+            releaseProtection(); assertShellRoundTrip(); stopTerminal(); waitReleased();
+            protection = (String)map(call("secrets.protect", VaultCollections.map("action", "acquire"))).get("owner");
+            rounds.set(0); expectedReviews.set(2);
+            connectMfa(request, keyId, null, false, false);
+            assertEquals(3, rounds.get()); assertEquals(2, reviews.get());
+            assertMfaReconnect("key", keyId, null);
+            releaseProtection(); assertShellRoundTrip(); stopTerminal(); waitReleased();
+            protection = (String)map(call("secrets.protect", VaultCollections.map("action", "acquire"))).get("owner");
+
+            String config = mfaConfiguration(request);
+            replaceMfaConfig(config);
+            rounds.set(0);
+            Map<String, Object> configured = mfaHost("mfakey");
+            connectMfa(request, keyId, configured, false, false);
+            assertEquals(3, rounds.get()); assertEquals(2, reviews.get());
+            assertMfaReconnect("config", keyId, "mfakey");
+            releaseProtection(); assertShellRoundTrip(); stopTerminal(); waitReleased();
+            protection = (String)map(call("secrets.protect", VaultCollections.map("action", "acquire"))).get("owner");
+            assertMfaPersistence(secrets.sshVault(), config, keyId, privateKey, request, false);
+
+            rounds.set(0); configured = mfaHost("mfapassword");
+            connectMfa(request, null, configured, false, true);
+            assertEquals(3, rounds.get()); assertEquals(2, reviews.get());
+            assertMfaReconnect("configPassword", null, "mfapassword");
+            releaseProtection(); assertShellRoundTrip(); stopTerminal(); waitReleased();
+            protection = (String)map(call("secrets.protect", VaultCollections.map("action", "acquire"))).get("owner");
+            assertMfaPersistence(secrets.sshVault(), config, keyId, privateKey, request, true);
+            assertEquals(true, passwordStatus(request).get("saved"));
+            rounds.set(0); configured = mfaHost("mfapassword");
+            connectMfa(request, null, configured, true, false);
+            assertEquals(3, rounds.get()); assertEquals(2, reviews.get());
+            releaseProtection(); assertShellRoundTrip(); stopTerminal(); waitReleased();
+            protection = (String)map(call("secrets.protect", VaultCollections.map("action", "acquire"))).get("owner");
+            assertEquals(true, map(call("ssh.forgetPassword", VaultCollections.map("requestId", id(),
+                    "host", request.getString("host"), "port", request.getInt("port"),
+                    "username", request.getString("username"), "all", false))).get("forgotten"));
+            assertMfaPersistence(secrets.sshVault(), config, keyId, privateKey, request, false);
+
+            rounds.set(0); cancelling.set(true); configured = mfaHost("mfapassword");
+            assertMfaConnectFailure(request, null, configured, "SSH_CANCELLED");
+            assertEquals(1, rounds.get()); assertEquals(2, reviews.get());
+            cancelling.set(false); rounds.set(0);
+            String disabled = config.replace("KbdInteractiveAuthentication yes", "KbdInteractiveAuthentication no");
+            replaceMfaConfig(disabled); configured = mfaHost("mfapassword");
+            byte[] before = java.nio.file.Files.readAllBytes(vaultFile.toPath());
+            try { assertMfaConnectFailure(request, null, configured, "SSH_MFA_POLICY"); assertCiphertextUnchanged(vaultFile, before); }
+            finally { VaultCodec.wipe(before); }
+            assertEquals(0, rounds.get()); assertEquals(2, reviews.get());
+            assertMfaPersistence(secrets.sshVault(), disabled, keyId, privateKey, request, false);
+        } catch (Exception | Error failure) { primary = failure; throw failure; }
+        finally {
+            keyboardEvents = null;
+            request.remove("password"); request.remove("keyboardAnswer");
+            try { cleanupKeyFixture(request, privateKey, vaultFile, created, observed,
+                    connectedRequest != null || observedSshTerminal.get()); }
+            catch (Exception | Error cleanup) { if (primary != null) primary.addSuppressed(cleanup); else throw cleanup; }
+        }
+    }
+
+    private JSONObject readMfaRequest(String path) throws Exception {
+        byte[] ownership = keyShellBytes("stat -c %a:%u:%F " + path, 128);
+        try { assertEquals("Fixture request must be a shell-owned0600 regular file", "600:2000:regular file",
+                new String(ownership, StandardCharsets.US_ASCII).trim()); }
+        finally { VaultCodec.wipe(ownership); }
+        byte[] encoded = keyShellBytes("cat " + path, 1_500_000);
+        try {
+            JSONObject request = new JSONObject(new String(encoded, StandardCharsets.UTF_8));
+            assertEquals("Only the exact MFA fixture fields are accepted", 7, request.length());
+            for (String field : new String[] {"host", "username", "password", "keyboardAnswer", "fingerprint", "privateKey"})
+                assertTrue("Required synthetic MFA fixture field missing", request.opt(field) instanceof String);
+            assertTrue(request.opt("port") instanceof Integer);
+            new SshPasswordProfile(request.getString("host"), request.getInt("port"), request.getString("username"));
+            assertTrue("Explicit complete synthetic fingerprint required", request.getString("fingerprint").matches("SHA256:[A-Za-z0-9+/]{43}"));
+            assertTrue("Independent bounded MFA answer required", request.getString("keyboardAnswer").matches("[A-Za-z0-9_-]{8,128}"));
+            assertFalse("MFA answer must differ from first-method password",
+                    request.getString("password").equals(request.getString("keyboardAnswer")));
+            return request;
+        } catch (org.json.JSONException invalid) { throw new AssertionError("Invalid synthetic MFA fixture request"); }
+        finally { VaultCodec.wipe(encoded); }
+    }
+
+    private List<String> mfaRoundAnswers(Map<?, ?> event, JSONObject request) {
+        int round = ((Number)event.get("round")).intValue();
+        List<?> prompts = (List<?>)event.get("prompts");
+        if (round == 1) {
+            assertEquals(3, prompts.size());
+            assertEquals("Account label: ", map(prompts.get(0)).get("text")); assertEquals(true, map(prompts.get(0)).get("echo"));
+            assertEquals("One-time code: ", map(prompts.get(1)).get("text")); assertEquals(false, map(prompts.get(1)).get("echo"));
+            assertEquals("Optional value: ", map(prompts.get(2)).get("text")); assertEquals(false, map(prompts.get(2)).get("echo"));
+            try { return List.of("fixture-label", request.getString("keyboardAnswer"), ""); }
+            catch (org.json.JSONException invalid) { throw new AssertionError("Missing synthetic MFA answer"); }
+        }
+        if (round == 2) { assertTrue(prompts.isEmpty()); assertFalse(((String)event.get("instruction")).isEmpty()); return List.of(); }
+        assertEquals(3, round); assertEquals(1, prompts.size());
+        assertEquals("Confirmation: ", map(prompts.get(0)).get("text")); assertEquals(false, map(prompts.get(0)).get("echo"));
+        return List.of("654321");
+    }
+
+    private void connectMfa(JSONObject request, String keyId, Map<String, Object> configured,
+            boolean useSavedPassword, boolean savePassword) throws Exception {
+        running.set(false); activeRequest = id();
+        Map<String, Object> arguments = new java.util.HashMap<>(configured == null
+                ? VaultCollections.map("requestId", activeRequest, "host", request.getString("host"),
+                        "port", request.getInt("port"), "username", request.getString("username"), "columns", 80, "rows", 24)
+                : VaultCollections.map("requestId", activeRequest, "alias", configured.get("alias"),
+                        "binding", configured.get("binding"), "username", "", "columns", 80, "rows", 24));
+        arguments.put("continueKeyboardInteractive", true);
+        String method = configured == null ? "ssh.passwordConnect" : "ssh.configPasswordConnect";
+        if (keyId == null) {
+            arguments.put("password", useSavedPassword ? "" : request.getString("password"));
+            arguments.put("useSavedPassword", useSavedPassword); arguments.put("savePassword", savePassword);
+        } else { arguments.put("keyId", keyId); method = configured == null ? "ssh.keyConnect" : "ssh.configConnect"; }
+        try {
+            Map<String, Object> reply = map(call(method, arguments));
+            assertEquals(activeRequest, reply.get("requestId")); assertEquals("connected", reply.get("status"));
+            assertTrue("Only final authenticated PTY may publish RUNNING", running.get());
+            connectedRequest = activeRequest; activeRequest = null;
+        } finally { arguments.remove("password"); }
+    }
+
+    private void assertMfaConnectFailure(JSONObject request, String keyId,
+            Map<String, Object> configured, String code) throws Exception {
+        try { connectMfa(request, keyId, configured, false, false); fail("MFA connection must be refused"); }
+        catch (java.util.concurrent.ExecutionException refused) { assertEquals("Fixed host failure: " + code,
+                refused.getCause().getMessage()); activeRequest = null; }
+        assertFalse("Failed MFA cannot publish RUNNING", running.get()); waitReleased();
+    }
+
+    private void assertMfaReconnect(String mode, String keyId, String alias) throws Exception {
+        Object handed = field(ssh, "handedOff"); assertNotNull(handed);
+        Map<String, Object> hint = ((SshPasswordConnector)field(handed, "connector")).reconnectTarget().wire();
+        java.util.Set<String> fields = new java.util.HashSet<>(java.util.Set.of("mode", "host", "port", "username", "continueKeyboardInteractive"));
+        if (keyId != null) fields.add("keyId"); if (alias != null) fields.add("configAlias");
+        assertEquals(fields, hint.keySet()); assertEquals(mode, hint.get("mode"));
+        assertEquals(true, hint.get("continueKeyboardInteractive"));
+        if (keyId != null) assertEquals(keyId, hint.get("keyId"));
+        if (alias != null) assertEquals(alias, hint.get("configAlias"));
+    }
+
+    private String mfaConfiguration(JSONObject request) throws Exception {
+        String target = "    HostName " + request.getString("host") + "\n    Port " + request.getInt("port")
+                + "\n    User \"" + request.getString("username").replace("\\", "\\\\").replace("\"", "\\\"")
+                + "\"\n    UserKnownHostsFile ~/.ssh/known_hosts\n    KbdInteractiveAuthentication yes\n";
+        return "# Preserve this exact imported configuration\nHost mfakey\n" + target
+                + "    PreferredAuthentications publickey,keyboard-interactive\n    IdentityFile /source/mfa-key\n"
+                + "Host mfapassword\n" + target + "    PreferredAuthentications password,keyboard-interactive\n";
+    }
+
+    private void replaceMfaConfig(String content) throws Exception {
+        Map<String, Object> document = map(call("ssh.configRead", VaultCollections.map("requestId", id(), "path", SshConnectionMaterial.ROOT)));
+        assertEquals(SshConnectionMaterial.ROOT, document.get("path"));
+        Map<String, Object> edit = map(call("ssh.configPreview", VaultCollections.map("requestId", id(),
+                "path", SshConnectionMaterial.ROOT, "content", content)));
+        pendingImportTicket = (String)edit.get("ticketId"); assertEquals(true, edit.get("canCommit")); commitImport(edit);
+    }
+
+    private Map<String, Object> mfaHost(String alias) throws Exception {
+        return deletionHost(map(call("ssh.library", VaultCollections.map("requestId", id()))), alias);
+    }
+
+    private void assertMfaPersistence(AppSecrets vault, String config, String keyId, byte[] privateKey,
+            JSONObject request, boolean saved) throws Exception {
+        long deadline = SystemClock.elapsedRealtime() + 60_000;
+        AppSecrets.BundleContext context = vault.newBundleContext(deadline, () -> { });
+        try (SshConnectionMaterial.Snapshot source = SshPasswordManifestValidator.within(deadline, () -> vault.sshLibrarySnapshot(context))) {
+            assertEquals(config, new String(SshConnectionMaterial.file(source.manifest, SshConnectionMaterial.ROOT).content, StandardCharsets.UTF_8));
+            assertTrue("MFA operations preserve the exact independently imported key",
+                    java.util.Arrays.equals(privateKey, SshConnectionMaterial.file(source.manifest, ".ssh/id_fixture").content));
+            assertEquals(1, source.manifest.keyBindings.size()); assertEquals(keyId, source.manifest.keyBindings.get(0).id);
+            assertEquals(saved ? 2 : 1, source.manifest.entries.size());
+            List<VaultManifest.Entry> preserved = new java.util.ArrayList<>();
+            for (VaultManifest.Entry entry : source.manifest.entries)
+                if (entry.type == VaultManifest.EntryType.TOTP) preserved.add(entry);
+            assertEquals(1, preserved.size());
+            assertEquals("MFA preservation:fixture", preserved.get(0).identity);
+            assertEquals("SHA1", preserved.get(0).algorithm); assertEquals(6, preserved.get(0).digits); assertEquals(30, preserved.get(0).period);
+            byte[] expectedSeed = TotpInput.base32("JBSWY3DPEHPK3PXP");
+            try { assertTrue("MFA operations preserve unrelated TOTP material",
+                    java.util.Arrays.equals(expectedSeed, preserved.get(0).secret)); }
+            finally { VaultCodec.wipe(expectedSeed); }
+            if (saved) {
+                VaultManifest.Entry entry = source.manifest.entries.stream()
+                        .filter(value -> value.type == VaultManifest.EntryType.SSH_PASSWORD).findFirst()
+                        .orElseThrow(() -> new AssertionError("Expected exact saved first-method credential"));
+                assertEquals(VaultManifest.EntryType.SSH_PASSWORD, entry.type);
+                byte[] expected = request.getString("password").getBytes(StandardCharsets.UTF_8);
+                try { assertTrue("Only explicitly saved first-method password may persist", java.util.Arrays.equals(expected, entry.secret)); }
+                finally { VaultCodec.wipe(expected); }
+            }
+            assertTrue("Config and manual key connections retain their actual trust collection",
+                    SshConnectionMaterial.file(source.manifest, SshConnectionMaterial.HOSTS).content.length > 0);
+            assertTrue("Password trust remains separate and retained",
+                    SshConnectionMaterial.file(source.manifest, SshPasswordProfile.HOSTS_PATH).content.length > 0);
+        } finally { vault.cancelBundleContext(context); vault.retryPasswordValidationCleanup(); }
+    }
+
     private String syntheticPassword(JSONObject request){
         try{return request.getString("password");}catch(org.json.JSONException failure){throw new AssertionError("Missing synthetic answer");}
     }
