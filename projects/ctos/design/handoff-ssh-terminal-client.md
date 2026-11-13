@@ -1,6 +1,100 @@
 # SSH 终端客户端接管档案
 
-## 当前：正式前台密码SSH已完成具名Android界面验收
+## 接管摘要：SSH 父任务，2026-11-13
+
+- **目标与完成判据**：继续原 [SSH 父任务](../.trellis/tasks/10-08-ssh-terminal/prd.md) 的
+  R1–R11／AC1–AC10；逐项取得对应实现、检查和必要人工证据后才能完成父任务。
+- **当前状态（确认）**：父任务仍为 `in_progress`；用户要求“部分提交；然后继续 task”，
+  并会新开 session。SSH 产品部分提交为 `15465750dca75b26bb65e55d7c31ab3cc8985d90`。
+- **已完成（确认）**：独立交互式及可选密码／私钥→交互式续接；SSH 表单重排、主机指纹
+  变化提示及原地忘记确认；用户反馈本轮表单与指纹恢复“可以；目前能够接受了”。
+- **未完成（确认）**：MFA 串联专项人工体验未由该反馈证明；完整父 AC 和下面的错误码
+  歧义仍开放。不要归档父任务，或把本次提交扩大解释为全部验收通过。
+- **首个下一步**：按下方“接管验证”确认分支、工作区和当前 task，然后调查主机键
+  错误码歧义；同时保留 MFA 专项人工反馈待办。[执行步骤](#下一步行动2026-11-13)。
+- **范围与权限**：只在 `projects/ctos` 工作；设备、真实账号、安装和运行服务须按新
+  session 当前请求与实际目标核对，不能把历史设备回执当成当前可达或授权。勿清库、
+  卸载正式应用、操作真实凭据或修改相邻项目；不推送、不归档父任务。
+- **工作区**：项目位于 `/home/wkyuu/cargo/repo/06-dedsec/projects/ctos`，分支
+  `antitrust`，Git 根为上两级。Trellis 运行时、工作区日志、`10-26-app-detail-fixes`
+  待办及相邻 `tacchi` 既有修改保持未提交；`design/README.md` 与 `design/changelog.md`
+  还留有旁任务未暂存片段。只暂存准确路径／片段，禁止用全仓 `git add -A`。
+- **最近更新／验证**：2026-11-13；部分提交前 Flutter 438 项、JVM 856 项／58 套通过，
+  指定板密码和独立交互式真实界面合成换键流程分别通过；细节见
+  [验证记录](verification.md#20261113-ssh-partial-commit-preparation)。
+- **环境**：构建使用项目 `./hako`；曾安装的正式 APK 为 `08881940…`，仅表示当次设备
+  回执。30 分钟合成 SSH 服务已按 deadline 退出、端口无监听；`/tmp` 证据未来可能清理。
+
+## 关键事实与发现（2026-11-13）
+
+- **表单／指纹体验已由用户接受** — 状态：确认。证据：[用户反馈](verification.md#20261113-ssh-feedback-human-acceptance)。用户没有列出每项操作，不能补写为 MFA 人工通过。
+- **MFA 与表单不能按完整文件拆开提交** — 状态：确认。干净 HEAD 只覆盖两份 UI 文件，
+  Dart 分析报 13 项缺失接口；叠加 35 个 SSH 产品／测试文件后离线分析通过。快照的
+  Flutter 测试未运行；详见[提交准备](verification.md#20261113-ssh-partial-commit-preparation)。
+- **主机键错误码复用** — 状态：确认。`android/app/src/main/java/im/majo/ctos/SshHostKeyAuthority.java`
+  的证明绑定不匹配与真实 CHANGED 均使用 `SSH_HOST_KEY_CHANGED`；Flutter 冲突判断见
+  `lib/ssh/password_connect_page.dart`。原授权仍 fail-closed，忘记须重新查询并明确确认。
+- **截图通用错误的唯一原因** — 状态：待验证。握手中断可复现类似通用错误，现已映射为
+  协商／通信失败；旧测试服务之后消失，但不能反推用户截图当时的服务状态。
+- **独立 KBI 的认证顺序** — 状态：确认。用户已指出并验证直接交互式认证无需先输入密码；
+  不要把测试服务的密码→KBI 串联要求套到独立交互式认证。
+
+## 假设台账（2026-11-13）
+
+- **证明绑定异常可能被展示为指纹变化** — 状态：待验证。旁证是上述共用错误码和 Flutter
+  分支；证实需展示可传播到界面的实际异常路径，证伪需证明所有相关绑定失败均在边界
+  前被转换或阻断。本轮未在正常 UI 复现，不能声称已确认误弹窗或已修复。
+
+## 当前焦点（2026-11-13）
+
+- 主机键错误码语义梳理及必要修正：未开始，先验证真实传播与现有错误契约。
+- MFA 串联／config 密码专项人工体验：待反馈；已完成的自动和隔离设备证据不能替代人工。
+- 父任务其他剩余 AC：进行中；包括逐跳 ProxyJump、转发和复杂恢复等，具体以 PRD 为准。
+
+<a id="下一步行动2026-11-13"></a>
+## 下一步行动（2026-11-13）
+
+1. **恢复上下文** — 前置：新 session 到达本项目。执行位置：项目根；运行 `git status --short`、
+   `git log -3 --oneline`、`python3 .trellis/scripts/task.py current`；若 current 为空且
+   用户仍要求继续此任务，执行 `python3 .trellis/scripts/task.py start .trellis/tasks/10-08-ssh-terminal`，
+   再读取 PRD／design／implement 与 context。判据：原 task 为 `in_progress`、现有 dirty
+   与已提交 SSH 工作均被识别；发现来源不明的变化时保留并停止触碰该路径。
+2. **验证错误码传播** — 前置：步骤 1 已确认。检查 `SshHostKeyAuthority.java`、
+   `SshProductionBridgeTest.java`、`SshManagedKnownHostsProviderTest.java`、
+   `lib/ssh/password_connect_page.dart` 及其冲突测试；用隔离、合成数据构造可验证的
+   绑定失败与真实 CHANGED 对照。判据：各失败有准确 UI 文案，真实 CHANGED 仍停连并
+   走明确预览／确认，绑定异常不误导或放宽安全边界；若路径无法证明，保留待验证状态。
+   如涉及代码变更，遵循当前 Trellis implement/check 和规格更新流程。
+3. **收集 MFA 专项反馈** — 前置：用户方便体验且当前授权覆盖具体测试服务／设备。
+   按 [MFA 合同](ssh-mfa-authentication.md) 准备短期合成端点，分别记录密码或私钥后
+   继续 KBI、问题回答及终端结果；不把直接 KBI 或自动仪器结果当人工串联验收。
+   判据：用户明确报告实际走过的路径；服务／设备不可达时如实记录，不使用真实账号替代。
+4. **继续父任务** — 前置：上述待办处理或无需等待用户的本地工作可并行。按 PRD 剩余 AC
+   收敛下一独立增量、证据及依赖；不要重做已通过的设备门禁或跳过必要专项检查。
+
+## 接管验证（2026-11-13）
+
+- 环境：`pwd` 应为本项目；`git branch --show-current` 为 `antitrust`；复核
+  `git log --oneline -3` 中的 SSH 产品提交 `1546575` 和后续接管文档提交。
+- 状态：`git status --short` 仍可能出现前述其他工作及共享文档片段；它们不属于 SSH 提交，
+  不回滚、不覆盖。使用 `python3 .trellis/scripts/task.py validate 10-08-ssh-terminal`
+  检查现有 context；任一异常先识别来源。
+- 最小验证：按变更范围使用 `./hako flutter analyze --no-pub`、相关 Flutter 测试及
+  `./hako bash -lc 'cd android && ./gradlew :app:testReleaseUnitTest --offline --console=plain'`；
+  历史结果及设备证据只作为当时记录，不冒充新 session 的运行结果。
+- 接管判据：明确 commit／未提交边界、task 状态和当时授权后再开始修改；完成首个动作后
+  更新本档、对应 `design/` 文档及任务状态。
+
+## 证据索引与历史修正（2026-11-13）
+
+- [完整本轮验证](verification.md#20261113-ssh-feedback-direct-recovery)：产品 UI、设备、
+  错误诊断、测试驱动失败及清理；[部分提交](verification.md#20261113-ssh-partial-commit)
+  是用户认可的提交边界。临时日志目录若已消失，不视为本次重验。
+- 旧错误判断：曾将仅支持密码后 KBI 的测试服务限制误当成独立 KBI 产品要求；用户纠正后
+  用直接 KBI 合成服务验证并确认进入测试终端，见[记录](verification.md#20261113-ssh-direct-kbi-manual-fixture)。
+- 下方历史“当前／下一步”均为当时状态，只供追溯，不覆盖以上接管摘要。
+
+## 历史：正式前台密码SSH已完成具名Android界面验收
 
 - 用户于2026-10-26明确回复“允许”，本轮指定开发板隔离测试安装/合成账号/清理已授权并执行，不应再次把历史“待授权”当当前阻塞。授权没有扩展为覆盖安装正式应用或使用真实用户库/账号。
 - AIO-3568J/Android11/API30/arm64-v8a/RUNNING_UNLOCKED：实际bridge测试OK1/5.924s，覆盖真实共享库、NEW精确指纹/CAS、密码PTY、保护释放后命令、KNOWN重连；实际Flutter UI测试最终OK1/12.802s，覆盖建库、输入、指纹/算法、信任保存、真实命令与非回显渲染输出、AppBar返回和关闭。两runner方法status0/最终-1，均无skip。

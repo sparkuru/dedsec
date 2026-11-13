@@ -1,5 +1,8 @@
 # SSH 终端规划入口
 
+2026-11-13：用户允许部分提交；SSH 表单、指纹恢复与 MFA 依赖已提交为 `1546575`。
+接续信息见[接管档案](handoff-ssh-terminal-client.md)，MFA 专项人工体验与完整父任务仍开放。
+
 2026-11-13：用户反馈本轮 SSH 表单与指纹恢复“可以；目前能够接受了”，按该范围记录
 [人工体验可接受](verification.md#20261113-ssh-feedback-human-acceptance)；MFA 串联具体
 人工流程及完整 SSH 父任务仍开放。

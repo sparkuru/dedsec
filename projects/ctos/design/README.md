@@ -1,5 +1,8 @@
 # ctOS 信息入口
 
+2026-11-13：SSH 表单、指纹恢复及其 MFA 依赖已按用户许可[部分提交](verification.md#20261113-ssh-partial-commit)；
+新 session 接续先看 [SSH 接管档案](handoff-ssh-terminal-client.md)，父任务继续。
+
 2026-11-13：用户反馈“可以；目前能够接受了”，本轮 SSH 表单与指纹恢复体验
 [人工验收可接受](verification.md#20261113-ssh-feedback-human-acceptance)；原 SSH 父任务及
 MFA 串联的具体人工流程仍保持开放。

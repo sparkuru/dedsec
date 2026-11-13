@@ -1,5 +1,14 @@
 # Verification
 
+<a id="20261113-ssh-partial-commit"></a>
+## 2026-11-13 SSH 部分提交
+
+用户明确允许部分提交；经依赖闭包核对，将 SSH 表单、指纹恢复与其 MFA 产品／测试依赖
+及相关规格、验证一起提交为 `15465750dca75b26bb65e55d7c31ab3cc8985d90`。共享索引和
+变更记录仅暂存 SSH 片段，其他应用主题待办仍保留在工作区；Trellis 运行时及相邻项目未提交。
+父任务保持 in_progress，MFA 串联专项人工验收与主机键错误码歧义仍开放。
+提交前实际检查及独立快照的局限见[下一节](#20261113-ssh-partial-commit-preparation)。
+
 <a id="20261113-ssh-partial-commit-preparation"></a>
 ## 2026-11-13 SSH 部分提交准备
 
