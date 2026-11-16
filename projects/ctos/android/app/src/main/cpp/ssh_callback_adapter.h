@@ -14,6 +14,7 @@
 #define CTOS_SSH_CALLBACK_HOST_FINGERPRINT_BYTES 64U
 #define CTOS_SSH_CALLBACK_HOST_PROPOSAL_BINDING_BYTES 65U
 #define CTOS_SSH_CALLBACK_CANDIDATE_ID_BYTES 129U
+#define CTOS_SSH_CALLBACK_CHANGED_RECORDS_BYTES (88U + 128U * 216U)
 
 typedef uint64_t ctos_ssh_callback_token;
 
@@ -90,6 +91,14 @@ struct ctos_ssh_known_hosts_candidate {
     size_t replacement_body_length;
 };
 
+/* The old-row projection is the bounded CSHTv1 query form produced from
+ * exactly the same source snapshot and base digest as the replacement. */
+struct ctos_ssh_changed_host_candidate {
+    struct ctos_ssh_known_hosts_candidate candidate;
+    unsigned char *old_records;
+    size_t old_records_length;
+};
+
 /* The target is called synchronously on the thread that opens the binding.
  * `environment` is deliberately opaque here: the JNI target validates that it
  * is an attached JNIEnv from the same JavaVM before any Java call. */
@@ -125,6 +134,11 @@ struct ctos_ssh_callback_target {
         const unsigned char selection_receipt[32], uint64_t cycle,
         const unsigned char session_digest[32], unsigned char *output,
         size_t capacity, size_t *length);
+    /* CHANGED is a separate provisional path, never a NEW proof or CAS. */
+    int (*changed_host_candidate)(void *context, void *environment,
+        const struct ctos_ssh_changed_host_candidate *candidate);
+    int (*changed_host_review)(void *context, void *environment,
+        const struct ctos_ssh_host_evidence *evidence);
 };
 
 /* Open binds the callback to the calling process, current event-loop thread,
@@ -174,6 +188,16 @@ int ctos_ssh_callback_known_hosts_candidate(ctos_ssh_callback_token callback,
  * the same event-loop thread and is idempotent after a successful rollback. */
 int ctos_ssh_callback_known_hosts_candidate_abort(
     ctos_ssh_callback_token callback, void *environment);
+int ctos_ssh_callback_changed_host_candidate(ctos_ssh_callback_token callback,
+    void *environment, const char *candidate_id, const char *key_type,
+    const char *fingerprint, const unsigned char base_digest[32],
+    const unsigned char replacement_digest[32], unsigned char *replacement_body,
+    size_t replacement_body_length, unsigned char *old_records, size_t old_records_length);
+int ctos_ssh_callback_changed_host_review(ctos_ssh_callback_token callback,
+    void *environment, const char *key_type, const char *fingerprint,
+    const unsigned char base_digest[32], const unsigned char replacement_digest[32]);
+/* Returns 1 only when the same live owner implements both provisional hooks. */
+int ctos_ssh_callback_supports_changed(ctos_ssh_callback_token callback, void *environment);
 int ctos_ssh_callback_kex_complete(ctos_ssh_callback_token callback, void *environment,
     uint64_t cycle, const unsigned char session_digest[32]);
 int ctos_ssh_callback_credential(ctos_ssh_callback_token callback, void *environment,

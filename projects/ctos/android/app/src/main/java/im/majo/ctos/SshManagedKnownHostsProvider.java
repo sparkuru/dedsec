@@ -11,6 +11,41 @@ import java.util.UUID;
  */
 final class SshManagedKnownHostsProvider implements
         SshManagedProvider.TrustProposalSource, SshManagedProvider.TrustCasWriter, AutoCloseable {
+    interface ChangedCommitObserver {
+        void persisted();
+        default void proofPublished() { }
+    }
+    /** Constructed only after this provider's exact CHANGED CAS has returned successfully. */
+    static final class ChangedCommitReceipt {
+        private final SshManagedKnownHostsProvider owner;
+        private final SshNativeCallbackAdapter.ChangedAuthorization authorization;
+        private final SshHostKeyAuthority.Evidence evidence;
+        private final SshTrustProposal proposal;
+        private boolean proofClaimed;
+
+        private ChangedCommitReceipt(SshManagedKnownHostsProvider owner,
+                SshNativeCallbackAdapter.ChangedAuthorization authorization,
+                SshHostKeyAuthority.Evidence evidence, SshTrustProposal proposal) {
+            this.owner = owner; this.authorization = authorization;
+            this.evidence = evidence; this.proposal = proposal;
+        }
+
+        synchronized void requireMatches(SshHostKeyAuthority.Evidence actual, SshTrustProposal exact)
+                throws VaultException {
+            if (!owner.changedCommitConfirmed || actual != evidence || exact != proposal
+                    || !proposal.matchesChangedEvidence(evidence))
+                throw new VaultException("SSH_HOST_KEY_CAS", "The changed-host commit receipt is unavailable");
+            authorization.requireMatches(evidence.role, evidence, proposal);
+        }
+
+        synchronized void claimProof(SshHostKeyAuthority.Evidence actual, SshTrustProposal exact)
+                throws VaultException {
+            requireMatches(actual, exact);
+            if (proofClaimed) throw new VaultException("SSH_HOST_KEY_CAS", "The changed-host receipt was consumed");
+            proofClaimed = true;
+        }
+    }
+
     static final class SnapshotReceipt implements AutoCloseable {
         final SshRoleContext role;
         final String rootPath;
@@ -99,12 +134,30 @@ final class SshManagedKnownHostsProvider implements
         }
 
         synchronized boolean matchesEvidence(SshHostKeyAuthority.Evidence evidence) throws VaultException {
+            return matchesEvidence(evidence, SshHostKeyAuthority.Classification.NEW);
+        }
+
+        synchronized boolean matchesChangedEvidence(SshHostKeyAuthority.Evidence evidence) throws VaultException {
+            return matchesEvidence(evidence, SshHostKeyAuthority.Classification.CHANGED);
+        }
+
+        private boolean matchesEvidence(SshHostKeyAuthority.Evidence evidence,
+                SshHostKeyAuthority.Classification expected) throws VaultException {
             requireLive();
             if (evidence == null || evidence.role != role
-                    || evidence.classification != SshHostKeyAuthority.Classification.NEW) return false;
+                    || evidence.classification != expected) return false;
             byte[] currentBase = evidence.baseDigest();
             try { return MessageDigest.isEqual(baseDigest, currentBase); }
             finally { VaultCodec.wipe(currentBase); }
+        }
+
+        synchronized void requireChangedMatches(SshRoleContext candidateRole,
+                SshHostKeyAuthority.Evidence evidence, SshTrustProposal proposal) throws VaultException {
+            if (candidateRole != role || !matchesChangedEvidence(evidence) || proposal == null
+                    || !proposal.matchesManagedObject(objectType, objectId, path, objectIdentity)
+                    || !proposal.matchesChangedEvidence(evidence)) {
+                throw new VaultException("SSH_HOST_KEY_REVIEW", "The changed trust snapshot is not exact");
+            }
         }
 
         @Override public synchronized void close() {
@@ -150,7 +203,8 @@ final class SshManagedKnownHostsProvider implements
         private boolean closed;
 
         private KnownHostsCandidate(SnapshotReceipt snapshot, SshHostKeyAuthority.Evidence evidence,
-                String candidateId, byte[] exactReplacement) throws VaultException {
+                String candidateId, byte[] exactReplacement,
+                SshHostKeyAuthority.Classification expected) throws VaultException {
             if (snapshot == null || evidence == null || exactReplacement == null
                     || candidateId == null || !candidateId.matches("[A-Za-z0-9_-]{1,128}")
                     || exactReplacement.length == 0
@@ -160,7 +214,9 @@ final class SshManagedKnownHostsProvider implements
             byte[] evidenceReplacement = null;
             try {
                 snapshot.requireLive();
-                if (!snapshot.matchesEvidence(evidence)) {
+                if (evidence.classification != expected || !(expected == SshHostKeyAuthority.Classification.NEW
+                        ? snapshot.matchesEvidence(evidence) : expected == SshHostKeyAuthority.Classification.CHANGED
+                        && snapshot.matchesChangedEvidence(evidence))) {
                     throw new VaultException("SSH_HOST_KEY_REVIEW",
                             "The managed trust candidate is not exact");
                 }
@@ -293,16 +349,25 @@ final class SshManagedKnownHostsProvider implements
     private AppSecrets.SshTrustContext activeContext;
     private boolean writing;
     private volatile boolean confirmedCommit;
+    private volatile boolean changedCommitConfirmed;
+    private boolean changedNativeAcknowledged;
+    private final ChangedCommitObserver changedCommitObserver;
     private boolean closed;
 
     private SshManagedKnownHostsProvider(SshVaultAdapter adapter, SnapshotReceipt snapshot,
             KnownHostsCandidate candidate) throws VaultException {
+        this(adapter, snapshot, candidate, () -> { });
+    }
+
+    private SshManagedKnownHostsProvider(SshVaultAdapter adapter, SnapshotReceipt snapshot,
+            KnownHostsCandidate candidate, ChangedCommitObserver changedCommitObserver) throws VaultException {
         if (adapter == null || snapshot == null) throw VaultException.invalid();
         snapshot.requireLive();
         if (candidate != null) candidate.requireSnapshot(snapshot);
         this.adapter = adapter;
         this.snapshot = snapshot;
         this.candidate = candidate;
+        this.changedCommitObserver = java.util.Objects.requireNonNull(changedCommitObserver);
     }
 
     /** Create a provider owning exactly one candidate and its snapshot receipt. */
@@ -321,6 +386,11 @@ final class SshManagedKnownHostsProvider implements
     static SshManagedKnownHostsProvider bindForNativeHandoff(SshVaultAdapter adapter,
             SnapshotReceipt snapshot) throws VaultException {
         return new SshManagedKnownHostsProvider(adapter, snapshot, null);
+    }
+
+    static SshManagedKnownHostsProvider bindForNativeHandoff(SshVaultAdapter adapter,
+            SnapshotReceipt snapshot, ChangedCommitObserver changedCommitObserver) throws VaultException {
+        return new SshManagedKnownHostsProvider(adapter, snapshot, null, changedCommitObserver);
     }
 
     SshKnownHostsCandidateHandoff nativeCandidateHandoff() throws VaultException {
@@ -416,7 +486,15 @@ final class SshManagedKnownHostsProvider implements
     static KnownHostsCandidate candidateFor(SnapshotReceipt snapshot,
             SshHostKeyAuthority.Evidence evidence, String candidateId, byte[] exactReplacement)
             throws VaultException {
-        return new KnownHostsCandidate(snapshot, evidence, candidateId, exactReplacement);
+        return new KnownHostsCandidate(snapshot, evidence, candidateId, exactReplacement,
+                SshHostKeyAuthority.Classification.NEW);
+    }
+
+    static KnownHostsCandidate changedCandidateFor(SnapshotReceipt snapshot,
+            SshHostKeyAuthority.Evidence evidence, String candidateId, byte[] exactReplacement)
+            throws VaultException {
+        return new KnownHostsCandidate(snapshot, evidence, candidateId, exactReplacement,
+                SshHostKeyAuthority.Classification.CHANGED);
     }
 
     @Override public synchronized SshTrustProposal proposalFor(SshHostKeyAuthority.Evidence evidence)
@@ -426,6 +504,19 @@ final class SshManagedKnownHostsProvider implements
 
     @Override public synchronized SshTrustProposal proposalFor(SshHostKeyAuthority.Evidence evidence,
             SshHostKeyAuthority.Proof proof) throws VaultException {
+        return proposalForExact(evidence, proof, SshHostKeyAuthority.Classification.NEW);
+    }
+
+    synchronized SshTrustProposal changedProposalFor(SshHostKeyAuthority.Evidence evidence)
+            throws VaultException {
+        return proposalForExact(evidence, null, SshHostKeyAuthority.Classification.CHANGED);
+    }
+
+    private SshTrustProposal proposalForExact(SshHostKeyAuthority.Evidence evidence,
+            SshHostKeyAuthority.Proof proof, SshHostKeyAuthority.Classification expected)
+            throws VaultException {
+        if (evidence == null || evidence.classification != expected)
+            throw new VaultException("SSH_HOST_KEY_REVIEW", "The exact host candidate is unavailable");
         if (closed || activeProposal != null || candidate == null) {
             throw new VaultException("SSH_HOST_KEY_REVIEW", "The exact managed trust candidate is unavailable");
         }
@@ -526,6 +617,76 @@ final class SshManagedKnownHostsProvider implements
 
     @Override public VaultException invalidateCommittedResult() {
         return confirmedCommit ? adapter.uncertainTrustCommit(null) : null;
+    }
+
+    /** Commit one separately authorized CHANGED candidate only after native signed KEX/NEWKEYS. */
+    ChangedCommitReceipt writeChanged(SshHostKeyAuthority.Evidence evidence,
+            SshNativeCallbackAdapter.ChangedAuthorization authorization, SshTrustProposal proposal)
+            throws VaultException {
+        AppSecrets.SshTrustContext context;
+        synchronized (this) {
+            if (closed || writing || activeProposal != proposal || proposal == null || authorization == null)
+                throw new VaultException("SSH_HOST_KEY_CAS", "The exact changed-host writer is unavailable");
+            writing = true;
+            context = activeContext;
+        }
+        boolean persisted = false;
+        try {
+            snapshot.requireChangedMatches(snapshot.role, evidence, proposal);
+            authorization.requireMatches(snapshot.role, evidence, proposal);
+            VaultOperation request = adapter.changedTrustRequest(snapshot.role, evidence, authorization,
+                    snapshot, proposal, context);
+            synchronized (this) {
+                if (closed || activeProposal != proposal)
+                    throw new VaultException("VAULT_CANCELLED", "The managed trust request was closed");
+                activeRequest = request;
+            }
+            adapter.updateChangedTrust(request, snapshot.role, evidence, authorization, snapshot, proposal, () -> { });
+            persisted = true;
+            changedCommitConfirmed = true;
+            confirmedCommit = true;
+            changedCommitObserver.persisted();
+            synchronized (this) {
+                if (closed || activeProposal != proposal)
+                    throw new VaultException("VAULT_CANCELLED", "The managed trust request was closed");
+                snapshot.requireLive();
+                authorization.requireMatches(snapshot.role, evidence, proposal);
+                activeRequest = null;
+                activeContext = null;
+                activeProposal = null;
+                closed = true;
+            }
+            ChangedCommitReceipt receipt = new ChangedCommitReceipt(this, authorization, evidence, proposal);
+            snapshot.close();
+            return receipt;
+        } catch (VaultException | RuntimeException | Error failure) {
+            boolean uncertain = persisted || failure instanceof VaultException
+                    && "VAULT_COMMIT_UNCERTAIN".equals(((VaultException)failure).code);
+            if (uncertain) {
+                changedCommitConfirmed = true;
+                confirmedCommit = true;
+                changedCommitObserver.persisted();
+                VaultException result = adapter.uncertainTrustCommit(failure);
+                try { failClosed(); } catch (RuntimeException | Error cleanup) { result.addSuppressed(cleanup); }
+                throw result;
+            }
+            try { failClosed(); } catch (RuntimeException | Error cleanup) { failure.addSuppressed(cleanup); }
+            throw failure;
+        }
+    }
+
+    synchronized void changedProofPublished() throws VaultException {
+        if (!changedCommitConfirmed || changedNativeAcknowledged)
+            throw new VaultException("SSH_HOST_KEY_CAS", "The changed-host commit is unavailable");
+        changedCommitObserver.proofPublished();
+        changedNativeAcknowledged = true;
+    }
+
+    VaultException invalidateUnacknowledgedChanged() {
+        synchronized (this) {
+            if (!changedCommitConfirmed || changedNativeAcknowledged) return null;
+        }
+        return adapter.uncertainTrustCommit(null);
     }
 
     private void failClosed() {

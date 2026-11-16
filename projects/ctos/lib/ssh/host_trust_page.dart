@@ -10,6 +10,13 @@ import 'api.dart';
 
 enum SshHostKeyConflictAction { view, forget, cancel }
 
+/// Match host-trust text actions to the shared 12 dp dialog button shape.
+const sshHostTrustDialogTextButtonStyle = ButtonStyle(
+  shape: WidgetStatePropertyAll(
+    RoundedRectangleBorder(borderRadius: BorderRadius.all(Radius.circular(12))),
+  ),
+);
+
 class SshHostKeyConflictDialog extends StatelessWidget {
   const SshHostKeyConflictDialog({
     super.key,
@@ -40,11 +47,13 @@ class SshHostKeyConflictDialog extends StatelessWidget {
     actions: [
       TextButton(
         key: const Key('ssh-host-changed-cancel'),
+        style: sshHostTrustDialogTextButtonStyle,
         onPressed: () => onAction(SshHostKeyConflictAction.cancel),
         child: const Text('取消'),
       ),
       TextButton(
         key: const Key('ssh-host-changed-view'),
+        style: sshHostTrustDialogTextButtonStyle,
         onPressed: () => onAction(SshHostKeyConflictAction.view),
         child: const Text('查看旧指纹'),
       ),
@@ -574,6 +583,7 @@ class _SshHostTrustPageState extends State<SshHostTrustPage>
           actions: [
             TextButton(
               key: const Key('ssh-trust-decline'),
+              style: sshHostTrustDialogTextButtonStyle,
               onPressed: () {
                 if (!dialog.wasCovered &&
                     identical(_dialog, dialog) &&

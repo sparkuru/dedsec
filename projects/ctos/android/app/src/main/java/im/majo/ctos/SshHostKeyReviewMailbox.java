@@ -26,8 +26,12 @@ final class SshHostKeyReviewMailbox implements SshHostKeyAuthority.UnknownKeyIss
         final int port;
         final String keyType;
         final String fingerprint;
+        final boolean changed;
+        final String source;
+        final java.util.List<SshHostTrustMaterial.Record> oldRecords;
         final long deadline;
         private final SshHostKeyAuthority.Review review;
+        private final SshHostKeyAuthority.ChangedReview changedReview;
         private final long startedNanos = System.nanoTime();
         private final long waitNanos;
         private int decision; // 0 pending, 1 approve, 2 reject, 3 cancelled
@@ -42,12 +46,34 @@ final class SshHostKeyReviewMailbox implements SshHostKeyAuthority.UnknownKeyIss
             port = review.port;
             keyType = review.keyType;
             fingerprint = review.fingerprint;
+            changed = false;
+            source = "";
+            oldRecords = java.util.Collections.emptyList();
+            changedReview = null;
             this.deadline = deadline;
             waitNanos = maximumWaitMillis * 1_000_000L;
         }
 
-        byte[] baseDigest() { return review.baseDigest(); }
-        byte[] replacementDigest() { return review.replacementDigest(); }
+        private Ticket(SshHostKeyAuthority.ChangedReview review, long deadline, long maximumWaitMillis) {
+            this.review = null;
+            changedReview = review;
+            binding = review.binding;
+            hop = review.hop;
+            connectionId = review.connectionId;
+            targetIdentity = review.targetIdentity;
+            host = review.host;
+            port = review.port;
+            keyType = review.keyType;
+            fingerprint = review.fingerprint;
+            changed = true;
+            source = review.source;
+            oldRecords = review.oldRecords;
+            this.deadline = deadline;
+            waitNanos = maximumWaitMillis * 1_000_000L;
+        }
+
+        byte[] baseDigest() { return changed ? changedReview.baseDigest() : review.baseDigest(); }
+        byte[] replacementDigest() { return changed ? changedReview.replacementDigest() : review.replacementDigest(); }
 
         private boolean withinWallLimit() {
             long elapsed = System.nanoTime() - startedNanos;
@@ -97,6 +123,24 @@ final class SshHostKeyReviewMailbox implements SshHostKeyAuthority.UnknownKeyIss
         if (now <= 0 || now >= role.deadline) throw failure("SSH_ROLE_EXPIRED");
         Ticket ticket = new Ticket(review, now + Math.min(role.deadline - now, maximumWaitMillis),
                 maximumWaitMillis);
+        awaitDecision(ticket);
+    }
+
+    /** Changed reviews are separate from NEW approvals and grant no proof or write authority. */
+    void requireChangedApproved(SshHostKeyAuthority.ChangedReview review, long transportDeadline) throws VaultException {
+        if (Thread.currentThread() != owner) throw failure("SSH_CALLBACK_THREAD");
+        if (review == null || !review.belongsTo(role)) throw refusal();
+        checkLive();
+        if (sink == null) throw refusal();
+        long now = clock.now();
+        if (now <= 0 || now >= role.deadline) throw failure("SSH_ROLE_EXPIRED");
+        if (now >= transportDeadline) throw failure("SSH_TIMED_OUT");
+        long deadline = Math.min(role.deadline, transportDeadline);
+        awaitDecision(new Ticket(review, now + Math.min(deadline - now, maximumWaitMillis),
+                maximumWaitMillis));
+    }
+
+    private void awaitDecision(Ticket ticket) throws VaultException {
         synchronized (lock) {
             if (cancelled) throw failure("SSH_HOST_KEY_REVIEW_CANCELLED");
             if (started) throw refusal();
@@ -159,6 +203,20 @@ final class SshHostKeyReviewMailbox implements SshHostKeyAuthority.UnknownKeyIss
             ticket.decision = approve ? 1 : 2;
             lock.notifyAll();
             return true;
+        }
+    }
+
+    /** A posted UI event is valid only while its exact one-shot review is live. */
+    boolean pending(Ticket ticket) throws VaultException {
+        checkLive();
+        synchronized (lock) {
+            if (cancelled || ticket == null || pending != ticket || ticket.decision != 0
+                    || !ticket.withinWallLimit()) return false;
+        }
+        long now = clock.now();
+        synchronized (lock) {
+            return !cancelled && pending == ticket && ticket.decision == 0
+                    && now > 0 && now < ticket.deadline && ticket.withinWallLimit();
         }
     }
 

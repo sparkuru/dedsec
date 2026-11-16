@@ -959,3 +959,66 @@ Delivered service-owned SSH with screen-lock disconnection and explicit fresh re
 ### Next Steps
 
 - 沿原1008推进direct资料的SAF目录批量导入：相对结构、整批预览/冲突处理及原子提交；下一增量研究独立保留。
+
+
+## Session 78: SSH目录批量导入隔离验证通过，待人工体验
+
+**Date**: 2026-10-30
+**Task**: SSH目录批量导入隔离验证通过，待人工体验
+**Branch**: `antitrust`
+
+### Summary
+
+已验收密钥交付提交360cca2和e0f866f；沿原1008完成目录批量导入。当前目录源码未提交，正式fc98保持，父完整AC开放。
+
+### Main Changes
+
+- 有界只读SAF快照、逐项选择／当次解锁、真实native配置与公钥验证、整批审阅／替换确认／一次原子提交；相同资料保留既有口令和关联。
+
+### Git Commits
+
+(No commits - planning session)
+
+### Testing
+
+- [OK] 819 JVM／55套、331 Flutter／目录14项、analyze0、normal及fixture构建lint／三APK审计、28张实际字体布局通过。
+- [OK] 指定AIO-3568J/API30精确目录方法31.649秒OK1，两次真实公钥登录及PTY；正式fc98及包元数据保持，隔离资源与专用15041／15491端口清理。
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 完成独立最终证据审阅；正式保留数据更新及新增页面人工体验按当前授权推进；不访问真实私钥／账号、不归档父task。
+
+
+## Session 79: 目录导入新版保留数据安装，待人工体验
+
+**Date**: 2026-10-30
+**Task**: 目录导入新版保留数据安装，待人工体验
+**Branch**: `antitrust`
+
+### Summary
+
+用户明确允许本次目录功能保留数据更新；同板正式b2d91de2已安装并启动，独立安装核对PASS。
+
+### Main Changes
+
+- 42项源码及冻结APK重核；备份原公开fc98后install-r，未卸载／清数据或访问真实秘密与账号。
+
+### Git Commits
+
+(No commits - planning session)
+
+### Testing
+
+- [OK] 设备实际APK为b2d91de2，UID10131／dataDir／首次安装时间保持，MainActivity Status ok及resumed，专用ADB15043停止且端口关闭；review-install.json独立PASS。
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 用户从终端→SSH连接→私钥与配置→导入目录体验新增交互；人工验收和本增量提交许可待反馈，父完整AC继续开放。

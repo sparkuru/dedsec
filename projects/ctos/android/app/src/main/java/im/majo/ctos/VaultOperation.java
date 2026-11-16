@@ -38,6 +38,7 @@ final class VaultOperation {
     private int roleHop = -1;
     private String roleFingerprint;
     private boolean trustBound;
+    private SshNativeCallbackAdapter.ChangedAuthorization changedTrustAuthorization;
     private SshRoleContext trustRole;
     private String trustSnapshotRequestId;
     private UUID trustVaultId;
@@ -205,6 +206,7 @@ final class VaultOperation {
             SshRoleContext role, SshHostKeyAuthority.Proof hostKey,
             SshHostKeyAuthority.Evidence evidence, SshTrustProposal proposal) throws VaultException {
         if (consumer != Consumer.SSH || purpose != Purpose.SSH_TRUST_UPDATE || cancelled || !trustBound
+                || changedTrustAuthorization != null
                 || snapshot == null || role == null || hostKey == null || evidence == null || proposal == null
                 || !trustSnapshotRequestId.equals(snapshot.requestId)
                 || !trustVaultId.equals(snapshot.vaultId) || trustGeneration != snapshot.generation
@@ -244,6 +246,81 @@ final class VaultOperation {
             VaultCodec.wipe(currentBase);
             VaultCodec.wipe(currentReplacement);
         }
+    }
+
+    /** Separate exact binding for a signed, user-approved CHANGED host; no ordinary host proof exists yet. */
+    synchronized void bindChangedTrust(SshManagedKnownHostsProvider.SnapshotReceipt snapshot,
+            SshRoleContext role, SshNativeCallbackAdapter.ChangedAuthorization authorization,
+            SshHostKeyAuthority.Evidence evidence, SshTrustProposal proposal) throws VaultException {
+        if (consumer != Consumer.SSH || purpose != Purpose.SSH_TRUST_UPDATE || consumed || cancelled
+                || trustBound || snapshot == null || role == null || authorization == null || evidence == null
+                || proposal == null || !resource.equals(proposal.binding)
+                || !target.equals(role.targetIdentity) || !connectionId.equals(role.connectionId))
+            throw new VaultException("VAULT_OPERATION", "Secret operation does not match its changed trust binding");
+        snapshot.requireChangedMatches(role, evidence, proposal);
+        authorization.requireMatches(role, evidence, proposal);
+        byte[] currentBinding = snapshot.binding();
+        try {
+            if (!vaultId.equals(snapshot.vaultId) || generation != snapshot.generation
+                    || epoch != snapshot.epoch || !MessageDigest.isEqual(currentBinding, snapshotBinding))
+                throw new VaultException("VAULT_CHANGED", "The managed trust snapshot changed");
+        } finally { VaultCodec.wipe(currentBinding); }
+        trustBound = true;
+        changedTrustAuthorization = authorization;
+        trustRole = role;
+        trustSnapshotRequestId = snapshot.requestId;
+        trustVaultId = snapshot.vaultId;
+        trustGeneration = snapshot.generation;
+        trustEpoch = snapshot.epoch;
+        trustSnapshotDeadline = snapshot.deadline;
+        trustSnapshotBinding = snapshot.binding();
+        trustProposalBinding = proposal.binding;
+        trustPath = proposal.path;
+        trustObjectId = proposal.objectId;
+        trustObjectType = proposal.objectType;
+        trustObjectIdentity = proposal.objectIdentity;
+        trustConnectionId = evidence.role.connectionId;
+        trustTargetIdentity = evidence.role.targetIdentity;
+        trustHost = evidence.role.host;
+        trustPort = evidence.role.port;
+        trustClassification = evidence.classification;
+        trustKeyType = evidence.keyType;
+        trustFingerprint = evidence.fingerprint;
+        trustBaseDigest = evidence.baseDigest();
+        trustReplacementDigest = evidence.replacementDigest();
+    }
+
+    synchronized void requireChangedTrust(SshManagedKnownHostsProvider.SnapshotReceipt snapshot,
+            SshRoleContext role, SshNativeCallbackAdapter.ChangedAuthorization authorization,
+            SshHostKeyAuthority.Evidence evidence, SshTrustProposal proposal) throws VaultException {
+        if (consumer != Consumer.SSH || purpose != Purpose.SSH_TRUST_UPDATE || cancelled || !trustBound
+                || authorization == null || changedTrustAuthorization != authorization || snapshot == null
+                || role == null || evidence == null || proposal == null || trustRole != role
+                || !trustSnapshotRequestId.equals(snapshot.requestId) || !trustVaultId.equals(snapshot.vaultId)
+                || trustGeneration != snapshot.generation || trustEpoch != snapshot.epoch
+                || trustSnapshotDeadline != snapshot.deadline || !trustProposalBinding.equals(proposal.binding)
+                || !trustPath.equals(proposal.path) || !trustObjectId.equals(proposal.objectId)
+                || trustObjectType != proposal.objectType || trustObjectIdentity == null
+                || !trustObjectIdentity.equals(proposal.objectIdentity)
+                || !trustConnectionId.equals(evidence.role.connectionId)
+                || !trustTargetIdentity.equals(evidence.role.targetIdentity)
+                || !trustHost.equals(evidence.role.host) || trustPort != evidence.role.port
+                || trustClassification != SshHostKeyAuthority.Classification.CHANGED
+                || trustClassification != evidence.classification || !trustKeyType.equals(evidence.keyType)
+                || !trustFingerprint.equals(evidence.fingerprint))
+            throw new VaultException("VAULT_OPERATION", "Secret operation does not match its changed trust binding");
+        byte[] currentBinding = snapshot.binding();
+        byte[] currentBase = evidence.baseDigest(), currentReplacement = evidence.replacementDigest();
+        try {
+            if (!MessageDigest.isEqual(trustSnapshotBinding, currentBinding)
+                    || !MessageDigest.isEqual(trustBaseDigest, currentBase)
+                    || !MessageDigest.isEqual(trustReplacementDigest, currentReplacement))
+                throw new VaultException("VAULT_CHANGED", "The managed trust snapshot changed");
+        } finally {
+            VaultCodec.wipe(currentBinding); VaultCodec.wipe(currentBase); VaultCodec.wipe(currentReplacement);
+        }
+        snapshot.requireChangedMatches(role, evidence, proposal);
+        authorization.requireMatches(role, evidence, proposal);
     }
 
     synchronized SshRoleContext boundTrustRole() {

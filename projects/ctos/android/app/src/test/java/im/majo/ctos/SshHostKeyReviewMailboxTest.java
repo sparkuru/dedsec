@@ -61,8 +61,9 @@ public final class SshHostKeyReviewMailboxTest {
             AtomicInteger dismissed = new AtomicInteger();
             try (SshHostKeyReviewMailbox mailbox = new SshHostKeyReviewMailbox(f.role, f.clock, () -> { },
                     new SshHostKeyReviewMailbox.Sink() {
-                        @Override public void present(SshHostKeyReviewMailbox.Ticket ticket) {
+                        @Override public void present(SshHostKeyReviewMailbox.Ticket ticket) throws VaultException {
                             shown.set(ticket);
+                            assertTrue(owner.get().pending(ticket));
                             assertEquals(f.role.host, ticket.host);
                             assertEquals(f.role.port, ticket.port);
                             assertEquals(FINGERPRINT, ticket.fingerprint);
@@ -80,6 +81,7 @@ public final class SshHostKeyReviewMailboxTest {
                 assertEquals(FINGERPRINT, f.run(mailbox).fingerprint);
                 assertTrue(answer.get().get(2, TimeUnit.SECONDS));
                 assertEquals(1, dismissed.get());
+                assertFalse(mailbox.pending(shown.get()));
                 assertFalse(mailbox.resolve(shown.get(), true));
                 code("SSH_HOST_KEY_REVIEW", () -> f.run(mailbox));
             }

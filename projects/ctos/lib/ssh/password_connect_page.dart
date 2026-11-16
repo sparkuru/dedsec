@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -11,18 +12,24 @@ import 'host_trust_page.dart';
 import 'library_page.dart';
 import 'keyboard_challenge_form.dart';
 
-/// The original KBI connection outcome survives a forcibly removed page.
+/// The original SSH connection outcome survives a forcibly removed page.
 class SshConnectLifetime {
   SshConnectLifetime(this.api);
   final SshPasswordApi api;
-  final _pending = <Future<void>>[];
-  final _requests = <String>{};
+  final _pending = <String, Future<void>>{};
+  final _retired = <String>{};
   String? establishedId;
   Future<void>? _finishing;
 
+  bool owns(String? id) => id != null && _pending.containsKey(id);
+  bool handlesCancellation(String id) =>
+      _retired.contains(id) || (_finishing != null && owns(id));
+
   void retain(String id, Future<void> result) {
-    _requests.add(id);
-    _pending.add(result.then<void>((_) {}, onError: (Object _) {}));
+    if (_pending.containsKey(id)) {
+      throw StateError('Cannot retain the same SSH request twice');
+    }
+    _pending[id] = result.then<void>((_) {}, onError: (Object _) {});
   }
 
   Future<void> finish() {
@@ -37,19 +44,26 @@ class SshConnectLifetime {
   }
 
   Future<void> _finish() async {
-    for (final id in _requests) {
-      if (id == establishedId) continue;
-      try {
-        await api.cancel(id);
-      } catch (_) {}
-    }
-    await Future.wait(_pending);
-    // A success can hand the owner off after the first cancellation was queued.
-    for (final id in _requests) {
-      if (id == establishedId) continue;
-      try {
-        await api.cancel(id);
-      } catch (_) {}
+    while (true) {
+      final current = _pending.keys
+          .where((id) => !_retired.contains(id))
+          .toList();
+      if (current.isEmpty) return;
+      for (final id in current) {
+        if (id == establishedId) continue;
+        try {
+          await api.cancel(id);
+        } catch (_) {}
+      }
+      await Future.wait(current.map((id) => _pending[id]!));
+      // A success can hand the owner off after the first cancellation was queued.
+      for (final id in current) {
+        if (id == establishedId) continue;
+        try {
+          await api.cancel(id);
+        } catch (_) {}
+      }
+      _retired.addAll(current);
     }
   }
 }
@@ -143,20 +157,31 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
   StreamSubscription<SshEvent>? _events;
   StreamSubscription<SecretSessionEvent>? _keyboardSession;
   Timer? _keyboardHandshake;
+  Timer? _pendingKeyboardExpiry;
+  Stopwatch? _pendingKeyboardAge;
   bool _keyboardSessionReady = false;
   int? _keyboardEpoch;
   late final SshConnectLifetime _lifetime;
   SshKeyboardChallenge? _challenge;
+  final _keyboardDialogTicket = ValueNotifier<SshKeyboardChallenge?>(null);
+  final _keyboardResponses = <SshKeyboardChallenge, Future<bool>?>{};
+  Completer<void>? _keyboardRetired;
+  SshKeyboardChallenge? _pendingKeyboardChallenge;
   int _lastKeyboardRound = 0;
   ModalRoute<dynamic>? _route;
   DialogRoute<bool>? _reviewRoute;
+  DialogRoute<void>? _keyboardRoute;
   DialogRoute<bool>? _forgetRoute;
   DialogRoute<SshHostKeyConflictAction>? _hostConflictRoute;
   DialogRoute<_AuthenticationMode>? _authenticationRoute;
   Timer? _statusDebounce;
-  SshHostKeyEvent? _review;
+  SshHostReviewEvent? _review;
   String? _defaultsId, _attemptId, _reconnectReadId, _error;
   String? _hostChangedAttemptId;
+  Future<void>? _pendingConnect;
+  String? _pendingConnectId;
+  bool _changedTrustChallenge = false, _changedTrustDecisionSent = false;
+  Completer<bool>? _changedTrustDecision;
   int _revision = 0;
   int _statusRevision = 0;
   bool _loading = true, _ready = false, _busy = false;
@@ -166,7 +191,7 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
   bool _savedPassword = false, _useSavedPassword = false, _savePassword = false;
   bool _useSavedPassphrase = false, _savePassphrase = false;
   bool _statusLoading = false, _forgetting = false;
-  bool _closing = false;
+  bool _closing = false, _disposing = false;
   Completer<void>? _forgetCompletion;
   String? _forgetReceipt;
   Completer<void>? _saveCompletion;
@@ -176,16 +201,21 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
   bool _identityMode = false, _managing = false;
   bool _keyboardMode = false;
   bool _continueKeyboardInteractive = false;
+  bool _requireFreshSelection = false;
   bool _connectOnOpenPending = false;
   SshAttemptState _state = SshAttemptState.connecting;
 
-  bool get _keyboardCapable => _keyboardMode || _continueKeyboardInteractive;
+  bool get _requiresInitialKeyboardSession =>
+      _keyboardMode || _continueKeyboardInteractive;
+  bool get _keyboardCapable =>
+      _requiresInitialKeyboardSession || (_busy && _attemptId != null);
 
   bool get _exposed =>
       mounted &&
       _foreground &&
       (_route?.isCurrent != false ||
           _reviewRoute?.isCurrent == true ||
+          _keyboardRoute?.isCurrent == true ||
           _forgetRoute?.isCurrent == true ||
           _hostConflictRoute?.isCurrent == true ||
           _authenticationRoute?.isCurrent == true);
@@ -290,9 +320,13 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
           _closing)
         return;
       final reconnect = restore ?? (applyReconnect ? widget.reconnect : null);
-      if (reconnect?.continueKeyboardInteractive == true &&
-          (reconnect!.mode == SshReconnectMode.keyboard ||
-              reconnect.mode == SshReconnectMode.configKeyboard)) {
+      if (reconnect != null &&
+          ((reconnect.continueKeyboardInteractive &&
+                  reconnect.autoKeyboardInteractive) ||
+              ((reconnect.mode == SshReconnectMode.keyboard ||
+                      reconnect.mode == SshReconnectMode.configKeyboard) &&
+                  (reconnect.continueKeyboardInteractive ||
+                      reconnect.autoKeyboardInteractive)))) {
         throw const FormatException('SSH 重连认证方式无效');
       }
       _continueKeyboardInteractive =
@@ -353,7 +387,7 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
           }
         }
       }
-      if (_keyboardCapable) _startKeyboardSession();
+      if (_requiresInitialKeyboardSession) _startKeyboardSession();
       setState(() {
         _loading = false;
         final invalidRecoveryConfig =
@@ -415,7 +449,11 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
       sshUsernameError(_username.text) == null;
 
   String _connectionError(Object error) =>
-      _identityMode ? sshMaterialError(error) : sshConnectionError(error);
+      error is PlatformException && error.code == 'SSH_HOST_TRUST_BLOCKED'
+      ? '此连接使用的信任文件包含受保护或共享记录，无法直接更新。请在“主机信任”中查看。'
+      : _identityMode
+      ? sshMaterialError(error)
+      : sshConnectionError(error);
 
   void _startKeyboardSession() {
     if (_keyboardSession != null) return;
@@ -429,9 +467,12 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
         final changed = _keyboardEpoch != null && _keyboardEpoch != event.epoch;
         _keyboardEpoch = event.epoch;
         _keyboardSessionReady = event.unlocked && event.foreground;
-        if (!_keyboardSessionReady || changed && _challenge != null) {
+        if (!_keyboardSessionReady ||
+            changed &&
+                (_challenge != null || _pendingKeyboardChallenge != null)) {
           _invalidate('秘密库状态已变化，请重新解锁并连接。');
         } else {
+          _presentPendingKeyboardChallenge();
           setState(() {});
         }
       },
@@ -442,11 +483,107 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
 
   void _stopKeyboardSession() {
     _keyboardHandshake?.cancel();
+    _clearPendingKeyboardChallenge();
+    _retireKeyboardResponses();
     unawaited(_keyboardSession?.cancel());
     _keyboardSession = null;
     _keyboardSessionReady = false;
     _keyboardEpoch = null;
     _challenge = null;
+    _dismissKeyboardDialog();
+  }
+
+  void _retireKeyboardResponses() {
+    final retired = _keyboardRetired;
+    if (retired != null && !retired.isCompleted) retired.complete();
+    _keyboardResponses.clear();
+  }
+
+  void _clearPendingKeyboardChallenge() {
+    _pendingKeyboardExpiry?.cancel();
+    _pendingKeyboardExpiry = null;
+    _pendingKeyboardAge?.stop();
+    _pendingKeyboardAge = null;
+    _pendingKeyboardChallenge = null;
+  }
+
+  void _presentPendingKeyboardChallenge() {
+    final pending = _pendingKeyboardChallenge;
+    if (pending == null || !_keyboardSessionReady) return;
+    final remaining =
+        pending.remainingMillis -
+        (_pendingKeyboardAge?.elapsedMilliseconds ?? pending.remainingMillis);
+    if (remaining <= 0 ||
+        !_exposed ||
+        _closing ||
+        _leaving ||
+        pending.requestId != _attemptId) {
+      _invalidate('服务器问题已过期，请重新连接。');
+      return;
+    }
+    final ready = SshKeyboardChallenge(
+      requestId: pending.requestId,
+      ticketId: pending.ticketId,
+      binding: pending.binding,
+      round: pending.round,
+      name: pending.name,
+      instruction: pending.instruction,
+      prompts: pending.prompts,
+      remainingMillis: remaining,
+    );
+    _clearPendingKeyboardChallenge();
+    _challenge = ready;
+    _keyboardResponses.remove(pending);
+    _keyboardResponses[ready] = null;
+    _keyboardDialogTicket.value = ready;
+    _showKeyboardDialog();
+  }
+
+  void _showKeyboardDialog() {
+    if (_keyboardRoute != null) return;
+    late final DialogRoute<void> route;
+    void cancel() {
+      if (mounted &&
+          identical(_keyboardRoute, route) &&
+          route.isCurrent &&
+          !_closing &&
+          !_leaving) {
+        unawaited(_leave());
+      }
+    }
+
+    route = DialogRoute<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => _KeyboardDialog(
+        ticket: _keyboardDialogTicket,
+        target: '${_username.text}@${_host.text}:${_port.text}',
+        onSubmit: _submitKeyboard,
+        onCancel: cancel,
+        onExpired: (ticket) {
+          if (identical(_challenge, ticket)) {
+            _invalidate('服务器问题已过期，请重新连接。');
+          }
+        },
+        onCovered: () {
+          if (mounted && identical(_keyboardRoute, route)) {
+            _invalidate('服务器问题已中断，请重新连接。');
+          }
+        },
+      ),
+    );
+    setState(() => _keyboardRoute = route);
+    unawaited(Navigator.of(context).push(route));
+  }
+
+  void _dismissKeyboardDialog() {
+    final route = _keyboardRoute;
+    _keyboardRoute = null;
+    if (!_disposing) _keyboardDialogTicket.value = null;
+    if (route == null) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (route.isActive) route.navigator?.removeRoute(route);
+    });
   }
 
   void _clearPassphrase() {
@@ -454,95 +591,237 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
     _useSavedPassphrase = _savePassphrase = false;
   }
 
-  Future<void> _manageIdentities({bool keysOnly = false}) async {
-    if (!_ready ||
-        _busy ||
-        !_exposed ||
-        _leaving ||
-        _closing ||
-        _managing ||
-        !_streamHealthy ||
-        (_saveCompletion != null && !_saveCompletion!.isCompleted))
-      return;
-    final host = _host.text, port = _port.text, username = _username.text;
-    final previousConfig = _configHost;
+  bool get _canOpenSshLibrary =>
+      _ready &&
+      !_busy &&
+      _pendingConnect == null &&
+      _exposed &&
+      !_leaving &&
+      !_closing &&
+      !_managing &&
+      _streamHealthy &&
+      (_saveCompletion == null || _saveCompletion!.isCompleted);
+
+  Future<SshLibrarySelection?> _openSshLibrary({
+    bool keysOnly = false,
+    bool hostsOnly = false,
+  }) {
     final idle = _defaultsId;
     _defaultsId = null;
     _statusRevision++;
     _statusDebounce?.cancel();
     _password.clear();
     _clearPassphrase();
-    _managing = true;
+    if (hostsOnly) FocusManager.instance.primaryFocus?.unfocus();
     setState(() {
+      _managing = true;
       _ready = false;
       _statusLoading = false;
     });
     unawaited(_cancelId(idle));
-    SshLibrarySelection? selection;
-    try {
-      selection = await showSshLibrary(
-        context,
-        api: widget.api,
-        keysOnly: keysOnly,
-      );
-    } catch (error) {
-      if (mounted) setState(() => _error = sshMaterialError(error));
-    } finally {
-      _managing = false;
+    return showSshLibrary(
+      context,
+      api: widget.api,
+      keysOnly: keysOnly,
+      hostsOnly: hostsOnly,
+      selectedHost: keysOnly ? _configHost : null,
+    );
+  }
+
+  Future<({SshConfigHost? config, SshIdentity? identity})?>
+  _revalidateLibrarySelection(
+    SshConfigHost? oldConfig,
+    SshIdentity? oldIdentity,
+    int revision,
+  ) async {
+    if (oldConfig == null && oldIdentity == null) {
+      return (config: null, identity: null);
     }
-    if (!mounted || !_foreground || _leaving || _established || !_streamHealthy)
-      return;
-    await _loadDefaults(applyReconnect: false);
-    if (!mounted || !_ready || !_exposed || _leaving) return;
-    if (keysOnly && selection != null && previousConfig != null) {
-      final readId = widget.api.newRequestId();
-      _reconnectReadId = readId;
-      try {
-        final library = await widget.api.library(readId);
-        if (!mounted || !_ready || !_exposed || _leaving || _closing) return;
-        final matching = library.hosts.where(
-          (value) => value.alias == previousConfig.alias,
+    final readId = widget.api.newRequestId();
+    _reconnectReadId = readId;
+    try {
+      final library = await widget.api.library(readId);
+      if (!mounted ||
+          revision != _revision ||
+          !_ready ||
+          !_exposed ||
+          _leaving ||
+          _closing) {
+        return null;
+      }
+      SshConfigHost? config;
+      SshIdentity? identity;
+      if (oldConfig != null) {
+        final matches = library.hosts.where(
+          (host) => host.alias == oldConfig.alias,
         );
-        final current = matching.isEmpty ? null : matching.single;
-        if (current == null ||
-            current.error != null ||
-            current.host != previousConfig.host ||
-            current.port != previousConfig.port ||
-            current.username != previousConfig.username ||
-            !current.keyIds.contains(selection.key?.id)) {
-          _invalidate('配置目标或私钥已变化，请在“私钥与配置”中重新选择。');
+        config = matches.isEmpty ? null : matches.single;
+        if (config == null ||
+            config.error != null ||
+            config.missingIdentityPaths.isNotEmpty ||
+            config.binding != oldConfig.binding ||
+            config.host != oldConfig.host ||
+            config.port != oldConfig.port ||
+            config.username != oldConfig.username) {
+          throw const FormatException('配置主机已变化');
+        }
+      }
+      if (oldIdentity != null) {
+        final matches = library.keys.where((key) => key.id == oldIdentity.id);
+        identity = matches.isEmpty ? null : matches.single;
+        if (identity == null ||
+            identity.path != oldIdentity.path ||
+            identity.algorithm != oldIdentity.algorithm ||
+            identity.fingerprint != oldIdentity.fingerprint ||
+            identity.encrypted != oldIdentity.encrypted ||
+            (config != null && !config.keyIds.contains(identity.id))) {
+          throw const FormatException('私钥已变化');
+        }
+      }
+      return (config: config, identity: identity);
+    } finally {
+      if (_reconnectReadId == readId) _reconnectReadId = null;
+      unawaited(_cancelId(readId));
+    }
+  }
+
+  Future<void> _selectConfigHost() => _manageIdentities(hostsOnly: true);
+
+  Future<void> _manageIdentities({
+    bool keysOnly = false,
+    bool hostsOnly = false,
+  }) async {
+    if (!_canOpenSshLibrary) return;
+    final previous = (
+      host: _host.text,
+      port: _port.text,
+      username: _username.text,
+      config: _configHost,
+      identity: _identity,
+      identityMode: _identityMode,
+      keyboardMode: _keyboardMode,
+      continuation: _continueKeyboardInteractive,
+    );
+    final revision = _revision;
+    try {
+      final selection = await _openSshLibrary(
+        keysOnly: keysOnly,
+        hostsOnly: hostsOnly,
+      );
+      if (!mounted ||
+          !_foreground ||
+          _leaving ||
+          _closing ||
+          _established ||
+          !_streamHealthy ||
+          revision != _revision) {
+        return;
+      }
+      await _loadDefaults(applyReconnect: false);
+      if (!mounted || !_ready || !_exposed || _leaving || _closing) return;
+      final loadedRevision = _revision;
+      if (selection?.kind == SshLibrarySelectionKind.host) {
+        final host = selection!.host;
+        if (host == null) throw const FormatException('配置主机选择无效');
+        final keepIdentity =
+            previous.identityMode &&
+            previous.identity != null &&
+            host.keyIds.contains(previous.identity!.id);
+        final refreshed = await _revalidateLibrarySelection(
+          host,
+          keepIdentity ? previous.identity : null,
+          loadedRevision,
+        );
+        if (refreshed == null || refreshed.config == null) return;
+        final current = refreshed.config!;
+        _host.text = current.host;
+        _port.text = current.port.toString();
+        _username.text =
+            current.username.isEmpty && previous.config?.alias == current.alias
+            ? previous.username
+            : current.username;
+        setState(() {
+          _keyboardMode = previous.keyboardMode;
+          _identityMode = previous.identityMode;
+          _continueKeyboardInteractive = previous.continuation;
+          _identity = refreshed.identity;
+          _configHost = current;
+          _savedPassword = _useSavedPassword = _savePassword = false;
+          if (previous.identityMode &&
+              previous.identity != null &&
+              !keepIdentity) {
+            _error = '请为此配置主机重新选择私钥。';
+          }
+        });
+        if (_requiresInitialKeyboardSession) _startKeyboardSession();
+        if (!_identityMode && !_keyboardMode && _validTuple) {
+          await _loadPasswordStatus();
+        }
+        return;
+      }
+
+      if (selection?.kind == SshLibrarySelectionKind.key) {
+        final key = selection!.key;
+        if (key == null) throw const FormatException('私钥选择无效');
+        final refreshed = await _revalidateLibrarySelection(
+          previous.config,
+          key,
+          loadedRevision,
+        );
+        if (refreshed == null || refreshed.identity == null) return;
+        if (!mounted || loadedRevision != _revision || !_exposed || _closing) {
           return;
         }
-        selection = SshLibrarySelection(key: selection.key, host: current);
-      } catch (error) {
-        if (mounted) _invalidate(sshMaterialError(error));
+        _host.text = previous.host;
+        _port.text = previous.port;
+        _username.text = previous.username;
+        setState(() {
+          _configHost = refreshed.config;
+          _identity = refreshed.identity;
+          _identityMode = true;
+          _keyboardMode = false;
+          _continueKeyboardInteractive = previous.identityMode
+              ? previous.continuation
+              : false;
+          _savedPassword = _useSavedPassword = _savePassword = false;
+        });
+        if (_requiresInitialKeyboardSession) _startKeyboardSession();
         return;
-      } finally {
-        if (_reconnectReadId == readId) _reconnectReadId = null;
-        unawaited(_cancelId(readId));
       }
-    }
-    _host.text = selection?.host?.host ?? host;
-    _port.text = selection?.host?.port.toString() ?? port;
-    _username.text =
-        keysOnly &&
-            previousConfig != null &&
-            selection?.host?.username.isEmpty == true
-        ? username
-        : selection?.host?.username ?? username;
-    final chosen = selection;
-    if (chosen != null) {
+
+      final refreshed = await _revalidateLibrarySelection(
+        previous.config,
+        previous.identity,
+        loadedRevision,
+      );
+      if (refreshed == null) return;
+      if (!mounted || loadedRevision != _revision || !_exposed || _closing)
+        return;
+      _host.text = previous.host;
+      _port.text = previous.port;
+      _username.text = previous.username;
       setState(() {
-        _keyboardMode = chosen.keyboardInteractive;
-        _identityMode = !_keyboardMode && !chosen.password;
-        _identity = chosen.key;
-        _configHost = chosen.host;
+        _configHost = refreshed.config;
+        _identity = refreshed.identity;
+        _identityMode = previous.identityMode;
+        _keyboardMode = previous.keyboardMode;
+        _continueKeyboardInteractive = previous.continuation;
         _savedPassword = _useSavedPassword = _savePassword = false;
       });
-      if (_keyboardMode) _startKeyboardSession();
-      if (chosen.password && _validTuple) await _loadPasswordStatus();
-    } else if (_validTuple) {
-      await _loadPasswordStatus();
+      if (_requiresInitialKeyboardSession) _startKeyboardSession();
+      if (!_identityMode && !_keyboardMode && _validTuple)
+        await _loadPasswordStatus();
+    } catch (error) {
+      if (mounted && !_leaving && !_closing) {
+        _requireFreshSelection = true;
+        _invalidate(
+          error is FormatException
+              ? '配置主机或私钥已变化，请重新选择。'
+              : sshMaterialError(error),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _managing = false);
     }
   }
 
@@ -580,21 +859,6 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
       : _identityMode
       ? _AuthenticationMode.privateKey
       : _AuthenticationMode.password;
-
-  void _continuationChanged(bool? value) {
-    if (!_ready ||
-        !_exposed ||
-        _busy ||
-        _statusLoading ||
-        _closing ||
-        _leaving ||
-        _established ||
-        _keyboardMode)
-      return;
-    _stopKeyboardSession();
-    setState(() => _continueKeyboardInteractive = value == true);
-    if (_keyboardCapable) _startKeyboardSession();
-  }
 
   Future<void> _chooseAuthentication() async {
     if (!_ready ||
@@ -897,6 +1161,7 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
       configAlias: config?.alias,
       continueKeyboardInteractive:
           !_keyboardMode && _continueKeyboardInteractive,
+      autoKeyboardInteractive: !_keyboardMode && !_continueKeyboardInteractive,
     );
   }
 
@@ -1027,13 +1292,14 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
   Future<void> _connect() async {
     if (!_ready ||
         _busy ||
+        _pendingConnect != null ||
         _managing ||
         _statusLoading ||
         !_exposed ||
         _leaving ||
         _closing ||
         (_saveCompletion != null && !_saveCompletion!.isCompleted) ||
-        (_keyboardCapable && !_keyboardSessionReady) ||
+        (_requiresInitialKeyboardSession && !_keyboardSessionReady) ||
         !_streamHealthy)
       return;
     if (widget.canConnect?.call() == false) {
@@ -1054,9 +1320,14 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
         null; // The host retires the idle guard before this request writes.
     _attemptId = requestId;
     _hostChangedAttemptId = null;
-    final keyboard = _keyboardCapable;
+    _pendingConnectId = requestId;
+    _pendingConnect = null;
+    _changedTrustChallenge = _changedTrustDecisionSent = false;
+    _changedTrustDecision = null;
     _lastKeyboardRound = 0;
     _challenge = null;
+    _retireKeyboardResponses();
+    _keyboardRetired = Completer<void>();
     final saving = _savePassword || _identityMode;
     final completion = saving ? Completer<void>() : null;
     if (saving) {
@@ -1069,6 +1340,7 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
       _error = null;
       _state = SshAttemptState.connecting;
     });
+    var cancelledForChallenge = false;
     try {
       final configHost = _configHost;
       final connected = _keyboardMode
@@ -1101,6 +1373,7 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
                     useSavedPassphrase: _useSavedPassphrase,
                     savePassphrase: _savePassphrase,
                     continueKeyboardInteractive: _continueKeyboardInteractive,
+                    autoKeyboardInteractive: !_continueKeyboardInteractive,
                     columns: widget.columns,
                     rows: widget.rows,
                   )
@@ -1113,6 +1386,7 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
                     useSavedPassphrase: _useSavedPassphrase,
                     savePassphrase: _savePassphrase,
                     continueKeyboardInteractive: _continueKeyboardInteractive,
+                    autoKeyboardInteractive: !_continueKeyboardInteractive,
                     username: configHost.username.isEmpty ? _username.text : '',
                     columns: widget.columns,
                     rows: widget.rows,
@@ -1127,6 +1401,7 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
               useSavedPassword: _useSavedPassword,
               savePassword: _savePassword,
               continueKeyboardInteractive: _continueKeyboardInteractive,
+              autoKeyboardInteractive: !_continueKeyboardInteractive,
               columns: widget.columns,
               rows: widget.rows,
             )
@@ -1139,45 +1414,78 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
               useSavedPassword: _useSavedPassword,
               savePassword: _savePassword,
               continueKeyboardInteractive: _continueKeyboardInteractive,
+              autoKeyboardInteractive: !_continueKeyboardInteractive,
               columns: widget.columns,
               rows: widget.rows,
             );
       _password.clear();
       _clearPassphrase();
-      if (keyboard) _lifetime.retain(requestId, connected);
+      _pendingConnect = connected;
+      // Every connection may perform a host-trust write before its first event
+      // reaches Flutter, so protection must outlive its terminal result.
+      _lifetime.retain(requestId, connected);
       await connected;
+      if (!await _settleKeyboardResponses(requestId)) {
+        if (!_lifetime.handlesCancellation(requestId)) {
+          await _cancelId(requestId, repeat: true);
+          cancelledForChallenge = true;
+        }
+        throw PlatformException(code: 'SSH_KEYBOARD_CHALLENGE');
+      }
+      if (_changedTrustChallenge) {
+        final decision = _changedTrustDecision;
+        if (decision == null || !await decision.future) {
+          if (!_lifetime.handlesCancellation(requestId))
+            await _cancelId(requestId, repeat: true);
+          throw PlatformException(code: 'SSH_HOST_KEY_REVIEW');
+        }
+      }
       if (_hostChangedAttemptId == requestId) {
-        await _cancelId(requestId, repeat: true);
+        if (!_lifetime.handlesCancellation(requestId))
+          await _cancelId(requestId, repeat: true);
         throw PlatformException(code: 'SSH_HOSTKEY_CHANGED');
       }
       if (saving) {
         _saveReceipt = _identityMode ? '本次私钥连接已完成。' : '密码已保存到秘密库。';
       }
-      if (keyboard &&
-          (!mounted || _closing || _leaving || revision != _revision)) {
-        await _cancelId(requestId, repeat: true);
+      if (!mounted || _closing || _leaving || revision != _revision) {
+        if (!_lifetime.handlesCancellation(requestId))
+          await _cancelId(requestId, repeat: true);
         return;
       }
       if (saving) {
         if (_closing) {
           // Success may have handed the session off before the first cancel arrived.
-          await _cancelId(requestId, repeat: true);
+          if (!_lifetime.handlesCancellation(requestId))
+            await _cancelId(requestId, repeat: true);
           return;
         }
       }
       if (!mounted || revision != _revision || _attemptId != requestId) return;
       _finishConnected();
     } catch (error) {
-      if (keyboard) unawaited(_cancelId(requestId, repeat: true));
-      if (saving &&
+      if (!cancelledForChallenge && !_lifetime.handlesCancellation(requestId))
+        unawaited(_cancelId(requestId, repeat: true));
+      if (!_requiresInitialKeyboardSession) _stopKeyboardSession();
+      if ((saving || _changedTrustChallenge) &&
           error is PlatformException &&
           error.code == 'VAULT_COMMIT_UNCERTAIN') {
         _saveReceipt = _connectionError(error);
+        if (_changedTrustChallenge &&
+            mounted &&
+            !_closing &&
+            !_leaving &&
+            !_established &&
+            revision != _revision) {
+          _invalidate(_saveReceipt!);
+        }
       }
       if (!mounted || revision != _revision || _established || _leaving) return;
       final hostChanged =
-          _isHostKeyConflict(error) ||
-          (_hostChangedAttemptId == requestId && !sshRequiresReopen(error));
+          !_changedTrustChallenge &&
+          (_isHostKeyConflict(error) ||
+              (_hostChangedAttemptId == requestId &&
+                  !sshRequiresReopen(error)));
       _hostChangedAttemptId = null;
       _password.clear();
       _clearPassphrase();
@@ -1195,6 +1503,11 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
         _revealMessage();
       }
     } finally {
+      if (_pendingConnectId == requestId) {
+        _pendingConnect = null;
+        _pendingConnectId = null;
+        if (mounted) setState(() {});
+      }
       completion?.complete();
     }
   }
@@ -1220,13 +1533,18 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
     }
     if (event is SshStateEvent) {
       if (event.state == SshAttemptState.connected) {
-        if (_hostChangedAttemptId == event.requestId) {
+        if (_changedTrustChallenge && !_changedTrustDecisionSent) {
           unawaited(_cancelId(event.requestId, repeat: true));
-        } else if (!_keyboardCapable) {
+          _invalidate('主机密钥确认未完成，请重新连接。');
+        } else if (_hostChangedAttemptId == event.requestId) {
+          unawaited(_cancelId(event.requestId, repeat: true));
+        } else if (!_keyboardCapable && !_changedTrustChallenge) {
           _finishConnected();
         }
       } else if (event.state == SshAttemptState.failed ||
           event.state == SshAttemptState.cancelled) {
+        _clearPendingKeyboardChallenge();
+        if (!_requiresInitialKeyboardSession) _stopKeyboardSession();
         final error = PlatformException(
           code:
               event.reason ??
@@ -1234,7 +1552,7 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
                   ? 'SSH_CANCELLED'
                   : 'SSH_FAILED'),
         );
-        if (_isHostKeyConflict(error)) {
+        if (_isHostKeyConflict(error) && !_changedTrustChallenge) {
           _hostChangedAttemptId = event.requestId;
           _password.clear();
           _clearPassphrase();
@@ -1243,10 +1561,24 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
           setState(() => _state = SshAttemptState.failed);
           return;
         }
+        if (_changedTrustChallenge && _pendingConnect != null) {
+          _password.clear();
+          _clearPassphrase();
+          _dismissReview();
+          _challenge = null;
+          setState(() {
+            _state = event.state;
+            _error = _connectionError(error);
+            if (sshRequiresReopen(error)) _ready = false;
+          });
+          _revealMessage();
+          return;
+        }
         _revision++;
         _password.clear();
         _clearPassphrase();
         _dismissReview();
+        _dismissKeyboardDialog();
         _challenge = null;
         _attemptId = null;
         setState(() {
@@ -1259,45 +1591,115 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
         setState(() => _state = event.state);
       }
     } else if (event is SshKeyboardChallenge) {
-      if (!_keyboardCapable ||
-          !_keyboardSessionReady ||
-          _review != null ||
-          event.remainingMillis <= 0 ||
-          event.round <= _lastKeyboardRound) {
+      if (!_keyboardCapable || _review != null || event.remainingMillis <= 0) {
+        _invalidate('服务器问题已失效，请重新连接。');
+        return;
+      }
+      if (event.round <= _lastKeyboardRound) {
         if (_challenge?.ticketId == event.ticketId &&
-            _challenge?.binding == event.binding &&
-            _challenge?.round == event.round)
+                _challenge?.binding == event.binding &&
+                _challenge?.round == event.round ||
+            _pendingKeyboardChallenge?.ticketId == event.ticketId &&
+                _pendingKeyboardChallenge?.binding == event.binding &&
+                _pendingKeyboardChallenge?.round == event.round)
           return;
         _invalidate('服务器问题已失效，请重新连接。');
         return;
       }
-      if (_challenge != null) {
+      if (_challenge != null || _pendingKeyboardChallenge != null) {
         _invalidate('服务器问题顺序无效，请重新连接。');
         return;
       }
-      setState(() {
-        _challenge = event;
-        _lastKeyboardRound = event.round;
-      });
-      _revealMessage();
+      _lastKeyboardRound = event.round;
+      _pendingKeyboardChallenge = event;
+      _keyboardResponses[event] = null;
+      _pendingKeyboardAge = Stopwatch()..start();
+      _pendingKeyboardExpiry = Timer(
+        Duration(milliseconds: event.remainingMillis),
+        () {
+          if (mounted && identical(_pendingKeyboardChallenge, event)) {
+            _invalidate('服务器问题已过期，请重新连接。');
+          }
+        },
+      );
+      if (!_keyboardSessionReady) _startKeyboardSession();
+      _presentPendingKeyboardChallenge();
+      if (_pendingKeyboardChallenge != null) setState(() {});
     } else if (event is SshKeyboardChallengeDismissed) {
       if (event.ticketId == _challenge?.ticketId) {
-        setState(() => _challenge = null);
+        _challenge = null;
+        _keyboardDialogTicket.value = null;
+      } else if (event.ticketId == _pendingKeyboardChallenge?.ticketId) {
+        _clearPendingKeyboardChallenge();
+        setState(() {});
       }
-    } else if (event is SshHostKeyEvent) {
+    } else if (event is SshHostReviewEvent) {
+      if (_challenge != null || _pendingKeyboardChallenge != null) {
+        _streamFailed();
+        return;
+      }
       final current = _review;
       if (current != null) {
-        if (current.ticketId != event.ticketId ||
-            current.binding != event.binding) {
+        if (current.runtimeType != event.runtimeType ||
+            current.ticketId != event.ticketId ||
+            current.binding != event.binding ||
+            current is SshHostKeyChangedEvent &&
+                event is SshHostKeyChangedEvent &&
+                !_sameChangedReview(current, event)) {
           _streamFailed();
         }
         return;
       }
+      if (event is SshHostKeyChangedEvent &&
+          (event.host != _host.text ||
+              event.port != int.tryParse(_port.text))) {
+        _invalidate('主机信息已变化，请重新连接。');
+        return;
+      }
+      if (event is SshHostKeyChangedEvent) {
+        final pending = _pendingConnect;
+        if (!_busy || _pendingConnectId != event.requestId || pending == null) {
+          _invalidate('主机密钥确认已失效，请重新连接。');
+          return;
+        }
+        _changedTrustChallenge = true;
+        _changedTrustDecision = Completer<bool>();
+      }
       unawaited(_showReview(event));
     } else if (event is SshHostKeyDismissed &&
+        _review is SshHostKeyEvent &&
         event.ticketId == _review?.ticketId) {
       _dismissReview();
+    } else if (event is SshHostKeyChangedDismissed &&
+        _review is SshHostKeyChangedEvent &&
+        event.ticketId == _review?.ticketId) {
+      if (event.binding != _review?.binding) {
+        _streamFailed();
+      } else {
+        _dismissReview();
+      }
     }
+  }
+
+  bool _sameChangedReview(
+    SshHostKeyChangedEvent first,
+    SshHostKeyChangedEvent second,
+  ) {
+    if (first.host != second.host ||
+        first.port != second.port ||
+        first.source != second.source ||
+        first.keyType != second.keyType ||
+        first.fingerprint != second.fingerprint ||
+        first.oldKeys.length != second.oldKeys.length) {
+      return false;
+    }
+    for (var i = 0; i < first.oldKeys.length; i++) {
+      if (first.oldKeys[i].keyType != second.oldKeys[i].keyType ||
+          first.oldKeys[i].fingerprint != second.oldKeys[i].fingerprint) {
+        return false;
+      }
+    }
+    return true;
   }
 
   Future<bool> _submitKeyboard(
@@ -1315,25 +1717,62 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
         ticket.requestId != _attemptId) {
       return Future.value(false);
     }
-    return widget.api
+    final response = widget.api
         .keyboardResponse(ticket, answers)
         .then(
           (accepted) {
-            if (!accepted && mounted && identical(_challenge, ticket)) {
+            if (!accepted &&
+                mounted &&
+                ticket.requestId == _attemptId &&
+                _keyboardResponses.containsKey(ticket)) {
               _invalidate('服务器问题已失效，请重新连接。');
             }
             return accepted;
           },
           onError: (Object error) {
-            if (mounted && identical(_challenge, ticket)) {
+            if (mounted &&
+                ticket.requestId == _attemptId &&
+                _keyboardResponses.containsKey(ticket)) {
               _invalidate(_connectionError(error));
             }
             return false;
           },
         );
+    _keyboardResponses[ticket] = response;
+    return response;
   }
 
-  Future<void> _showReview(SshHostKeyEvent ticket) async {
+  Future<bool> _settleKeyboardResponses(String requestId) async {
+    while (true) {
+      if (_pendingKeyboardChallenge != null ||
+          _keyboardResponses.values.any((response) => response == null)) {
+        return false;
+      }
+      final responses = _keyboardResponses.values
+          .whereType<Future<bool>>()
+          .toList();
+      if (responses.isEmpty) return true;
+      final retired = _keyboardRetired;
+      if (retired == null) return false;
+      final accepted = await Future.any([
+        Future.wait(
+          responses,
+        ).then((results) => results.every((result) => result)),
+        retired.future.then((_) => false),
+      ]);
+      if (!accepted ||
+          requestId != _attemptId ||
+          !_exposed ||
+          _closing ||
+          _leaving) {
+        return false;
+      }
+      if (_pendingKeyboardChallenge != null) return false;
+      if (_keyboardResponses.length == responses.length) return true;
+    }
+  }
+
+  Future<void> _showReview(SshHostReviewEvent ticket) async {
     if (!_exposed ||
         ticket.requestId != _attemptId ||
         ticket.remainingMillis <= 0) {
@@ -1344,13 +1783,35 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
     final navigator = Navigator.of(context);
     _review = ticket;
     setState(() => _state = SshAttemptState.reviewing);
-    final route = DialogRoute<bool>(
+    var explicitChangedDecision = false;
+    late final DialogRoute<bool> route;
+    route = DialogRoute<bool>(
       context: context,
       barrierDismissible: false,
-      builder: (_) => _HostKeyDialog(
-        ticket: ticket,
-        onCovered: () => _invalidate('主机密钥确认已中断，请重试。'),
-      ),
+      builder: (_) => switch (ticket) {
+        SshHostKeyEvent() => _HostKeyDialog(
+          ticket: ticket,
+          onCovered: () => _invalidate('主机密钥确认已中断，请重试。'),
+        ),
+        SshHostKeyChangedEvent() => _ChangedHostKeyDialog(
+          ticket: ticket,
+          onCovered: () => _invalidate('主机密钥确认已中断，请重试。'),
+          onDecision: (accept) {
+            if (!mounted ||
+                !_foreground ||
+                _closing ||
+                _leaving ||
+                !identical(_review, ticket) ||
+                !identical(_reviewRoute, route) ||
+                !route.isCurrent ||
+                ticket.requestId != _attemptId) {
+              return;
+            }
+            explicitChangedDecision = true;
+            route.navigator?.pop(accept);
+          },
+        ),
+      },
     );
     _reviewRoute = route;
     final accepted = await Future.any([navigator.push(route), route.completed]);
@@ -1364,12 +1825,23 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
       return;
     }
     try {
-      final applied = await widget.api.decide(
-        ticket,
-        accept:
-            accepted == true &&
-            elapsed.elapsedMilliseconds < ticket.remainingMillis,
-      );
+      final allow =
+          accepted == true &&
+          (ticket is! SshHostKeyChangedEvent || explicitChangedDecision) &&
+          elapsed.elapsedMilliseconds < ticket.remainingMillis;
+      final decision = ticket is SshHostKeyChangedEvent
+          ? _changedTrustDecision
+          : null;
+      if (ticket is SshHostKeyChangedEvent) _changedTrustDecisionSent = allow;
+      bool applied;
+      try {
+        applied = await widget.api.decide(ticket, accept: allow);
+        if (decision != null && !decision.isCompleted)
+          decision.complete(allow && applied);
+      } catch (_) {
+        if (decision != null && !decision.isCompleted) decision.complete(false);
+        rethrow;
+      }
       if (!mounted || !identical(_review, ticket) || _leaving || _established)
         return;
       if (!applied) {
@@ -1386,12 +1858,24 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
 
   void _dismissReview() {
     final route = _reviewRoute;
+    final decision = _changedTrustDecision;
+    if (_changedTrustChallenge &&
+        !_changedTrustDecisionSent &&
+        decision != null &&
+        !decision.isCompleted) {
+      decision.complete(false);
+    }
     _review = null;
     _reviewRoute = null;
     if (route == null) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (route.isActive) route.navigator?.removeRoute(route);
     });
+  }
+
+  void _retireChangedTrustDecision() {
+    final decision = _changedTrustDecision;
+    if (decision != null && !decision.isCompleted) decision.complete(false);
   }
 
   void _finishConnected() {
@@ -1423,6 +1907,7 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
 
   void _invalidate(String message) {
     if (!mounted || _leaving || _established) return;
+    _retireChangedTrustDecision();
     final attempt = _attemptId;
     final defaults = _defaultsId;
     _revision++;
@@ -1456,22 +1941,32 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
 
   Future<void> _leave() async {
     if (_leaving || _established || _closing) return;
+    _retireChangedTrustDecision();
+    _clearPendingKeyboardChallenge();
+    _retireKeyboardResponses();
     setState(() {
       _closing = true;
       _challenge = null;
     });
     _password.clear();
     _clearPassphrase();
+    final hadKeyboardDialog = _keyboardRoute != null;
+    _dismissKeyboardDialog();
     _dismissReview();
     _dismissAuthentication();
     _dismissHostConflict();
     await _cancelId(_reconnectReadId);
     _reconnectReadId = null;
-    await _cancelId(_attemptId);
+    if (!_lifetime.owns(_attemptId)) await _cancelId(_attemptId);
     await _lifetime.finish();
     final saveCompletion = _saveCompletion;
     if (saveCompletion != null) {
-      if (!saveCompletion.isCompleted) await _cancelId(_saveRequestId);
+      final saveId = _saveRequestId;
+      if (!saveCompletion.isCompleted &&
+          saveId != null &&
+          !_lifetime.handlesCancellation(saveId)) {
+        await _cancelId(saveId);
+      }
       await saveCompletion.future;
       if (!mounted) return;
     }
@@ -1529,15 +2024,26 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
     _clearPassphrase();
     _dismissReview();
     _dismissForget();
-    await Future.wait([_cancelId(_attemptId), _cancelId(_defaultsId)]);
-    if (mounted && _route?.isCurrent != false) Navigator.of(context).pop();
+    await Future.wait([
+      if (!_lifetime.owns(_attemptId)) _cancelId(_attemptId),
+      _cancelId(_defaultsId),
+    ]);
+    if (mounted && _route?.isCurrent != false) {
+      Navigator.of(context).pop();
+    } else if (hadKeyboardDialog) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _route?.isCurrent != false) Navigator.of(context).pop();
+      });
+    }
   }
 
   @override
   void dispose() {
+    _disposing = true;
     _statusDebounce?.cancel();
+    _retireChangedTrustDecision();
     if (!_established) {
-      unawaited(_cancelId(_attemptId));
+      if (!_lifetime.owns(_attemptId)) unawaited(_cancelId(_attemptId));
       unawaited(_cancelId(_defaultsId));
       unawaited(_lifetime.finish());
     }
@@ -1549,6 +2055,7 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
     _dismissForget();
     _dismissAuthentication();
     _dismissHostConflict();
+    _keyboardDialogTicket.dispose();
     _host.dispose();
     _port.dispose();
     _username.dispose();
@@ -1790,7 +2297,7 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
   ];
 
   List<Widget> _connectionOptions() => [
-    if (!_keyboardMode) ...[
+    if (!_keyboardMode && (!_identityMode || _identity?.encrypted == true)) ...[
       const SizedBox(height: 24),
       _sectionHeading('本次连接'),
       if (_identityMode && _identity?.encrypted == true)
@@ -1827,22 +2334,10 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
                 : (value) => setState(() => _savePassword = value == true),
           ),
         ),
-      _credentialOption(
-        CheckboxListTile(
-          key: const Key('ssh-continue-keyboard-interactive'),
-          contentPadding: const EdgeInsets.symmetric(
-            horizontal: 12,
-            vertical: 4,
-          ),
-          controlAffinity: ListTileControlAffinity.leading,
-          title: const Text('按服务器要求继续交互式认证'),
-          subtitle: const Text('密码或私钥通过后，如服务器仍需认证，再回答服务器问题。'),
-          value: _continueKeyboardInteractive,
-          onChanged: _busy || _statusLoading ? null : _continuationChanged,
-        ),
-      ),
     ],
-    if (_keyboardCapable && !_keyboardSessionReady) ...[
+    if ((_requiresInitialKeyboardSession ||
+            _pendingKeyboardChallenge != null) &&
+        !_keyboardSessionReady) ...[
       const SizedBox(height: 12),
       const Text('正在确认秘密库状态…'),
     ],
@@ -1937,22 +2432,7 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
                 Semantics(liveRegion: true, child: Text(_error!)),
                 const SizedBox(height: 16),
               ],
-              if (_challenge case final challenge?) ...[
-                SshKeyboardChallengeForm(
-                  key: ValueKey('ssh-keyboard-${challenge.ticketId}'),
-                  ticket: challenge,
-                  target: '${_username.text}@${_host.text}:${_port.text}',
-                  onSubmit: (answers) => _submitKeyboard(challenge, answers),
-                  onCancel: () => unawaited(_leave()),
-                  onExpired: () {
-                    if (identical(_challenge, challenge)) {
-                      _invalidate('服务器问题已过期，请重新连接。');
-                    }
-                  },
-                ),
-                const SizedBox(height: 16),
-              ],
-              if (_ready && _challenge == null)
+              if (_ready && _keyboardRoute == null)
                 AbsorbPointer(
                   absorbing: _managing,
                   child: Form(
@@ -1960,28 +2440,61 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        _sectionHeading('连接目标'),
-                        if (_configHost != null) ...[
-                          InputDecorator(
-                            decoration: const InputDecoration(
-                              labelText: '配置主机',
+                        Wrap(
+                          alignment: WrapAlignment.spaceBetween,
+                          crossAxisAlignment: WrapCrossAlignment.center,
+                          spacing: 12,
+                          children: [
+                            Text(
+                              '连接目标',
+                              style: Theme.of(context).textTheme.titleMedium,
                             ),
-                            child: Text(_configHost!.alias),
-                          ),
-                          Align(
-                            alignment: AlignmentDirectional.centerStart,
-                            child: TextButton(
-                              key: const Key('ssh-config-manual'),
-                              onPressed: _busy
+                            TextButton.icon(
+                              key: const Key('ssh-select-config-host'),
+                              onPressed: _busy || _statusLoading || _managing
                                   ? null
-                                  : () => setState(() {
-                                      _configHost = null;
-                                      _clearPassphrase();
-                                    }),
-                              child: const Text('切换到手动连接'),
+                                  : () => unawaited(_selectConfigHost()),
+                              icon: const Icon(Icons.dns_outlined),
+                              label: Text(
+                                _configHost == null ? '选择配置主机' : '更换配置主机',
+                              ),
                             ),
+                          ],
+                        ),
+                        const SizedBox(height: 4),
+                        if (_configHost != null) ...[
+                          Wrap(
+                            crossAxisAlignment: WrapCrossAlignment.center,
+                            spacing: 12,
+                            children: [
+                              Text(
+                                '配置：${_configHost!.alias}',
+                                key: const Key('ssh-config-summary'),
+                                style: Theme.of(context).textTheme.bodyMedium,
+                              ),
+                              TextButton(
+                                key: const Key('ssh-config-manual'),
+                                onPressed: _busy
+                                    ? null
+                                    : () {
+                                        _password.clear();
+                                        _clearPassphrase();
+                                        setState(() {
+                                          _configHost = null;
+                                          _savedPassword = _useSavedPassword =
+                                              _savePassword = false;
+                                        });
+                                        if (!_identityMode &&
+                                            !_keyboardMode &&
+                                            _validTuple) {
+                                          unawaited(_loadPasswordStatus());
+                                        }
+                                      },
+                                child: const Text('切换到手动连接'),
+                              ),
+                            ],
                           ),
-                          const SizedBox(height: 12),
+                          const SizedBox(height: 4),
                         ],
                         _targetFields(),
                         const SizedBox(height: 24),
@@ -2005,8 +2518,10 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
                           key: const Key('ssh-connect'),
                           onPressed:
                               _busy ||
+                                  _pendingConnect != null ||
                                   _statusLoading ||
-                                  (_keyboardCapable && !_keyboardSessionReady)
+                                  (_requiresInitialKeyboardSession &&
+                                      !_keyboardSessionReady)
                               ? null
                               : () => unawaited(_connect()),
                           icon: const Icon(Icons.login),
@@ -2037,8 +2552,12 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
                 const SizedBox(height: 16),
                 OutlinedButton(
                   key: const Key('ssh-reload'),
-                  onPressed: _foreground
-                      ? () => unawaited(_loadDefaults())
+                  onPressed: _foreground && _pendingConnect == null
+                      ? () {
+                          final fresh = _requireFreshSelection;
+                          _requireFreshSelection = false;
+                          unawaited(_loadDefaults(applyReconnect: !fresh));
+                        }
                       : null,
                   child: const Text('重新读取连接信息'),
                 ),
@@ -2059,6 +2578,123 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
                 _connectionManagement(),
               ],
             ],
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
+class _KeyboardDialog extends StatefulWidget {
+  const _KeyboardDialog({
+    required this.ticket,
+    required this.target,
+    required this.onSubmit,
+    required this.onCancel,
+    required this.onExpired,
+    required this.onCovered,
+  });
+
+  final ValueListenable<SshKeyboardChallenge?> ticket;
+  final String target;
+  final Future<bool> Function(SshKeyboardChallenge, List<String>) onSubmit;
+  final VoidCallback onCancel, onCovered;
+  final ValueChanged<SshKeyboardChallenge> onExpired;
+
+  @override
+  State<_KeyboardDialog> createState() => _KeyboardDialogState();
+}
+
+class _KeyboardDialogState extends State<_KeyboardDialog> {
+  final _scroll = ScrollController();
+  bool _covered = false;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.ticket.addListener(_resetScrollForNewQuestion);
+  }
+
+  @override
+  void didUpdateWidget(covariant _KeyboardDialog oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.ticket != widget.ticket) {
+      oldWidget.ticket.removeListener(_resetScrollForNewQuestion);
+      widget.ticket.addListener(_resetScrollForNewQuestion);
+    }
+  }
+
+  void _resetScrollForNewQuestion() {
+    if (widget.ticket.value != null && _scroll.hasClients) _scroll.jumpTo(0);
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (!_covered && ModalRoute.of(context)?.isCurrent == false) {
+      _covered = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) widget.onCovered();
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.ticket.removeListener(_resetScrollForNewQuestion);
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => PopScope<void>(
+    canPop: false,
+    onPopInvokedWithResult: (didPop, _) {
+      if (!didPop && !_covered) widget.onCancel();
+    },
+    child: Dialog(
+      key: const Key('ssh-keyboard-dialog'),
+      backgroundColor: Colors.transparent,
+      elevation: 0,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 640),
+        child: Scrollbar(
+          controller: _scroll,
+          thumbVisibility: true,
+          child: SingleChildScrollView(
+            controller: _scroll,
+            child: ValueListenableBuilder<SshKeyboardChallenge?>(
+              valueListenable: widget.ticket,
+              builder: (context, ticket, _) => ticket == null
+                  ? Card(
+                      child: Padding(
+                        padding: const EdgeInsets.all(24),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            const Text('等待服务器继续认证…'),
+                            const SizedBox(height: 16),
+                            TextButton(
+                              key: const Key('ssh-keyboard-wait-cancel'),
+                              onPressed: _covered ? null : widget.onCancel,
+                              child: const Text('取消连接'),
+                            ),
+                          ],
+                        ),
+                      ),
+                    )
+                  : SshKeyboardChallengeForm(
+                      key: ValueKey('ssh-keyboard-${ticket.ticketId}'),
+                      ticket: ticket,
+                      target: widget.target,
+                      onSubmit: (answers) => _covered
+                          ? Future.value(false)
+                          : widget.onSubmit(ticket, answers),
+                      onCancel: widget.onCancel,
+                      onExpired: () => widget.onExpired(ticket),
+                    ),
+            ),
           ),
         ),
       ),
@@ -2201,4 +2837,271 @@ class _HostKeyDialogState extends State<_HostKeyDialog> {
       FilledButton(onPressed: () => _decide(true), child: const Text('信任并保存')),
     ],
   );
+}
+
+class _ChangedHostKeyDialog extends StatefulWidget {
+  const _ChangedHostKeyDialog({
+    required this.ticket,
+    required this.onCovered,
+    required this.onDecision,
+  });
+
+  final SshHostKeyChangedEvent ticket;
+  final VoidCallback onCovered;
+  final ValueChanged<bool> onDecision;
+
+  @override
+  State<_ChangedHostKeyDialog> createState() => _ChangedHostKeyDialogState();
+}
+
+class _ChangedHostKeyDialogState extends State<_ChangedHostKeyDialog> {
+  final _scroll = ScrollController();
+  final _viewportKey = GlobalKey();
+  final _lastFingerprintKey = GlobalKey();
+  Timer? _expiry;
+  bool _covered = false, _decided = false;
+  bool _fingerprintsReviewed = false, _reviewCheckScheduled = false;
+  bool _detailsExpanded = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _scroll.addListener(_scheduleReviewCheck);
+    _expiry = Timer(Duration(milliseconds: widget.ticket.remainingMillis), () {
+      if (mounted && !_decided) _decide(false);
+    });
+  }
+
+  void _scheduleReviewCheck() {
+    if (!mounted || _fingerprintsReviewed || _reviewCheckScheduled) return;
+    _reviewCheckScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _reviewCheckScheduled = false;
+      if (!mounted || _fingerprintsReviewed) return;
+      final viewport = _viewportKey.currentContext?.findRenderObject();
+      final last = _lastFingerprintKey.currentContext?.findRenderObject();
+      if (viewport is! RenderBox ||
+          last is! RenderBox ||
+          !viewport.hasSize ||
+          !last.hasSize) {
+        return;
+      }
+      final viewportBottom =
+          viewport.localToGlobal(Offset.zero).dy + viewport.size.height;
+      final lastBottom = last.localToGlobal(Offset.zero).dy + last.size.height;
+      if (lastBottom <= viewportBottom + 0.5) {
+        setState(() => _fingerprintsReviewed = true);
+      }
+    });
+  }
+
+  KeyEventResult _scrollByKeyboard(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
+      return KeyEventResult.ignored;
+    }
+    if (!_scroll.hasClients) return KeyEventResult.ignored;
+    final position = _scroll.position;
+    final key = event.logicalKey;
+    final double next;
+    if (key == LogicalKeyboardKey.end) {
+      next = position.maxScrollExtent;
+    } else if (key == LogicalKeyboardKey.home) {
+      next = position.minScrollExtent;
+    } else if (key == LogicalKeyboardKey.pageDown) {
+      next = position.pixels + position.viewportDimension * 0.8;
+    } else if (key == LogicalKeyboardKey.pageUp) {
+      next = position.pixels - position.viewportDimension * 0.8;
+    } else if (key == LogicalKeyboardKey.arrowDown) {
+      next = position.pixels + 48;
+    } else if (key == LogicalKeyboardKey.arrowUp) {
+      next = position.pixels - 48;
+    } else {
+      return KeyEventResult.ignored;
+    }
+    _scroll.jumpTo(
+      next.clamp(position.minScrollExtent, position.maxScrollExtent),
+    );
+    return KeyEventResult.handled;
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (!(ModalRoute.of(context)?.isCurrent ?? true) &&
+        !_decided &&
+        !_covered) {
+      _covered = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) widget.onCovered();
+      });
+    }
+  }
+
+  void _decide(bool accept) {
+    if (!mounted ||
+        _decided ||
+        _covered ||
+        (accept && !_fingerprintsReviewed) ||
+        !(ModalRoute.of(context)?.isCurrent ?? true)) {
+      return;
+    }
+    _decided = true;
+    _expiry?.cancel();
+    widget.onDecision(accept);
+  }
+
+  @override
+  void dispose() {
+    _expiry?.cancel();
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final ticket = widget.ticket;
+    final size = MediaQuery.sizeOf(context);
+    final compact = size.width < 480 || size.height < 480;
+    _scheduleReviewCheck();
+    return AlertDialog(
+      semanticLabel: '服务器指纹已变化',
+      insetPadding: compact
+          ? const EdgeInsets.symmetric(horizontal: 16, vertical: 8)
+          : null,
+      contentPadding: EdgeInsets.fromLTRB(
+        compact ? 16 : 24,
+        compact ? 12 : 24,
+        compact ? 16 : 24,
+        8,
+      ),
+      actionsPadding: EdgeInsets.fromLTRB(
+        compact ? 8 : 24,
+        0,
+        compact ? 8 : 24,
+        compact ? 8 : 24,
+      ),
+      content: SizedBox(
+        key: _viewportKey,
+        width: compact ? 464 : 520,
+        child: NotificationListener<ScrollMetricsNotification>(
+          onNotification: (_) {
+            _scheduleReviewCheck();
+            return false;
+          },
+          child: Scrollbar(
+            controller: _scroll,
+            thumbVisibility: true,
+            child: Focus(
+              key: const Key('ssh-changed-host-scroll-focus'),
+              autofocus: true,
+              onKeyEvent: _scrollByKeyboard,
+              child: SingleChildScrollView(
+                key: const Key('ssh-changed-host-scroll'),
+                controller: _scroll,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Semantics(
+                      header: true,
+                      child: Text(
+                        '服务器指纹已变化',
+                        style: compact
+                            ? Theme.of(context).textTheme.titleMedium
+                            : Theme.of(context).textTheme.headlineSmall,
+                      ),
+                    ),
+                    SizedBox(height: compact ? 4 : 12),
+                    SelectableText('${ticket.host}:${ticket.port}'),
+                    SizedBox(height: compact ? 8 : 16),
+                    Text(
+                      '本次收到的新指纹',
+                      style: Theme.of(context).textTheme.labelLarge,
+                    ),
+                    const SizedBox(height: 8),
+                    SelectableText(
+                      ticket.fingerprint,
+                      key: const Key('ssh-changed-host-new-fingerprint'),
+                    ),
+                    const SizedBox(height: 16),
+                    Text(
+                      '已保存的指纹（${ticket.oldKeys.length} 条）',
+                      style: Theme.of(context).textTheme.labelLarge,
+                    ),
+                    const SizedBox(height: 8),
+                    for (var i = 0; i < ticket.oldKeys.length; i++) ...[
+                      if (ticket.oldKeys.length > 1) Text('第 ${i + 1} 条'),
+                      SelectableText(
+                        ticket.oldKeys[i].fingerprint,
+                        key: Key('ssh-changed-host-old-fingerprint-$i'),
+                      ),
+                      if (i + 1 < ticket.oldKeys.length)
+                        const SizedBox(height: 8),
+                    ],
+                    SizedBox(key: _lastFingerprintKey, height: 0),
+                    const SizedBox(height: 16),
+                    const Text('请核对新指纹。信任后将更新此连接使用的记录并继续连接。'),
+                    Align(
+                      alignment: AlignmentDirectional.centerStart,
+                      child: Semantics(
+                        expanded: _detailsExpanded,
+                        child: TextButton.icon(
+                          key: const Key('ssh-changed-host-details'),
+                          onPressed: () => setState(
+                            () => _detailsExpanded = !_detailsExpanded,
+                          ),
+                          icon: Icon(
+                            _detailsExpanded
+                                ? Icons.expand_less
+                                : Icons.expand_more,
+                          ),
+                          label: const Text('查看信任来源和密钥类型'),
+                        ),
+                      ),
+                    ),
+                    if (_detailsExpanded)
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Theme.of(
+                            context,
+                          ).colorScheme.surfaceContainerHighest,
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text('信任来源'),
+                            const SizedBox(height: 4),
+                            SelectableText(ticket.source),
+                            const SizedBox(height: 8),
+                            Text('新密钥：${ticket.keyType}'),
+                            for (var i = 0; i < ticket.oldKeys.length; i++)
+                              Text('旧密钥 ${i + 1}：${ticket.oldKeys[i].keyType}'),
+                          ],
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          key: const Key('ssh-changed-host-reject'),
+          style: sshHostTrustDialogTextButtonStyle,
+          onPressed: () => _decide(false),
+          child: const Text('取消'),
+        ),
+        FilledButton(
+          key: const Key('ssh-changed-host-accept'),
+          onPressed: _fingerprintsReviewed ? () => _decide(true) : null,
+          child: Text(_fingerprintsReviewed ? '信任新指纹并继续' : '滚动查看全部指纹'),
+        ),
+      ],
+    );
+  }
 }

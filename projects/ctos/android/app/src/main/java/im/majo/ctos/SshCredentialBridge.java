@@ -125,9 +125,8 @@ final class SshCredentialBridge {
         }
         role.requireActive(clock);
         hostKey.requireMatches(role);
-        if (hostKey.classification != SshHostKeyAuthority.Classification.KNOWN
-                && hostKey.classification != SshHostKeyAuthority.Classification.NEW) {
-            throw new VaultException("SSH_HOST_KEY_CHANGED", "The host-key proof cannot authorize credentials");
+        if (!hostKey.permitsCredentials()) {
+            throw new VaultException(SshHostKeyAuthority.PROOF_INVALID, "The host-key proof cannot authorize credentials");
         }
         VaultManifest.EntryType expected = kind == Kind.KEY_PASSPHRASE
                 ? VaultManifest.EntryType.SSH_KEY_PASSPHRASE : VaultManifest.EntryType.SSH_PASSWORD;
@@ -167,9 +166,8 @@ final class SshCredentialBridge {
         }
         role.requireActive(clock);
         hostKey.requireMatches(role);
-        if (hostKey.classification != SshHostKeyAuthority.Classification.KNOWN
-                && hostKey.classification != SshHostKeyAuthority.Classification.NEW) {
-            throw new VaultException("SSH_HOST_KEY_CHANGED", "The host-key proof cannot authorize credentials");
+        if (!hostKey.permitsCredentials()) {
+            throw new VaultException(SshHostKeyAuthority.PROOF_INVALID, "The host-key proof cannot authorize credentials");
         }
         VaultOperation operation = null;
         try {

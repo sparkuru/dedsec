@@ -295,9 +295,10 @@ void main() {
         findsOneWidget,
       );
       await ui.tap('ssh-config-host-demo');
-      expect(find.text('尚未导入可用私钥。可选择密码或服务器交互式认证，或返回导入私钥。'), findsOneWidget);
-      await ui.tap('ssh-config-key-cancel');
-      await ui.tap('ssh-library-cancel');
+      expect(find.byType(SshLibraryPage), findsNothing);
+      expect(ui.librarySelection?.kind, SshLibrarySelectionKind.host);
+      expect(ui.librarySelection?.host?.alias, 'demo');
+      expect(ui.librarySelection?.key, isNull);
       expect(ui.releases, hasLength(1));
       await ui.remove();
     },
@@ -475,10 +476,10 @@ void main() {
       await ui.open(manual: true);
       await ui.tap('ssh-manage-identities');
       await ui.tap('ssh-config-host-demo');
-      expect(find.byKey(const Key('ssh-config-key-choice')), findsOneWidget);
-      expect(find.text('/home/source/.ssh/id_rsa'), findsOneWidget);
+      expect(find.byKey(const Key('ssh-config-key-choice')), findsNothing);
+      expect(find.byType(SshLibraryPage), findsNothing);
       expect(ui.arguments('ssh.configConnect'), isEmpty);
-      await ui.tap('ssh-config-key-key_b');
+      await ui.chooseKey('key_b');
       expect(ui.field('ssh-host').text, 'config.invalid');
       await ui.tap('ssh-connect');
       final request = ui.arguments('ssh.configConnect').single;
@@ -518,11 +519,10 @@ void main() {
     await ui.tap('ssh-import-acknowledge');
     expect(ui.arguments('ssh.importCommit'), hasLength(1));
     await ui.tap('ssh-config-host-demo');
-    expect(find.text('尚未导入可用私钥。可选择密码或服务器交互式认证，或返回导入私钥。'), findsOneWidget);
-    expect(find.text('/home/source/.ssh/id_rsa'), findsOneWidget);
-    expect(find.byKey(const Key('ssh-config-key-key_a')), findsNothing);
-    await ui.tap('ssh-config-key-cancel');
-    expect(find.byKey(const Key('ssh-config-host-demo')), findsOneWidget);
+    expect(find.byType(SshLibraryPage), findsNothing);
+    expect(ui.librarySelection?.kind, SshLibrarySelectionKind.host);
+    expect(ui.librarySelection?.host?.alias, 'demo');
+    expect(ui.librarySelection?.key, isNull);
     expect(ui.arguments('ssh.configConnect'), isEmpty);
     expect(ui.arguments('ssh.passwordConnect'), isEmpty);
     await ui.remove();
@@ -535,25 +535,273 @@ void main() {
       await ui.open(manual: true);
       await ui.tap('ssh-manage-identities');
       await ui.tap('ssh-config-host-demo');
-      expect(find.byKey(const Key('ssh-config-key-key_a')), findsOneWidget);
+      expect(find.byKey(const Key('ssh-config-key-choice')), findsNothing);
+      expect(find.byType(SshLibraryPage), findsNothing);
+      expect(ui.arguments('ssh.configConnect'), isEmpty);
+      await ui.tap('ssh-authentication');
+      await ui.tap('ssh-auth-privateKey');
+      await ui.tap('ssh-select-private-key');
       expect(find.byType(SshLibraryPage), findsOneWidget);
       expect(ui.arguments('ssh.configConnect'), isEmpty);
-      await ui.tap('ssh-config-key-cancel');
-      expect(find.byType(SshLibraryPage), findsOneWidget);
-      expect(ui.arguments('ssh.configConnect'), isEmpty);
-      await ui.tap('ssh-config-host-demo');
+      await ui.tap('ssh-library-cancel');
+      expect(find.byType(SshLibraryPage), findsNothing);
+      expect(find.byKey(const Key('ssh-select-private-key')), findsOneWidget);
+      expect(find.text('配置：demo'), findsOneWidget);
+      await ui.tap('ssh-select-private-key');
       await tester.binding.handlePopRoute();
       await ui.pump();
-      expect(find.byKey(const Key('ssh-config-key-choice')), findsNothing);
-      expect(find.byType(SshLibraryPage), findsOneWidget);
+      expect(find.byType(SshLibraryPage), findsNothing);
       expect(ui.arguments('ssh.configConnect'), isEmpty);
-      await ui.tap('ssh-config-host-demo');
-      await ui.tap('ssh-config-key-key_a');
+      await ui.tap('ssh-select-private-key');
+      await ui.tap('ssh-key-key_a');
       expect(find.byType(SshLibraryPage), findsNothing);
       expect(ui.field('ssh-host').text, 'config.invalid');
       await ui.remove();
     },
   );
+
+  testWidgets('config host is selectable directly from the target section', (
+    tester,
+  ) async {
+    final ui = _Ui(tester);
+    await ui.open(manual: true);
+    expect(find.byKey(const Key('ssh-manage-identities')), findsNothing);
+    await ui.tap('ssh-select-config-host');
+    expect(find.text('选择配置主机'), findsOneWidget);
+    expect(find.byKey(const Key('ssh-import-key')), findsNothing);
+    expect(find.byKey(const Key('ssh-key-key_a')), findsNothing);
+    await ui.tap('ssh-config-host-demo');
+    expect(find.byKey(const Key('ssh-config-key-choice')), findsNothing);
+    expect(find.byType(SshLibraryPage), findsNothing);
+    expect(ui.arguments('ssh.configConnect'), isEmpty);
+    await ui.chooseKey('key_a');
+    expect(ui.field('ssh-host').text, 'config.invalid');
+    expect(ui.field('ssh-port').text, '2223');
+    expect(ui.field('ssh-username').text, 'configured');
+    expect(find.text('更换配置主机'), findsOneWidget);
+    await ui.tap('ssh-connect');
+    final request = ui.arguments('ssh.configConnect').single;
+    expect(request['alias'], 'demo');
+    expect(request['binding'], List.filled(64, 'b').join());
+    expect(request['keyId'], 'key_a');
+    ui.connect!.completeError(PlatformException(code: 'SSH_AUTHENTICATION'));
+    await ui.pump();
+    await ui.remove();
+  });
+
+  testWidgets(
+    'cancelling host picker revalidates and restores public selection without passphrase',
+    (tester) async {
+      final ui = _Ui(tester)
+        ..libraryValue = {
+          ..._encryptedLibrary(),
+          'hosts': [
+            {..._host(), 'username': ''},
+          ],
+        };
+      await ui.open(manual: true);
+      await ui.tap('ssh-select-config-host');
+      await ui.tap('ssh-config-host-demo');
+      await ui.chooseKey('key_a');
+      await ui.reveal('ssh-username');
+      await tester.enterText(
+        find.byKey(const Key('ssh-username')),
+        'chosen-user',
+      );
+      await ui.reveal('ssh-key-passphrase');
+      await tester.enterText(
+        find.byKey(const Key('ssh-key-passphrase')),
+        'private-fixture',
+      );
+      await ui.tap('ssh-select-config-host');
+      await ui.tap('ssh-library-cancel');
+      expect(ui.field('ssh-host').text, 'config.invalid');
+      expect(ui.field('ssh-port').text, '2223');
+      expect(ui.field('ssh-username').text, 'chosen-user');
+      expect(ui.field('ssh-key-passphrase').text, isEmpty);
+      expect(find.text('更换配置主机'), findsOneWidget);
+      expect(find.text('id_ed25519'), findsOneWidget);
+      expect(ui.arguments('ssh.configConnect'), isEmpty);
+      expect(ui.arguments('ssh.passwordConnect'), isEmpty);
+      await ui.remove();
+    },
+  );
+
+  testWidgets('cancelling host picker rejects changed config or replaced key', (
+    tester,
+  ) async {
+    for (final changeConfig in [true, false]) {
+      final ui = _Ui(tester);
+      await ui.open(manual: true);
+      await ui.tap('ssh-select-config-host');
+      await ui.tap('ssh-config-host-demo');
+      await ui.chooseKey('key_a');
+      await ui.tap('ssh-select-config-host');
+      ui.libraryValue = {
+        'keys': [
+          changeConfig
+              ? _key()
+              : {..._key(), 'fingerprint': _otherKey()['fingerprint']!},
+        ],
+        'hosts': [
+          changeConfig
+              ? {..._host(), 'binding': List.filled(64, 'c').join()}
+              : _host(),
+        ],
+        'hasConfig': true,
+      };
+      await ui.tap('ssh-library-cancel');
+      expect(find.text('配置主机或私钥已变化，请重新选择。'), findsOneWidget);
+      expect(find.byKey(const Key('ssh-connect')), findsNothing);
+      expect(ui.arguments('ssh.configConnect'), isEmpty);
+      await ui.tap('ssh-reload');
+      expect(find.text('选择配置主机'), findsOneWidget);
+      expect(find.text('更换配置主机'), findsNothing);
+      await ui.remove();
+    }
+  });
+
+  testWidgets(
+    'cancelling key picker retains config and selected key but clears phrase',
+    (tester) async {
+      final ui = _Ui(tester)..libraryValue = _encryptedLibrary();
+      await ui.open(manual: true);
+      await ui.tap('ssh-select-config-host');
+      await ui.tap('ssh-config-host-demo');
+      await ui.chooseKey('key_a');
+      await ui.reveal('ssh-key-passphrase');
+      await tester.enterText(
+        find.byKey(const Key('ssh-key-passphrase')),
+        'draft',
+      );
+      await ui.tap('ssh-select-private-key');
+      await ui.tap('ssh-library-cancel');
+      expect(find.text('配置：demo'), findsOneWidget);
+      expect(find.text('id_ed25519'), findsOneWidget);
+      expect(ui.field('ssh-key-passphrase').text, isEmpty);
+      expect(ui.arguments('ssh.configConnect'), isEmpty);
+      await ui.remove();
+    },
+  );
+
+  testWidgets('cancelling key picker rejects drift rather than changing mode', (
+    tester,
+  ) async {
+    for (final changeConfig in [true, false]) {
+      final ui = _Ui(tester);
+      await ui.open(manual: true);
+      await ui.tap('ssh-select-config-host');
+      await ui.tap('ssh-config-host-demo');
+      await ui.chooseKey('key_a');
+      await ui.tap('ssh-select-private-key');
+      ui.libraryValue = {
+        'keys': [
+          changeConfig
+              ? _key()
+              : {..._key(), 'fingerprint': _otherKey()['fingerprint']!},
+        ],
+        'hosts': [
+          changeConfig
+              ? {..._host(), 'binding': List.filled(64, 'c').join()}
+              : _host(),
+        ],
+        'hasConfig': true,
+      };
+      await ui.tap('ssh-library-cancel');
+      expect(find.text('配置主机或私钥已变化，请重新选择。'), findsOneWidget);
+      expect(find.byKey(const Key('ssh-connect')), findsNothing);
+      expect(ui.arguments('ssh.passwordConnect'), isEmpty);
+      expect(ui.arguments('ssh.configConnect'), isEmpty);
+      await ui.remove();
+    }
+  });
+
+  testWidgets('host picker rechecks its choice before exposing it', (
+    tester,
+  ) async {
+    for (final changeConfig in [true, false]) {
+      final ui = _Ui(tester);
+      await ui.open(manual: true);
+      await ui.tap('ssh-select-config-host');
+      await ui.tap('ssh-config-host-demo');
+      await ui.tap('ssh-authentication');
+      await ui.tap('ssh-auth-privateKey');
+      await ui.tap('ssh-select-private-key');
+      ui.libraryValue = {
+        'keys': [
+          changeConfig
+              ? _key()
+              : {..._key(), 'fingerprint': _otherKey()['fingerprint']!},
+        ],
+        'hosts': [
+          changeConfig
+              ? {..._host(), 'binding': List.filled(64, 'c').join()}
+              : _host(),
+        ],
+        'hasConfig': true,
+      };
+      await ui.tap('ssh-key-key_a');
+      expect(find.text('配置主机或私钥已变化，请重新选择。'), findsOneWidget);
+      expect(find.byKey(const Key('ssh-connect')), findsNothing);
+      expect(ui.arguments('ssh.configConnect'), isEmpty);
+      await ui.remove();
+    }
+  });
+
+  testWidgets('direct host picker reports an empty configuration', (
+    tester,
+  ) async {
+    final ui = _Ui(tester)
+      ..libraryValue = {
+        'keys': [_key()],
+        'hosts': <Object>[],
+        'hasConfig': false,
+      }
+      ..previewValue = _preview(config: true);
+    await ui.open(manual: true);
+    await ui.fillTuple();
+    await ui.tap('ssh-select-config-host');
+    expect(find.text('导入 .ssh/config 后显示 Host 别名。'), findsOneWidget);
+    expect(find.byKey(const Key('ssh-key-key_a')), findsNothing);
+    await ui.tap('ssh-host-picker-import-config');
+    await ui.tap('ssh-import-choose-file');
+    expect(find.text('确认保存 SSH 配置'), findsOneWidget);
+    await ui.tap('ssh-import-decline');
+    await ui.tap('ssh-library-cancel');
+    expect(ui.field('ssh-host').text, 'manual.invalid');
+    expect(ui.field('ssh-port').text, '2201');
+    expect(ui.field('ssh-username').text, 'manual-user');
+    expect(ui.arguments('ssh.configConnect'), isEmpty);
+    await ui.remove();
+  });
+
+  testWidgets('direct host picker remains reachable at large text sizes', (
+    tester,
+  ) async {
+    for (final size in [const Size(320, 568), const Size(568, 320)]) {
+      await tester.binding.setSurfaceSize(size);
+      final ui = _Ui(tester);
+      await ui.open(
+        manual: true,
+        scale: 2,
+        keyboard: size.width == 320 ? 180 : 0,
+      );
+      await ui.tap('ssh-select-config-host');
+      await ui.tap('ssh-config-host-demo');
+      await ui.tap('ssh-authentication');
+      await ui.tap('ssh-auth-privateKey');
+      await ui.tap('ssh-select-private-key');
+      await ui.reveal('ssh-key-key_a');
+      expect(
+        tester.getSize(find.byKey(const Key('ssh-key-key_a'))).height,
+        greaterThanOrEqualTo(48),
+      );
+      await ui.tap('ssh-library-cancel');
+      expect(tester.takeException(), isNull);
+      await ui.remove();
+    }
+    await tester.binding.setSurfaceSize(null);
+  });
 
   testWidgets('stale config or background cannot deliver an old key choice', (
     tester,
@@ -563,8 +811,11 @@ void main() {
       await ui.open(manual: true);
       await ui.tap('ssh-manage-identities');
       await ui.tap('ssh-config-host-demo');
+      await ui.tap('ssh-authentication');
+      await ui.tap('ssh-auth-privateKey');
+      await ui.tap('ssh-select-private-key');
       final choose = tester
-          .widget<OutlinedButton>(find.byKey(const Key('ssh-config-key-key_a')))
+          .widget<OutlinedButton>(find.byKey(const Key('ssh-key-key_a')))
           .onPressed!;
       if (background) {
         tester.binding.handleAppLifecycleStateChanged(
@@ -590,7 +841,6 @@ void main() {
       }
       choose();
       await ui.pump();
-      expect(find.byKey(const Key('ssh-config-key-choice')), findsNothing);
       expect(find.byType(SshLibraryPage), findsOneWidget);
       expect(ui.arguments('ssh.configConnect'), isEmpty);
       expect(ui.arguments('ssh.keyConnect'), isEmpty);
@@ -615,17 +865,23 @@ void main() {
             ],
             'hasConfig': true,
           };
-        await ui.open(scale: 2, keyboard: size.height > 400 ? 180 : 0);
-        await ui.tap('ssh-config-host-demo');
-        expect(find.text('/home/source/.ssh/id_rsa'), findsOneWidget);
-        await ui.reveal('ssh-config-key-key_b');
-        final target = tester.getRect(
-          find.byKey(const Key('ssh-config-key-key_b')),
+        await ui.open(
+          manual: true,
+          scale: 2,
+          keyboard: size.height > 400 ? 180 : 0,
         );
+        await ui.tap('ssh-select-config-host');
+        await ui.tap('ssh-config-host-demo');
+        await ui.tap('ssh-authentication');
+        await ui.tap('ssh-auth-privateKey');
+        await ui.tap('ssh-select-private-key');
+        expect(find.text('/home/source/.ssh/id_rsa'), findsOneWidget);
+        await ui.reveal('ssh-key-key_b');
+        final target = tester.getRect(find.byKey(const Key('ssh-key-key_b')));
         expect(target.height, greaterThanOrEqualTo(48));
         expect(target.left, greaterThanOrEqualTo(0));
         expect(target.right, lessThanOrEqualTo(size.width));
-        await ui.tap('ssh-config-key-cancel');
+        await ui.tap('ssh-library-cancel');
         expect(tester.takeException(), isNull);
         await ui.remove();
       }
@@ -677,6 +933,7 @@ void main() {
         'port': 2201,
         'username': 'manual-user',
         'keyId': 'key_a',
+        'autoKeyboardInteractive': true,
         'columns': 81,
         'rows': 25,
       });
@@ -962,7 +1219,7 @@ void main() {
       await ui.open(manual: true);
       await ui.tap('ssh-manage-identities');
       await ui.tap('ssh-config-host-demo');
-      await ui.tap('ssh-config-key-key_a');
+      await ui.chooseKey('key_a');
       expect(
         tester
             .widget<CheckboxListTile>(
@@ -1133,9 +1390,7 @@ void main() {
           await ui.reveal('ssh-config-host-$alias');
         }
         await ui.tap('ssh-config-host-$selected');
-        await ui.tap(
-          'ssh-config-key-${selected == 'demo' ? 'key_a' : 'key_b'}',
-        );
+        await ui.chooseKey(selected == 'demo' ? 'key_a' : 'key_b');
         final expected = hosts[selected]!;
         expect(ui.field('ssh-host').text, expected['host']);
         expect(ui.field('ssh-port').text, '${expected['port']}');
@@ -1163,7 +1418,7 @@ void main() {
       await ui.open(manual: true);
       await ui.tap('ssh-manage-identities');
       await ui.tap('ssh-config-host-demo');
-      await ui.tap('ssh-config-key-key_a');
+      await ui.chooseKey('key_a');
       expect(ui.field('ssh-host').text, 'config.invalid');
       expect(ui.field('ssh-port').text, '2223');
       expect(ui.field('ssh-username').text, 'configured');
@@ -1186,6 +1441,7 @@ void main() {
         'binding': List.filled(64, 'b').join(),
         'keyId': 'key_a',
         'username': '',
+        'autoKeyboardInteractive': true,
         'columns': 81,
         'rows': 25,
       });
@@ -1210,7 +1466,7 @@ void main() {
       await ui.open(manual: true);
       await ui.tap('ssh-manage-identities');
       await ui.tap('ssh-config-host-demo');
-      await ui.tap('ssh-config-key-key_a');
+      await ui.chooseKey('key_a');
       ui.libraryValue = {
         ..._library(),
         'hosts': [
@@ -1591,6 +1847,7 @@ class _Ui {
       pendingDeleteCommit,
       connect;
   Object? unlockFailure, deleteFailure;
+  SshLibrarySelection? librarySelection;
   late SshPasswordApi api;
   int _id = 0, _owner = 0;
   List<Map<dynamic, dynamic>> arguments(String method) => calls
@@ -1709,7 +1966,11 @@ class _Ui {
                     ),
                   );
                 else
-                  unawaited(showSshLibrary(context, api: api));
+                  unawaited(
+                    showSshLibrary(context, api: api).then((selection) {
+                      librarySelection = selection;
+                    }),
+                  );
               },
               child: const Text('Open'),
             ),
@@ -1780,6 +2041,13 @@ class _Ui {
   Future<void> beginImport() async {
     await tap('ssh-import-key');
     await tap('ssh-import-choose-file');
+  }
+
+  Future<void> chooseKey(String keyId) async {
+    await tap('ssh-authentication');
+    await tap('ssh-auth-privateKey');
+    await tap('ssh-select-private-key');
+    await tap('ssh-key-$keyId');
   }
 
   Future<void> fillTuple() async {

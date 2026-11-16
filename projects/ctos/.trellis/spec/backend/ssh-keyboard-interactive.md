@@ -9,8 +9,8 @@ Local source/tests/build audit and authorized isolated Android runtime passed; h
 remains pending. Android RAM reconnect metadata is not an actual Flutter reconnect-click test.
 This spec is not a device acceptance receipt; dated evidence lives in design/verification.md.
 Do not confuse KBI's multiple prompt rounds with chained publickey/password→KBI MFA.
-The separately approved [MFA continuation contract](ssh-mfa-authentication.md) extends
-only opted-in immutable two-stage plans. Standalone kind3 and legacy plans keep the
+The [MFA continuation contract](ssh-mfa-authentication.md) also permits automatic intent
+for immutable two-stage plans when the actual configuration permits it. Standalone kind3 and legacy plans keep the
 single-method rules here; no global relaxation of selected credentials or partial success.
 
 ## 2. Signatures
@@ -67,6 +67,8 @@ answers and delayed delivery cannot release a secret or revive a retired round.
 Back/cancel/background/lock/stream loss/route destruction retire pending prompts, clear
 answers and await original terminal cleanup. Sensitive protection outlives an in-flight
 connection response; successful handoff and failed/cancelled cleanup keep their prior rules.
+Render a real current challenge as a protected dialog; show all prompts without requiring a
+pre-connection option and support successive rounds without extending the original deadline.
 Untrusted remote name/instruction/prompt content is body text. Filter control characters
 while preserving useful newlines; it cannot become a lifecycle event, local command or URL.
 

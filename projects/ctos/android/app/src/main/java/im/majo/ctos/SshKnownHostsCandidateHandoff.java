@@ -35,6 +35,16 @@ final class SshKnownHostsCandidateHandoff implements AutoCloseable {
      */
     synchronized void accept(SshHostKeyAuthority.Evidence evidence, String candidateId,
             byte[] replacementBody) throws VaultException {
+        acceptExact(evidence, candidateId, replacementBody, SshHostKeyAuthority.Classification.NEW);
+    }
+
+    synchronized void acceptChanged(SshHostKeyAuthority.Evidence evidence, String candidateId,
+            byte[] replacementBody) throws VaultException {
+        acceptExact(evidence, candidateId, replacementBody, SshHostKeyAuthority.Classification.CHANGED);
+    }
+
+    private void acceptExact(SshHostKeyAuthority.Evidence evidence, String candidateId,
+            byte[] replacementBody, SshHostKeyAuthority.Classification expected) throws VaultException {
         if (closed || used) {
             VaultCodec.wipe(replacementBody);
             throw new VaultException("SSH_HOST_KEY_REVIEW",
@@ -43,15 +53,16 @@ final class SshKnownHostsCandidateHandoff implements AutoCloseable {
         used = true;
         SshManagedKnownHostsProvider.KnownHostsCandidate candidate = null;
         try {
-            if (evidence == null || evidence.classification != SshHostKeyAuthority.Classification.NEW
+            if (evidence == null || evidence.classification != expected
                     || replacementBody == null || replacementBody.length == 0
                     || replacementBody.length > MAX_FILE_BYTES) {
                 throw new VaultException("SSH_HOST_KEY_REVIEW",
                         "The exact known_hosts candidate is unavailable");
             }
             snapshot.requireLive();
-            candidate = SshManagedKnownHostsProvider.candidateFor(snapshot, evidence, candidateId,
-                    replacementBody);
+            candidate = expected == SshHostKeyAuthority.Classification.NEW
+                    ? SshManagedKnownHostsProvider.candidateFor(snapshot, evidence, candidateId, replacementBody)
+                    : SshManagedKnownHostsProvider.changedCandidateFor(snapshot, evidence, candidateId, replacementBody);
             if (!provider.acceptsNativeCandidate(candidate)) {
                 throw new VaultException("SSH_HOST_KEY_REVIEW",
                         "The exact known_hosts candidate is unavailable");

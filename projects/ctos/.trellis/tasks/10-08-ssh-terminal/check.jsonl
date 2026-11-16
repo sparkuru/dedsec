@@ -1,4 +1,4 @@
-{"file": "design/ssh-mfa-authentication.md", "reason": "Latest user-approved20261104 two-stage manual/config scope, UI and original lifetime; overrides standalone-only exclusion only for these chains."}
+{"file": "design/ssh-mfa-authentication.md", "reason": "Historical two-stage manual/config contract and original lifetime; latest user feedback requests automatic detection without a checkbox."}
 {"file": ".trellis/spec/backend/host-bridge.md", "reason": "Strict MethodChannel arguments, original request and owned worker/native boundaries."}
 {"file": ".trellis/spec/backend/ssh-password-connect.md", "reason": "Actual host/KEX first, exact target saved/transient password; preserve atomic save and once-only delivery."}
 {"file": ".trellis/spec/backend/ssh-key-config-connect.md", "reason": "Actual config snapshot and effective target/trust, explicit key and original proof-bound native consumption."}
@@ -7,8 +7,8 @@
 {"file": ".trellis/spec/backend/ssh-keyboard-interactive.md", "reason": "Existing method-aware CSKI/CSKR and mailbox/limits/once current round; no generic stored credential for KBI."}
 {"file": ".trellis/spec/backend/ssh-background-session.md", "reason": "Final SUCCESS-only service handoff, original cancellation/lock cleanup, RAM-only fresh reconnect."}
 {"file": ".trellis/spec/frontend/app-secrets.md", "reason": "Sensitive route and original cleanup lifetime, session stream and guarded outcome."}
-{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "Accepted chooser and rounded option controls; 48dp, dynamic font, keyboard, actual-font QA."}
-{"file": ".trellis/spec/frontend/type-safety.md", "reason": "Strict shared typed continuation/reconnect decoder; omitted flag false, illegal combination rejection."}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "Reuse project theme, 48dp controls, dynamic font, keyboard and actual-font visual QA; do not preserve the rejected config auth chooser."}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "Strict typed continuation/reconnect decoder; preserve legacy omitted false while specifying automatic mode and illegal combinations."}
 {"file": ".trellis/spec/frontend/terminal-interaction.md", "reason": "Shared terminal single input, raw remote data, original KBI protected UI and local shell regressions."}
 {"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Container-native checks, real protocol vs JVM vs Android separation."}
 {"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "Bounded safe diagnostics; no answers/secrets in logs."}
@@ -16,5 +16,12 @@
 {"file": "design/constraints.md", "reason": "Project-only scope and existing changed files preservation, no current device/install/account authority."}
 {"file": ".trellis/tasks/10-08-ssh-terminal/research/mfa-contract-20261104.md", "reason": "Check narrow transition, legacy no permission, original once secret and actual config-password source"}
 {"file": ".trellis/spec/backend/ssh-mfa-authentication.md", "reason": "Check exact cross-layer framing/state/errors and actual evidence separation"}
-{"file": "design/ssh-host-trust-management.md", "reason": "Review exact target, fresh preview, confirmation and no automatic retry or trust."}
-{"file": ".trellis/spec/backend/ssh-host-trust-management.md", "reason": "Review changed-host denial and precise guarded mutation."}
+{"file": "design/ssh-host-trust-management.md", "reason": "Review explicitly authorized changed-key proposal, actual source, provisional proof and independent forget distinction."}
+{"file": ".trellis/spec/backend/ssh-host-trust-management.md", "reason": "Review existing independent forget guards and precise new narrow source-bound mutation contract."}
+{"file": ".trellis/tasks/10-08-ssh-terminal/research/host-key-recovery-flow-20261113.md", "reason": "Review offered-key timing, provisional proof, original owner/deadline, exact CAS and real protocol evidence."}
+{"file": ".trellis/tasks/10-08-ssh-terminal/research/host-key-recovery-journey-20261113.md", "reason": "Review user decision count, trusted display, precise cancel/lifecycle and config picker behavior."}
+{"file": ".trellis/tasks/10-08-ssh-terminal/research/config-selection-journey-20261113.md", "reason": "Review target-only selection, cancellation, config binding and key drift guards with real widget paths."}
+{"file": ".trellis/tasks/10-08-ssh-terminal/research/mfa-automatic-continuation-20261113.md", "reason": "Review automatic KBI against actual partial/method list/config, legacy strict mode and lifecycle evidence."}
+{"file": ".trellis/tasks/10-08-ssh-terminal/research/ssh-auth-method-discovery-20261113.md", "reason": "Review the exact boundary of automatic KBI and ensure no invented none-discovery or wrong-password retry."}
+{"file": ".trellis/spec/backend/ssh-server-alive.md", "reason": "Check config plan compatibility, exact owner and lifecycle, encrypted timeout behavior and separation of device evidence."}
+{"file": ".trellis/tasks/10-08-ssh-terminal/research/server-alive-20261116.md", "reason": "Review fixed OpenSSH semantics and cross-layer test scope without inferring real-device behavior."}

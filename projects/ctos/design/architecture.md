@@ -1,5 +1,16 @@
 # Architecture
 
+2026-11-16：[提前通道输出](ssh-shell-early-output.md)仍归同一原生 session owner。
+通道打开后即按原窗口和内存上限接收输出；等待 PTY／shell 答复时只缓存，真实 shell
+成功后才允许读取并交付，失败或提前关闭清除未发布数据。现有认证、信任和生命周期
+所有权不变。
+
+2026-11-16：[服务器保活](ssh-server-alive.md)由固定 OpenSSH 配置求值得到有效值，
+经 CSCP/CSPPv4 和当前配置快照传给已认证的原 session owner；有界 shell pump 在加密
+通道内发送并匹配 global request／reply，沿现有生命周期超时关闭。手动及默认间隔为 0
+的连接不探测。后续客户端转发须统一管理 global request 答复顺序。
+[本地验证与设备边界](verification.md#20261116-ssh-server-alive-local)。
+
 2026-11-04：[MFA续接](ssh-mfa-authentication.md)保留原selection／role／owner／host／KEX及
 一次秘密消费；CSASv3预先固定续接许可，原生只将真实首阶段PARTIAL切换一次到KBI。
 Java严格核对CSAPv1后保留私有阶段标记，回执临时byte[]擦除；公共问题wire保持。

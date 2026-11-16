@@ -33,7 +33,7 @@ final class SshNativeSession implements AutoCloseable {
         HostKeyRejectedException(String code) {
             super("The actual SSH host key was rejected");
             if (!"SSH_HOST_KEY_CHANGED".equals(code) && !"SSH_HOST_KEY_REVOKED".equals(code)
-                    && !"SSH_HOST_KEY_CERTIFICATE".equals(code))
+                    && !"SSH_HOST_KEY_CERTIFICATE".equals(code) && !"SSH_HOST_TRUST_BLOCKED".equals(code))
                 throw new IllegalArgumentException("Invalid SSH host rejection code");
             this.code = code;
         }
@@ -186,6 +186,9 @@ final class SshNativeSession implements AutoCloseable {
         default void respondKeyboardInteractive(long handle, byte[] response) throws IOException {
             throw new IOException("SSH keyboard-interactive authentication is unavailable");
         }
+        default void configureServerAlive(long handle, int interval, int countMax) throws IOException {
+            throw new IOException("SSH server-alive policy is unavailable");
+        }
         default void beginShell(long handle, int columns, int rows) throws IOException {
             throw new IOException("SSH shell is unavailable");
         }
@@ -326,6 +329,9 @@ final class SshNativeSession implements AutoCloseable {
             Native.respondKeyboardInteractive(handle, response);
         }
 
+        @Override public void configureServerAlive(long handle, int interval, int countMax) throws IOException {
+            Native.configureServerAlive(handle, interval, countMax);
+        }
         @Override public void beginShell(long handle, int columns, int rows) throws IOException {
             Native.beginShell(handle, columns, rows);
         }
@@ -391,6 +397,7 @@ final class SshNativeSession implements AutoCloseable {
         static native int keyboardInteractiveAuthResult(long handle) throws IOException;
         static native byte[] keyboardInteractiveChallenge(long handle) throws IOException;
         static native void respondKeyboardInteractive(long handle, byte[] response) throws IOException;
+        static native void configureServerAlive(long handle, int interval, int countMax) throws IOException;
         static native void beginShell(long handle, int columns, int rows) throws IOException;
         static native int[] shellStatus(long handle) throws IOException;
         static native int writeShell(long handle, byte[] bytes) throws IOException;
@@ -421,6 +428,7 @@ final class SshNativeSession implements AutoCloseable {
     private boolean complete;
     private Phase phase = Phase.KEX_ONLY;
     private ShellPhase shellPhase = ShellPhase.DISABLED;
+    private boolean serverAliveConfigured;
     private ShellStatus lastShellStatus;
     private boolean shellEofAccepted;
     private volatile boolean established;
@@ -1040,13 +1048,29 @@ final class SshNativeSession implements AutoCloseable {
         } finally { VaultCodec.wipe(owned); NATIVE_ENTRY.remove(); }
     }
 
+    private boolean authenticationSucceeded() {
+        return phase == Phase.FINISHED && (keyboardInteractiveAuthentication
+                ? keyboardResult == KeyboardInteractiveAuthResult.SUCCESS
+                : privateKeyAuthentication ? privateKeyResult == PrivateKeyAuthResult.SUCCESS
+                : authenticationResult == PasswordAuthResult.SUCCESS);
+    }
+
+    void configureServerAlive(int interval, int countMax) throws VaultException {
+        shellEntry("SSH_SESSION_KEEPALIVE", () -> {
+            if (!authenticationSucceeded() || shellPhase != ShellPhase.DISABLED
+                    || expectedSelectionReceipt == null || serverAliveConfigured) throw phaseFailure();
+            if (interval < 0 || countMax < 0) throw invalid();
+            nativeBinding.configureServerAlive(nativeHandle, interval, countMax);
+            requireTransportLive();
+            serverAliveConfigured = true;
+            return null;
+        });
+    }
+
     void beginShell(int columns, int rows) throws VaultException {
         shellEntry("SSH_SESSION_SHELL", () -> {
-            if (phase != Phase.FINISHED || shellPhase != ShellPhase.DISABLED
-                    || expectedSelectionReceipt == null
-                    || (keyboardInteractiveAuthentication ? keyboardResult != KeyboardInteractiveAuthResult.SUCCESS
-                            : privateKeyAuthentication ? privateKeyResult != PrivateKeyAuthResult.SUCCESS
-                            : authenticationResult != PasswordAuthResult.SUCCESS)) throw phaseFailure();
+            if (!authenticationSucceeded() || shellPhase != ShellPhase.DISABLED
+                    || expectedSelectionReceipt == null) throw phaseFailure();
             requireDimensions(columns, rows);
             nativeBinding.beginShell(nativeHandle, columns, rows);
             try { callback.retainEstablishedSession(callbackClaim); }
@@ -1225,6 +1249,14 @@ final class SshNativeSession implements AutoCloseable {
     }
 
     private VaultException protocolNativeFailure(String code) throws VaultException {
+        if (!cancellationRequested && callback.changedPolicyRejected()) {
+            synchronized (stateLock) {
+                if (!cancellationRequested && view.active()) {
+                    terminalFailure = "SSH_HOST_CHANGED_POLICY";
+                    return failure(terminalFailure);
+                }
+            }
+        }
         // A callback may cancel, expire or revoke the view while native reports failure.
         requireTransportLive();
         synchronized (stateLock) { terminalFailure = code; }

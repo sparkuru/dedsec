@@ -19,7 +19,7 @@ final class SshConfigEvaluator implements AutoCloseable {
     static final int MAX_CATALOG_BYTES = 70424;
     static final int MAX_AUDIT_BYTES = 82732;
     static final int MAX_RESOURCE_AUDIT_BYTES = 107328;
-    static final int MAX_DIRECT_PLAN_BYTES = 60 + 3 * 259 + (256 + 32) * 516;
+    static final int MAX_DIRECT_PLAN_BYTES = 68 + 3 * 259 + (256 + 32) * 516;
     static final int MAX_DETACHED_BYTES = 8455704;
     static final int MAX_OPENS = 1024, MAX_READ_BYTES = 64 * 1024 * 1024, MAX_LINES = 16384;
     private static final int REQUEST_MAGIC = 0x43534551;
@@ -229,6 +229,7 @@ final class SshConfigEvaluator implements AutoCloseable {
     static class DirectPlan {
         final String alias, hostname, user;
         final int port, connectTimeoutMillis, requestTty, strictHostKeyChecking;
+        final int serverAliveInterval, serverAliveCountMax;
         final boolean identitiesOnly, pubkeyAuthentication, passwordAuthentication, keyboardInteractiveAuthentication, userRequired;
         final boolean passwordThenKeyboardAllowed, publickeyThenKeyboardAllowed;
         final List<String> identityFiles, userKnownHostsFiles, identityHints;
@@ -238,23 +239,26 @@ final class SshConfigEvaluator implements AutoCloseable {
             ByteBuffer buffer = ByteBuffer.wrap(wire);
             if (buffer.getInt() != (profile ? 0x43535050 : 0x43534350)) throw invalid();
             int version = buffer.getInt();
-            if (version < 1 || version > 3 || version >= 2 && wire.length < 64
-                    || version == 3 && wire.length < 72) throw invalid();
+            if (version < 1 || version > 4 || version >= 2 && wire.length < 64
+                    || version >= 3 && wire.length < 72 || version == 4 && wire.length < 80) throw invalid();
             port = buffer.getInt();
             identitiesOnly = flag(buffer.getInt());
             pubkeyAuthentication = flag(buffer.getInt());
             passwordAuthentication = flag(buffer.getInt());
             keyboardInteractiveAuthentication = version >= 2 && flag(buffer.getInt());
-            passwordThenKeyboardAllowed = version == 3 && flag(buffer.getInt());
-            publickeyThenKeyboardAllowed = version == 3 && flag(buffer.getInt());
+            passwordThenKeyboardAllowed = version >= 3 && flag(buffer.getInt());
+            publickeyThenKeyboardAllowed = version >= 3 && flag(buffer.getInt());
             if (passwordThenKeyboardAllowed && (!passwordAuthentication || !keyboardInteractiveAuthentication)
                     || publickeyThenKeyboardAllowed && (!pubkeyAuthentication || !keyboardInteractiveAuthentication)) throw invalid();
+            serverAliveInterval = version >= 4 ? buffer.getInt() : 0;
+            serverAliveCountMax = version >= 4 ? buffer.getInt() : 3;
             connectTimeoutMillis = buffer.getInt();
             requestTty = buffer.getInt();
             strictHostKeyChecking = buffer.getInt();
             userRequired = flag(buffer.getInt());
             int identities = buffer.getInt(), hosts = buffer.getInt();
-            if (port < 1 || port > 65535 || connectTimeoutMillis < 1000 || connectTimeoutMillis > 60000
+            if (port < 1 || port > 65535 || serverAliveInterval < 0 || serverAliveCountMax < 0
+                    || connectTimeoutMillis < 1000 || connectTimeoutMillis > 60000
                     || connectTimeoutMillis % 1000 != 0 || (requestTty != 0 && requestTty != 2 && requestTty != 3)
                     || (strictHostKeyChecking != 2 && strictHostKeyChecking != 3)
                     || identities < 0 || identities > 256 || hosts < 1 || hosts > 32) throw invalid();

@@ -6,6 +6,7 @@ Apply to `SshHostTrustMaterial`, `SshHostTrustManagement`, `SshProfilesBridge`, 
 `ssh_host_trust.[ch]` / JNI and their tests. Product scope and wire layout live in
 [the contract](../../../design/ssh-host-trust-management.md). This operation forgets old local
 ordinary records; it never supplies NEW evidence, approves an offered key or reconnects.
+The separate same-connection CHANGED transaction below does not reuse a forget ticket.
 
 ## 2. Signatures
 
@@ -115,4 +116,89 @@ remain distinct; do not call a compiled Android test an executed test.
 ```text
 Wrong: saved query metadata -> delete a line by caller-supplied fingerprint -> retry CHANGED.
 Correct: fresh source-bound preview -> exact once bundle commit -> user-started new KEX/review.
+```
+
+## Scenario: same-connection changed host key
+
+### 1. Scope / Trigger
+
+Apply when the real managed host-file issuer classifies the offered server key as CHANGED.
+This transaction is separate from the standalone query/forget operation above and from NEW
+approval. It changes the native/JNI/Java/vault/Flutter contract and is scoped to the exact
+single managed known-hosts object used by the current connection.
+
+### 2. Signatures
+
+```text
+hostKeyChanged {requestId,ticketId,binding,host,port,source,keyType,fingerprint,
+                oldKeys:[{keyType,fingerprint}],remainingMillis}
+hostKeyChangedDismissed {requestId,ticketId,binding}
+ssh.hostKeyDecision(requestId,ticketId,binding,accept) -> applied
+onNativeChangedHostCandidate(role,hop,port,connection,target,host,classification,
+    keyType,fingerprint,baseDigest,replacementDigest,candidateId,body,oldRecords) -> boolean
+onNativeChangedHostReview(role,hop,port,connection,target,host,classification,
+    keyType,fingerprint,baseDigest,replacementDigest) -> boolean
+onNativeKexComplete(cycle,sessionDigest) -> boolean
+```
+
+### 3. Contracts
+
+- The event contains public facts only: 1–128 ordered old rows, canonical SHA256 fingerprints,
+  the actual managed relative source path and a remaining budget of 1–30000 ms. Reject extra,
+  missing, malformed, stale or mismatched fields. The source label is never a caller-selected
+  authority or replacement body. The actual offered fingerprint is **received**, not yet
+  signature verified, when the user reviews it.
+- The native parser prepares the replacement from the same validated snapshot and exact
+  endpoint; preserve unrelated byte spans. Shared, wildcard, marker, certificate,
+  unsupported and unrepresentable matches cannot enter the replacement path. Do not merge
+  or mutate another source merely because it contains an equal fingerprint.
+- Explicit one-shot approval pins only that offered key provisionally on the original
+  owner/role/target/view/connection and within the original deadlines. It grants neither
+  credentials nor a durable proof. Verify the server signature and inbound NEWKEYS on the
+  same KEX before making a source/identity/epoch/base-digest/replacement-bound once-only CAS.
+  Only a successful guarded CAS and successful native completion publish formal host/KEX
+  proofs and release the selected credential to the transport. Local key inspection and
+  separately opted-in credential saving retain their existing earlier contracts.
+- Keep the original connection future and protected route alive through terminal completion,
+  including late cancellation, route destruction and a possible handoff. On cancellation,
+  expiration, background, lock, bad signature, source change, duplicate callback or failed
+  CAS, fail closed. If a write may have happened but its safe completion cannot be confirmed,
+  lock and report `VAULT_COMMIT_UNCERTAIN`; never claim rollback or silently retry.
+- An independent exact review of the selected credential and any opted-in keyboard-
+  interactive continuation still follows the existing authentication policy and same-session
+  PARTIAL-to-KBI contract. A changed-key approval never answers a server prompt.
+
+### 4. Validation & Error Matrix
+
+| Condition | Required behavior |
+| --- | --- |
+| Ordinary exact old records, valid review and signature, guarded CAS succeeds | Update only actual source; continue original connection |
+| Shared/pattern/marker/certificate/unsupported or over-limit matches | `SSH_HOST_TRUST_BLOCKED`; no unsafe replacement |
+| `StrictHostKeyChecking` requires an already trusted key | `SSH_HOST_CHANGED_POLICY`; no review or write |
+| Decline, stale/forged ticket, wrong binding or route covered | No approval, credential or pre-commit write |
+| Invalid signature, stale source/view, revoked role or expired transport deadline | Stop; no formal proof or credential release |
+| Write outcome or post-write delivery cannot safely be confirmed | `VAULT_COMMIT_UNCERTAIN`; lock and require reinspection |
+
+### 5. Good / Base / Bad Cases
+
+Good: review all old and received new fingerprints; approve once; validate the signed KEX;
+commit the exact source candidate; continue the same selected key plus KBI. Base: existing
+NEW approval and independent old-record management retain their own contracts. Bad: trust
+Dart-provided key/path/body, mark approval as KEX proof, or update both independent sources.
+
+### 6. Tests Required
+
+Exercise real native same-socket KEX/signature/NEWKEYS with private key, password and KBI;
+separately exercise the real encrypted vault CAS, source isolation, stale/forged binding,
+once-only reads and cancellation/write/deadline races. Flutter tests cover exact event parsing,
+explicit decisions, overflow/keyboard review, failed decision and late lifecycle delivery.
+Record synthetic-native, real-vault/JVM, Flutter, APK, Android and human evidence separately;
+none alone proves an actual Android end-to-end connection.
+
+### 7. Wrong vs Correct
+
+```text
+Wrong: received changed fingerprint -> UI approves -> delete all matching sources -> send secret.
+Correct: exact candidate -> explicit provisional pin -> signed KEX/NEWKEYS -> exact CAS
+         -> native completion/proofs -> selected authentication on the original connection.
 ```

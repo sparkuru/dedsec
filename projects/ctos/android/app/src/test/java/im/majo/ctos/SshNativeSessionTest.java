@@ -210,6 +210,7 @@ public final class SshNativeSessionTest {
         int authReads;
         int keyBegins;
         int keyReads;
+        int aliveCalls, aliveInterval, aliveCountMax;
         String failOperation;
         int failureKind;
         Runnable protocolHook;
@@ -261,6 +262,12 @@ public final class SshNativeSessionTest {
             keyReads++;
             invoke("keyRead");
             return result;
+        }
+
+        @Override public void configureServerAlive(long handle, int interval, int countMax) throws IOException {
+            assertEquals(903, handle);
+            aliveCalls++; aliveInterval = interval; aliveCountMax = countMax;
+            invoke("serverAlive");
         }
     }
 
@@ -350,10 +357,16 @@ public final class SshNativeSessionTest {
     }
 
     private static void mfaReady(Setup setup, MfaNative binding, boolean key, boolean continuation) throws Exception {
+        mfaReady(setup,binding,key,new SshPasswordConnector.ContinuationPolicy(
+                continuation ? SshPasswordConnector.ContinuationMode.STRICT : SshPasswordConnector.ContinuationMode.NONE,false));
+    }
+
+    private static void mfaReady(Setup setup, MfaNative binding, boolean key,
+            SshPasswordConnector.ContinuationPolicy continuation) throws Exception {
         SshAuthenticationSelection selection = key ? SshAuthenticationSelection.privateKey(setup.issued.role,
                 "user", "keys/key", "identity", bytes("public"), setup.clock)
                 : SshAuthenticationSelection.password(setup.issued.role, "user", "password", setup.clock);
-        if (continuation) selection = selection.withKeyboardContinuation(setup.clock);
+        selection = continuation.select(selection,setup.clock);
         setup.callback.selectAuthentication(selection);
         setup.session = open(setup);
         assertTrue(setup.callback.onNativeHostKey(SshNativeCallbackAdapter.HOST_KNOWN, "ssh-ed25519",
@@ -383,9 +396,84 @@ public final class SshNativeSessionTest {
                 binding.challengeWire = SshKeyboardChallengeTest.frame(1,"server","notice","Code"); binding.result = 5;
                 setup.session.step(); SshKeyboardChallenge challenge = setup.session.keyboardInteractiveChallenge();
                 setup.session.respondKeyboardInteractive(challenge, challenge.response(List.of("")));
-                binding.result = 2; setup.session.step(); setup.session.beginShell(80,24);
+                binding.result = 2; setup.session.step();
+                setup.session.configureServerAlive(15, 3);
+                assertEquals(1, binding.aliveCalls);
+                setup.session.beginShell(80,24);
                 assertEquals(1,binding.continuationCalls); assertEquals(key ? 1 : 0,binding.keyBegins);
                 assertEquals(key ? 0 : 1,binding.authBegins); assertEquals(0,binding.keyboardBegins);
+            } finally { if (setup.session != null) setup.session.close(); setup.closeRegistry(); }
+        }
+    }
+
+    @Test public void firstFactorPartialRequiresExplicitContinuation() throws Exception {
+        for (boolean continuation : new boolean[] {false, true}) {
+            assertFalse(SshPasswordConnector.firstFactorNeedsContinuation(true, false, continuation));
+            assertCode("SSH_AUTHENTICATION", () ->
+                    SshPasswordConnector.firstFactorNeedsContinuation(false, false, continuation));
+        }
+        assertTrue(SshPasswordConnector.firstFactorNeedsContinuation(false, true, true));
+        assertCode("SSH_AUTH_PARTIAL", () ->
+                SshPasswordConnector.firstFactorNeedsContinuation(false, true, false));
+    }
+
+    @Test public void automaticPartialWithoutAuthorizedContinuationDoesNotGuessTheNextMethod() throws Exception {
+        for (boolean key : new boolean[]{false,true}) {
+            SshPasswordConnector.ContinuationPolicy policy = new SshPasswordConnector.ContinuationPolicy(
+                    SshPasswordConnector.ContinuationMode.AUTOMATIC,true);
+            policy.acceptConfiguredCapability(false);
+            MfaNative binding = new MfaNative(); binding.receiptMutation = -1;
+            Setup setup = new Setup(true,binding);
+            try {
+                mfaReady(setup,binding,key,policy); binding.result = 4; setup.session.step();
+                // No server method list is retained in this selection; PARTIAL could also require another key.
+                assertCode("SSH_AUTH_PARTIAL", () ->
+                        SshPasswordConnector.firstFactorNeedsContinuation(false,true,policy.enabled()));
+                assertEquals(0,binding.continuationCalls);
+                assertCode("SSH_SESSION_PHASE", () -> setup.session.beginShell(80,24));
+            } finally { if (setup.session != null) setup.session.close(); setup.closeRegistry(); }
+        }
+    }
+
+    @Test public void automaticBridgeRequestUsesTheProductionSelectionAndSessionStages() throws Exception {
+        for (boolean key : new boolean[]{false,true}) for (boolean configured : new boolean[]{false,true})
+                for (boolean allowed : new boolean[]{false,true}) {
+            if (!configured && !allowed) continue;
+            String method = configured ? key ? "ssh.configConnect" : "ssh.configPasswordConnect"
+                    : key ? "ssh.keyConnect" : "ssh.passwordConnect";
+            java.util.Map<String,Object> arguments = new java.util.HashMap<>(VaultCollections.map(
+                    "requestId","request","username","user","columns",80,"rows",24,"autoKeyboardInteractive",true));
+            if (configured) { arguments.put("alias","host"); arguments.put("binding","a".repeat(64)); }
+            else { arguments.put("host","host.invalid"); arguments.put("port",22); }
+            if (key) arguments.put("keyId","key");
+            else {
+                arguments.put("password","synthetic");
+                if (configured) { arguments.put("useSavedPassword",false); arguments.put("savePassword",false); }
+            }
+            SshPasswordConnector.ContinuationPolicy policy = new SshPasswordConnector.ContinuationPolicy(
+                    SshPasswordConnectBridge.authenticationContinuationMode(new io.flutter.plugin.common.MethodCall(method,arguments)),
+                    configured);
+            if (configured) policy.acceptConfiguredCapability(allowed);
+            MfaNative binding = new MfaNative(); binding.receiptMutation = -1;
+            Setup setup = new Setup(true,binding);
+            try {
+                mfaReady(setup,binding,key,policy);
+                assertEquals(allowed ? 3 : 1,java.nio.ByteBuffer.wrap(binding.wireCopy).getShort(4));
+                if (allowed) {
+                    binding.result = 4; setup.session.step();
+                    assertTrue(SshPasswordConnector.firstFactorNeedsContinuation(false,true,
+                            policy.enabled()));
+                    setup.session.continueKeyboardInteractiveAuth();
+                    binding.result = 2; setup.session.step();
+                } else {
+                    binding.result = 2; setup.session.step();
+                    assertFalse(SshPasswordConnector.firstFactorNeedsContinuation(true,false,
+                            policy.enabled()));
+                }
+                setup.session.beginShell(80,24);
+                assertEquals(allowed ? 1 : 0,binding.continuationCalls);
+                assertEquals(key ? 1 : 0,binding.keyBegins);
+                assertEquals(key ? 0 : 1,binding.authBegins);
             } finally { if (setup.session != null) setup.session.close(); setup.closeRegistry(); }
         }
     }
@@ -455,7 +543,8 @@ public final class SshNativeSessionTest {
                 assertCode("SSH_SESSION_PHASE",()->setup.session.privateKeyAuthResult());
                 VaultCodec.wipe(response);
             }
-            binding.result=2;setup.session.step();setup.session.beginShell(80,24);
+            binding.result=2;setup.session.step();setup.session.configureServerAlive(15,3);
+            assertEquals(1,binding.aliveCalls);setup.session.beginShell(80,24);
             assertEquals(1,binding.keyboardBegins);assertEquals(16,binding.keyboardResponds);
             assertCode("SSH_SESSION_PHASE",()->setup.session.keyboardInteractiveAuthResult());
         }finally{if(setup.session!=null)setup.session.close();setup.closeRegistry();}
@@ -1208,7 +1297,7 @@ public final class SshNativeSessionTest {
     }
 
     @Test public void actualHostRejectionDiagnosticIsFixedAndTerminalWithoutReplayingNative() throws Exception {
-        for (String code : new String[] {"SSH_HOST_KEY_CHANGED", "SSH_HOST_KEY_REVOKED", "SSH_HOST_KEY_CERTIFICATE"}) {
+        for (String code : new String[] {"SSH_HOST_KEY_CHANGED", "SSH_HOST_KEY_REVOKED", "SSH_HOST_KEY_CERTIFICATE", "SSH_HOST_TRUST_BLOCKED"}) {
             ManagedShellNative binding = new ManagedShellNative();
             Setup setup = new Setup(false, binding);
             try {
@@ -1260,6 +1349,29 @@ public final class SshNativeSessionTest {
                 assertCode(code, () -> setup.session.step());
             } finally { binding.stepHook = null; setup.session.close(); setup.closeRegistry(); }
         }
+    }
+
+    @Test public void hostProofCallbackFailureIsTerminalWhenNativeReportsCancellation() throws Exception {
+        ManagedShellNative binding = new ManagedShellNative();
+        Setup setup = new Setup(false, binding);
+        try {
+            setup.session = openManaged(setup);
+            binding.stepFailure = new IOException("synthetic native callback rejection");
+            binding.stepHook = () -> {
+                assertEquals(null, setup.callback.onNativeHostEvidence(setup.issued.token,
+                        setup.issued.role.hop + 1, setup.issued.role.port,
+                        setup.issued.role.connectionId, setup.issued.role.targetIdentity,
+                        setup.issued.role.host, SshNativeCallbackAdapter.HOST_KNOWN,
+                        "ssh-ed25519", "SHA256:" + "A".repeat(43), filled(32, 1), filled(32, 2)));
+                assertEquals("SSH_HOST_PROOF_INVALID", setup.callback.lastFailureCode());
+            };
+            assertCode("SSH_SESSION_CANCELLED", () -> setup.session.step());
+            binding.stepHook = null;
+            assertCode("SSH_SESSION_CANCELLED", () -> setup.session.step());
+            assertEquals(Arrays.asList("managedOpen", "step"), binding.order);
+            assertEquals(null, setup.callback.hostProof());
+            assertEquals(null, setup.callback.kexProof());
+        } finally { binding.stepHook = null; setup.session.close(); setup.closeRegistry(); }
     }
 
     @Test public void aFreshSessionDoesNotInheritAnotherAttemptHostRejection() throws Exception {
@@ -1842,6 +1954,60 @@ public final class SshNativeSessionTest {
         setup.session.beginShell(80, 24);
         binding.status[0] = 4;
         assertEquals(SshNativeSession.ShellPhase.RUNNING, setup.session.shellStatus().phase);
+    }
+
+    @Test public void serverAlivePolicyRequiresSuccessfulAuthenticationAndOriginalOwner() throws Exception {
+        for (boolean key : new boolean[] {false, true}) {
+            for (int result : new int[] {1, 2, 3, 4}) {
+                ShellNative binding = new ShellNative(); Setup setup = new Setup(true, binding);
+                try {
+                    authenticated(setup, binding, key, result);
+                    if (result != 2) {
+                        assertCode("SSH_SESSION_PHASE", () -> setup.session.configureServerAlive(10, 2));
+                        assertEquals(0, binding.aliveCalls);
+                    } else {
+                        assertCode("SSH_SESSION_REQUIRED", () -> setup.session.configureServerAlive(-1, 2));
+                        assertEquals(0, binding.aliveCalls);
+                        AtomicReference<Throwable> wrongOwner = new AtomicReference<>();
+                        Thread other = new Thread(() -> {
+                            try { setup.session.configureServerAlive(10, 2); }
+                            catch (Throwable failure) { wrongOwner.set(failure); }
+                        });
+                        other.start(); other.join();
+                        assertTrue(wrongOwner.get() instanceof VaultException);
+                        assertEquals("SSH_SESSION_THREAD", ((VaultException) wrongOwner.get()).code);
+                        assertEquals(0, binding.aliveCalls);
+                        setup.session.configureServerAlive(10, 2);
+                        assertEquals(1, binding.aliveCalls); assertEquals(10, binding.aliveInterval);
+                        assertEquals(2, binding.aliveCountMax);
+                        assertCode("SSH_SESSION_PHASE", () -> setup.session.configureServerAlive(10, 2));
+                        setup.session.beginShell(80, 24);
+                        assertCode("SSH_SESSION_PHASE", () -> setup.session.configureServerAlive(10, 2));
+                        assertEquals(1, binding.aliveCalls);
+                    }
+                } finally { setup.session.close(); setup.closeRegistry(); }
+            }
+        }
+    }
+
+    @Test public void serverAliveNativeFailureAndCancellationCannotPromoteTheSession() throws Exception {
+        for (boolean cancel : new boolean[] {false, true}) {
+            ShellNative binding = new ShellNative(); Setup setup = new Setup(true, binding);
+            try {
+                authenticated(setup, binding, false, 2);
+                if (cancel) binding.protocolHook = () -> {
+                    try { setup.session.cancel(); } catch (VaultException failure) { throw new AssertionError(failure); }
+                };
+                else binding.failOperation = "serverAlive";
+                assertCode(cancel ? "SSH_SESSION_CANCELLED" : "SSH_SESSION_KEEPALIVE",
+                        () -> setup.session.configureServerAlive(10, 2));
+                assertEquals(1, binding.aliveCalls);
+                assertCode(cancel ? "SSH_SESSION_CANCELLED" : "SSH_SESSION_KEEPALIVE",
+                        () -> setup.session.beginShell(80, 24));
+                assertEquals(0, binding.shellCalls);
+                binding.failOperation = null; binding.protocolHook = null;
+            } finally { setup.session.close(); setup.closeRegistry(); }
+        }
     }
 
     @Test public void shellRequiresSavedSelectedSuccessForEitherAuthentication() throws Exception {

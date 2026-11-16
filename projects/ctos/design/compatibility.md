@@ -1,5 +1,15 @@
 # Compatibility
 
+2026-11-16：[早期通道输出](ssh-shell-early-output.md)允许 session channel 打开后在
+PTY／shell 请求答复之前接收有界输出，仍由真实 shell success 决定能否发布。修正不
+新增认证或配置格式；旧候选设备复现、修正版本地回归和[指定板复测](verification.md#20261116-ssh-early-output-device)分开记录。
+
+2026-11-16：[服务器保活](ssh-server-alive.md)消费配置的 `ServerAliveInterval` 和
+`ServerAliveCountMax`，其他尚未消费的选项仍明确拒绝。CSCP/CSPPv4 保留 v3 方法能力；
+旧 v1–v3 计划解码为间隔 0、次数 3，不改变既有连接。本地及指定 Android 11 板与
+合成服务的真实加密保活应答已验证；设备无应答和生命周期的后续结果见上条，真实业务
+服务器及用户体验仍待验证，见[证据与边界](verification.md#20261116-ssh-server-alive-device)。
+
 2026-11-04：[两阶段MFA](ssh-mfa-authentication.md)保持原单方法及vault格式；旧CSASv1/v2、
 旧config plan v1/v2和缺省continuation均无续接权。新CSASv3正确区分无口令和有entry的
 加密私钥，CSCP/CSPPv3严格方法／顺序能力，packet60始终按实际当前方法解释。

@@ -6,7 +6,7 @@ import java.util.Map;
 final class SshReconnectTarget {
     final String mode, host, username, keyId, configAlias;
     final int port;
-    final boolean continueKeyboardInteractive;
+    final boolean continueKeyboardInteractive, autoKeyboardInteractive;
 
     SshReconnectTarget(SshPasswordProfile profile, String keyId, String configAlias) throws VaultException {
         this(profile, keyId, configAlias, false);
@@ -18,7 +18,13 @@ final class SshReconnectTarget {
 
     SshReconnectTarget(SshPasswordProfile profile, String keyId, String configAlias, boolean keyboardInteractive,
             boolean continueKeyboardInteractive) throws VaultException {
-        if (profile == null || configAlias == null || keyboardInteractive && (keyId != null || continueKeyboardInteractive))
+        this(profile, keyId, configAlias, keyboardInteractive, continueKeyboardInteractive, false);
+    }
+
+    SshReconnectTarget(SshPasswordProfile profile, String keyId, String configAlias, boolean keyboardInteractive,
+            boolean continueKeyboardInteractive, boolean autoKeyboardInteractive) throws VaultException {
+        if (profile == null || configAlias == null || continueKeyboardInteractive && autoKeyboardInteractive
+                || keyboardInteractive && (keyId != null || continueKeyboardInteractive || autoKeyboardInteractive))
             throw SshPasswordProfile.parameters();
         if (keyId != null) VaultManifest.identifier(keyId);
         if (!configAlias.isEmpty()) {
@@ -35,6 +41,7 @@ final class SshReconnectTarget {
         this.keyId = keyId;
         this.configAlias = configAlias;
         this.continueKeyboardInteractive = continueKeyboardInteractive;
+        this.autoKeyboardInteractive = autoKeyboardInteractive;
     }
 
     Map<String, Object> wire() {
@@ -43,6 +50,7 @@ final class SshReconnectTarget {
         if (keyId != null) value.put("keyId", keyId);
         if (!configAlias.isEmpty()) value.put("configAlias", configAlias);
         if (continueKeyboardInteractive) value.put("continueKeyboardInteractive", true);
+        if (autoKeyboardInteractive) value.put("autoKeyboardInteractive", true);
         return value;
     }
 }

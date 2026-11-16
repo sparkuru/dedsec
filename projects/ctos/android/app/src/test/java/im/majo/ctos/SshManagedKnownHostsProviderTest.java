@@ -287,16 +287,16 @@ public final class SshManagedKnownHostsProviderTest {
 
         assertWriterRejectsChangedEvidence("ssh-rsa", FINGERPRINT,
                 SshHostKeyAuthority.Classification.NEW, OLD_CONTENT, NEW_CONTENT,
-                "SSH_HOST_KEY_CHANGED");
+                "SSH_HOST_PROOF_INVALID");
         assertWriterRejectsChangedEvidence(KEY_TYPE, "SHA256:" + "B".repeat(43),
                 SshHostKeyAuthority.Classification.NEW, OLD_CONTENT, NEW_CONTENT,
-                "SSH_HOST_KEY_CHANGED");
+                "SSH_HOST_PROOF_INVALID");
         assertWriterRejectsChangedEvidence(KEY_TYPE, FINGERPRINT,
                 SshHostKeyAuthority.Classification.NEW, "wrong base", NEW_CONTENT,
-                "SSH_HOST_KEY_CHANGED");
+                "SSH_HOST_PROOF_INVALID");
         assertWriterRejectsChangedEvidence(KEY_TYPE, FINGERPRINT,
                 SshHostKeyAuthority.Classification.NEW, OLD_CONTENT, "wrong replacement",
-                "SSH_HOST_KEY_CHANGED");
+                "SSH_HOST_PROOF_INVALID");
         assertWriterRejectsChangedEvidence(KEY_TYPE, FINGERPRINT,
                 SshHostKeyAuthority.Classification.KNOWN, OLD_CONTENT, NEW_CONTENT,
                 "SSH_HOST_KEY_CAS");

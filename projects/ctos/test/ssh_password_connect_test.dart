@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:ui' show PointerDeviceKind, SemanticsAction;
 
 import 'package:ctos/main.dart';
 import 'package:ctos/ssh/api.dart';
@@ -7,6 +8,7 @@ import 'package:ctos/ssh/host_trust_page.dart';
 import 'package:ctos/ssh/password_connect_page.dart';
 import 'package:ctos/ui/ctos_theme.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -116,6 +118,31 @@ void main() {
       await host.remove();
     },
   );
+
+  testWidgets('partial key authentication reports a neutral next step', (
+    tester,
+  ) async {
+    final host = _SshHost(tester)..libraryValues = _reconnectLibrary();
+    await host.mount(
+      reconnect: const SshReconnectTarget(
+        mode: SshReconnectMode.key,
+        host: 'server.invalid',
+        port: 2222,
+        username: 'alice',
+        keyId: 'key_a',
+      ),
+    );
+    await tester.tap(find.text('Open SSH'));
+    await host.advance();
+    await host.tapConnect();
+    host.completeConnect(error: PlatformException(code: 'SSH_AUTH_PARTIAL'));
+    await host.advance();
+    expect(find.text('服务器要求进一步认证，但当前连接无法继续。请检查服务器及配置。'), findsOneWidget);
+    expect(find.textContaining('私钥登录被拒绝'), findsNothing);
+    expect(host.identityCalls, hasLength(1));
+    await host.leave();
+    await host.remove();
+  });
 
   testWidgets(
     'key retry reloads the exact identity and requires explicit connect',
@@ -278,7 +305,7 @@ void main() {
     await tester.tap(find.text('Open SSH'));
     await host.advance();
     expect(host.connectResults, isEmpty);
-    expect(find.text('fixture'), findsOneWidget);
+    expect(find.text('配置：fixture'), findsOneWidget);
     await host.tapConnect();
     final args = host.identityCalls.single;
     expect(args['alias'], 'fixture');
@@ -544,6 +571,77 @@ void main() {
     );
   });
 
+  test(
+    'changed-host challenge is bounded, canonical and preserves all rows',
+    () {
+      final good = _changedTicket('attempt');
+      final parsed = SshEvent.parse(good) as SshHostKeyChangedEvent;
+      expect(parsed.host, 'server.invalid');
+      expect(parsed.source, 'ssh/known_hosts');
+      expect(parsed.oldKeys.map((row) => row.fingerprint), [
+        _changedOldFingerprint,
+        _changedOldFingerprint,
+        _changedOtherFingerprint,
+      ]);
+      expect(() => parsed.oldKeys.clear(), throwsUnsupportedError);
+      final config =
+          SshEvent.parse({...good, 'source': '.ssh/known_hosts'})
+              as SshHostKeyChangedEvent;
+      expect(config.source, '.ssh/known_hosts');
+      for (final bad in <Map<String, Object>>[
+        {...good, 'unexpected': true},
+        {...good}..remove('source'),
+        {...good, 'source': '/etc/known_hosts'},
+        {...good, 'source': 'ssh/../known_hosts'},
+        {...good, 'source': 'ssh//known_hosts'},
+        {...good, 'source': r'ssh\known_hosts'},
+        {...good, 'source': 'ssh/known*'},
+        {...good, 'source': 'a/b/c/d/e/f/g/h/i'},
+        {...good, 'source': 'a' * 513},
+        {...good, 'oldKeys': <Object>[]},
+        {
+          ...good,
+          'oldKeys': List.filled(129, {
+            'keyType': 'ssh-ed25519',
+            'fingerprint': _changedOldFingerprint,
+          }),
+        },
+        {
+          ...good,
+          'oldKeys': [
+            {'keyType': 'x' * 129, 'fingerprint': _changedOldFingerprint},
+          ],
+        },
+        {...good, 'keyType': 'x' * 65},
+        {...good, 'keyType': 'ssh invalid'},
+        {...good, 'fingerprint': 'SHA256:${'B' * 43}'},
+        {...good, 'remainingMillis': 0},
+        {...good, 'remainingMillis': 30001},
+        {...good, 'binding': 'not-an-exact-binding'},
+      ]) {
+        expect(() => SshEvent.parse(bad), throwsFormatException);
+      }
+      final dismissed =
+          SshEvent.parse({
+                'type': 'hostKeyChangedDismissed',
+                'requestId': 'attempt',
+                'ticketId': 'ticket-a',
+                'binding': 'a' * 64,
+              })
+              as SshHostKeyChangedDismissed;
+      expect(dismissed.ticketId, 'ticket-a');
+      expect(dismissed.binding, 'a' * 64);
+      expect(
+        () => SshEvent.parse({
+          'type': 'hostKeyChangedDismissed',
+          'requestId': 'attempt',
+          'ticketId': 'ticket-a',
+        }),
+        throwsFormatException,
+      );
+    },
+  );
+
   testWidgets(
     'protected form is created only after shared unlock and protection',
     (tester) async {
@@ -695,10 +793,13 @@ void main() {
         'state': 'connected',
       });
       await host.advance();
+      // The state event is advisory; the original RPC owns the handoff.
+      expect(find.byKey(const Key('ssh-password')), findsOneWidget);
+      host.completeConnect();
+      await host.advance();
+      await host.advance();
       expect(find.byKey(const Key('ssh-password')), findsNothing);
       expect(host.cancelled, isNot(contains(second)));
-      host.completeConnect(error: PlatformException(code: 'LATE_FAILURE'));
-      await host.advance();
       expect(tester.takeException(), isNull);
       expect(host.releases, isNotEmpty);
     },
@@ -1164,6 +1265,564 @@ void main() {
     },
   );
 
+  testWidgets(
+    'changed host displays every fingerprint and continues the same attempt',
+    (tester) async {
+      final host = _SshHost(tester);
+      await host.open();
+      await host.fill();
+      await host.tapConnect();
+      final id = host.connectCalls.single['requestId'] as String;
+      final ticket = _changedTicket(id);
+      await host.emit(ticket);
+      await host.advance();
+      expect(find.text('服务器指纹已变化'), findsOneWidget);
+      expect(find.text('server.invalid:2222'), findsOneWidget);
+      expect(find.text('本次收到的新指纹'), findsOneWidget);
+      expect(find.text(_changedNewFingerprint), findsOneWidget);
+      expect(find.text(_changedOldFingerprint), findsNWidgets(2));
+      expect(find.text(_changedOtherFingerprint), findsOneWidget);
+      expect(find.text('ssh/known_hosts'), findsNothing);
+      await tester.ensureVisible(
+        find.byKey(const Key('ssh-changed-host-details')),
+      );
+      await tester.tap(find.byKey(const Key('ssh-changed-host-details')));
+      await host.advance();
+      expect(find.text('ssh/known_hosts'), findsOneWidget);
+      await host.emit(ticket);
+      await tester.ensureVisible(
+        find.byKey(const Key('ssh-changed-host-accept')),
+      );
+      await tester.tap(find.byKey(const Key('ssh-changed-host-accept')));
+      await host.advance();
+      expect(host.decisions, [
+        {
+          'requestId': id,
+          'ticketId': 'changed-ticket',
+          'binding': 'a' * 64,
+          'accept': true,
+        },
+      ]);
+      expect(host.connectResults, hasLength(1));
+      expect(
+        host.calls.where((call) => call.method.startsWith('ssh.hostTrust')),
+        isEmpty,
+      );
+      host.completeConnect();
+      await host.advance();
+      expect(find.text('Open SSH'), findsOneWidget);
+      expect(host.cancelled, isNot(contains(id)));
+      await host.remove();
+    },
+  );
+
+  testWidgets('changed-host actions use the same rounded state layer', (
+    tester,
+  ) async {
+    final host = _SshHost(tester);
+    await host.open();
+    await host.fill();
+    await host.tapConnect();
+    final id = host.connectCalls.single['requestId'] as String;
+    await host.emit(_changedTicket(id));
+    await host.advance();
+    const reject = 'ssh-changed-host-reject';
+    _expectChangedHostActionShape(tester, reject);
+    _expectChangedHostActionShape(tester, 'ssh-changed-host-accept');
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    await mouse.addPointer(location: Offset.zero);
+    await mouse.moveTo(tester.getCenter(find.byKey(const Key(reject))));
+    await tester.pump();
+    expect(
+      _changedHostActionInk(tester, reject).statesController!.value,
+      contains(WidgetState.hovered),
+    );
+    _expectChangedHostActionShape(tester, reject);
+    await mouse.down(tester.getCenter(find.byKey(const Key(reject))));
+    await tester.pump(const Duration(milliseconds: 150));
+    expect(
+      _changedHostActionInk(tester, reject).statesController!.value,
+      contains(WidgetState.pressed),
+    );
+    _expectChangedHostActionShape(tester, reject);
+    await mouse.cancel();
+    await mouse.removePointer();
+    Focus.of(
+      tester.element(
+        find.descendant(
+          of: find.byKey(const Key(reject)),
+          matching: find.text('取消'),
+        ),
+      ),
+    ).requestFocus();
+    await tester.pump();
+    expect(
+      _changedHostActionInk(tester, reject).statesController!.value,
+      contains(WidgetState.focused),
+    );
+    _expectChangedHostActionShape(tester, reject);
+    host.completeConnect(error: PlatformException(code: 'SSH_HOSTKEY_DENIED'));
+    await host.advance();
+    await host.remove();
+  });
+
+  testWidgets('changed-host reject, expiry and forged pop never approve', (
+    tester,
+  ) async {
+    for (final scenario in ['reject', 'expiry', 'forged']) {
+      final host = _SshHost(tester);
+      await host.open();
+      await host.fill();
+      await host.tapConnect();
+      final id = host.connectCalls.single['requestId'] as String;
+      await host.emit({
+        ..._changedTicket(id),
+        'remainingMillis': scenario == 'expiry' ? 500 : 30000,
+      });
+      await host.advance(milliseconds: 100);
+      if (scenario == 'reject') {
+        await tester.tap(find.byKey(const Key('ssh-changed-host-reject')));
+      } else if (scenario == 'expiry') {
+        await tester.pump(const Duration(milliseconds: 501));
+      } else {
+        Navigator.of(tester.element(find.text('服务器指纹已变化'))).pop(true);
+      }
+      await host.advance();
+      expect(host.decisions.single['accept'], isFalse);
+      host.completeConnect(
+        error: PlatformException(code: 'SSH_HOSTKEY_DENIED'),
+      );
+      await host.advance();
+      expect(find.text('未信任此主机，连接已结束。'), findsOneWidget);
+      await host.remove();
+    }
+  });
+
+  testWidgets('changed-host dismissal and changed target revoke the decision', (
+    tester,
+  ) async {
+    for (final changedTarget in [false, true]) {
+      final host = _SshHost(tester);
+      await host.open();
+      await host.fill();
+      await host.tapConnect();
+      final id = host.connectCalls.single['requestId'] as String;
+      await host.emit({
+        ..._changedTicket(id),
+        if (changedTarget) 'host': 'another.invalid',
+      });
+      await host.advance();
+      if (changedTarget) {
+        expect(find.text('主机信息已变化，请重新连接。'), findsOneWidget);
+      } else {
+        final stale = tester
+            .widget<FilledButton>(
+              find.byKey(const Key('ssh-changed-host-accept')),
+            )
+            .onPressed!;
+        await host.emit({
+          'type': 'hostKeyChangedDismissed',
+          'requestId': id,
+          'ticketId': 'changed-ticket',
+          'binding': 'a' * 64,
+        });
+        await host.advance();
+        stale();
+        await host.advance();
+      }
+      expect(host.decisions, isEmpty);
+      expect(find.text('服务器指纹已变化'), findsNothing);
+      host.completeConnect(error: PlatformException(code: 'SSH_CANCELLED'));
+      await host.advance();
+      await host.remove();
+    }
+  });
+
+  testWidgets('changed-host waits for the decision acknowledgement and RPC', (
+    tester,
+  ) async {
+    for (final outcome in ['accepted', 'rejected', 'error']) {
+      final host = _SshHost(tester)
+        ..pendingDecision = Completer<Map<String, Object>>();
+      await host.open();
+      await host.fill();
+      await host.tapConnect();
+      final id = host.connectCalls.single['requestId'] as String;
+      await host.emit(_changedTicket(id));
+      await host.advance();
+      await tester.tap(find.byKey(const Key('ssh-changed-host-accept')));
+      await host.advance();
+      await host.emit({
+        'type': 'hostKeyChangedDismissed',
+        'requestId': id,
+        'ticketId': 'changed-ticket',
+        'binding': 'a' * 64,
+      });
+      await host.emit({'type': 'state', 'requestId': id, 'state': 'connected'});
+      host.completeConnect();
+      await host.advance();
+      expect(find.text('Open SSH'), findsNothing);
+      expect(host.releases, isEmpty);
+      if (outcome == 'error') {
+        host.pendingDecision!.completeError(
+          PlatformException(code: 'SSH_FAILED'),
+        );
+      } else {
+        host.pendingDecision!.complete({'accepted': outcome == 'accepted'});
+      }
+      await host.advance();
+      if (outcome == 'accepted') {
+        expect(find.text('Open SSH'), findsOneWidget);
+      } else {
+        expect(find.text('Open SSH'), findsNothing);
+        expect(host.cancelled, contains(id));
+      }
+      await host.remove();
+    }
+  });
+
+  testWidgets(
+    'early changed-host connected event cannot hide uncertain commit',
+    (tester) async {
+      final host = _SshHost(tester);
+      await host.open();
+      await host.fill();
+      await host.tapConnect();
+      final id = host.connectCalls.single['requestId'] as String;
+      await host.emit(_changedTicket(id));
+      await host.advance();
+      await tester.tap(find.byKey(const Key('ssh-changed-host-accept')));
+      await host.advance();
+      await host.emit({'type': 'state', 'requestId': id, 'state': 'connected'});
+      expect(find.text('Open SSH'), findsNothing);
+      expect(host.releases, isEmpty);
+      host.completeConnect(
+        error: PlatformException(code: 'VAULT_COMMIT_UNCERTAIN'),
+      );
+      await host.advance();
+      expect(find.text('保存结果未能确认，请重新解锁并核验连接信息、已保存密码或主机密钥。'), findsOneWidget);
+      expect(find.text('Open SSH'), findsNothing);
+      await host.leave();
+      expect(find.text('密码操作结果'), findsOneWidget);
+      expect(host.releases, isEmpty);
+      await tester.tap(find.text('知道了'));
+      await host.advance();
+      expect(host.releases, isNotEmpty);
+      await host.remove();
+    },
+  );
+
+  testWidgets(
+    'changed-host rejects a connected event before explicit approval',
+    (tester) async {
+      final host = _SshHost(tester);
+      await host.open();
+      await host.fill();
+      await host.tapConnect();
+      final id = host.connectCalls.single['requestId'] as String;
+      await host.emit(_changedTicket(id));
+      await host.advance();
+      await host.emit({'type': 'state', 'requestId': id, 'state': 'connected'});
+      await host.advance();
+      expect(find.text('主机密钥确认未完成，请重新连接。'), findsOneWidget);
+      expect(host.decisions, isEmpty);
+      expect(host.cancelled, contains(id));
+      host.completeConnect();
+      await host.advance();
+      expect(find.text('Open SSH'), findsNothing);
+      await host.remove();
+    },
+  );
+
+  testWidgets('all connect attempts retain protection before the first event', (
+    tester,
+  ) async {
+    final host = _SshHost(tester);
+    await host.open();
+    await host.fill();
+    await host.tapConnect();
+    final id = host.connectCalls.single['requestId'] as String;
+    expect(host.connectCalls.single['autoKeyboardInteractive'], isTrue);
+    await host.remove();
+    expect(host.releases, isEmpty);
+    expect(host.cancelled.where((value) => value == id), hasLength(1));
+    host.completeConnect(error: PlatformException(code: 'SSH_CANCELLED'));
+    await host.advance();
+    expect(host.cancelled.where((value) => value == id), hasLength(2));
+    expect(host.releases, isNotEmpty);
+  });
+
+  testWidgets(
+    'changed-host protection survives disposal until uncertain outcome',
+    (tester) async {
+      final host = _SshHost(tester);
+      await host.open();
+      await host.fill();
+      await host.tapConnect();
+      final id = host.connectCalls.single['requestId'] as String;
+      await host.emit(_changedTicket(id));
+      await host.advance();
+      await tester.tap(find.byKey(const Key('ssh-changed-host-accept')));
+      await host.advance();
+      await host.remove();
+      expect(host.releases, isEmpty);
+      host.completeConnect(
+        error: PlatformException(code: 'VAULT_COMMIT_UNCERTAIN'),
+      );
+      await host.advance();
+      expect(host.releases, isNotEmpty);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('cancel after changed-host acceptance closes late handoff', (
+    tester,
+  ) async {
+    final host = _SshHost(tester);
+    await host.open();
+    await host.fill();
+    await host.tapConnect();
+    final id = host.connectCalls.single['requestId'] as String;
+    await host.emit(_changedTicket(id));
+    await host.advance();
+    await tester.tap(find.byKey(const Key('ssh-changed-host-accept')));
+    await host.advance();
+    await host.leave();
+    expect(host.releases, isEmpty);
+    expect(host.cancelled.where((value) => value == id), hasLength(1));
+    host.completeConnect();
+    await host.advance();
+    expect(host.cancelled.where((value) => value == id), hasLength(2));
+    expect(find.text('Open SSH'), findsOneWidget);
+    expect(host.releases, isNotEmpty);
+    await host.remove();
+  });
+
+  testWidgets('blocked actual trust source never opens group recovery', (
+    tester,
+  ) async {
+    for (final (mode, code, message) in [
+      (
+        SshReconnectMode.password,
+        'SSH_HOST_TRUST_BLOCKED',
+        '此连接使用的信任文件包含受保护或共享记录，无法直接更新。请在“主机信任”中查看。',
+      ),
+      (
+        SshReconnectMode.key,
+        'SSH_HOST_TRUST_BLOCKED',
+        '此连接使用的信任文件包含受保护或共享记录，无法直接更新。请在“主机信任”中查看。',
+      ),
+      (
+        SshReconnectMode.config,
+        'SSH_HOST_TRUST_BLOCKED',
+        '此连接使用的信任文件包含受保护或共享记录，无法直接更新。请在“主机信任”中查看。',
+      ),
+      (
+        SshReconnectMode.config,
+        'SSH_HOST_CHANGED_POLICY',
+        '此配置要求已信任的主机，不能直接替换。请检查配置或在“主机信任”中管理。',
+      ),
+    ]) {
+      final host = _SshHost(tester)..libraryValues = _reconnectLibrary();
+      if (mode == SshReconnectMode.password) {
+        await host.open();
+        await host.fill();
+      } else {
+        await host.mount(
+          reconnect: SshReconnectTarget(
+            mode: mode,
+            host: 'server.invalid',
+            port: 2222,
+            username: 'alice',
+            keyId: 'key_a',
+            configAlias: mode == SshReconnectMode.config ? 'fixture' : null,
+          ),
+        );
+        await tester.tap(find.text('Open SSH'));
+        await host.advance();
+      }
+      await host.tapConnect();
+      host.connectResults.last.completeError(PlatformException(code: code));
+      await host.advance();
+      expect(find.text(message), findsOneWidget);
+      expect(find.text('服务器主机密钥已变化'), findsNothing);
+      expect(
+        host.calls.where((call) => call.method.startsWith('ssh.hostTrust')),
+        isEmpty,
+      );
+      await host.leave();
+      await host.remove();
+    }
+  });
+
+  testWidgets(
+    'changed-host fingerprints must fit or be reviewed before trust',
+    (tester) async {
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      tester.view.devicePixelRatio = 1;
+      for (final compact in [false, true]) {
+        final size = compact ? const Size(320, 568) : const Size(1024, 768);
+        tester.view.physicalSize = size;
+        await tester.binding.setSurfaceSize(size);
+        final host = _SshHost(tester);
+        await host.open(scale: compact ? 2 : 1);
+        await host.fill();
+        await host.tapConnect();
+        final id = host.connectCalls.single['requestId'] as String;
+        await host.emit({
+          ..._changedTicket(id),
+          'oldKeys': [
+            {'keyType': 'ssh-ed25519', 'fingerprint': _changedOldFingerprint},
+          ],
+        });
+        await host.advance();
+        final accept = find.byKey(const Key('ssh-changed-host-accept'));
+        if (compact) {
+          expect(tester.widget<FilledButton>(accept).onPressed, isNull);
+          expect(find.text('滚动查看全部指纹'), findsOneWidget);
+          await tester.tap(accept);
+          expect(host.decisions, isEmpty);
+          expect(
+            find.byKey(const Key('ssh-changed-host-reject')).hitTestable(),
+            findsOneWidget,
+          );
+          final scrollView = find.descendant(
+            of: find.byKey(const Key('ssh-changed-host-scroll-focus')),
+            matching: find.byType(SingleChildScrollView),
+          );
+          Focus.of(tester.element(scrollView)).requestFocus();
+          await tester.pump();
+          await tester.sendKeyEvent(LogicalKeyboardKey.end);
+          await host.advance();
+        }
+        expect(tester.widget<FilledButton>(accept).onPressed, isNotNull);
+        expect(find.text('信任新指纹并继续'), findsOneWidget);
+        await tester.tap(accept);
+        await host.advance();
+        expect(host.decisions.single['accept'], isTrue);
+        host.completeConnect(
+          error: PlatformException(code: 'SSH_HOSTKEY_DENIED'),
+        );
+        await host.advance();
+        await host.remove();
+      }
+    },
+  );
+
+  testWidgets('changed-host review exposes accessible scrolling', (
+    tester,
+  ) async {
+    final semantics = tester.ensureSemantics();
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(568, 320);
+    await tester.binding.setSurfaceSize(const Size(568, 320));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final host = _SshHost(tester);
+    await host.open(scale: 2);
+    await host.fill();
+    await host.tapConnect();
+    final id = host.connectCalls.single['requestId'] as String;
+    await host.emit(_changedTicket(id));
+    await host.advance();
+    final accept = find.byKey(const Key('ssh-changed-host-accept'));
+    expect(tester.widget<FilledButton>(accept).onPressed, isNull);
+    final scrollable = find.descendant(
+      of: find.byKey(const Key('ssh-changed-host-scroll')),
+      matching: find.byType(Scrollable),
+    );
+    SemanticsNode? scrollSemantics;
+    void findScrollSemantics(SemanticsNode node) {
+      if (node.getSemanticsData().hasAction(SemanticsAction.scrollUp)) {
+        scrollSemantics = node;
+      } else {
+        node.visitChildren((child) {
+          findScrollSemantics(child);
+          return scrollSemantics == null;
+        });
+      }
+    }
+
+    findScrollSemantics(tester.getSemantics(scrollable.first));
+    expect(scrollSemantics, isNotNull);
+    for (var step = 0; step < 20; step++) {
+      if (tester.widget<FilledButton>(accept).onPressed != null) break;
+      scrollSemantics!.owner!.performAction(
+        scrollSemantics!.id,
+        SemanticsAction.scrollUp,
+      );
+      await tester.pump(const Duration(milliseconds: 300));
+    }
+    expect(tester.widget<FilledButton>(accept).onPressed, isNotNull);
+    await tester.tap(accept);
+    await host.advance();
+    expect(host.decisions.single['accept'], isTrue);
+    host.completeConnect(error: PlatformException(code: 'SSH_HOSTKEY_DENIED'));
+    await host.advance();
+    await host.remove();
+    semantics.dispose();
+  });
+
+  testWidgets('changed-host review supports 128 rows and large text', (
+    tester,
+  ) async {
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    tester.view.devicePixelRatio = 1;
+    for (final size in [const Size(320, 568), const Size(568, 320)]) {
+      tester.view.physicalSize = size;
+      await tester.binding.setSurfaceSize(size);
+      final host = _SshHost(tester);
+      await host.open(scale: 2);
+      await host.fill();
+      await host.tapConnect();
+      final id = host.connectCalls.single['requestId'] as String;
+      await host.emit({
+        ..._changedTicket(id),
+        'oldKeys': List.generate(
+          128,
+          (index) => {
+            'keyType': 'ssh-ed25519',
+            'fingerprint': index.isEven
+                ? _changedOldFingerprint
+                : _changedOtherFingerprint,
+          },
+        ),
+      });
+      await host.advance();
+      expect(find.text('已保存的指纹（128 条）'), findsOneWidget);
+      await tester.ensureVisible(
+        find.byKey(const Key('ssh-changed-host-old-fingerprint-127')),
+      );
+      expect(
+        find
+            .byKey(const Key('ssh-changed-host-old-fingerprint-127'))
+            .hitTestable(),
+        findsOneWidget,
+      );
+      await tester.ensureVisible(
+        find.byKey(const Key('ssh-changed-host-accept')),
+      );
+      expect(
+        find.byKey(const Key('ssh-changed-host-accept')).hitTestable(),
+        findsOneWidget,
+      );
+      await tester.tap(find.byKey(const Key('ssh-changed-host-reject')));
+      await host.advance();
+      expect(host.decisions.single['accept'], isFalse);
+      host.completeConnect(
+        error: PlatformException(code: 'SSH_HOSTKEY_DENIED'),
+      );
+      await host.advance();
+      expect(tester.takeException(), isNull);
+      await host.remove();
+    }
+    await tester.binding.setSurfaceSize(null);
+  });
+
   testWidgets('reject and expired host prompts never auto-approve', (
     tester,
   ) async {
@@ -1223,6 +1882,47 @@ void main() {
     host.completeConnect(error: PlatformException(code: 'SSH_CANCELLED'));
     await host.advance();
   });
+
+  testWidgets(
+    'host proof and callback cancellation never offer changed-key recovery',
+    (tester) async {
+      for (final scenario in [
+        ('SSH_HOST_PROOF_INVALID', '主机身份验证未能完成，连接已停止。请重新连接并核对服务器信息。'),
+        ('SSH_SESSION_CANCELLED', 'SSH 连接已中止，请重新连接。'),
+      ]) {
+        for (final useStateEvent in [false, true]) {
+          final host = _SshHost(tester);
+          await host.open();
+          await host.fill();
+          await host.tapConnect();
+          final request = host.connectCalls.single['requestId'] as String;
+          if (useStateEvent) {
+            await host.emit({
+              'type': 'state',
+              'requestId': request,
+              'state': 'failed',
+              'reason': scenario.$1,
+            });
+          }
+          host.completeConnect(error: PlatformException(code: scenario.$1));
+          await host.advance();
+          expect(find.text(scenario.$2), findsOneWidget);
+          expect(find.text('服务器主机密钥已变化'), findsNothing);
+          expect(
+            find.byKey(const Key('ssh-host-changed-forget')),
+            findsNothing,
+          );
+          expect(
+            host.calls.where((call) => call.method.startsWith('ssh.hostTrust')),
+            isEmpty,
+          );
+          expect(host.decisions, isEmpty);
+          await host.leave();
+          await host.remove();
+        }
+      }
+    },
+  );
 
   testWidgets(
     'changed and revoked hosts are failures without another approval',
@@ -1814,6 +2514,27 @@ void main() {
   );
 }
 
+InkWell _changedHostActionInk(WidgetTester tester, String key) =>
+    tester.widget<InkWell>(
+      find
+          .descendant(of: find.byKey(Key(key)), matching: find.byType(InkWell))
+          .first,
+    );
+
+void _expectChangedHostActionShape(WidgetTester tester, String key) {
+  final button = find.byKey(Key(key));
+  final material = tester.widget<Material>(
+    find.descendant(of: button, matching: find.byType(Material)).first,
+  );
+  const radius = BorderRadius.all(Radius.circular(12));
+  expect(material.shape, isA<RoundedRectangleBorder>());
+  expect((material.shape! as RoundedRectangleBorder).borderRadius, radius);
+  final inkBorder = _changedHostActionInk(tester, key).customBorder;
+  expect(inkBorder, isA<RoundedRectangleBorder>());
+  expect((inkBorder! as RoundedRectangleBorder).borderRadius, radius);
+  expect(tester.getSize(button).height, greaterThanOrEqualTo(48));
+}
+
 Map<String, Object> _ticket(String id) => {
   'type': 'hostKey',
   'requestId': id,
@@ -1823,6 +2544,28 @@ Map<String, Object> _ticket(String id) => {
   'port': 2222,
   'keyType': 'ssh-ed25519',
   'fingerprint': 'SHA256:${List.filled(43, 'A').join()}',
+  'remainingMillis': 30000,
+};
+
+final _changedOldFingerprint = 'SHA256:${'B' * 42}A';
+final _changedOtherFingerprint = 'SHA256:${'C' * 42}A';
+final _changedNewFingerprint = 'SHA256:${'D' * 42}A';
+
+Map<String, Object> _changedTicket(String id) => {
+  'type': 'hostKeyChanged',
+  'requestId': id,
+  'ticketId': 'changed-ticket',
+  'binding': 'a' * 64,
+  'host': 'server.invalid',
+  'port': 2222,
+  'source': 'ssh/known_hosts',
+  'keyType': 'ssh-ed25519',
+  'fingerprint': _changedNewFingerprint,
+  'oldKeys': [
+    {'keyType': 'ssh-rsa', 'fingerprint': _changedOldFingerprint},
+    {'keyType': 'ssh-rsa', 'fingerprint': _changedOldFingerprint},
+    {'keyType': 'ecdsa-sha2-nistp256', 'fingerprint': _changedOtherFingerprint},
+  ],
   'remainingMillis': 30000,
 };
 
@@ -1927,6 +2670,7 @@ class _SshHost {
   bool notificationsEnabled = true;
   Completer<Map<String, Object>>? notificationPermission;
   Completer<Map<String, Object>>? pendingLibrary;
+  Completer<Map<String, Object>>? pendingDecision;
   Object? forgetError;
   Completer<Map<String, Object>>? pendingForget;
   Map<String, Object> defaultValues = {'host': '', 'port': 22, 'username': ''};
@@ -2024,7 +2768,7 @@ class _SshHost {
       case 'ssh.cancel':
         return {'cancelled': true};
       case 'ssh.hostKeyDecision':
-        return {'accepted': true};
+        return pendingDecision?.future ?? {'accepted': true};
       case 'rootAuto':
         return jsonEncode({'root': false, 'attempted': false});
       case 'snapshot':

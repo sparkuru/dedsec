@@ -10,6 +10,61 @@ import java.util.function.BooleanSupplier;
 
 /** Real managed connection assembly. Every native resource is created and closed on one owner. */
 final class SshPasswordConnector implements MainActivity.AuthenticatedSshFactory {
+    enum ContinuationMode { NONE, STRICT, AUTOMATIC }
+
+    /** Freeze the allowed continuation separately from the user's automatic intent. */
+    static final class ContinuationPolicy {
+        final ContinuationMode mode;
+        final boolean configured;
+        private Boolean configuredCapability;
+
+        ContinuationPolicy(ContinuationMode mode, boolean configured) {
+            this.mode = java.util.Objects.requireNonNull(mode);
+            this.configured = configured;
+        }
+
+        void acceptConfiguredCapability(boolean allowed) throws VaultException {
+            if (mode == ContinuationMode.NONE) return;
+            if (!configured) throw SshPasswordProfile.parameters();
+            if (mode == ContinuationMode.STRICT && !allowed)
+                throw new VaultException("SSH_MFA_POLICY", "This configuration does not allow the selected authentication sequence");
+            if (mode == ContinuationMode.AUTOMATIC) {
+                if (configuredCapability != null && configuredCapability != allowed) throw changed();
+                configuredCapability = allowed;
+            }
+        }
+
+        boolean enabled() {
+            return mode == ContinuationMode.STRICT || mode == ContinuationMode.AUTOMATIC
+                    && (!configured || Boolean.TRUE.equals(configuredCapability));
+        }
+
+        SshAuthenticationSelection select(SshAuthenticationSelection selection, SshRoleContext.Clock clock)
+                throws VaultException {
+            return enabled() ? selection.withKeyboardContinuation(clock) : selection;
+        }
+    }
+
+    /** Preserve one effective policy across every protected configuration snapshot. */
+    static final class ServerAlivePolicy {
+        private boolean configured;
+        private int interval;
+        private int countMax = 3;
+
+        void accept(SshConfigEvaluator.DirectPlan plan) throws VaultException {
+            if (plan == null) throw SshPasswordProfile.parameters();
+            if (configured && (interval != plan.serverAliveInterval || countMax != plan.serverAliveCountMax))
+                throw changed();
+            interval = plan.serverAliveInterval;
+            countMax = plan.serverAliveCountMax;
+            configured = true;
+        }
+
+        boolean configured() { return configured; }
+        int interval() { return interval; }
+        int countMax() { return countMax; }
+    }
+
     interface Events {
         void present(SshHostKeyReviewMailbox.Ticket ticket) throws VaultException;
         void dismiss(SshHostKeyReviewMailbox.Ticket ticket);
@@ -31,7 +86,9 @@ final class SshPasswordConnector implements MainActivity.AuthenticatedSshFactory
     private final boolean useSaved;
     private final boolean keyboardInteractive;
     private AppSecrets.SshEntryMutationContext saveContext;
-    private boolean continueKeyboardInteractive, configuredPassword, saveConfigPassword;
+    private ContinuationPolicy continuationPolicy = new ContinuationPolicy(ContinuationMode.NONE, false);
+    private final ServerAlivePolicy serverAlivePolicy = new ServerAlivePolicy();
+    private boolean configuredPassword, saveConfigPassword;
     private byte[] pendingConfigPassword;
     private final AppSecrets.BundleContext origin;
     private final String privateKeyId, configAlias, usernameOverride, expectedConfigBinding;
@@ -53,6 +110,7 @@ final class SshPasswordConnector implements MainActivity.AuthenticatedSshFactory
     private final long initialRevision;
     private volatile boolean started;
     private volatile boolean durableWrite;
+    private volatile boolean changedTrustWritten, changedTrustProofPublished;
     private volatile Runnable cancellationAction;
     private Thread owner;
     private BooleanSupplier hostCancelled = () -> false;
@@ -67,6 +125,8 @@ final class SshPasswordConnector implements MainActivity.AuthenticatedSshFactory
     private volatile SshHostKeyReviewMailbox.Ticket ticket;
     private volatile SshKeyboardMailbox keyboardMailbox;
     private SshHostKeyAuthority.Review approved;
+    private SshHostKeyAuthority.ChangedReview approvedChanged;
+    private volatile boolean reviewingChanged;
     private SshNativeSession session;
     private boolean returned;
     private SshReconnectTarget reconnectTarget;
@@ -150,8 +210,13 @@ final class SshPasswordConnector implements MainActivity.AuthenticatedSshFactory
 
     boolean started() { return started; }
     void allowKeyboardContinuation(boolean enabled) throws VaultException {
-        if (started || keyboardInteractive && enabled) throw SshPasswordProfile.parameters();
-        continueKeyboardInteractive = enabled;
+        setContinuationMode(enabled ? ContinuationMode.STRICT : ContinuationMode.NONE);
+    }
+
+    void setContinuationMode(ContinuationMode mode) throws VaultException {
+        if (mode == null || started || keyboardInteractive && mode != ContinuationMode.NONE)
+            throw SshPasswordProfile.parameters();
+        continuationPolicy = new ContinuationPolicy(mode, !configAlias.isEmpty());
     }
 
     SshPasswordConnector(AppSecrets vault, String configAlias, String configBinding, String usernameOverride,
@@ -173,6 +238,7 @@ final class SshPasswordConnector implements MainActivity.AuthenticatedSshFactory
         try { check(); } catch (VaultException | RuntimeException | Error failure) { cancel(); throw failure; }
     }
     boolean durableWrite() { return durableWrite; }
+    boolean changedTrustPublicationUncertain() { return changedTrustWritten && !changedTrustProofPublished; }
     @Override public SshReconnectTarget reconnectTarget() { return reconnectTarget; }
     boolean handoffLive() {
         return !cancelled.get() && session != null && session.shellOutputPublicationLive();
@@ -205,6 +271,12 @@ final class SshPasswordConnector implements MainActivity.AuthenticatedSshFactory
         SshHostKeyReviewMailbox.Ticket pending = ticket;
         return current != null && pending != null && pending.id.equals(id) && pending.binding.equals(binding)
                 && current.resolve(pending, accept);
+    }
+
+    boolean hostKeyPending(SshHostKeyReviewMailbox.Ticket pending) throws VaultException {
+        checkTransport();
+        SshHostKeyReviewMailbox current = mailbox;
+        return current != null && current.pending(pending);
     }
 
     boolean respondKeyboard(String id, String binding, java.util.List<?> answers) throws VaultException {
@@ -281,6 +353,7 @@ final class SshPasswordConnector implements MainActivity.AuthenticatedSshFactory
             issueRole();
             mailbox = new SshHostKeyReviewMailbox(issued.role, clock, () -> {
                 check();
+                if (reviewingChanged) checkTransport();
                 if (callback == null) throw denied();
                 callback.requireAuthenticationSelectionLive();
             }, new SshHostKeyReviewMailbox.Sink() {
@@ -295,15 +368,29 @@ final class SshPasswordConnector implements MainActivity.AuthenticatedSshFactory
             SshHostKeyAuthority authority = new SshHostKeyAuthority(review -> {
                 if (strictHostKeyChecking == 2) throw new VaultException("SSH_HOSTKEY_UNKNOWN", "This configuration requires an already trusted host");
                 mailbox.requireApproved(review); check(); approved = review;
+            }, review -> {
+                if (strictHostKeyChecking == 2) throw new VaultException("SSH_HOST_CHANGED_POLICY", "This configuration requires an already trusted host");
+                checkTransport();
+                reviewingChanged = true;
+                try { mailbox.requireChangedApproved(review, transportDeadline); checkTransport(); approvedChanged = review; }
+                finally { reviewingChanged = false; }
             });
             SshVaultAdapter trusted = new SshVaultAdapter(vault, (connection, target) -> {
                 check();
                 if (approved == null || !connectionId.equals(connection) || !profileTarget(target)
                         || !issued.role.binding().equals(approved.roleBinding)) throw denied();
-            }, this::requireApprovedProposal);
+            }, this::requireApprovedProposal, proposal -> { throw denied(); }, (review, proposal) -> {
+                checkTransport();
+                if (approvedChanged != review || !proposal.matchesManagedObject(
+                        VaultManifest.FileType.KNOWN_HOSTS, hostsId, hostsPath, hostsIdentity)) throw denied();
+            });
             SshManagedKnownHostsProvider.SnapshotReceipt receipt = SshManagedKnownHostsProvider.snapshotFor(
                     trusted, issued.role, clock, rootPath, hostsPath, hostsId, hostsIdentity);
-            trust = SshManagedKnownHostsProvider.bindForNativeHandoff(trusted, receipt);
+            trust = SshManagedKnownHostsProvider.bindForNativeHandoff(trusted, receipt,
+                    new SshManagedKnownHostsProvider.ChangedCommitObserver() {
+                        @Override public void persisted() { changedTrustWritten = true; }
+                        @Override public void proofPublished() { changedTrustProofPublished = true; }
+                    });
             handoff = trust.nativeCandidateHandoff();
             SshCredentialBridge credential = new SshCredentialBridge(vault, authority, clock, password, transientKey);
             SshManagedProvider provider = new SshManagedProvider(credential, clock, trust, trust,
@@ -321,7 +408,7 @@ final class SshPasswordConnector implements MainActivity.AuthenticatedSshFactory
                                 : useSavedKeyPassphrase ? selectedKey.binding.passphraseEntryId : "", clock); }
                 finally { VaultCodec.wipe(blob); }
             }
-            if (continueKeyboardInteractive) selection = selection.withKeyboardContinuation(clock);
+            selection = continuationPolicy.select(selection, clock);
             if (password != null) password.bind(issued.role, selection);
             if (transientKey != null) transientKey.bind(issued.role, selection);
             callback.selectAuthentication(selection);
@@ -332,6 +419,10 @@ final class SshPasswordConnector implements MainActivity.AuthenticatedSshFactory
                 if (clock.now() >= transportDeadline) throw new VaultException("SSH_TIMED_OUT", "SSH key exchange timed out");
                 pause();
             }
+            boolean changedCompletionPending = changedTrustPublicationUncertain();
+            if (changedCompletionPending) check();
+            requireChangedCompletionDeadline(changedCompletionPending, clock, transportDeadline);
+            callback.confirmChangedNativeCompletion();
             check(); session.beginUserauthService();
             while (!session.userauthServiceReady()) { session.step(); pause(); }
             check();
@@ -345,29 +436,42 @@ final class SshPasswordConnector implements MainActivity.AuthenticatedSshFactory
                 while ((result = session.passwordAuthResult()) == SshNativeSession.PasswordAuthResult.PENDING) {
                     session.step(); pause();
                 }
-                partial = result == SshNativeSession.PasswordAuthResult.PARTIAL;
-                if (result != SshNativeSession.PasswordAuthResult.SUCCESS && !(partial && continueKeyboardInteractive))
-                    throw new VaultException("SSH_AUTHENTICATION", "SSH password authentication failed");
+                partial = firstFactorNeedsContinuation(result == SshNativeSession.PasswordAuthResult.SUCCESS,
+                        result == SshNativeSession.PasswordAuthResult.PARTIAL, continuationPolicy.enabled());
             } else {
                 session.beginPrivateKeyAuth();
                 SshNativeSession.PrivateKeyAuthResult result;
                 while ((result = session.privateKeyAuthResult()) == SshNativeSession.PrivateKeyAuthResult.PENDING) {
                     session.step(); pause();
                 }
-                partial = result == SshNativeSession.PrivateKeyAuthResult.PARTIAL;
-                if (result != SshNativeSession.PrivateKeyAuthResult.SUCCESS && !(partial && continueKeyboardInteractive))
-                    throw new VaultException("SSH_AUTHENTICATION", "SSH private key authentication failed");
+                partial = firstFactorNeedsContinuation(result == SshNativeSession.PrivateKeyAuthResult.SUCCESS,
+                        result == SshNativeSession.PrivateKeyAuthResult.PARTIAL, continuationPolicy.enabled());
             }
-            if (partial && continueKeyboardInteractive) {
+            if (partial && continuationPolicy.enabled()) {
                 session.continueKeyboardInteractiveAuth();
                 completeKeyboardAuthentication();
             }
             check();
-            reconnectTarget = new SshReconnectTarget(profile, privateKeyId, configAlias, keyboardInteractive, continueKeyboardInteractive);
+            if (!configAlias.isEmpty() && !serverAlivePolicy.configured()) throw changed();
+            if (serverAlivePolicy.interval() != 0)
+                session.configureServerAlive(serverAlivePolicy.interval(), serverAlivePolicy.countMax());
+            reconnectTarget = new SshReconnectTarget(profile, privateKeyId, configAlias, keyboardInteractive,
+                    continuationPolicy.mode == ContinuationMode.STRICT,
+                    continuationPolicy.mode == ContinuationMode.AUTOMATIC);
             session.retireAuthenticationWith(this::retireAuthentication);
             returned = true;
             return session;
         });
+    }
+
+    static boolean firstFactorNeedsContinuation(boolean success, boolean partial,
+            boolean continuationAllowed) throws VaultException {
+        if (success) return false;
+        if (partial) {
+            if (continuationAllowed) return true;
+            throw new VaultException("SSH_AUTH_PARTIAL", "The server requires another authentication method");
+        }
+        throw new VaultException("SSH_AUTHENTICATION", "SSH authentication failed");
     }
 
     private void completeKeyboardAuthentication() throws VaultException {
@@ -400,13 +504,12 @@ final class SshPasswordConnector implements MainActivity.AuthenticatedSshFactory
         }
         keyboardMailbox.close(); keyboardMailbox = null;
         if (result != SshNativeSession.KeyboardInteractiveAuthResult.SUCCESS)
-            throw new VaultException(continueKeyboardInteractive ? "SSH_MFA_AUTH" : "SSH_KEYBOARD_AUTH",
+            throw new VaultException(continuationPolicy.enabled() ? "SSH_MFA_AUTH" : "SSH_KEYBOARD_AUTH",
                     "SSH keyboard-interactive authentication failed");
     }
 
     private void requireChainPolicy(SshConfigEvaluator.DirectPlan plan, boolean key) throws VaultException {
-        if (continueKeyboardInteractive && !(key ? plan.publickeyThenKeyboardAllowed : plan.passwordThenKeyboardAllowed))
-            throw new VaultException("SSH_MFA_POLICY", "This configuration does not allow the selected authentication sequence");
+        continuationPolicy.acceptConfiguredCapability(key ? plan.publickeyThenKeyboardAllowed : plan.passwordThenKeyboardAllowed);
     }
 
     private void prepareConfigPassword() throws Exception {
@@ -449,6 +552,7 @@ final class SshPasswordConnector implements MainActivity.AuthenticatedSshFactory
             if (!plan.passwordAuthentication)
                 throw new VaultException("SSH_PASSWORD_POLICY", "This configuration disables password authentication");
             requireChainPolicy(plan, false);
+            serverAlivePolicy.accept(plan);
             SshPasswordProfile actual = new SshPasswordProfile(plan.hostname, plan.port, plan.user);
             String trustPath = SshConnectionMaterial.singleTrustPath(snapshot.manifest, plan);
             if (profile != null && (!profile.same(actual) || !hostsPath.equals(trustPath))) throw changed();
@@ -500,6 +604,7 @@ final class SshPasswordConnector implements MainActivity.AuthenticatedSshFactory
                 if (!plan.pubkeyAuthentication)
                     throw new VaultException("SSH_KEY_SELECTION", "This SSH configuration disables public-key authentication");
                 requireChainPolicy(plan, true);
+                serverAlivePolicy.accept(plan);
                 profile = new SshPasswordProfile(plan.hostname, plan.port, plan.user);
                 strictHostKeyChecking = plan.strictHostKeyChecking;
                 transportDeadline = Math.min(deadline, requestStarted + plan.connectTimeoutMillis);
@@ -545,6 +650,7 @@ final class SshPasswordConnector implements MainActivity.AuthenticatedSshFactory
                 if (plan.userRequired) throw new VaultException("SSH_USER_REQUIRED", "Enter an SSH username");
                 if (!plan.keyboardInteractiveAuthentication)
                     throw new VaultException("SSH_KEYBOARD_POLICY", "This SSH configuration does not allow keyboard-interactive authentication");
+                serverAlivePolicy.accept(plan);
                 SshPasswordProfile actual = new SshPasswordProfile(plan.hostname, plan.port, plan.user);
                 String trustPath = SshConnectionMaterial.singleTrustPath(snapshot.manifest, plan);
                 if (pass == 0) { selected = actual; selectedTrust = trustPath; }
@@ -575,6 +681,7 @@ final class SshPasswordConnector implements MainActivity.AuthenticatedSshFactory
                 if (!plan.pubkeyAuthentication)
                     throw new VaultException("SSH_KEY_SELECTION", "This SSH configuration disables public-key authentication");
                 requireChainPolicy(plan, true);
+                serverAlivePolicy.accept(plan);
                 SshConnectionMaterial.singleTrustPath(snapshot.manifest, plan);
                 actualProfile = new SshPasswordProfile(plan.hostname, plan.port, plan.user);
             }
@@ -655,6 +762,17 @@ final class SshPasswordConnector implements MainActivity.AuthenticatedSshFactory
         if (view == null) vault.session.assertEpoch(expectedEpoch);
         else if (!view.active()) throw changed();
     }
+    private void checkTransport() throws VaultException {
+        check();
+        requireTransportDeadline(clock.now(), transportDeadline);
+    }
+    static void requireTransportDeadline(long now, long limit) throws VaultException {
+        if (now <= 0 || now >= limit) throw new VaultException("SSH_TIMED_OUT", "SSH key exchange timed out");
+    }
+    static void requireChangedCompletionDeadline(boolean pending, SshRoleContext.Clock clock, long limit)
+            throws VaultException {
+        if (pending) requireTransportDeadline(clock.now(), limit);
+    }
     private boolean profileTarget(String target) { return targetIdentity.equals(target); }
     private static VaultException changed() { return new VaultException("VAULT_CHANGED", "The vault changed; try again"); }
     private static VaultException denied() { return new VaultException("SSH_HOST_KEY_REVIEW", "The exact host approval is required"); }
@@ -680,6 +798,7 @@ final class SshPasswordConnector implements MainActivity.AuthenticatedSshFactory
         mailbox = null;
         ticket = null;
         approved = null;
+        approvedChanged = null;
         selectedKey = null;
         sensitive = null;
         events = null;

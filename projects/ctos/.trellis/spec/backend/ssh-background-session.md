@@ -13,9 +13,14 @@ Keep pre-auth file/secret/trust admission and App/Root lifecycle unchanged.
 - `SshSessionService.write(generation, bytes)`, `resize(generation, columns, rows)`, `stop(generation)`.
 - `ssh.notificationStatus`, `ssh.requestNotifications`: no arguments, `{enabled:bool}` response.
 - `SshTerminalSession.isEstablishedFailureCode(String)`: null-safe, exact fixed-code predicate.
-- Closed screen-lock events add optional `reconnect` target: `{mode:'password'|'key'|'config',
-  host:String,port:int,username:String,keyId?:String,configAlias?:String}`. Password has neither
-  selection field; key requires keyId only; config requires both keyId and configAlias.
+- Closed screen-lock events add optional `reconnect` target:
+  `{mode:'password'|'key'|'config'|'configPassword'|'keyboard'|'configKeyboard',
+  host:String,port:int,username:String,keyId?:String,configAlias?:String,
+  continueKeyboardInteractive?:bool,autoKeyboardInteractive?:bool}`. `key` requires keyId;
+  `config` requires keyId and configAlias; `configPassword` and `configKeyboard` require
+  configAlias without keyId; `password` and `keyboard` have neither selection field. The
+  two optional continuation fields are mutually exclusive by presence and prohibited for
+  keyboard/configKeyboard. They express fresh-attempt intent, not a saved config capability.
 - `ctos/terminal` retains data/state. Adds snapshot `{type:'snapshot', generation:int, state, mode,
   remote:true, bytes:Uint8List, truncated:bool, exitStatus?:int, reason?:String}` and
   focus `{type:'focus',generation:int}`. Snapshot bytes <=262144, generations process-monotonic.

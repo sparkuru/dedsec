@@ -44,19 +44,23 @@ final class SshHostTrustMaterial {
             algorithm = paddedAscii(frame, nameLength, 128);
             fingerprint = paddedAscii(frame, fingerprintLength, 64);
             if (!algorithm.matches("[A-Za-z0-9@._+-]{1,128}")
-                    || !fingerprint.matches("SHA256:[A-Za-z0-9+/]{43}")) throw invalid();
-            byte[] decoded = null;
-            try {
-                decoded = Base64.getDecoder().decode(fingerprint.substring(7));
-                if (decoded.length != 32 || !Base64.getEncoder().withoutPadding().encodeToString(decoded)
-                        .equals(fingerprint.substring(7))) throw invalid();
-            } catch (IllegalArgumentException failure) { throw invalid(); }
-            finally { VaultCodec.wipe(decoded); }
+                    || !canonicalFingerprint(fingerprint)) throw invalid();
         }
         Map<String, Object> metadata() {
             return VaultCollections.map("line", line, "algorithm", algorithm, "fingerprint", fingerprint,
                     "marker", marker, "selector", selector, "reason", reason);
         }
+    }
+
+    static boolean canonicalFingerprint(String fingerprint) {
+        if (fingerprint == null || !fingerprint.matches("SHA256:[A-Za-z0-9+/]{43}")) return false;
+        byte[] decoded = null;
+        try {
+            decoded = Base64.getDecoder().decode(fingerprint.substring(7));
+            return decoded.length == 32 && Base64.getEncoder().withoutPadding().encodeToString(decoded)
+                    .equals(fingerprint.substring(7));
+        } catch (IllegalArgumentException failure) { return false; }
+        finally { VaultCodec.wipe(decoded); }
     }
 
     static final class Result implements AutoCloseable {
@@ -123,6 +127,15 @@ final class SshHostTrustMaterial {
                 (input, endpoint, selectedPort, mode, limit) -> {
                     NativeLoader.load(); return nativeInspect(input, endpoint, selectedPort, mode, limit);
                 });
+    }
+
+    /** Decode the native issuer's bounded, source-digest-bound CHANGED review rows. */
+    static List<Record> changedRecords(byte[] wire, byte[] expectedBase) throws IOException {
+        if (expectedBase == null || expectedBase.length != 32) throw invalid();
+        try (Result decoded = new Result(wire, expectedBase, false)) {
+            if (!decoded.canForget || decoded.records.isEmpty()) throw invalid();
+            return decoded.records;
+        }
     }
 
     static Result inspect(byte[] body, String host, int port, boolean prepare, long deadline,

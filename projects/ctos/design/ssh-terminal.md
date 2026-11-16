@@ -1,5 +1,9 @@
 # SSH 终端规划入口
 
+2026-11-16：服务器保活设备测试发现部分服务器会在 shell 成功答复前发送通道输出；
+本地修复将其有界暂存，仍只在实际 shell 成功后发布。修正版已在指定板通过同顺序
+合成服务复测，详见[早期通道输出](ssh-shell-early-output.md)及[验证](verification.md#20261116-ssh-early-output-device)。
+
 2026-11-13：用户允许部分提交；SSH 表单、指纹恢复与 MFA 依赖已提交为 `1546575`。
 接续信息见[接管档案](handoff-ssh-terminal-client.md)，MFA 专项人工体验与完整父任务仍开放。
 

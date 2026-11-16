@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-2.md`
-- **Total Sessions**: 77
+- **Total Sessions**: 79
 - **Last Active**: 2026-10-30
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-2.md` | ~961 | Active |
+| `journal-2.md` | ~1024 | Active |
 | `journal-1.md` | ~1936 | Archived |
 <!-- @@@/auto:active-documents -->
 
@@ -30,6 +30,8 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 79 | 2026-10-30 | 目录导入新版保留数据安装，待人工体验 | - | `antitrust` |
+| 78 | 2026-10-30 | SSH目录批量导入隔离验证通过，待人工体验 | - | `antitrust` |
 | 77 | 2026-10-30 | SSH encrypted-key lifecycle delivery | `360cca2` | `antitrust` |
 | 76 | 2026-10-30 | SSH service and screen-lock reconnect delivery | `1b57fb9` | `antitrust` |
 | 75 | 2026-10-26 | SSH key/config, saved passwords and Android16 real-login acceptance | `30dd1dc` | `antitrust` |

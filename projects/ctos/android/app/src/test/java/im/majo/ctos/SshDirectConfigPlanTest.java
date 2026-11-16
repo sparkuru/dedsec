@@ -113,6 +113,7 @@ public final class SshDirectConfigPlanTest {
             assertTrue(plan.identitiesOnly); assertTrue(plan.pubkeyAuthentication); assertFalse(plan.passwordAuthentication);
             assertFalse(plan.keyboardInteractiveAuthentication);
             assertFalse(plan.userRequired); assertEquals(3000, plan.connectTimeoutMillis);
+            assertEquals(0, plan.serverAliveInterval); assertEquals(3, plan.serverAliveCountMax);
             assertEquals(0, plan.requestTty); assertEquals(3, plan.strictHostKeyChecking);
             try { plan.identityFiles.add("other"); fail(); } catch (UnsupportedOperationException expected) { }
             assertEquals(1, binding.reserved); assertEquals(1, binding.loaded); binding.clean();
@@ -155,6 +156,7 @@ public final class SshDirectConfigPlanTest {
                     SshConfigEvaluator.DirectPlan plan = profile ? evaluator.profileDirectPlan() : evaluator.directPlan();
                     assertEquals((flags & 1) != 0,plan.passwordThenKeyboardAllowed);
                     assertEquals((flags & 2) != 0,plan.publickeyThenKeyboardAllowed);
+                    assertEquals(0,plan.serverAliveInterval); assertEquals(3,plan.serverAliveCountMax);
                 }
                 binding.clean();
             }
@@ -170,6 +172,128 @@ public final class SshDirectConfigPlanTest {
                 assertFalse(evaluator.directPlan().publickeyThenKeyboardAllowed);
             }
         }
+    }
+
+    @Test public void versionFourCarriesServerAlivePolicyWithoutChangingAuthenticationFlags() throws Exception {
+        for (boolean profile : List.of(false, true)) {
+            for (int[] values : new int[][] {{0, 3}, {15, 2}, {0, 0}, {Integer.MAX_VALUE, Integer.MAX_VALUE}, {-1, 3}, {1, -1}}) {
+                Binding binding = new Binding(); byte[] old = frame("remote");
+                binding.response = ByteBuffer.allocate(old.length + 20).put(old, 0, 24)
+                        .putInt(1).putInt(0).putInt(1).putInt(values[0]).putInt(values[1])
+                        .put(old, 24, old.length - 24).array();
+                ByteBuffer.wrap(binding.response).putInt(4, 4);
+                if (profile) ByteBuffer.wrap(binding.response).putInt(0, 0x43535050);
+                try (SshConfigEvaluator evaluator = profile
+                        ? SshConfigEvaluator.prepareProfileDirectDetached(() -> { }, binding) : prepare(binding)) {
+                    evaluator.loadDetached(source(), 0, 31000, request()); evaluator.run();
+                    if (values[0] < 0 || values[1] < 0) {
+                        if (profile) rejected(evaluator::profileDirectPlan); else rejected(evaluator::directPlan);
+                    } else {
+                        SshConfigEvaluator.DirectPlan plan = profile ? evaluator.profileDirectPlan() : evaluator.directPlan();
+                        assertEquals(values[0], plan.serverAliveInterval);
+                        assertEquals(values[1], plan.serverAliveCountMax);
+                        assertTrue(plan.keyboardInteractiveAuthentication);
+                        assertFalse(plan.passwordThenKeyboardAllowed);
+                        assertTrue(plan.publickeyThenKeyboardAllowed);
+                        assertEquals(3000, plan.connectTimeoutMillis);
+                    }
+                    binding.clean();
+                }
+            }
+        }
+    }
+
+    private static SshConfigEvaluator.DirectPlan serverAlivePlan(int interval, int count) throws Exception {
+        Binding binding = new Binding(); byte[] old = frame("remote");
+        binding.response = ByteBuffer.allocate(old.length + 20).put(old, 0, 24)
+                .putInt(1).putInt(0).putInt(1).putInt(interval).putInt(count)
+                .put(old, 24, old.length - 24).array();
+        ByteBuffer.wrap(binding.response).putInt(4, 4);
+        try (SshConfigEvaluator evaluator = prepare(binding)) {
+            evaluator.loadDetached(source(), 0, 31000, request()); evaluator.run();
+            SshConfigEvaluator.DirectPlan result = evaluator.directPlan(); binding.clean(); return result;
+        }
+    }
+
+    @Test public void serverAlivePolicyFreezesTheEffectiveConfigAcrossSnapshots() throws Exception {
+        SshPasswordConnector.ServerAlivePolicy manual = new SshPasswordConnector.ServerAlivePolicy();
+        assertFalse(manual.configured()); assertEquals(0, manual.interval()); assertEquals(3, manual.countMax());
+        for (int[] values : new int[][] {{0, 0}, {0, 3}, {15, 2}, {Integer.MAX_VALUE, Integer.MAX_VALUE}}) {
+            SshPasswordConnector.ServerAlivePolicy policy = new SshPasswordConnector.ServerAlivePolicy();
+            policy.accept(serverAlivePlan(values[0], values[1]));
+            policy.accept(serverAlivePlan(values[0], values[1]));
+            assertTrue(policy.configured());
+            assertEquals(values[0], policy.interval()); assertEquals(values[1], policy.countMax());
+            int otherInterval = values[0] == 0 ? 1 : 0;
+            int otherCount = values[1] == 0 ? 1 : 0;
+            policyCode("VAULT_CHANGED", () -> policy.accept(serverAlivePlan(otherInterval, values[1])));
+            policyCode("VAULT_CHANGED", () -> policy.accept(serverAlivePlan(values[0], otherCount)));
+            assertEquals(values[0], policy.interval()); assertEquals(values[1], policy.countMax());
+        }
+    }
+
+    private static SshConfigEvaluator.DirectPlan chainPlan(boolean passwordThen, boolean keyThen) throws Exception {
+        Binding binding = new Binding(); byte[] old = frame("remote");
+        binding.response = ByteBuffer.allocate(old.length + 12).put(old,0,24)
+                .putInt(1).putInt(passwordThen ? 1 : 0).putInt(keyThen ? 1 : 0)
+                .put(old,24,old.length - 24).array();
+        ByteBuffer.wrap(binding.response).putInt(4,3).putInt(20,1);
+        try (SshConfigEvaluator evaluator = prepare(binding)) {
+            evaluator.loadDetached(source(),0,31000,request()); evaluator.run();
+            SshConfigEvaluator.DirectPlan result = evaluator.directPlan(); binding.clean(); return result;
+        }
+    }
+
+    private static void policyCode(String code, Work work) throws Exception {
+        try { work.run(); fail("Expected " + code); }
+        catch (VaultException expected) { assertEquals(code,expected.code); }
+    }
+
+    @Test public void automaticChainUsesDecodedConfigWithoutPreemptingFirstFactorSuccess() throws Exception {
+        for (boolean key : new boolean[]{false,true}) for (boolean allowed : new boolean[]{false,true}) {
+            // The unrelated chain remains enabled to catch accidental use of the wrong flag.
+            SshConfigEvaluator.DirectPlan plan = key ? chainPlan(true,allowed) : chainPlan(allowed,true);
+            boolean capability = key ? plan.publickeyThenKeyboardAllowed : plan.passwordThenKeyboardAllowed;
+            SshPasswordConnector.ContinuationPolicy automatic = new SshPasswordConnector.ContinuationPolicy(
+                    SshPasswordConnector.ContinuationMode.AUTOMATIC,true);
+            automatic.acceptConfiguredCapability(capability);
+            assertEquals(allowed,automatic.enabled());
+            assertFalse(SshPasswordConnector.firstFactorNeedsContinuation(true,false,automatic.enabled()));
+            if (allowed) assertTrue(SshPasswordConnector.firstFactorNeedsContinuation(false,true,automatic.enabled()));
+            else policyCode("SSH_AUTH_PARTIAL", () ->
+                    SshPasswordConnector.firstFactorNeedsContinuation(false,true,automatic.enabled()));
+
+            SshPasswordConnector.ContinuationPolicy strict = new SshPasswordConnector.ContinuationPolicy(
+                    SshPasswordConnector.ContinuationMode.STRICT,true);
+            if (allowed) { strict.acceptConfiguredCapability(capability); assertTrue(strict.enabled()); }
+            else policyCode("SSH_MFA_POLICY", () -> strict.acceptConfiguredCapability(capability));
+        }
+    }
+
+    @Test public void automaticPolicyFreezesAcrossSnapshotsAndFreshReconnectReevaluates() throws Exception {
+        for (boolean key : new boolean[]{false,true}) for (boolean first : new boolean[]{false,true}) {
+            SshConfigEvaluator.DirectPlan initial = key ? chainPlan(true,first) : chainPlan(first,true);
+            SshConfigEvaluator.DirectPlan changed = key ? chainPlan(true,!first) : chainPlan(!first,true);
+            boolean initialCapability = key ? initial.publickeyThenKeyboardAllowed : initial.passwordThenKeyboardAllowed;
+            boolean changedCapability = key ? changed.publickeyThenKeyboardAllowed : changed.passwordThenKeyboardAllowed;
+            SshPasswordConnector.ContinuationPolicy current = new SshPasswordConnector.ContinuationPolicy(
+                    SshPasswordConnector.ContinuationMode.AUTOMATIC,true);
+            current.acceptConfiguredCapability(initialCapability);
+            current.acceptConfiguredCapability(initialCapability);
+            policyCode("VAULT_CHANGED", () -> current.acceptConfiguredCapability(changedCapability));
+
+            // A new connection retains only intent and independently evaluates the new protected snapshot.
+            SshReconnectTarget target = new SshReconnectTarget(new SshPasswordProfile("host.invalid",22,"user"),
+                    key ? "key_1" : null,"configured",false,false,true);
+            assertEquals(true,target.wire().get("autoKeyboardInteractive"));
+            SshPasswordConnector.ContinuationPolicy fresh = new SshPasswordConnector.ContinuationPolicy(
+                    SshPasswordConnector.ContinuationMode.AUTOMATIC,true);
+            fresh.acceptConfiguredCapability(changedCapability);
+            assertEquals(!first,fresh.enabled());
+        }
+        SshPasswordConnector.ContinuationPolicy manual = new SshPasswordConnector.ContinuationPolicy(
+                SshPasswordConnector.ContinuationMode.AUTOMATIC,false);
+        assertTrue(manual.enabled());
     }
 
     @Test public void configPasswordUsesCallerUserOnlyWhenActualConfigPlanRequiresIt() throws Exception {

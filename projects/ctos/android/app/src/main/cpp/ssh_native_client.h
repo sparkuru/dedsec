@@ -79,7 +79,8 @@ enum ctos_ssh_native_host_key_rejection {
     CTOS_SSH_HOST_REJECTION_NONE = 0,
     CTOS_SSH_HOST_REJECTION_CHANGED = 1,
     CTOS_SSH_HOST_REJECTION_REVOKED = 2,
-    CTOS_SSH_HOST_REJECTION_CERTIFICATE = 3
+    CTOS_SSH_HOST_REJECTION_CERTIFICATE = 3,
+    CTOS_SSH_HOST_REJECTION_CHANGED_BLOCKED = 4
 };
 
 struct ctos_ssh_native_client_config {
@@ -197,6 +198,10 @@ int ctos_ssh_native_client_continue_keyboard_interactive_auth(struct ctos_ssh_na
 int ctos_ssh_native_client_keyboard_interactive_auth_result(
     const struct ctos_ssh_native_client *,
     enum ctos_ssh_native_client_keyboard_interactive_auth_result *);
+
+/* Freeze a configured server-alive policy once after authentication succeeds. */
+int ctos_ssh_native_client_configure_server_alive(
+    struct ctos_ssh_native_client *, unsigned int interval_seconds, unsigned int count_max);
 int ctos_ssh_native_client_keyboard_interactive_challenge(
     const struct ctos_ssh_native_client *, unsigned char *, size_t, size_t *);
 int ctos_ssh_native_client_respond_keyboard_interactive(

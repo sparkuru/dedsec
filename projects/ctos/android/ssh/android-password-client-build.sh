@@ -111,14 +111,11 @@ main() {
 	fi
 	local -a native_sources=() inputs=("${BASH_SOURCE[0]}" "$TEST_CPP/ssh_native_client_test.c" "$test_source" "$archive" "$PRODUCTION_INCLUDE/hostfile.h")
 	local unit
-	for unit in ssh_file_view ssh_view_handle ssh_role_bootstrap ssh_callback_adapter ssh_hostfile_issuer ssh_kex_guard ssh_native_client ssh_key_policy; do
+	for unit in ssh_file_view ssh_view_handle ssh_role_bootstrap ssh_callback_adapter ssh_hostfile_issuer ssh_hostfile_changed ssh_host_trust ssh_material_inspect ssh_kex_guard ssh_native_client ssh_key_policy; do
 		native_sources+=("$CPP/$unit.c")
-		inputs+=("$CPP/$unit.c" "$CPP/$unit.h")
+		inputs+=("$CPP/$unit.c")
+		if [[ "$unit" != ssh_hostfile_changed ]]; then inputs+=("$CPP/$unit.h"); fi
 	done
-	if [[ "$mode" == key-interop ]]; then
-		native_sources+=("$CPP/ssh_material_inspect.c")
-		inputs+=("$CPP/ssh_material_inspect.c" "$CPP/ssh_material_inspect.h")
-	fi
 	local -a flags=(
 		-std=c11 -DCTOS_ANDROID_ABI_BASELINE_ONLY=1 -DHAVE_CONFIG_H
 		-I"$CPP" -I"$PRODUCTION_INCLUDE" -I"$SOURCE" -I"$UP_BUILD" -I"$UP_BUILD/openbsd-compat/include" -I"$SSL/include"

@@ -60,8 +60,9 @@ audit/resource modes remain unchanged. Keep actual Host/Match/Include/first-valu
 semantics. Final plan includes real tuple, ordered expanded managed IdentityFile/known_hosts,
 auth enabled flags, identitiesOnly, timeout, PTY and strict host policy. Resolve identity paths
 using identity semantics, not Include's relative base. Diagnose unsupported/CWD/external paths
-with actual object/line. Never silently drop jump/forward/RemoteCommand/HostKeyAlias, keepalive,
-algorithm overrides or any other unconsumed declaration. Strict YES rejects unknown trust;
+with actual object/line. The consumed [server-alive settings](ssh-server-alive.md) travel in
+the v4 plan; never silently drop jump/forward/RemoteCommand/HostKeyAlias, other unconsumed
+keepalive settings, algorithm overrides or any other unconsumed declaration. Strict YES rejects unknown trust;
 ASK requires the existing actual fingerprint approval. Multiple actual trust sources must be
 consumed or visibly refused, never silently truncated to the first one.
 

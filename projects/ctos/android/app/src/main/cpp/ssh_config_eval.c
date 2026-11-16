@@ -200,7 +200,7 @@ int ctos_config_direct_keyword(const char *keyword, int active, int count, char 
     static const char *const accepted[] = {"host", "match", "include", "hostname", "user", "port",
         "identityfile", "identitiesonly", "userknownhostsfile", "stricthostkeychecking", "connecttimeout",
         "requesttty", "pubkeyauthentication", "passwordauthentication", "kbdinteractiveauthentication",
-        "challengeresponseauthentication"};
+        "challengeresponseauthentication", "serveraliveinterval", "serveralivecountmax"};
     for (size_t i = 0; i < sizeof(accepted) / sizeof(accepted[0]); i++) if (strcmp(keyword, accepted[i]) == 0) {
         if (count == 1 && ((strcmp(keyword, "requesttty") == 0 &&
                 (strcasecmp(args[0], "no") == 0 || strcasecmp(args[0], "false") == 0)) ||
@@ -970,6 +970,7 @@ static int finish_direct_plan(struct ctos_ssh_config_eval *e) {
         o->session_type != SESSION_TYPE_DEFAULT || !clear_or_none(o->jump_host) ||
         !clear_or_none(o->remote_command) || o->num_local_forwards != 0 || o->num_remote_forwards != 0 ||
         o->num_certificate_files != 0 || o->host_key_alias != NULL ||
+        o->server_alive_interval < 0 || o->server_alive_count_max < 0 ||
         (o->strict_host_key_checking != SSH_STRICT_HOSTKEY_ASK && o->strict_host_key_checking != SSH_STRICT_HOSTKEY_YES))
         return ctos_config_reject(CTOS_CONFIG_UNSUPPORTED, ENOTSUP);
     plan->summary = e->summary;
@@ -989,6 +990,8 @@ static int finish_direct_plan(struct ctos_ssh_config_eval *e) {
     plan->connect_timeout_millis = o->connection_timeout > 0 && o->connection_timeout < 60
         ? (unsigned int)o->connection_timeout * 1000U : 60000U;
     plan->strict_host_key_checking = (unsigned int)o->strict_host_key_checking;
+    plan->server_alive_interval = (unsigned int)o->server_alive_interval;
+    plan->server_alive_count_max = (unsigned int)o->server_alive_count_max;
     for (int i = 0; i < o->num_identity_files; i++) {
         if (strcasecmp(o->identity_files[i], "none") == 0) continue;
         if (e->profile_identities) {

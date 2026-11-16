@@ -466,11 +466,15 @@ extension SshLibraryApi on SshPasswordApi {
     bool useSavedPassphrase = false,
     bool savePassphrase = false,
     bool continueKeyboardInteractive = false,
+    bool autoKeyboardInteractive = false,
   }) => _connectIdentity(this, requestId, 'ssh.keyConnect', {
     ..._tuple(requestId, host, port, username),
     'keyId': _identifier(keyId),
     ..._sshPassphraseArguments(passphrase, useSavedPassphrase, savePassphrase),
-    if (continueKeyboardInteractive) 'continueKeyboardInteractive': true,
+    ..._sshContinuationArguments(
+      continueKeyboardInteractive,
+      autoKeyboardInteractive,
+    ),
     ..._sshSize(columns, rows),
   });
 
@@ -486,6 +490,7 @@ extension SshLibraryApi on SshPasswordApi {
     bool useSavedPassphrase = false,
     bool savePassphrase = false,
     bool continueKeyboardInteractive = false,
+    bool autoKeyboardInteractive = false,
   }) {
     if (username.isNotEmpty && sshUsernameError(username) != null)
       throw _invalid();
@@ -495,7 +500,10 @@ extension SshLibraryApi on SshPasswordApi {
       'binding': _sshBinding(binding),
       'keyId': _identifier(keyId),
       'username': username,
-      if (continueKeyboardInteractive) 'continueKeyboardInteractive': true,
+      ..._sshContinuationArguments(
+        continueKeyboardInteractive,
+        autoKeyboardInteractive,
+      ),
       ..._sshPassphraseArguments(
         passphrase,
         useSavedPassphrase,
@@ -514,6 +522,7 @@ extension SshLibraryApi on SshPasswordApi {
     bool useSavedPassword = false,
     bool savePassword = false,
     bool continueKeyboardInteractive = false,
+    bool autoKeyboardInteractive = false,
     required int columns,
     required int rows,
   }) {
@@ -531,7 +540,10 @@ extension SshLibraryApi on SshPasswordApi {
       'password': password,
       'useSavedPassword': useSavedPassword,
       'savePassword': savePassword,
-      if (continueKeyboardInteractive) 'continueKeyboardInteractive': true,
+      ..._sshContinuationArguments(
+        continueKeyboardInteractive,
+        autoKeyboardInteractive,
+      ),
       ..._sshSize(columns, rows),
     });
   }
@@ -541,6 +553,14 @@ bool _sshOptionalBoolean(Map<String, Object?> value, String key) {
   if (!value.containsKey(key)) return false;
   if (value[key] case final bool result) return result;
   throw _invalid();
+}
+
+Map<String, bool> _sshContinuationArguments(bool explicit, bool automatic) {
+  if (explicit && automatic) throw _invalid();
+  return {
+    if (explicit) 'continueKeyboardInteractive': true,
+    if (automatic) 'autoKeyboardInteractive': true,
+  };
 }
 
 Map<String, Object> _sshPassphraseArguments(

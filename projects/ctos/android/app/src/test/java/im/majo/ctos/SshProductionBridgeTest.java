@@ -133,10 +133,37 @@ public final class SshProductionBridgeTest {
             knownProof.requireMatches(second);
             fail("a host proof must not cross hops");
         } catch (VaultException failure) {
-            assertEquals("SSH_HOST_KEY_CHANGED", failure.code);
+            assertEquals("SSH_HOST_PROOF_INVALID", failure.code);
         }
         registry.release(second);
         assertEquals(1, registry.size());
+    }
+
+    @Test public void kexRecheckRejectsAnotherHopsHostProofWithoutClaimingKeyChange() throws Exception {
+        SshRoleContext other = issueRole(1, "connection-1", 2_102, 3);
+        try {
+            SshHostKeyAuthority.Proof otherProof = new SshHostKeyAuthority().requireVerified(
+                    other, evidence(other, SshHostKeyAuthority.Classification.KNOWN,
+                            digest("known-hosts-before"), digest("known-hosts-after")), null);
+            assertEquals(knownProof.fingerprint, otherProof.fingerprint);
+            try {
+                kex.requireMatches(role, otherProof);
+                fail("KEX must reject a host proof belonging to another hop");
+            } catch (VaultException failure) {
+                assertEquals("SSH_HOST_PROOF_INVALID", failure.code);
+            }
+            byte[] original = store.bytes.clone();
+            SshCredentialBridge bridge = new SshCredentialBridge(vault, new SshHostKeyAuthority(), clock);
+            try {
+                bridge.openCredential(role, otherProof, "password", SshCredentialBridge.Kind.PASSWORD);
+                fail("a foreign host proof must not open a credential request");
+            } catch (VaultException failure) {
+                assertEquals("SSH_HOST_PROOF_INVALID", failure.code);
+            }
+            assertArrayEquals(original, store.bytes);
+        } finally {
+            registry.release(other);
+        }
     }
 
     @Test public void roleRegistryAllowsDistinctHopsOnOneConnection() throws Exception {
@@ -455,7 +482,9 @@ public final class SshProductionBridgeTest {
                     wrongHopIssued.role.connectionId, wrongHopIssued.role.targetIdentity,
                     wrongHopIssued.role.host, SshNativeCallbackAdapter.HOST_NEW,
                     "ssh-ed25519", FINGERPRINT, base, digest(replacement)));
-            assertEquals("SSH_HOST_KEY_CHANGED", wrongHop.lastFailureCode());
+            assertEquals("SSH_HOST_PROOF_INVALID", wrongHop.lastFailureCode());
+            assertEquals(null, wrongHop.hostProof());
+            assertEquals(null, proposalHolder[0]);
         } finally {
             wrongHop.close();
             wrongHopRegistry.close();

@@ -1,15 +1,44 @@
 # Terminal interaction contract
 
-2026-11-04: [MFA continuation](../backend/ssh-mfa-authentication.md) adds the explicit default-off
-`continueKeyboardInteractive` option for password/key, including configPassword/config-key.
-Keep the accepted single authentication chooser and rounded option row. Changing method clears
-the option; standalone KBI hides it. Config-password retains actual alias/binding/User policy
+2026-11-13: choosing a config Host selects the target only. Select password, a managed
+private key, or standalone server-question authentication on the connection page; never
+silently select a key. Revalidate any retained key against the current host, binding and
+key metadata. A cancelled key picker retains the selected target and authentication choice.
+Keep the target summary readable on wide and narrow screens, with actual host/port available.
+
+For password or private-key attempts, request automatic continuation under the actual config
+policy. When the current request receives a real server question, show it in a protected
+dialog without a pre-connection checkbox; never invent a question or fill an answer. A
+single-factor success must not wait for a KBI event-stream handshake. Preserve the original
+ticket, deadline, session guards and cleanup across multiple rounds. If success arrives before
+an explicitly submitted response's acknowledgement, wait for that response or retirement;
+an unanswered or rejected challenge cancels that exact handed-off connection. A KBI-only
+first method still uses the standalone authentication choice;
+automatic continuation is not general first-method discovery.
+
+2026-11-13: an eligible changed server key uses the single-decision transaction in
+[host-trust management](../backend/ssh-host-trust-management.md#scenario-same-connection-changed-host-key).
+The older independent View/Forget flow remains a separate management operation and is not
+the normal recovery route for the live changed-key event.
+
+2026-11-13: for an unserviceable `SSH_AUTH_PARTIAL`, explain that the server requires further
+authentication but the connection cannot continue; do not claim the server offered KBI or
+automatically retry. For changed-host and forget-confirmation dialogs, text
+actions use the existing 12 dp rounded state layer and at least 48 dp touch target, consistent
+with filled actions; preserve destructive color and the separate preview/confirmation guards.
+Widget tests check actual theme Material/InkWell shapes and interaction states; device visual
+acceptance is separate.
+
+2026-11-04 historical wire compatibility: [MFA continuation](../backend/ssh-mfa-authentication.md)
+added the explicit default-off `continueKeyboardInteractive` parameter for password/key,
+including configPassword/config-key; the current form uses the automatic mode described above.
+Config-password retains actual alias/binding/User policy
 and uses its dedicated API rather than turning into a manual target. During same-config key-only
 refresh, preserve a user-entered missing-User override; a nonempty current config User wins.
-All continuing modes use KBI stream readiness/challenge/route-external lifetime, including saved
-password and saving variants. A connected event before the original RPC completes does not
+Continuing modes use KBI stream readiness for actual challenges and route-external lifetime,
+including saved password and saving variants. A connected event before the original RPC completes does not
 release protection; forced disposal cancels a late exact handoff before cleanup resolves.
-RAM reconnect accepts strict optional bool and configPassword mode, resolves current config and
+RAM reconnect accepts either strict or automatic continuation intent and configPassword mode, resolves current config and
 starts a fresh first method. It carries no question, answer, old binding or stage receipt.
 Phase-A review fixed the missing-User override regression; actual-font/scoped tests and full396
 passed. Android IME/device and final cross-layer acceptance remain separate evidence gates.
@@ -30,7 +59,7 @@ just the static checkbox tree; selecting a new method must preserve existing sec
 2026-11-02: [standalone KBI](../backend/ssh-keyboard-interactive.md) adds explicit manual/config
 authentication choice and current-round `keyboardChallenge`/`keyboardChallengeDismissed` events.
 A config profile with no key may choose KBI; key authentication still requires an explicit key.
-Display all bounded server prompts together in the protected connection page, including
+Display all bounded server prompts together in a protected dialog, including
 name/instruction and actual target; honor echo independently, disable suggestions/autofill and
 save controls, preserve empty answers, and require explicit continue for zero prompts.
 Typed payload validation owns UTF8/count/round/total limits. Remote text is labeled body text,
@@ -55,9 +84,9 @@ the existing exact impact confirmation; layout must support clear and saved-phra
 
 2026-11-02: [config identity selection](../backend/ssh-config-identity-selection.md) makes a
 valid imported profile independent of its original IdentityFile paths. Parse optional
-identityHints as bounded protected public text, never managed paths. Keep no-key profiles visible;
-clicking explains key import. With keys, always show an explicit scrollable chooser, even for
-one key, with original hints and actual key label/path/algorithm/fingerprint. Cancel/coverage/
+identityHints as bounded protected public text, never managed paths. Keep no-key profiles visible.
+When choosing private-key authentication, use an explicit scrollable chooser, even for one key,
+with original hints and actual key label/path/algorithm/fingerprint. Cancel/coverage/
 background/stale generation cannot select. There is no automatic first-key or saved-Account
 default. Preserve exact alias/binding/keyId configConnect and ordinary encrypted phrase flow.
 
@@ -113,8 +142,16 @@ The SSH form hierarchy and changed-host recovery also follow this contract and t
   private-key selection reachable within its authentication flow and place destructive password
   management behind the secondary section. Wide screens may place host and port in one row;
   narrow screens, enlarged text and keyboard insets must keep all controls usable.
-- On `SSH_HOSTKEY_CHANGED` or `SSH_HOST_KEY_CHANGED`, wait for the original request to settle,
-  clear transient secrets and show the exact endpoint with View old fingerprints / Forget old
+- On a live `hostKeyChanged` event, show the exact target, all old fingerprints, and the new
+  fingerprint labeled as received. A real, current button decision authorizes only this
+  connection; retain its protected original future and wait for the decision acknowledgement
+  and terminal result before entering the terminal. Show the actual source and key types on
+  request. With overflow, retain accessible scrolling before allowing confirmation; when it
+  fits, do not add a separate confirmation step. Cancellation, route coverage, stale tickets
+  and late results cannot revive approval or a session.
+- On a legacy `SSH_HOSTKEY_CHANGED` or `SSH_HOST_KEY_CHANGED` without a live changed review,
+  wait for the original request to settle, clear transient secrets and show the exact endpoint
+  with View old fingerprints / Forget old
   fingerprints / Cancel. View opens the exact target; Forget opens an in-place protected
   confirmation over the connection form, without navigating to the trust-management page.
   It still requires a fresh source-bound preview and separate explicit confirmation. Direct password and direct keyboard use the
@@ -135,10 +172,11 @@ The SSH form hierarchy and changed-host recovery also follow this contract and t
   destruction must keep the existing cleanup and protection lifetime guarantees.
 - A generic native `SSH_SESSION_STEP` failure reports SSH negotiation or communication failure
   and suggests checking server state and network. Do not present a changed-host dialog unless
-  the connection reports a corresponding host-key change code. The current host authority also
-  uses `SSH_HOST_KEY_CHANGED` for proof-binding mismatches; those are fail-closed and have not
-  been reproduced through the normal UI in this validation. Distinguishing those causes remains
-  follow-up work and must not be represented as already implemented.
+  the connection reports a corresponding host-key change code. `SSH_HOST_PROOF_INVALID`
+  reports that host identity verification did not complete and offers no changed-key recovery;
+  internal proof/role mismatches remain fail-closed and do not establish that a server key changed.
+  The existing callback lifecycle may instead yield `SSH_SESSION_CANCELLED`; report that the
+  connection stopped without asserting that the user cancelled or that credentials were wrong.
 - With no session, show `应用 Shell`, `Root PTY`, and the production `SSH 连接` entry. Root is unavailable unless the current Root capability is online. Start/stop transitions are guarded against duplicate actions; switching closes the current PTY before another is offered.
 - The upper `TerminalView` is `readOnly: true`. It may render, scroll, and resize, but must not open the IME or become a second keyboard path. Text selection belongs to the separate output snapshot page. The bottom input is the sole keyboard target; the Shell prompt and edited command appear through PTY echo above.
 - The bottom input requests `TextInputType.text` and `TextInputAction.send`, with no password input or automatic command rewriting. It visibly shows text currently typed into the field while sending committed edits to PTY, so Shell echo above may temporarily show the same text. Keep the IME editing value intact until Enter, including committed text, because some vendor IMEs commit pinyin before replacing it with a selected Hanzi. Compare the current committed Unicode text against the last text sent to PTY: erase the changed suffix with `\x7f` per code point, then send the replacement suffix. Hold active composing text until commit. Its invisible anchor exists only to make soft-keyboard delete observable; never forward the anchor to PTY. An empty-field delete emits `\x7f`; Enter/send flushes any visible composing text, emits `\r`, and resets the editing value.
@@ -182,7 +220,8 @@ The SSH form hierarchy and changed-host recovery also follow this contract and t
 
 | Condition | Required behavior |
 | --- | --- |
-| Host key changes | Stop the connection; offer exact-target view/forget/cancel, with no approval or automatic retry. |
+| Eligible host key changes | Explicitly review old and received new fingerprints, then cancel or approve the exact same-connection transaction. |
+| Protected or policy-blocked changed record | Explain the block; do not offer an unsafe replacement. |
 | Connection is refused or the SSH handshake is interrupted | Explain the corresponding connection or negotiation/communication failure; neither implies a host-key change. |
 | Config source is not known | Query available groups; require a user choice before the fresh preview, and never guess which group to mutate. |
 | Recovery is backgrounded or the original request sends a late connected result | Retire its authority and any pending dialog; do not enter a terminal or reuse its secrets. |
@@ -201,10 +240,10 @@ The SSH form hierarchy and changed-host recovery also follow this contract and t
 
 ## 5. Good / Base / Bad Cases
 
-- Good: View the changed endpoint's old fingerprints, or confirm a fresh exact-group preview;
-  reconnect deliberately and review the new fingerprint as a new host key.
-- Bad: Treat the changed-host error itself as permission to delete a record, infer a config
-  source, automatically reconnect, or convert a late connected event into a running session.
+- Good: Review the exact current old/new fingerprints once, then explicitly trust and continue
+  the original connection; separately managed forgetting still needs its own fresh preview.
+- Bad: Treat an error or a forged route result as approval, infer a config source, mutate
+  unrelated sources, or convert a late connected event into a running session.
 - Good: Type `ec`, tap Tab, see Shell expand it to `echo` in both the terminal and the bottom input; edit and send from the bottom input. Tap Up after a completed command and see that session command in both places, with keyboard focus below.
 - Base: Type `id` in App Shell and use the keyboard send key; output shows an app UID. Open Root PTY with existing authorization; `id` shows UID 0. Open and return from output selection without losing the PTY.
 - Bad: Make xterm editable while also showing a bottom `TextField`; one input path may accept characters while the other owns Enter, reproducing the original unreliable interaction.
@@ -212,9 +251,10 @@ The SSH form hierarchy and changed-host recovery also follow this contract and t
 ## 6. Tests Required
 
 - SSH form/conflict: assert hierarchy and action placement, wide/narrow/large-text/keyboard
-  reachability, exact target, cancellation without mutation, fresh preview before commit,
-  protected groups, config source selection, background and late-event fences. Real-device
-  evidence must separately exercise a synthetic key change and actual new-key review.
+  reachability, exact target/source, explicit one-shot changed decision, cancellation without
+  mutation, protected groups, background and late-event fences. Independent forgetting still
+  requires its own fresh preview and group selection. Real-device evidence must separately
+  exercise the single-review changed-key transaction and continuation on an actual connection.
 - Flutter widget test: picker entries and unavailable Root, read-only `TerminalView`, exactly five shortcuts with correct writes, visible bottom text, committed input/IME composing/delete/paste, candidate replacement after committed pinyin, one Enter, Tab line synchronization followed by edit/delete/send, bounded per-session Up/Down history and draft restoration, Ctrl-C/Esc reset, output selection and return, and start/stop state.
 - Flutter widget test: a 320×568 screen with a keyboard inset does not overflow; terminal status chips may collapse while the keyboard is visible.
 - Flutter widget test: protected-before-form, masked/cleared password, explicit endpoint/fingerprint review, reject/cancel/late-event handling, foreground recovery, visible errors and review actions with keyboard/large text, and successful terminal handoff. Independent SSH and Android runtime evidence remain separate from widget tests.

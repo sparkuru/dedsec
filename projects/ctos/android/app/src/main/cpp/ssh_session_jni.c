@@ -51,6 +51,7 @@ static void fail_step(JNIEnv *env, enum ctos_ssh_native_host_key_rejection rejec
         case CTOS_SSH_HOST_REJECTION_CHANGED: code = "SSH_HOST_KEY_CHANGED"; break;
         case CTOS_SSH_HOST_REJECTION_REVOKED: code = "SSH_HOST_KEY_REVOKED"; break;
         case CTOS_SSH_HOST_REJECTION_CERTIFICATE: code = "SSH_HOST_KEY_CERTIFICATE"; break;
+        case CTOS_SSH_HOST_REJECTION_CHANGED_BLOCKED: code = "SSH_HOST_TRUST_BLOCKED"; break;
         default: fail(env); return;
     }
     if (env == NULL || (*env)->ExceptionCheck(env)) return;
@@ -577,6 +578,21 @@ JNIEXPORT jint JNICALL Java_im_majo_ctos_SshNativeSession_00024Native_privateKey
     pthread_mutex_unlock(&sessions_lock);
     if (result < 0) fail(env);
     return result;
+}
+
+JNIEXPORT void JNICALL Java_im_majo_ctos_SshNativeSession_00024Native_configureServerAlive(
+    JNIEnv *env, jclass type, jlong handle, jint interval, jint count_max) {
+    struct session_slot *slot;
+    int result;
+
+    (void)type;
+    if (interval < 0 || count_max < 0) { fail(env); return; }
+    slot = lock_session(env, handle);
+    if (slot == NULL) return;
+    result = ctos_ssh_native_client_configure_server_alive(slot->client,
+        (unsigned int)interval, (unsigned int)count_max);
+    pthread_mutex_unlock(&sessions_lock);
+    if (result != 0) fail(env);
 }
 
 JNIEXPORT void JNICALL Java_im_majo_ctos_SshNativeSession_00024Native_beginShell(

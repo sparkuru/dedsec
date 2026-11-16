@@ -47,4 +47,14 @@ int ctos_ssh_hostfile_issue(const struct ctos_ssh_view *view,
     size_t replacement_capacity, ctos_ssh_callback_token callback,
     void *environment, struct ctos_ssh_hostfile_issue *issue);
 
+/* Prepare only a real CHANGED result from the same live source. Returns 0
+ * after the exact candidate is handed off, 1 when old rows are not safely
+ * replaceable, and -1 on failure. The handoff is provisional only. */
+int ctos_ssh_hostfile_prepare_changed(const struct ctos_ssh_view *view,
+    ctos_ssh_role_token role, const char *known_hosts_path, const char *host,
+    const struct sshkey *host_key, const char *candidate_id,
+    FILE *replacement_stream, unsigned char *replacement_body,
+    size_t replacement_capacity, ctos_ssh_callback_token callback,
+    void *environment, struct ctos_ssh_hostfile_issue *issue);
+
 #endif

@@ -26,6 +26,13 @@ struct fixture {
     unsigned int host_evidence_calls;
     unsigned int candidate_calls;
     unsigned int candidate_abort_calls;
+    int enable_changed;
+    int cancel_changed_candidate;
+    int cancel_changed_kex;
+    int changed_abort_failures;
+    int changed_abort_reentry;
+    unsigned int changed_candidate_calls;
+    unsigned int changed_review_calls;
     unsigned int kex_calls;
     unsigned int credential_calls;
     unsigned int credential_bytes_calls;
@@ -134,6 +141,8 @@ static int kex_complete(void *context, void *environment, uint64_t cycle,
     assert(fixture != NULL && environment == fixture->environment);
     assert(cycle > 0 && session_digest != NULL);
     fixture->kex_calls++;
+    if (fixture->cancel_changed_kex)
+        assert(ctos_ssh_callback_cancel(fixture->callback) == 0);
     return 0;
 }
 
@@ -174,6 +183,37 @@ static int known_hosts_candidate_abort(void *context, void *environment) {
     struct fixture *fixture = context;
     assert(fixture != NULL && environment == fixture->environment);
     fixture->candidate_abort_calls++;
+    if (fixture->changed_abort_reentry) {
+        errno = 0;
+        assert(ctos_ssh_callback_close(fixture->callback, environment) != 0
+            && errno == EBUSY);
+    }
+    if (fixture->changed_abort_failures > 0) {
+        fixture->changed_abort_failures--;
+        return EIO;
+    }
+    return 0;
+}
+
+static int changed_host_candidate(void *context, void *environment,
+    const struct ctos_ssh_changed_host_candidate *changed) {
+    struct fixture *fixture = context;
+    assert(fixture != NULL && environment == fixture->environment && changed != NULL);
+    assert(changed->candidate.evidence.classification == CTOS_SSH_CALLBACK_HOST_CHANGED
+        && changed->old_records != NULL && changed->old_records_length == 304U
+        && changed->candidate.replacement_body != NULL);
+    fixture->changed_candidate_calls++;
+    if (fixture->cancel_changed_candidate)
+        assert(ctos_ssh_callback_cancel(fixture->callback) == 0);
+    return 0;
+}
+
+static int changed_host_review(void *context, void *environment,
+    const struct ctos_ssh_host_evidence *evidence) {
+    struct fixture *fixture = context;
+    assert(fixture != NULL && environment == fixture->environment && evidence != NULL);
+    assert(evidence->classification == CTOS_SSH_CALLBACK_HOST_CHANGED);
+    fixture->changed_review_calls++;
     return 0;
 }
 
@@ -263,7 +303,9 @@ static struct ctos_ssh_callback_target target(struct fixture *fixture) {
         .credential = credential,
         .release = release,
         .credential_bytes = credential_bytes,
-        .credential_bytes_selected = fixture->omit_selected ? NULL : credential_bytes_selected
+        .credential_bytes_selected = fixture->omit_selected ? NULL : credential_bytes_selected,
+        .changed_host_candidate = fixture->enable_changed ? changed_host_candidate : NULL,
+        .changed_host_review = fixture->enable_changed ? changed_host_review : NULL
     };
 }
 
@@ -859,6 +901,24 @@ static void test_known_hosts_candidate_handoff(void) {
     assert(ctos_ssh_callback_close(callback, failed.environment) == 0);
     assert(ctos_ssh_role_bootstrap_close(role) == 0);
 
+    struct fixture retry = {.changed_abort_failures = 1, .changed_abort_reentry = 1};
+    deadline = deadline_after(3000);
+    role = role_open(deadline);
+    callback = binding(&retry, role, deadline);
+    unsigned char retry_body[] = "known-hosts-body\n";
+    assert(ctos_ssh_callback_known_hosts_candidate(callback, retry.environment,
+        "candidate-1", CTOS_SSH_CALLBACK_HOST_NEW, "ssh-ed25519", fingerprint,
+        digest, digest, retry_body, sizeof(retry_body) - 1U) == 0);
+    errno = 0;
+    assert(ctos_ssh_callback_known_hosts_candidate_abort(callback, retry.environment) != 0
+        && errno == EIO);
+    assert(ctos_ssh_callback_check_live(callback, retry.environment) == 0);
+    assert(ctos_ssh_callback_known_hosts_candidate_abort(callback, retry.environment) == 0);
+    assert(ctos_ssh_callback_known_hosts_candidate_abort(callback, retry.environment) == 0
+        && retry.candidate_abort_calls == 2U);
+    assert(ctos_ssh_callback_close(callback, retry.environment) == 0);
+    assert(ctos_ssh_role_bootstrap_close(role) == 0);
+
     struct fixture invalid = {0};
     deadline = deadline_after(3000);
     role = role_open(deadline);
@@ -878,7 +938,138 @@ static void test_known_hosts_candidate_handoff(void) {
     for (size_t index = 0; index < sizeof(oversized); index++) assert(oversized[index] == 0);
     assert(ctos_ssh_callback_close(callback, invalid.environment) == 0);
     assert(ctos_ssh_role_bootstrap_close(role) == 0);
-    cases += 5;
+    cases += 6;
+}
+
+static void put_be32(unsigned char *bytes, uint32_t value) {
+    bytes[0] = (unsigned char)(value >> 24); bytes[1] = (unsigned char)(value >> 16);
+    bytes[2] = (unsigned char)(value >> 8); bytes[3] = (unsigned char)value;
+}
+
+static void changed_record(unsigned char wire[304], const unsigned char base[32]) {
+    static const char algorithm[] = "ssh-ed25519";
+    static const char fingerprint[] = "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+    memset(wire, 0, 304U);
+    put_be32(wire, 0x43534854U); put_be32(wire + 4, 1U);
+    put_be32(wire + 12, 1U); put_be32(wire + 16, 1U);
+    memcpy(wire + 24, base, 32U);
+    put_be32(wire + 88, 1U); put_be32(wire + 88 + 16, sizeof(algorithm) - 1U);
+    put_be32(wire + 88 + 20, sizeof(fingerprint) - 1U);
+    memcpy(wire + 88 + 24, algorithm, sizeof(algorithm) - 1U);
+    memcpy(wire + 88 + 152, fingerprint, sizeof(fingerprint) - 1U);
+}
+
+static void test_changed_candidate_contract(void) {
+    const char *fingerprint = "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+    unsigned char base[32], replacement[32], digest[32], receipt[32];
+    memset(base, 7, sizeof(base)); memset(replacement, 8, sizeof(replacement));
+    memset(digest, 7, sizeof(digest)); memset(receipt, 8, sizeof(receipt));
+
+    for (unsigned int bad = 0; bad < 8U; bad++) {
+        struct fixture fixture = {.enable_changed = 1};
+        uint64_t deadline = deadline_after(3000);
+        ctos_ssh_role_token role = role_open(deadline);
+        ctos_ssh_callback_token callback = binding(&fixture, role, deadline);
+        unsigned char body[] = "replacement-body", records[304];
+        changed_record(records, base);
+        size_t records_length = sizeof(records);
+        if (bad == 0U) put_be32(records + 12, 0U);
+        if (bad == 1U) put_be32(records + 88 + 4, 1U);
+        if (bad == 2U) put_be32(records + 88 + 8, 2U);
+        if (bad == 3U) put_be32(records + 88 + 12, 3U);
+        if (bad == 4U) records[24] ^= 1U;
+        if (bad == 5U) records[88 + 152] = '!';
+        if (bad == 6U) put_be32(records + 16, 0U);
+        if (bad == 7U) records_length--;
+        assert(ctos_ssh_callback_changed_host_candidate(callback, fixture.environment,
+            "candidate-1", "ssh-ed25519", fingerprint, base, replacement,
+            body, sizeof(body) - 1U, records, records_length) != 0);
+        for (size_t i = 0; i < sizeof(body) - 1U; i++) assert(body[i] == 0);
+        for (size_t i = 0; i < records_length; i++) assert(records[i] == 0);
+        assert(fixture.changed_candidate_calls == 0U && fixture.changed_review_calls == 0U);
+        assert(ctos_ssh_callback_close(callback, fixture.environment) == 0);
+        assert(ctos_ssh_role_bootstrap_close(role) == 0);
+        cases++;
+    }
+    for (unsigned int mode = 0; mode < 10U; mode++) {
+        struct fixture fixture = {.enable_changed = 1, .cancel_changed_candidate = mode == 5U,
+            .cancel_changed_kex = mode == 7U, .changed_abort_reentry = mode == 9U};
+        uint64_t deadline = deadline_after(3000);
+        ctos_ssh_role_token role = role_open(deadline);
+        ctos_ssh_callback_token callback = binding(&fixture, role, deadline);
+        unsigned char body[] = "replacement-body", records[304], output[64];
+        size_t length = 99U;
+        changed_record(records, base);
+        assert(ctos_ssh_callback_supports_changed(callback, fixture.environment) == 1);
+        int accepted = ctos_ssh_callback_changed_host_candidate(callback, fixture.environment,
+            "candidate-1", "ssh-ed25519", fingerprint, base, replacement,
+            body, sizeof(body) - 1U, records, sizeof(records));
+        for (size_t i = 0; i < sizeof(body) - 1U; i++) assert(body[i] == 0);
+        for (size_t i = 0; i < sizeof(records); i++) assert(records[i] == 0);
+        if (mode == 5U) {
+            assert(accepted != 0 && fixture.candidate_abort_calls == 1U);
+        } else {
+            assert(accepted == 0 && fixture.changed_candidate_calls == 1U);
+            if (mode == 1U) {
+                memset(output, 0xa5, sizeof(output));
+                assert(ctos_ssh_callback_credential_bytes_selected(callback, fixture.environment,
+                    CTOS_SSH_CALLBACK_CREDENTIAL_PASSWORD, receipt, 17U, digest,
+                    output, sizeof(output), &length) != 0 && length == 0U);
+                for (size_t i = 0; i < sizeof(output); i++) assert(output[i] == 0);
+                assert(fixture.selected_calls == 0U);
+            } else if (mode == 2U) {
+                assert(ctos_ssh_callback_kex_complete(callback, fixture.environment, 17U, digest) != 0);
+                assert(fixture.kex_calls == 0U);
+            } else if (mode == 3U) {
+                unsigned char wrong[32]; memcpy(wrong, base, 32U); wrong[0] ^= 1U;
+                assert(ctos_ssh_callback_changed_host_review(callback, fixture.environment,
+                    "ssh-ed25519", fingerprint, wrong, replacement) != 0);
+                assert(fixture.changed_review_calls == 0U);
+            } else if (mode == 6U) {
+                assert(ctos_ssh_callback_known_hosts_candidate_abort(callback, fixture.environment) == 0);
+                memset(output, 0xa5, sizeof(output));
+                assert(ctos_ssh_callback_credential_bytes_selected(callback, fixture.environment,
+                    CTOS_SSH_CALLBACK_CREDENTIAL_PASSWORD, receipt, 17U, digest,
+                    output, sizeof(output), &length) != 0 && length == 0U);
+                for (size_t i = 0; i < sizeof(output); i++) assert(output[i] == 0);
+                assert(fixture.selected_calls == 0U);
+            } else {
+                assert(ctos_ssh_callback_changed_host_review(callback, fixture.environment,
+                    "ssh-ed25519", fingerprint, base, replacement) == 0);
+                assert(fixture.changed_review_calls == 1U);
+                if (mode == 4U) {
+                    assert(ctos_ssh_callback_changed_host_review(callback, fixture.environment,
+                        "ssh-ed25519", fingerprint, base, replacement) != 0);
+                } else if (mode == 7U) {
+                    assert(ctos_ssh_callback_kex_complete(callback, fixture.environment, 17U, digest) != 0);
+                    assert(fixture.kex_calls == 1U && fixture.selected_calls == 0U);
+                } else {
+                    assert(ctos_ssh_callback_kex_complete(callback, fixture.environment, 17U, digest) == 0);
+                    if (mode == 8U) {
+                        fixture.changed_abort_failures = 1;
+                        assert(ctos_ssh_callback_known_hosts_candidate_abort(callback, fixture.environment) != 0);
+                        memset(output, 0xa5, sizeof(output));
+                        assert(ctos_ssh_callback_credential_bytes_selected(callback, fixture.environment,
+                            CTOS_SSH_CALLBACK_CREDENTIAL_PASSWORD, receipt, 17U, digest,
+                            output, sizeof(output), &length) != 0 && length == 0U);
+                        for (size_t i = 0; i < sizeof(output); i++) assert(output[i] == 0);
+                        assert(fixture.selected_calls == 0U);
+                    } else {
+                        assert(ctos_ssh_callback_credential_bytes_selected(callback, fixture.environment,
+                            CTOS_SSH_CALLBACK_CREDENTIAL_PASSWORD, receipt, 17U, digest,
+                            output, sizeof(output), &length) == 0 && length > 0U);
+                        assert(fixture.selected_calls == 1U);
+                    }
+                }
+            }
+        }
+        assert(ctos_ssh_callback_known_hosts_candidate_abort(callback, fixture.environment) == 0);
+        assert(ctos_ssh_callback_known_hosts_candidate_abort(callback, fixture.environment) == 0);
+        assert(fixture.candidate_abort_calls == (mode == 8U ? 2U : 1U));
+        assert(ctos_ssh_callback_close(callback, fixture.environment) == 0);
+        assert(ctos_ssh_role_bootstrap_close(role) == 0);
+        cases++;
+    }
 }
 
 int main(void) {
@@ -889,13 +1080,14 @@ int main(void) {
     test_selected_credential_transport();
     test_host_evidence_contract();
     test_known_hosts_candidate_handoff();
+    test_changed_candidate_contract();
     printf("SSH_CALLBACK_HOST phase=check_live state=pass errno=0 value=4\n");
     printf("SSH_CALLBACK_HOST phase=thread_reentry state=pass errno=0 value=1\n");
     printf("SSH_CALLBACK_HOST phase=cancel_deadline_cleanup state=pass errno=0 value=5\n");
     printf("SSH_CALLBACK_HOST phase=credential_bytes state=pass errno=0 value=5\n");
     printf("SSH_CALLBACK_HOST phase=selected_bytes state=pass errno=0 value=11\n");
     printf("SSH_CALLBACK_HOST phase=host_evidence state=pass errno=0 value=4\n");
-    printf("SSH_CALLBACK_HOST phase=known_hosts_candidate state=pass errno=0 value=5\n");
+    printf("SSH_CALLBACK_HOST phase=known_hosts_candidate state=pass errno=0 value=6\n");
     printf("SSH_CALLBACK_HOST phase=gate state=pass errno=0 value=%u\n", cases);
     return 0;
 }

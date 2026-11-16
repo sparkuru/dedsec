@@ -34,9 +34,8 @@ final class SshKexProof {
         }
         role.requireBound();
         hostKey.requireMatches(role);
-        if (hostKey.classification != SshHostKeyAuthority.Classification.KNOWN
-                && hostKey.classification != SshHostKeyAuthority.Classification.NEW) {
-            throw new VaultException("SSH_HOST_KEY_CHANGED", "The KEX proof has no approved host key");
+        if (!hostKey.permitsCredentials()) {
+            throw new VaultException(SshHostKeyAuthority.PROOF_INVALID, "The KEX proof has no approved host key");
         }
         byte combined = 0;
         for (byte value : sessionIdDigest) combined |= value;

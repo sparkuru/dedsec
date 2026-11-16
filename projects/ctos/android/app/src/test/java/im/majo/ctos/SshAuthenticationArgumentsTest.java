@@ -40,9 +40,43 @@ public final class SshAuthenticationArgumentsTest {
     @Test public void standaloneMethodsRejectEvenFalseContinuationAndAllSecretFields() throws Exception {
         for (String method : new String[]{"ssh.keyboardConnect","ssh.configKeyboardConnect"}) {
             assertFalse(SshPasswordConnectBridge.authenticationContinuation(new MethodCall(method,arguments(method))));
-            for (String field : new String[]{"continueKeyboardInteractive","password","passphrase","keyId","savePassword"}) {
+            for (String field : new String[]{"continueKeyboardInteractive","autoKeyboardInteractive","password","passphrase","keyId","savePassword"}) {
                 Map<String,Object> values=arguments(method); values.put(field,false); refused(method,values);
             }
+        }
+    }
+    @Test public void automaticModeIsTypedMutuallyExclusiveAndCompatibleWithLegacyRequests() throws Exception {
+        for (String method : new String[]{"ssh.passwordConnect","ssh.keyConnect","ssh.configConnect","ssh.configPasswordConnect"}) {
+            Map<String,Object> values=arguments(method);
+            assertEquals(SshPasswordConnector.ContinuationMode.NONE,
+                    SshPasswordConnectBridge.authenticationContinuationMode(new MethodCall(method,values)));
+            values.put("autoKeyboardInteractive",true);
+            assertEquals(SshPasswordConnector.ContinuationMode.AUTOMATIC,
+                    SshPasswordConnectBridge.authenticationContinuationMode(new MethodCall(method,values)));
+            values.put("autoKeyboardInteractive",false);
+            assertEquals(SshPasswordConnector.ContinuationMode.NONE,
+                    SshPasswordConnectBridge.authenticationContinuationMode(new MethodCall(method,values)));
+            for (Object invalid : new Object[]{null,0,1,"true"}) {
+                values.put("autoKeyboardInteractive",invalid); refused(method,values);
+            }
+            for (boolean automatic : new boolean[]{false,true}) for (boolean strict : new boolean[]{false,true}) {
+                values.put("autoKeyboardInteractive",automatic); values.put("continueKeyboardInteractive",strict);
+                refused(method,values);
+            }
+            values.remove("autoKeyboardInteractive"); values.put("continueKeyboardInteractive",true);
+            assertEquals(SshPasswordConnector.ContinuationMode.STRICT,
+                    SshPasswordConnectBridge.authenticationContinuationMode(new MethodCall(method,values)));
+
+            if (!method.equals("ssh.configPasswordConnect")) {
+                values.remove("useSavedPassword"); values.remove("savePassword");
+                values.remove("passphrase"); values.remove("useSavedPassphrase"); values.remove("savePassphrase");
+                values.remove("continueKeyboardInteractive"); values.put("autoKeyboardInteractive",true);
+                assertEquals(SshPasswordConnector.ContinuationMode.AUTOMATIC,
+                        SshPasswordConnectBridge.authenticationContinuationMode(new MethodCall(method,values)));
+            }
+        }
+        for (String method : new String[]{"ssh.keyboardConnect","ssh.configKeyboardConnect"}) {
+            Map<String,Object> values=arguments(method); values.put("autoKeyboardInteractive",true); refused(method,values);
         }
     }
     @Test public void configPasswordCannotSupplyForeignTupleOrOmitBindingAndSaveFlags() throws Exception {

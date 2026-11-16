@@ -54,4 +54,22 @@ public final class SshReconnectTargetTest {
         try { new SshReconnectTarget(profile, null, "configured", true, true); fail("Standalone KBI has no continuation"); }
         catch (VaultException expected) { }
     }
+
+    @Test public void automaticReconnectKeepsIntentButNoCapabilityOrAuthenticationState() throws Exception {
+        SshPasswordProfile profile = new SshPasswordProfile("host.invalid", 22, "user");
+        for (boolean configured : new boolean[]{false,true}) for (boolean key : new boolean[]{false,true}) {
+            SshReconnectTarget target = new SshReconnectTarget(profile, key ? "key_1" : null,
+                    configured ? "configured" : "", false, false, true);
+            Set<String> expected = new java.util.HashSet<>(Set.of("mode","host","port","username","autoKeyboardInteractive"));
+            if (key) expected.add("keyId");
+            if (configured) expected.add("configAlias");
+            assertEquals(expected,target.wire().keySet());
+            assertEquals(true,target.wire().get("autoKeyboardInteractive"));
+            assertEquals(configured ? key ? "config" : "configPassword" : key ? "key" : "password",target.mode);
+        }
+        try { new SshReconnectTarget(profile,null,"configured",false,true,true); fail("Modes cannot be combined"); }
+        catch (VaultException expected) { assertEquals("PARAMETERS",expected.code); }
+        try { new SshReconnectTarget(profile,null,"configured",true,false,true); fail("Standalone KBI has no continuation"); }
+        catch (VaultException expected) { assertEquals("PARAMETERS",expected.code); }
+    }
 }

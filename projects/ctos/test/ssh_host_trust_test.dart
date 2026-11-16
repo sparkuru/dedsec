@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:ui' show PointerDeviceKind;
 
 import 'package:ctos/ssh/api.dart';
 import 'package:ctos/authenticator/api.dart';
@@ -19,6 +20,7 @@ void main() {
       final actions = <SshHostKeyConflictAction>[];
       await tester.pumpWidget(
         MaterialApp(
+          theme: CtosTheme.dark(),
           home: Scaffold(
             body: SshHostKeyConflictDialog(
               host: 'server.example',
@@ -30,6 +32,9 @@ void main() {
       );
       expect(find.text('server.example:2222'), findsOneWidget);
       expect(find.text('服务器主机密钥已变化'), findsOneWidget);
+      _expectDialogActionShape(tester, 'ssh-host-changed-cancel');
+      _expectDialogActionShape(tester, 'ssh-host-changed-view');
+      _expectDialogActionShape(tester, 'ssh-host-changed-forget');
       for (final key in [
         'ssh-host-changed-view',
         'ssh-host-changed-forget',
@@ -45,6 +50,52 @@ void main() {
       ]);
     },
   );
+
+  testWidgets('changed-host text action keeps a rounded state layer', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: CtosTheme.dark(),
+        home: Scaffold(
+          body: SshHostKeyConflictDialog(
+            host: 'server.example',
+            port: 2222,
+            onAction: (_) {},
+          ),
+        ),
+      ),
+    );
+    const key = 'ssh-host-changed-view';
+    final button = find.byKey(const Key(key));
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    await mouse.addPointer(location: Offset.zero);
+    await mouse.moveTo(tester.getCenter(button));
+    await tester.pump();
+    expect(
+      _dialogActionInk(tester, key).statesController!.value,
+      contains(WidgetState.hovered),
+    );
+    _expectDialogActionShape(tester, key);
+
+    await mouse.down(tester.getCenter(button));
+    await tester.pump(const Duration(milliseconds: 150));
+    expect(
+      _dialogActionInk(tester, key).statesController!.value,
+      contains(WidgetState.pressed),
+    );
+    _expectDialogActionShape(tester, key);
+    await mouse.cancel();
+    await mouse.removePointer();
+
+    Focus.of(tester.element(find.text('查看旧指纹'))).requestFocus();
+    await tester.pump();
+    expect(
+      _dialogActionInk(tester, key).statesController!.value,
+      contains(WidgetState.focused),
+    );
+    _expectDialogActionShape(tester, key);
+  });
 
   for (final size in [const Size(320, 568), const Size(568, 320)]) {
     testWidgets('changed-host actions fit $size at double text size', (
@@ -99,6 +150,8 @@ void main() {
       expect(find.text('主机信任'), findsNothing);
       expect(find.text('忘记这些旧指纹？'), findsOneWidget);
       expect(find.text(_reviewedFingerprint), findsOneWidget);
+      _expectDialogActionShape(tester, 'ssh-trust-decline');
+      _expectDialogActionShape(tester, 'ssh-trust-confirm');
       expect(ui.arguments('ssh.hostTrustForgetPreview'), hasLength(1));
       expect(ui.arguments('ssh.hostTrustForgetCommit'), isEmpty);
       await ui.tap('ssh-trust-decline');
@@ -1416,6 +1469,30 @@ void main() {
       },
     );
   }
+}
+
+InkWell _dialogActionInk(WidgetTester tester, String key) =>
+    tester.widget<InkWell>(
+      find
+          .descendant(of: find.byKey(Key(key)), matching: find.byType(InkWell))
+          .first,
+    );
+
+void _expectDialogActionShape(WidgetTester tester, String key) {
+  final button = find.byKey(Key(key));
+  final material = tester.widget<Material>(
+    find.descendant(of: button, matching: find.byType(Material)).first,
+  );
+  const borderRadius = BorderRadius.all(Radius.circular(12));
+  expect(material.shape, isA<RoundedRectangleBorder>());
+  expect(
+    (material.shape! as RoundedRectangleBorder).borderRadius,
+    borderRadius,
+  );
+  final inkBorder = _dialogActionInk(tester, key).customBorder;
+  expect(inkBorder, isA<RoundedRectangleBorder>());
+  expect((inkBorder! as RoundedRectangleBorder).borderRadius, borderRadius);
+  expect(tester.getSize(button).height, greaterThanOrEqualTo(48));
 }
 
 final _fingerprint = 'SHA256:${List.filled(43, 'A').join()}';

@@ -1,5 +1,19 @@
 # SSH Native Gates
 
+2026-11-16: [early channel output](ssh-shell-early-output.md) may be buffered once the
+session channel opens, including while PTY/shell requests await replies. Only actual
+shell success permits publication; failures before success wipe the pending bytes.
+
+2026-11-16: [server-alive](ssh-server-alive.md) adds owner-bound encrypted global requests
+and ordered replies to the established shell pump. CSCP/CSPPv4 carry actual config values;
+older scenarios that reject keepalive describe their earlier implementation only.
+
+2026-11-13: the approved [same-connection CHANGED transaction](ssh-host-trust-management.md#scenario-same-connection-changed-host-key)
+supersedes older blanket CHANGED-rejection statements in the dated scenarios below. It uses a
+separate provisional pin, verified signature/NEWKEYS and exact-source guarded CAS before
+formal proof/credential release. REVOKED/CERTIFICATE/INVALID and unsafe CHANGED records
+remain fail-closed. The legacy NEW and independent forget contracts are unchanged.
+
 2026-11-02: [standalone keyboard-interactive](ssh-keyboard-interactive.md) adds an explicit
 CSASv1 kind3 with no stored credential fields and method-aware INFO_REQUEST/RESPONSE.
 CSKI/CSKR bind owned bounded current rounds, original host/KEX/role/view and one response.
@@ -7,7 +21,7 @@ CSCP/CSPPv2 expose the actual fixed Options KBI policy. Local implementation/che
 older sections excluding KBI describe their earlier password/key gate, not a prohibition on
 the new approved method. Chained-method MFA remains separate and PARTIAL grants no shell.
 
-2026-11-02: negative host-key diagnostics remain separate from trust authority.
+2026-11-02 historical gate: negative host-key diagnostics remain separate from trust authority.
 `verify_host_key` still rejects actual issuer CHANGED/REVOKED/CERTIFICATE before any managed
 host-evidence callback, proposal or proof. Record only a terminal `host_key_rejection` enum
 from that successful issuer result. `ctos_ssh_native_client_host_key_rejection` clears its
@@ -2780,7 +2794,8 @@ not itself prove that a native callback came from the real OpenSSH event loop.
 | Missing/expired/closed role or revoked public view | `SSH_ROLE_REQUIRED`, `SSH_ROLE_EXPIRED` or `SSH_FILE_VIEW` |
 | NEW key without exact role/target/digest review | `SSH_HOST_KEY_REVIEW` |
 | Changed/revoked/certificate/invalid host evidence | `SSH_HOST_KEY_CHANGED`, `SSH_HOST_KEY_REVOKED`, `SSH_HOST_KEY_CERTIFICATE` or `SSH_HOST_KEY_INVALID` |
-| Missing or cross-hop KEX proof | `SSH_KEX_REQUIRED` or `SSH_HOST_KEY_CHANGED` |
+| Missing or cross-hop KEX proof | `SSH_KEX_REQUIRED` or `SSH_HOST_PROOF_INVALID` |
+| Host proof/evidence, role, key or digest binding mismatch | `SSH_HOST_PROOF_INVALID`; reject without releasing credentials or writing trust |
 | Missing receiver, invalid request or manifest-kind mismatch | `PARAMETERS` or the existing vault operation error |
 | Failure after opening a request | close the request and revoke its exact operation; do not rebind it |
 
@@ -2794,12 +2809,22 @@ not itself prove that a native callback came from the real OpenSSH event loop.
 - Bad: a UI boolean, prompt text, control frame, cached host fingerprint or
   same connection ID is used to release a secret; reject it and keep the
   public/native provider gates closed.
+- Bad: label an internal proof or role binding mismatch as a changed server
+  key. Reserve `SSH_HOST_KEY_CHANGED` for actual CHANGED classification;
+  callback cancellation/expiry may still supersede an internal error. In the
+  existing JNI callback failure path, terminalization may surface
+  `SSH_SESSION_CANCELLED` instead of the internal proof error; never present
+  that as a changed host or weaken cancellation and write-outcome guards to
+  expose a more specific diagnostic.
 
 ### 6. Tests Required
 
 - `SshProductionBridgeTest`: replay and distinct-hop binding, all host-key
   classifications, exact NEW-key review, kind mismatch, missing-KEX closure,
   successful typed password/private-key release, expiry and cross-hop proof.
+- Compare cross-hop host/KEX proof and altered key/base/replacement digest
+  failures against real CHANGED classification: no credential release or
+  trust write for either, but only CHANGED carries the changed-key code.
 - `SshRoleRegistry` regression: distinct hops on one connection must be
   allowed while same-hop binding/nonce reuse is rejected.
 - `:app:testReleaseUnitTest`, `lintRelease`, and the host native view/control
@@ -2824,7 +2849,9 @@ bridge.release(request, signedKexAndNewkeysProof, receiver);
 
 The correct call is still allowed only through the package-private bridge and
 its repeated role/host/operation guards; native production wiring must supply
-the proof from the real event loop.
+the proof from the real event loop. `SSH_HOST_PROOF_INVALID` may travel through
+the existing connection error channel; it is not a new host-trust decision or
+an authorization to forget a saved key.
 
 ## Native role bootstrap seam (bounded registry; KEX fixture integration)
 

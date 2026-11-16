@@ -43,6 +43,47 @@ void main() {
     expect(ids, ['later_attempt', 'later_attempt']);
   });
 
+  test('cleanup cancels a newly retained request before awaiting it', () async {
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    final ids = <String>[];
+    final enteredFirstCancel = Completer<void>();
+    final releaseFirstCancel = Completer<void>();
+    final firstResult = Completer<void>();
+    final secondResult = Completer<void>();
+    messenger.setMockMethodCallHandler(const MethodChannel('ctos/native'), (
+      call,
+    ) async {
+      expect(call.method, 'ssh.cancel');
+      final id = (call.arguments as Map)['requestId'] as String;
+      ids.add(id);
+      if (id == 'attempt_a' && !enteredFirstCancel.isCompleted) {
+        enteredFirstCancel.complete();
+        await releaseFirstCancel.future;
+        firstResult.complete();
+      } else if (id == 'attempt_b' && !secondResult.isCompleted) {
+        secondResult.complete();
+      }
+      return {'cancelled': true};
+    });
+    addTearDown(
+      () => messenger.setMockMethodCallHandler(
+        const MethodChannel('ctos/native'),
+        null,
+      ),
+    );
+    final lifetime = SshConnectLifetime(SshPasswordApi());
+    lifetime.retain('attempt_a', firstResult.future);
+    final finishing = lifetime.finish();
+    await enteredFirstCancel.future;
+    lifetime.retain('attempt_b', secondResult.future);
+    releaseFirstCancel.complete();
+    await finishing.timeout(const Duration(seconds: 2));
+    expect(ids, ['attempt_a', 'attempt_a', 'attempt_b', 'attempt_b']);
+    await lifetime.finish();
+    expect(ids, hasLength(4));
+  });
+
   test(
     'KBI challenge decoder bounds complete actual metadata and strict Unicode',
     () {
@@ -188,6 +229,339 @@ void main() {
     );
   }
 
+  testWidgets(
+    'ordinary password success does not wait for a KBI session event',
+    (tester) async {
+      final ui = _Ui(tester);
+      await ui.open();
+      await tester.enterText(
+        find.byKey(const Key('ssh-password')),
+        'first-factor',
+      );
+      await ui.tap('ssh-connect');
+      expect(
+        ui.connections.single.arguments,
+        containsPair('autoKeyboardInteractive', true),
+      );
+      ui.complete(success: true);
+      await ui.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(find.byType(SshPasswordConnectPage), findsNothing);
+      expect(ui.answers, isEmpty);
+      await ui.remove();
+    },
+  );
+
+  testWidgets(
+    'pending automatic challenge expires or is revoked before display',
+    (tester) async {
+      for (final expires in [true, false]) {
+        final ui = _Ui(tester);
+        await ui.open();
+        await tester.enterText(
+          find.byKey(const Key('ssh-password')),
+          'first-factor',
+        );
+        await ui.tap('ssh-connect');
+        final id = ui.connectId;
+        await ui.event({
+          ..._challenge(id),
+          if (expires) 'remainingMillis': 500,
+        });
+        expect(find.byType(SshKeyboardChallengeForm), findsNothing);
+        if (expires) {
+          await tester.pump(const Duration(milliseconds: 500));
+        } else {
+          await ui.session(unlocked: false);
+        }
+        await ui.pump();
+        await ui.session();
+        expect(find.byType(SshKeyboardChallengeForm), findsNothing);
+        expect(ui.answers, isEmpty);
+        expect(ui.cancelled, contains(id));
+        ui.complete();
+        await ui.pump();
+        await ui.remove();
+      }
+    },
+  );
+
+  testWidgets(
+    'success racing an unanswered automatic challenge cancels exact handoff',
+    (tester) async {
+      for (final sessionReady in [false, true]) {
+        final ui = _Ui(tester);
+        await ui.open();
+        await tester.enterText(
+          find.byKey(const Key('ssh-password')),
+          'first-factor',
+        );
+        await ui.tap('ssh-connect');
+        final id = ui.connectId;
+        await ui.event(_challenge(id));
+        if (sessionReady) await ui.session();
+        ui.complete(success: true);
+        await ui.pump();
+        expect(ui.cancelled, contains(id));
+        expect(find.byType(SshPasswordConnectPage), findsOneWidget);
+        expect(ui.answers, isEmpty);
+        await ui.remove();
+      }
+    },
+  );
+
+  for (final order in ['dismiss-first', 'success-first', 'accepted-first']) {
+    testWidgets('submitted challenge tolerates $order receipt ordering', (
+      tester,
+    ) async {
+      final ui = _Ui(tester)
+        ..keyboardResponse = Completer<Map<String, Object>>();
+      await ui.open();
+      await tester.enterText(find.byKey(const Key('ssh-password')), 'first');
+      await ui.tap('ssh-connect');
+      final id = ui.connectId;
+      expect(find.byKey(const Key('ssh-keyboard-dialog')), findsNothing);
+      await ui.event(_challenge(id));
+      await ui.session();
+      expect(find.byKey(const Key('ssh-keyboard-dialog')), findsOneWidget);
+      await ui.tap('ssh-keyboard-submit');
+      if (order == 'accepted-first') {
+        ui.keyboardResponse!.complete({'accepted': true});
+        await ui.pump();
+      }
+      if (order == 'dismiss-first') {
+        await ui.event({
+          'type': 'keyboardChallengeDismissed',
+          'requestId': id,
+          'ticketId': 'ticket_1',
+        });
+      }
+      ui.complete(success: true);
+      await ui.pump();
+      if (order != 'accepted-first') {
+        expect(find.byType(SshPasswordConnectPage), findsOneWidget);
+        expect(ui.cancelled, isNot(contains(id)));
+        ui.keyboardResponse!.complete({'accepted': true});
+        await ui.pump();
+      }
+      await ui.pump();
+      expect(find.byType(SshPasswordConnectPage), findsNothing);
+      expect(ui.cancelled, isNot(contains(id)));
+      await ui.remove();
+    });
+  }
+
+  testWidgets('dismissed unanswered challenge cannot hand off a session', (
+    tester,
+  ) async {
+    final ui = _Ui(tester);
+    await ui.open();
+    await tester.enterText(find.byKey(const Key('ssh-password')), 'first');
+    await ui.tap('ssh-connect');
+    final id = ui.connectId;
+    await ui.event(_challenge(id));
+    await ui.session();
+    await ui.event({
+      'type': 'keyboardChallengeDismissed',
+      'requestId': id,
+      'ticketId': 'ticket_1',
+    });
+    ui.complete(success: true);
+    await ui.pump();
+    expect(ui.cancelled, contains(id));
+    expect(find.byType(SshPasswordConnectPage), findsOneWidget);
+    expect(ui.answers, isEmpty);
+    await ui.remove();
+  });
+
+  testWidgets(
+    'challenge dismissed before session readiness still requires an answer',
+    (tester) async {
+      final ui = _Ui(tester);
+      await ui.open();
+      await tester.enterText(find.byKey(const Key('ssh-password')), 'first');
+      await ui.tap('ssh-connect');
+      final id = ui.connectId;
+      await ui.event(_challenge(id));
+      await ui.event({
+        'type': 'keyboardChallengeDismissed',
+        'requestId': id,
+        'ticketId': 'ticket_1',
+      });
+      ui.complete(success: true);
+      await ui.pump();
+      expect(ui.cancelled, contains(id));
+      expect(find.byType(SshPasswordConnectPage), findsOneWidget);
+      expect(ui.answers, isEmpty);
+      await ui.remove();
+    },
+  );
+
+  testWidgets('accepted answer no longer expires while server finishes', (
+    tester,
+  ) async {
+    final ui = _Ui(tester);
+    await ui.open();
+    await tester.enterText(find.byKey(const Key('ssh-password')), 'first');
+    await ui.tap('ssh-connect');
+    final id = ui.connectId;
+    await ui.event(_challenge(id, remainingMillis: 3000));
+    await ui.session();
+    await ui.tap('ssh-keyboard-submit');
+    await tester.pump(const Duration(seconds: 4));
+    expect(ui.cancelled, isNot(contains(id)));
+    expect(find.byKey(const Key('ssh-keyboard-dialog')), findsOneWidget);
+    ui.complete(success: true);
+    await ui.pump();
+    await ui.pump();
+    expect(find.byType(SshPasswordConnectPage), findsNothing);
+    await ui.remove();
+  });
+
+  testWidgets('revocation while answer receipt is pending cannot hand off', (
+    tester,
+  ) async {
+    final ui = _Ui(tester)..keyboardResponse = Completer<Map<String, Object>>();
+    await ui.open();
+    await tester.enterText(find.byKey(const Key('ssh-password')), 'first');
+    await ui.tap('ssh-connect');
+    final id = ui.connectId;
+    await ui.event(_challenge(id));
+    await ui.session();
+    await ui.tap('ssh-keyboard-submit');
+    ui.complete(success: true);
+    await ui.session(unlocked: false);
+    await ui.pump();
+    expect(ui.cancelled, contains(id));
+    ui.keyboardResponse!.complete({'accepted': true});
+    await ui.pump();
+    expect(find.byType(SshPasswordConnectPage), findsOneWidget);
+    expect(find.byKey(const Key('ssh-keyboard-dialog')), findsNothing);
+    await ui.remove();
+  });
+
+  for (final resolution in ['rejected', 'timeout']) {
+    testWidgets('$resolution answer receipt cannot hand off the session', (
+      tester,
+    ) async {
+      final ui = _Ui(tester)
+        ..keyboardResponse = Completer<Map<String, Object>>();
+      await ui.open();
+      await tester.enterText(find.byKey(const Key('ssh-password')), 'first');
+      await ui.tap('ssh-connect');
+      final id = ui.connectId;
+      await ui.event(_challenge(id, remainingMillis: 3000));
+      await ui.session();
+      await ui.tap('ssh-keyboard-submit');
+      ui.complete(success: true);
+      if (resolution == 'rejected') {
+        ui.keyboardResponse!.complete({'accepted': false});
+      } else {
+        await tester.pump(const Duration(seconds: 4));
+      }
+      await ui.pump();
+      expect(ui.cancelled, contains(id));
+      if (resolution == 'timeout') {
+        ui.keyboardResponse!.complete({'accepted': true});
+        await ui.pump();
+      }
+      expect(find.byType(SshPasswordConnectPage), findsOneWidget);
+      await ui.remove();
+    });
+  }
+
+  testWidgets(
+    'later question retains its own deadline after an accepted answer',
+    (tester) async {
+      final ui = _Ui(tester);
+      await ui.open();
+      await tester.enterText(find.byKey(const Key('ssh-password')), 'first');
+      await ui.tap('ssh-connect');
+      final id = ui.connectId;
+      await ui.event(_challenge(id));
+      await ui.session();
+      await ui.tap('ssh-keyboard-submit');
+      await ui.event({
+        'type': 'keyboardChallengeDismissed',
+        'requestId': id,
+        'ticketId': 'ticket_1',
+      });
+      await ui.event(_challenge(id, round: 2, remainingMillis: 500));
+      await tester.pump(const Duration(milliseconds: 501));
+      await ui.pump();
+      expect(ui.cancelled, contains(id));
+      expect(ui.answers, hasLength(1));
+      ui.complete();
+      await ui.pump();
+      await ui.remove();
+    },
+  );
+
+  testWidgets(
+    'challenge dialog cancellation retains protection until receipt',
+    (tester) async {
+      final ui = _Ui(tester);
+      await ui.open();
+      await tester.enterText(find.byKey(const Key('ssh-password')), 'first');
+      await ui.tap('ssh-connect');
+      final id = ui.connectId;
+      await ui.event(_challenge(id));
+      await ui.session();
+      await ui.tap('ssh-keyboard-cancel');
+      expect(ui.cancelled, contains(id));
+      expect(ui.releases, isEmpty);
+      expect(ui.answers, isEmpty);
+      ui.complete();
+      await ui.pump();
+      expect(ui.releases, hasLength(1));
+      await ui.remove();
+    },
+  );
+
+  testWidgets(
+    'challenge dialog actions and new rounds remain reachable at large text sizes',
+    (tester) async {
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      for (final size in [const Size(320, 568), const Size(568, 320)]) {
+        await tester.binding.setSurfaceSize(size);
+        final ui = _Ui(tester);
+        await ui.open(scale: 2, keyboard: 80);
+        await tester.enterText(find.byKey(const Key('ssh-password')), 'first');
+        await ui.tap('ssh-connect');
+        final id = ui.connectId;
+        await ui.event(_challenge(id));
+        await ui.session();
+        final dialog = find.byKey(const Key('ssh-keyboard-dialog'));
+        expect(dialog, findsOneWidget);
+        expect(
+          find.descendant(of: dialog, matching: find.byType(Scrollbar)),
+          findsOneWidget,
+        );
+        for (final action in ['ssh-keyboard-submit', 'ssh-keyboard-cancel']) {
+          final button = find.byKey(Key(action));
+          await tester.ensureVisible(button);
+          await ui.pump();
+          expect(button.hitTestable(), findsOneWidget);
+        }
+        await ui.tap('ssh-keyboard-submit');
+        await ui.event({
+          'type': 'keyboardChallengeDismissed',
+          'requestId': id,
+          'ticketId': 'ticket_1',
+        });
+        await ui.event(_challenge(id, round: 2));
+        expect(
+          tester.getTopLeft(find.text('服务器请求')).dy,
+          greaterThanOrEqualTo(0),
+        );
+        expect(tester.takeException(), isNull);
+        ui.complete();
+        await ui.pump();
+        await ui.remove();
+      }
+    },
+  );
+
   test(
     'MFA reconnect metadata grants only the explicit bounded continuation',
     () {
@@ -206,6 +580,17 @@ void main() {
           isFalse,
         );
         expect(
+          SshReconnectTarget.parse(value).autoKeyboardInteractive,
+          isFalse,
+        );
+        expect(
+          SshReconnectTarget.parse({
+            ...value,
+            'autoKeyboardInteractive': true,
+          }).autoKeyboardInteractive,
+          isTrue,
+        );
+        expect(
           SshReconnectTarget.parse({
             ...value,
             'continueKeyboardInteractive': true,
@@ -220,7 +605,22 @@ void main() {
             }),
             throwsFormatException,
           );
+          expect(
+            () => SshReconnectTarget.parse({
+              ...value,
+              'autoKeyboardInteractive': bad,
+            }),
+            throwsFormatException,
+          );
         }
+        expect(
+          () => SshReconnectTarget.parse({
+            ...value,
+            'continueKeyboardInteractive': false,
+            'autoKeyboardInteractive': true,
+          }),
+          throwsFormatException,
+        );
         expect(
           () => SshReconnectTarget.parse({...value, 'stage': 2}),
           throwsFormatException,
@@ -233,17 +633,22 @@ void main() {
         }
       }
       for (final mode in ['keyboard', 'configKeyboard']) {
-        expect(
-          () => SshReconnectTarget.parse({
-            'mode': mode,
-            'host': 'server.invalid',
-            'port': 2222,
-            'username': 'alice',
-            if (mode == 'configKeyboard') 'configAlias': 'fixture',
-            'continueKeyboardInteractive': true,
-          }),
-          throwsFormatException,
-        );
+        for (final field in [
+          'continueKeyboardInteractive',
+          'autoKeyboardInteractive',
+        ]) {
+          expect(
+            () => SshReconnectTarget.parse({
+              'mode': mode,
+              'host': 'server.invalid',
+              'port': 2222,
+              'username': 'alice',
+              if (mode == 'configKeyboard') 'configAlias': 'fixture',
+              field: false,
+            }),
+            throwsFormatException,
+          );
+        }
       }
     },
   );
@@ -251,7 +656,7 @@ void main() {
   for (final configured in [false, true]) {
     for (final key in [false, true]) {
       testWidgets(
-        '${configured ? 'config' : 'manual'} ${key ? 'key' : 'password'} explicitly continues KBI on original protected attempt',
+        '${configured ? 'config' : 'manual'} ${key ? 'key' : 'password'} presents requested KBI on original protected attempt',
         (tester) async {
           final ui = _Ui(tester)..withKey = key;
           await ui.open(
@@ -270,21 +675,9 @@ void main() {
             ),
           );
           expect(
-            tester
-                .widget<CheckboxListTile>(
-                  find.byKey(const Key('ssh-continue-keyboard-interactive')),
-                )
-                .value,
-            isFalse,
+            find.byKey(const Key('ssh-continue-keyboard-interactive')),
+            findsNothing,
           );
-          await ui.tap('ssh-continue-keyboard-interactive');
-          expect(
-            tester
-                .widget<FilledButton>(find.byKey(const Key('ssh-connect')))
-                .onPressed,
-            isNull,
-          );
-          await ui.session();
           if (!key)
             await tester.enterText(
               find.byKey(const Key('ssh-password')),
@@ -298,9 +691,10 @@ void main() {
                 ? (key ? 'ssh.configConnect' : 'ssh.configPasswordConnect')
                 : (key ? 'ssh.keyConnect' : 'ssh.passwordConnect'),
           );
+          expect(call.arguments, containsPair('autoKeyboardInteractive', true));
           expect(
             call.arguments,
-            containsPair('continueKeyboardInteractive', true),
+            isNot(contains('continueKeyboardInteractive')),
           );
           if (configured) {
             expect(call.arguments, containsPair('alias', 'fixture'));
@@ -310,6 +704,8 @@ void main() {
             expect(call.arguments, containsPair('username', ''));
           }
           await ui.event(_challenge(ui.connectId));
+          expect(find.byType(SshKeyboardChallengeForm), findsNothing);
+          await ui.session();
           expect(find.byType(SshKeyboardChallengeForm), findsOneWidget);
           expect(find.byKey(const Key('ssh-password')), findsNothing);
           await tester.enterText(
@@ -335,7 +731,6 @@ void main() {
       await ui.open();
       await ui.tap('ssh-manage-identities');
       await ui.tap('ssh-config-host-fixture');
-      await ui.tap('ssh-config-password-choice');
       await ui.pump();
       expect(
         find.byKey(const Key('ssh-host')),
@@ -360,8 +755,6 @@ void main() {
         ui.arguments('ssh.passwordStatus').last,
         containsPair('host', 'server.invalid'),
       );
-      await ui.tap('ssh-continue-keyboard-interactive');
-      await ui.session();
       await ui.tap('ssh-authentication');
       await ui.tap('ssh-auth-keyboard');
       await ui.session();
@@ -372,12 +765,8 @@ void main() {
       await ui.tap('ssh-authentication');
       await ui.tap('ssh-auth-password');
       expect(
-        tester
-            .widget<CheckboxListTile>(
-              find.byKey(const Key('ssh-continue-keyboard-interactive')),
-            )
-            .value,
-        isFalse,
+        find.byKey(const Key('ssh-continue-keyboard-interactive')),
+        findsNothing,
       );
       expect(
         tester
@@ -404,6 +793,10 @@ void main() {
         ui.connections.single.arguments,
         isNot(contains('continueKeyboardInteractive')),
       );
+      expect(
+        ui.connections.single.arguments,
+        containsPair('autoKeyboardInteractive', true),
+      );
       ui.complete();
       await ui.pump();
       await ui.close();
@@ -412,9 +805,11 @@ void main() {
   );
 
   testWidgets(
-    'changing config password to an explicit key refreshes the same alias binding',
+    'changing config password to an explicit key preserves the alias binding',
     (tester) async {
-      final ui = _Ui(tester)..withKey = true;
+      final ui = _Ui(tester)
+        ..withKey = true
+        ..libraryBinding = 'd' * 64;
       await ui.open(
         connectOnOpen: false,
         reconnect: const SshReconnectTarget(
@@ -427,7 +822,6 @@ void main() {
       );
       await ui.tap('ssh-authentication');
       await ui.tap('ssh-auth-privateKey');
-      ui.libraryBinding = 'd' * 64;
       await ui.tap('ssh-select-private-key');
       await ui.tap('ssh-key-key_a');
       await ui.pump();
@@ -438,8 +832,6 @@ void main() {
             .text,
         'server.invalid',
       );
-      await ui.tap('ssh-continue-keyboard-interactive');
-      await ui.session();
       await ui.tap('ssh-connect');
       expect(ui.connections.single.method, 'ssh.configConnect');
       expect(
@@ -460,7 +852,8 @@ void main() {
     (tester) async {
       final ui = _Ui(tester)
         ..withKey = true
-        ..libraryUsername = '';
+        ..libraryUsername = ''
+        ..libraryBinding = 'e' * 64;
       await ui.open(
         connectOnOpen: false,
         reconnect: const SshReconnectTarget(
@@ -473,7 +866,6 @@ void main() {
       );
       await ui.tap('ssh-authentication');
       await ui.tap('ssh-auth-privateKey');
-      ui.libraryBinding = 'e' * 64;
       await ui.tap('ssh-select-private-key');
       await ui.tap('ssh-key-key_a');
       await ui.pump();
@@ -576,8 +968,6 @@ void main() {
           } else {
             await ui.tap('ssh-use-saved-password');
           }
-          await ui.tap('ssh-continue-keyboard-interactive');
-          await ui.session();
           await ui.tap('ssh-connect');
           expect(
             ui.connections.single.arguments,
@@ -588,6 +978,7 @@ void main() {
             containsPair('password', saving ? 'first-save-only' : ''),
           );
           await ui.event(_challenge(ui.connectId));
+          await ui.session();
           await ui.event({
             'type': 'state',
             'requestId': ui.connectId,
@@ -630,13 +1021,12 @@ void main() {
         final ui = _Ui(tester);
         await ui.open();
         await ui.tap('ssh-use-saved-password');
-        await ui.tap('ssh-continue-keyboard-interactive');
-        await ui.session();
         await ui.tap('ssh-connect');
         final id = ui.connectId;
         await ui.event(
           _challenge(id, remainingMillis: cause == 'expired' ? 500 : 60000),
         );
+        await ui.session();
         await tester.enterText(
           find.byKey(const Key('ssh-keyboard-answer-1')),
           'clear-on-retire',
@@ -948,6 +1338,11 @@ void main() {
       await ui.tap('ssh-keyboard-submit');
       expect(ui.answers.last['answers'], isEmpty);
       expect(ui.answers.last['ticketId'], 'ticket_2');
+      await ui.event({
+        'type': 'keyboardChallengeDismissed',
+        'requestId': id,
+        'ticketId': 'ticket_2',
+      });
       ui.complete(success: true);
       await ui.pump();
       await tester.pump(const Duration(milliseconds: 400));
@@ -973,7 +1368,9 @@ void main() {
       await ui.open();
       await ui.tap('ssh-manage-identities');
       await ui.tap('ssh-config-host-fixture');
-      await ui.tap('ssh-config-keyboard-choice');
+      final statusCount = ui.arguments('ssh.passwordStatus').length;
+      await ui.tap('ssh-authentication');
+      await ui.tap('ssh-auth-keyboard');
       await ui.session();
       await ui.tap('ssh-connect');
       expect(ui.connections.single.method, 'ssh.configKeyboardConnect');
@@ -986,7 +1383,7 @@ void main() {
         'rows': 24,
       });
       expect(find.byKey(const Key('ssh-select-private-key')), findsNothing);
-      expect(ui.arguments('ssh.passwordStatus'), isEmpty);
+      expect(ui.arguments('ssh.passwordStatus'), hasLength(statusCount));
       ui.complete();
       await ui.pump();
       await ui.close();
@@ -1210,6 +1607,7 @@ class _Ui {
   String libraryBinding = 'a' * 64;
   String libraryHost = 'server.invalid';
   String libraryUsername = 'alice';
+  Completer<Map<String, Object>>? keyboardResponse;
   late SshPasswordApi api;
 
   List<Map<dynamic, dynamic>> arguments(String method) => calls
@@ -1308,7 +1706,7 @@ class _Ui {
         pending.add(completion);
         return completion.future;
       case 'ssh.keyboardResponse':
-        return {'accepted': true};
+        return keyboardResponse?.future ?? {'accepted': true};
       case 'ssh.passwordStatus':
         return {'saved': true};
       case 'ssh.cancel':

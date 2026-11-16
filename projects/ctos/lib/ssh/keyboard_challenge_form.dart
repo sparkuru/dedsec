@@ -87,6 +87,7 @@ class _SshKeyboardChallengeFormState extends State<SshKeyboardChallengeForm> {
       _clear();
       answers.clear();
       final accepted = await response;
+      if (accepted) _expiry?.cancel();
       if (mounted && !accepted && !_expired) {
         setState(() => _error = '本轮问题已失效，请重新连接。');
       }

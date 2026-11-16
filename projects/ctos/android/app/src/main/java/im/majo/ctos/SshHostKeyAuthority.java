@@ -9,10 +9,16 @@ import java.security.MessageDigest;
  * role-bound result and applies the approval policy.
  */
 final class SshHostKeyAuthority {
+    static final String PROOF_INVALID = "SSH_HOST_PROOF_INVALID";
     enum Classification { KNOWN, NEW, CHANGED, REVOKED, CERTIFICATE, INVALID }
 
     interface UnknownKeyIssuer {
         void requireApproved(Review review) throws VaultException;
+    }
+
+    /** A separate user decision: this capability never constitutes host proof. */
+    interface ChangedKeyIssuer {
+        void requireApproved(ChangedReview review) throws VaultException;
     }
 
     static final class Evidence {
@@ -103,6 +109,59 @@ final class SshHostKeyAuthority {
         boolean belongsTo(SshRoleContext candidate) { return role == candidate; }
     }
 
+    /** Exact old/new facts from the current candidate and its source snapshot. */
+    static final class ChangedReview {
+        private final SshRoleContext role;
+        private final Evidence evidence;
+        private final SshTrustProposal proposal;
+        final String roleBinding, connectionId, targetIdentity, host, source, keyType, fingerprint, binding;
+        final int hop, port;
+        final java.util.List<SshHostTrustMaterial.Record> oldRecords;
+
+        private ChangedReview(Evidence evidence, SshTrustProposal proposal,
+                java.util.List<SshHostTrustMaterial.Record> oldRecords) throws VaultException {
+            if (evidence == null || evidence.classification != Classification.CHANGED || proposal == null
+                    || !proposal.matchesChangedEvidence(evidence) || oldRecords == null
+                    || oldRecords.isEmpty() || oldRecords.size() > SshHostTrustMaterial.MAX_ROWS)
+                throw new VaultException("SSH_HOST_KEY_REVIEW", "The exact changed host review is unavailable");
+            role = evidence.role; this.evidence = evidence; this.proposal = proposal;
+            roleBinding = role.binding(); hop = role.hop; connectionId = role.connectionId;
+            targetIdentity = role.targetIdentity; host = role.host; port = role.port;
+            source = proposal.path; keyType = evidence.keyType; fingerprint = evidence.fingerprint;
+            VaultManifest.path(source);
+            int previous = 0;
+            StringBuilder facts = new StringBuilder(roleBinding).append('\0').append(hop)
+                    .append('\0').append(connectionId).append('\0').append(targetIdentity)
+                    .append('\0').append(host).append('\0').append(port).append('\0')
+                    .append(source).append('\0').append(proposal.binding).append('\0')
+                    .append(keyType).append('\0').append(fingerprint);
+            for (SshHostTrustMaterial.Record row : oldRecords) {
+                if (row == null || row.line <= previous || !row.reason.equals("none")
+                        || !row.marker.equals("none")
+                        || !(row.selector.equals("literal") || row.selector.equals("hashed")))
+                    throw new VaultException("SSH_HOST_TRUST_BLOCKED", "The old host records cannot be replaced");
+                previous = row.line;
+                facts.append('\0').append(row.line).append('\0').append(row.algorithm)
+                        .append('\0').append(row.fingerprint).append('\0').append(row.selector);
+            }
+            this.oldRecords = VaultCollections.copyList(oldRecords);
+            binding = digest(facts.toString());
+        }
+
+        boolean belongsTo(SshRoleContext candidate) { return role == candidate; }
+
+        byte[] baseDigest() { return evidence.baseDigest(); }
+        byte[] replacementDigest() { return evidence.replacementDigest(); }
+
+        void requireMatches(SshRoleContext candidate, Evidence actual, SshTrustProposal exact)
+                throws VaultException {
+            if (candidate != role || actual != evidence || exact != proposal
+                    || !proposal.matchesChangedEvidence(actual))
+                throw new VaultException(PROOF_INVALID, "The changed host review is no longer exact");
+            candidate.requireBound();
+        }
+    }
+
     static final class Proof {
         final String roleBinding;
         final int hop;
@@ -113,10 +172,15 @@ final class SshHostKeyAuthority {
         final String keyType;
         final String fingerprint;
         final Classification classification;
+        private final boolean changedCommitted;
         private final byte[] baseDigest;
         private final byte[] replacementDigest;
 
         private Proof(Evidence evidence) {
+            this(evidence, false);
+        }
+
+        private Proof(Evidence evidence, boolean changedCommitted) {
             roleBinding = evidence.role.binding();
             hop = evidence.role.hop;
             connectionId = evidence.role.connectionId;
@@ -126,15 +190,21 @@ final class SshHostKeyAuthority {
             keyType = evidence.keyType;
             fingerprint = evidence.fingerprint;
             classification = evidence.classification;
+            this.changedCommitted = changedCommitted;
             baseDigest = evidence.baseDigest.clone();
             replacementDigest = evidence.replacementDigest.clone();
+        }
+
+        boolean permitsCredentials() {
+            return classification == Classification.KNOWN || classification == Classification.NEW
+                    || classification == Classification.CHANGED && changedCommitted;
         }
 
         void requireMatches(SshRoleContext role) throws VaultException {
             if (role == null || !role.binding().equals(roleBinding) || role.hop != hop
                     || !role.connectionId.equals(connectionId) || !role.targetIdentity.equals(targetIdentity)
                     || !role.host.equals(host) || role.port != port)
-                throw new VaultException("SSH_HOST_KEY_CHANGED", "The host-key proof is bound to another hop");
+                throw new VaultException(PROOF_INVALID, "The host-key proof is bound to another hop");
         }
 
         /** Revalidate the complete evidence, not only the role coordinates. */
@@ -142,14 +212,14 @@ final class SshHostKeyAuthority {
             requireMatches(role);
             if (evidence == null || evidence.role != role || evidence.classification != classification
                     || !keyType.equals(evidence.keyType) || !fingerprint.equals(evidence.fingerprint)) {
-                throw new VaultException("SSH_HOST_KEY_CHANGED", "The host-key proof is bound to another key");
+                throw new VaultException(PROOF_INVALID, "The host-key proof is bound to another key");
             }
             byte[] currentBase = evidence.baseDigest();
             byte[] currentReplacement = evidence.replacementDigest();
             try {
                 if (!MessageDigest.isEqual(baseDigest, currentBase)
                         || !MessageDigest.isEqual(replacementDigest, currentReplacement)) {
-                    throw new VaultException("SSH_HOST_KEY_CHANGED", "The host-key proof digest changed");
+                    throw new VaultException(PROOF_INVALID, "The host-key proof digest changed");
                 }
             } finally {
                 VaultCodec.wipe(currentBase);
@@ -159,19 +229,48 @@ final class SshHostKeyAuthority {
     }
 
     private final UnknownKeyIssuer unknownKeyIssuer;
+    private final ChangedKeyIssuer changedKeyIssuer;
 
     SshHostKeyAuthority() {
         this(review -> { throw new VaultException("SSH_HOST_KEY_REVIEW", "An exact host-key review is required"); });
     }
 
     SshHostKeyAuthority(UnknownKeyIssuer unknownKeyIssuer) {
+        this(unknownKeyIssuer, review -> {
+            throw new VaultException("SSH_HOST_KEY_CHANGED", "The host key changed");
+        });
+    }
+
+    SshHostKeyAuthority(UnknownKeyIssuer unknownKeyIssuer, ChangedKeyIssuer changedKeyIssuer) {
         this.unknownKeyIssuer = java.util.Objects.requireNonNull(unknownKeyIssuer);
+        this.changedKeyIssuer = java.util.Objects.requireNonNull(changedKeyIssuer);
+    }
+
+    ChangedReview requireChangedApproval(SshRoleContext role, Evidence evidence,
+            SshTrustProposal proposal, java.util.List<SshHostTrustMaterial.Record> oldRecords)
+            throws VaultException {
+        if (role == null || evidence == null || !evidence.matches(role))
+            throw new VaultException(PROOF_INVALID, "The host-key evidence is bound to another hop");
+        ChangedReview review = new ChangedReview(evidence, proposal, oldRecords);
+        changedKeyIssuer.requireApproved(review);
+        review.requireMatches(role, evidence, proposal);
+        return review;
+    }
+
+    /** Only the exact provider's post-write, one-shot receipt can promote CHANGED. */
+    Proof committedChanged(SshRoleContext role, Evidence evidence, SshTrustProposal proposal,
+            SshManagedKnownHostsProvider.ChangedCommitReceipt receipt) throws VaultException {
+        if (role == null || evidence == null || !evidence.matches(role)
+                || evidence.classification != Classification.CHANGED || receipt == null)
+            throw new VaultException(PROOF_INVALID, "The committed changed host proof is unavailable");
+        receipt.claimProof(evidence, proposal);
+        return new Proof(evidence, true);
     }
 
     Proof requireVerified(SshRoleContext role, Evidence evidence, SshTrustProposal proposal)
             throws VaultException {
         if (role == null || evidence == null || !evidence.matches(role))
-            throw new VaultException("SSH_HOST_KEY_CHANGED", "The host-key evidence is bound to another hop");
+            throw new VaultException(PROOF_INVALID, "The host-key evidence is bound to another hop");
         switch (evidence.classification) {
             case KNOWN:
                 if (proposal != null) throw new VaultException("SSH_HOST_KEY_REVIEW", "A known key cannot authorize a trust rewrite");

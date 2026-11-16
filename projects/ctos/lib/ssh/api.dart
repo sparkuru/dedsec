@@ -76,6 +76,15 @@ sealed class SshEvent {
       case 'hostKeyDismissed':
         _keys(value, {'type', 'requestId', 'ticketId'});
         return SshHostKeyDismissed(requestId, _identifier(value['ticketId']));
+      case 'hostKeyChanged':
+        return SshHostKeyChangedEvent.parse(value);
+      case 'hostKeyChangedDismissed':
+        _keys(value, {'type', 'requestId', 'ticketId', 'binding'});
+        return SshHostKeyChangedDismissed(
+          requestId,
+          _identifier(value['ticketId']),
+          _sshBinding(value['binding']),
+        );
       case 'keyboardChallenge':
         return SshKeyboardChallenge.parse(value);
       case 'keyboardChallengeDismissed':
@@ -96,24 +105,123 @@ final class SshStateEvent extends SshEvent {
   final String? reason;
 }
 
-final class SshHostKeyEvent extends SshEvent {
-  const SshHostKeyEvent({
+sealed class SshHostReviewEvent extends SshEvent {
+  const SshHostReviewEvent({
     required String requestId,
     required this.ticketId,
     required this.binding,
     required this.host,
     required this.port,
-    required this.keyType,
-    required this.fingerprint,
     required this.remainingMillis,
   }) : super(requestId);
-  final String ticketId, binding, host, keyType, fingerprint;
+
+  final String ticketId, binding, host;
   final int port, remainingMillis;
+}
+
+final class SshHostKeyEvent extends SshHostReviewEvent {
+  const SshHostKeyEvent({
+    required String requestId,
+    required super.ticketId,
+    required super.binding,
+    required super.host,
+    required super.port,
+    required this.keyType,
+    required this.fingerprint,
+    required super.remainingMillis,
+  }) : super(requestId: requestId);
+  final String keyType, fingerprint;
 }
 
 final class SshHostKeyDismissed extends SshEvent {
   const SshHostKeyDismissed(super.requestId, this.ticketId);
   final String ticketId;
+}
+
+final class SshHostKeyChangedRecord {
+  const SshHostKeyChangedRecord({
+    required this.keyType,
+    required this.fingerprint,
+  });
+
+  factory SshHostKeyChangedRecord.parse(Object? raw) {
+    final value = _map(raw);
+    _keys(value, {'keyType', 'fingerprint'});
+    return SshHostKeyChangedRecord(
+      keyType: _sshChangedKeyType(value['keyType'], 128),
+      fingerprint: _sshCanonicalFingerprint(value['fingerprint']),
+    );
+  }
+
+  final String keyType, fingerprint;
+}
+
+final class SshHostKeyChangedEvent extends SshHostReviewEvent {
+  SshHostKeyChangedEvent({
+    required String requestId,
+    required super.ticketId,
+    required super.binding,
+    required super.host,
+    required super.port,
+    required super.remainingMillis,
+    required this.source,
+    required this.keyType,
+    required this.fingerprint,
+    required List<SshHostKeyChangedRecord> oldKeys,
+  }) : oldKeys = List.unmodifiable(oldKeys),
+       super(requestId: requestId);
+
+  factory SshHostKeyChangedEvent.parse(Map<String, Object?> value) {
+    _keys(value, {
+      'type',
+      'requestId',
+      'ticketId',
+      'binding',
+      'host',
+      'port',
+      'source',
+      'keyType',
+      'fingerprint',
+      'oldKeys',
+      'remainingMillis',
+    });
+    final remaining = value['remainingMillis'];
+    final oldKeys = _sshRows(
+      value['oldKeys'],
+      128,
+    ).map(SshHostKeyChangedRecord.parse).toList(growable: false);
+    if (value['type'] != 'hostKeyChanged' ||
+        oldKeys.isEmpty ||
+        remaining is! int ||
+        remaining <= 0 ||
+        remaining > 30000) {
+      throw _invalid();
+    }
+    return SshHostKeyChangedEvent(
+      requestId: _identifier(value['requestId']),
+      ticketId: _identifier(value['ticketId']),
+      binding: _sshBinding(value['binding']),
+      host: _host(value['host']),
+      port: _port(value['port']),
+      source: _sshTrustSource(value['source']),
+      keyType: _sshChangedKeyType(value['keyType'], 64),
+      fingerprint: _sshCanonicalFingerprint(value['fingerprint']),
+      oldKeys: oldKeys,
+      remainingMillis: remaining,
+    );
+  }
+
+  final String source, keyType, fingerprint;
+  final List<SshHostKeyChangedRecord> oldKeys;
+}
+
+final class SshHostKeyChangedDismissed extends SshEvent {
+  const SshHostKeyChangedDismissed(
+    super.requestId,
+    this.ticketId,
+    this.binding,
+  );
+  final String ticketId, binding;
 }
 
 enum SshReconnectMode {
@@ -135,6 +243,7 @@ final class SshReconnectTarget {
     this.keyId,
     this.configAlias,
     this.continueKeyboardInteractive = false,
+    this.autoKeyboardInteractive = false,
   });
 
   factory SshReconnectTarget.parse(Object? raw) {
@@ -162,15 +271,19 @@ final class SshReconnectTarget {
             mode == SshReconnectMode.configKeyboard)
           'configAlias',
       },
-      {'continueKeyboardInteractive'},
+      {'continueKeyboardInteractive', 'autoKeyboardInteractive'},
     );
     final continuation = _sshOptionalBoolean(
       value,
       'continueKeyboardInteractive',
     );
-    if (continuation &&
-        (mode == SshReconnectMode.keyboard ||
-            mode == SshReconnectMode.configKeyboard)) {
+    final automatic = _sshOptionalBoolean(value, 'autoKeyboardInteractive');
+    if ((value.containsKey('continueKeyboardInteractive') &&
+            value.containsKey('autoKeyboardInteractive')) ||
+        ((mode == SshReconnectMode.keyboard ||
+                mode == SshReconnectMode.configKeyboard) &&
+            (value.containsKey('continueKeyboardInteractive') ||
+                value.containsKey('autoKeyboardInteractive')))) {
       throw _invalid();
     }
     final username = value['username'];
@@ -191,6 +304,7 @@ final class SshReconnectTarget {
           ? _sshAlias(value['configAlias'])
           : null,
       continueKeyboardInteractive: continuation,
+      autoKeyboardInteractive: automatic,
     );
   }
 
@@ -198,7 +312,7 @@ final class SshReconnectTarget {
   final String host, username;
   final int port;
   final String? keyId, configAlias;
-  final bool continueKeyboardInteractive;
+  final bool continueKeyboardInteractive, autoKeyboardInteractive;
 }
 
 class SshConnectionDefaults {
@@ -279,6 +393,7 @@ class SshPasswordApi {
     bool useSavedPassword = false,
     bool savePassword = false,
     bool continueKeyboardInteractive = false,
+    bool autoKeyboardInteractive = false,
   }) {
     _identifier(requestId);
     if (sshHostError(host) != null ||
@@ -304,7 +419,10 @@ class SshPasswordApi {
           'password': password,
           'useSavedPassword': useSavedPassword,
           'savePassword': savePassword,
-          if (continueKeyboardInteractive) 'continueKeyboardInteractive': true,
+          ..._sshContinuationArguments(
+            continueKeyboardInteractive,
+            autoKeyboardInteractive,
+          ),
           'columns': columns,
           'rows': rows,
         })
@@ -356,14 +474,15 @@ class SshPasswordApi {
       })
       .then((raw) => _booleanReply(raw, 'cancelled'));
 
-  Future<bool> decide(SshHostKeyEvent ticket, {required bool accept}) => channel
-      .invokeMethod<Object?>('ssh.hostKeyDecision', {
-        'requestId': ticket.requestId,
-        'ticketId': ticket.ticketId,
-        'binding': ticket.binding,
-        'accept': accept,
-      })
-      .then((raw) => _booleanReply(raw, 'accepted'));
+  Future<bool> decide(SshHostReviewEvent ticket, {required bool accept}) =>
+      channel
+          .invokeMethod<Object?>('ssh.hostKeyDecision', {
+            'requestId': ticket.requestId,
+            'ticketId': ticket.ticketId,
+            'binding': ticket.binding,
+            'accept': accept,
+          })
+          .then((raw) => _booleanReply(raw, 'accepted'));
 }
 
 Map<String, Object> _tuple(
@@ -433,6 +552,8 @@ String sshConnectionError(Object error) {
     'SSH_PASSWORD_MISSING' => '此连接没有已保存密码，请输入密码后重试。',
     'SSH_HOSTKEY_CHANGED' ||
     'SSH_HOST_KEY_CHANGED' => '主机密钥与已保存记录不同，连接已拒绝。可在“私钥与配置 → 主机信任”核对并管理旧记录。',
+    'SSH_HOST_PROOF_INVALID' => '主机身份验证未能完成，连接已停止。请重新连接并核对服务器信息。',
+    'SSH_HOST_CHANGED_POLICY' => '此配置要求已信任的主机，不能直接替换。请检查配置或在“主机信任”中管理。',
     'SSH_HOSTKEY_REVOKED' || 'SSH_HOST_KEY_REVOKED' => '主机密钥已被撤销，连接已拒绝。',
     'SSH_HOST_KEY_CERTIFICATE' => '此连接方式暂不支持主机证书。',
     'SSH_HOST_KEY_INVALID' => '服务端主机密钥无效，连接已拒绝。',
@@ -448,11 +569,12 @@ String sshConnectionError(Object error) {
     'SSH_AUTHENTICATION' ||
     'SSH_PASSWORD_AUTH' ||
     'SSH_AUTH_REJECTED' => 'SSH 登录被拒绝，请检查用户名和密码。',
+    'SSH_AUTH_PARTIAL' => '服务器要求进一步认证，但当前连接无法继续。请检查服务器及配置。',
     'SSH_KEYBOARD_AUTH' => '服务器交互式认证未完成或被拒绝，请重新连接后回答服务器问题。',
     'SSH_KEYBOARD_POLICY' => '此配置未允许服务器交互式认证，请检查配置中的认证方式。',
     'SSH_PASSWORD_POLICY' => '此配置未允许密码认证，请检查配置中的认证方式。',
     'SSH_MFA_POLICY' => '此配置未允许所选的认证顺序，请检查认证方式和配置。',
-    'SSH_MFA_AUTH' => '后续服务器交互式认证未完成，请重新连接。',
+    'SSH_MFA_AUTH' => '无法完成服务器要求的后续验证，请检查服务器及配置。',
     'SSH_KEYBOARD_CHALLENGE' => '服务器问题或回答已失效，请重新连接。',
     'SSH_UNSUPPORTED' ||
     'SSH_PROFILE_UNSUPPORTED' ||
@@ -460,6 +582,7 @@ String sshConnectionError(Object error) {
     'VAULT_CONTENT' => '当前秘密库包含此连接方式不支持的 SSH 资料。',
     'BUSY' || 'SSH_BUSY' => '已有终端或连接请求，请先结束当前会话。',
     'VAULT_CANCELLED' || 'SSH_CANCELLED' => '连接已取消。',
+    'SSH_SESSION_CANCELLED' => 'SSH 连接已中止，请重新连接。',
     _ when error is FormatException => 'SSH 连接响应无效，请重新打开连接页面。',
     _ => 'SSH 连接未完成，请检查地址和凭据后重试。',
   };
@@ -502,6 +625,45 @@ String _identifier(Object? value) {
     throw _invalid();
   }
   return value;
+}
+
+String _sshChangedKeyType(Object? raw, int maximum) {
+  if (raw is! String ||
+      raw.length > maximum ||
+      !RegExp(r'^[A-Za-z0-9@._+\-]+$').hasMatch(raw)) {
+    throw _invalid();
+  }
+  return raw;
+}
+
+String _sshCanonicalFingerprint(Object? raw) {
+  if (raw is! String || !RegExp(r'^SHA256:[A-Za-z0-9+/]{43}$').hasMatch(raw)) {
+    throw _invalid();
+  }
+  final encoded = raw.substring(7);
+  try {
+    final bytes = base64.decode('$encoded=');
+    if (bytes.length != 32 ||
+        base64.encode(bytes).replaceAll('=', '') != encoded)
+      throw _invalid();
+  } on FormatException {
+    throw _invalid();
+  }
+  return raw;
+}
+
+/// Public source label mirrors the vault's managed relative-path contract.
+String _sshTrustSource(Object? raw) {
+  final path = _sshPublicText(raw, 512);
+  if (path.startsWith('/') ||
+      path.contains(RegExp(r'[\\:%~*?\[]')) ||
+      path.split('/').length > 8 ||
+      path
+          .split('/')
+          .any((part) => part.isEmpty || part == '.' || part == '..')) {
+    throw _invalid();
+  }
+  return path;
 }
 
 String _host(Object? value) {

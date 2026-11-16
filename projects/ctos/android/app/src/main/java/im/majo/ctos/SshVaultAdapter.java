@@ -7,6 +7,10 @@ final class SshVaultAdapter {
     interface HostKeyGate { void requireVerified(String connectionId, String targetIdentity) throws VaultException; }
     interface TrustProposalGate { void requireApproved(SshTrustProposal exactProposal) throws VaultException; }
     interface ExactBundleApproval { void requireApproved(SshBundleProposal exactProposal) throws VaultException; }
+    interface ChangedTrustGate {
+        void requireApproved(SshHostKeyAuthority.ChangedReview review, SshTrustProposal exactProposal)
+                throws VaultException;
+    }
     interface CredentialReceiver { void receive(byte[] credential) throws VaultException; }
     interface FileReceiver { void receive(List<VaultManifest.FileObject> files) throws VaultException; }
     interface FileSnapshotReceiver { void receive(SshFileSnapshot snapshot) throws VaultException; }
@@ -14,6 +18,7 @@ final class SshVaultAdapter {
     private final HostKeyGate hostKeyGate;
     private final TrustProposalGate trustGate;
     private final ExactBundleApproval bundleGate;
+    private final ChangedTrustGate changedTrustGate;
 
     SshVaultAdapter(AppSecrets vault, HostKeyGate hostKeyGate) {
         this(vault, hostKeyGate, proposal -> {
@@ -26,10 +31,18 @@ final class SshVaultAdapter {
         });
     }
     SshVaultAdapter(AppSecrets vault, HostKeyGate hostKeyGate, TrustProposalGate trustGate, ExactBundleApproval bundleGate) {
+        this(vault, hostKeyGate, trustGate, bundleGate, (review, proposal) -> {
+            throw new VaultException("SSH_HOST_KEY_REVIEW", "An exact changed-host review is required");
+        });
+    }
+
+    SshVaultAdapter(AppSecrets vault, HostKeyGate hostKeyGate, TrustProposalGate trustGate,
+            ExactBundleApproval bundleGate, ChangedTrustGate changedTrustGate) {
         this.vault = vault;
         this.hostKeyGate = hostKeyGate;
         this.trustGate = trustGate;
         this.bundleGate = java.util.Objects.requireNonNull(bundleGate);
+        this.changedTrustGate = java.util.Objects.requireNonNull(changedTrustGate);
     }
 
     void cancel(VaultOperation request) { vault.cancelOperation(request); }
@@ -230,5 +243,49 @@ final class SshVaultAdapter {
         }
         hostKeyGate.requireVerified(evidence.role.connectionId, evidence.role.targetIdentity);
         trustGate.requireApproved(proposal);
+    }
+
+    /** CHANGED is a separate signed-only capability and never enters the NEW proof path. */
+    VaultOperation changedTrustRequest(SshRoleContext role, SshHostKeyAuthority.Evidence evidence,
+            SshNativeCallbackAdapter.ChangedAuthorization authorization,
+            SshManagedKnownHostsProvider.SnapshotReceipt snapshot, SshTrustProposal proposal,
+            AppSecrets.SshTrustContext context) throws VaultException {
+        requireChangedTrustBinding(role, evidence, authorization, snapshot, proposal);
+        VaultOperation request = null;
+        try {
+            request = vault.beginTrustUpdate(proposal, context,
+                    () -> requireChangedTrustBinding(role, evidence, authorization, snapshot, proposal));
+            request.bindChangedTrust(snapshot, role, authorization, evidence, proposal);
+            return request;
+        } catch (VaultException | RuntimeException | Error failure) {
+            if (request != null) vault.cancelOperation(request);
+            throw failure;
+        }
+    }
+
+    void updateChangedTrust(VaultOperation request, SshRoleContext role,
+            SshHostKeyAuthority.Evidence evidence, SshNativeCallbackAdapter.ChangedAuthorization authorization,
+            SshManagedKnownHostsProvider.SnapshotReceipt snapshot, SshTrustProposal proposal,
+            AppSecrets.EffectGuard guard) throws VaultException {
+        requireChangedTrustBinding(role, evidence, authorization, snapshot, proposal);
+        if (request == null) throw new VaultException("VAULT_OPERATION", "Secret operation is unavailable");
+        request.requireChangedTrust(snapshot, role, authorization, evidence, proposal);
+        vault.updateTrust(request, proposal, AppSecrets.boundGuard(guard, () -> {
+            requireChangedTrustBinding(role, evidence, authorization, snapshot, proposal);
+            request.requireChangedTrust(snapshot, role, authorization, evidence, proposal);
+        }));
+    }
+
+    private void requireChangedTrustBinding(SshRoleContext role, SshHostKeyAuthority.Evidence evidence,
+            SshNativeCallbackAdapter.ChangedAuthorization authorization,
+            SshManagedKnownHostsProvider.SnapshotReceipt snapshot, SshTrustProposal proposal)
+            throws VaultException {
+        if (role == null || evidence == null || authorization == null || snapshot == null || proposal == null
+                || evidence.classification != SshHostKeyAuthority.Classification.CHANGED)
+            throw new VaultException("SSH_HOST_KEY_CAS", "The exact changed-host CAS is unavailable");
+        role.requireBound();
+        snapshot.requireChangedMatches(role, evidence, proposal);
+        authorization.requireMatches(role, evidence, proposal);
+        changedTrustGate.requireApproved(authorization.review(), proposal);
     }
 }

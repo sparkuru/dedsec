@@ -152,9 +152,32 @@
           "result": "user_reported_direct_kbi_challenge_answer_and_synthetic_terminal",
           "mfa_acceptance_established": false,
           "verification": "design/verification.md#20261113-ssh-direct-kbi-manual-fixture"
+        },
+        "password_continuation_feedback": {
+          "date": "2026-11-13",
+          "response": "密码后续接已通过",
+          "mode": "password_then_keyboard_interactive",
+          "result": "user_confirmed_prompt_response_and_terminal_in_the_question_scope",
+          "other_modes_accepted": false,
+          "verification": "design/verification.md#20261113-ssh-mfa-key-manual"
+        },
+        "private_key_continuation_feedback": {
+          "date": "2026-11-13",
+          "response": "勾选后，就成功了",
+          "mode": "manual_private_key_then_keyboard_interactive",
+          "result": "user_reported_success_with_continuation_selected",
+          "config_manual_result": "user_reported_pass_after_config_private_key_continuation_test",
+          "verification": "design/verification.md#20261113-ssh-key-config-dialog-feedback"
+        },
+        "config_private_key_continuation_feedback": {
+          "date": "2026-11-13",
+          "response": "功能通过",
+          "mode": "config_private_key_then_keyboard_interactive",
+          "result": "user_reported_pass",
+          "verification": "design/verification.md#20261113-ssh-config-passed-flow-feedback"
         }
       },
-      "next_action": "Continue the in-progress parent task after SSH partial commit 1546575. Investigate the recorded host-key error-code ambiguity and collect targeted human experience for MFA/config-password flows. Do not infer full parent acceptance or archive authorization.",
+      "next_action": "Changed-key continuation, config-host selection, automatic subsequent questions, and the server-alive slice have since been implemented. The early-output fix was installed and retested on the authorized board; see design/handoff-ssh-terminal-client.md and design/verification.md#20261116-ssh-early-output-device. Continue the in-progress parent against its remaining acceptance criteria; standalone KBI first-method discovery, real-server coverage, and full human acceptance remain separate.",
       "device_authorization": {
         "date": "2026-11-04",
         "response": "授权",

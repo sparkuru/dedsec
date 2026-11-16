@@ -59,6 +59,7 @@ struct ctos_ssh_config_direct_plan {
     unsigned int password_then_keyboard_allowed;
     unsigned int publickey_then_keyboard_allowed;
     unsigned int connect_timeout_millis, strict_host_key_checking;
+    unsigned int server_alive_interval, server_alive_count_max;
     unsigned int identity_count, hostfile_count;
     char identity_files[CTOS_SSH_CONFIG_LIST][513];
     char user_hostfiles[CTOS_SSH_CONFIG_HOSTFILES][513];

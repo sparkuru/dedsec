@@ -327,7 +327,7 @@ final class SshPasswordConnectBridge implements AutoCloseable {
 
     private void connect(MethodCall call, MethodChannel.Result result, boolean configured) throws VaultException {
         boolean extended = call.arguments instanceof Map && ((Map<?, ?>)call.arguments).containsKey("useSavedPassword");
-        boolean continuation = authenticationContinuation(call);
+        SshPasswordConnector.ContinuationMode continuation = authenticationContinuationMode(call);
         boolean useSaved = extended && bool(call, "useSavedPassword"), save = extended && bool(call, "savePassword");
         String id = id(call);
         secrets.requireSshConsumer();
@@ -362,14 +362,14 @@ final class SshPasswordConnectBridge implements AutoCloseable {
                     : new SshPasswordConnector(vault, profile, password, useSaved, save, SystemClock.elapsedRealtime() + 60_000,
                     () -> { if (closed) throw failure("SSH_CANCELLED"); secrets.requireSshConsumer(); },
                     events(id));
-            connector.allowKeyboardContinuation(continuation);
+            connector.setContinuationMode(continuation);
         } finally { VaultCodec.wipe(password); }
         attach(id, connector, columns, rows, result);
     }
 
     private void connectKey(MethodCall call, MethodChannel.Result result, boolean configured) throws VaultException {
         boolean extended = call.arguments instanceof Map && ((Map<?, ?>)call.arguments).containsKey("passphrase");
-        boolean continuation = authenticationContinuation(call);
+        SshPasswordConnector.ContinuationMode continuation = authenticationContinuationMode(call);
         boolean useSaved = extended && bool(call, "useSavedPassphrase"), save = extended && bool(call, "savePassphrase");
         byte[] phrase = SshKeyPassphrase.bytes(extended ? text(call, "passphrase") : "", true);
         try {
@@ -390,7 +390,7 @@ final class SshPasswordConnectBridge implements AutoCloseable {
         SshPasswordConnector connector = new SshPasswordConnector(vault, manual, keyId, alias, binding, username, phrase, useSaved, save,
                 SystemClock.elapsedRealtime() + 60_000,
                 () -> { if (closed) throw failure("SSH_CANCELLED"); secrets.requireSshConsumer(); }, events(id));
-        connector.allowKeyboardContinuation(continuation);
+        connector.setContinuationMode(continuation);
         attach(id, connector, columns, rows, result);
         } finally { VaultCodec.wipe(phrase); }
     }
@@ -437,11 +437,8 @@ final class SshPasswordConnectBridge implements AutoCloseable {
                         connector.cancel(); completionFailure = invalidated.code;
                     }
                 }
-                if (completionFailure != null && connector.durableWrite()
-                        && (isCancelled(completionFailure) || completionFailure.startsWith("VAULT_")
-                                || completionFailure.equals("SSH_TIMED_OUT"))) {
-                    vault.session.lock(); completionFailure = "VAULT_COMMIT_UNCERTAIN";
-                }
+                completionFailure = completionFailure(vault, completionFailure,
+                        connector.changedTrustPublicationUncertain(), connector.durableWrite());
                 if (completionFailure == null) {
                     // A late form leave may arrive after publication but before Flutter handles it.
                     // Keep one exact receipt; event-stream disposal alone must not stop this shell.
@@ -461,6 +458,17 @@ final class SshPasswordConnectBridge implements AutoCloseable {
         }
     }
 
+    /** Interpret the actual connection completion before publishing it to MethodChannel. */
+    static String completionFailure(AppSecrets vault, String failure, boolean changedUncertain,
+            boolean credentialWritten) {
+        if (failure != null && (changedUncertain || credentialWritten && (isCancelled(failure)
+                || failure.startsWith("VAULT_") || failure.equals("SSH_TIMED_OUT")))) {
+            vault.session.lock();
+            return "VAULT_COMMIT_UNCERTAIN";
+        }
+        return failure;
+    }
+
 
     private SshPasswordConnector.Events events(String id) {
         return new SshPasswordConnector.Events() {
@@ -468,17 +476,40 @@ final class SshPasswordConnectBridge implements AutoCloseable {
                             if (closed) throw failure("SSH_CANCELLED");
                             main.post(() -> {
                                 if (active == null || !active.id.equals(id) || sink == null) return;
+                                if (ticket.changed) {
+                                    try {
+                                        secrets.requireSshConsumer();
+                                        if (!active.connector.hostKeyPending(ticket)) return;
+                                    } catch (VaultException | RuntimeException failure) {
+                                        active.connector.cancel();
+                                        return;
+                                    }
+                                }
                                 long remaining = ticket.deadline - SystemClock.elapsedRealtime();
                                 if (remaining <= 0) { active.connector.cancel(); return; }
                                 state(id, "reviewing", null);
-                                emit(VaultCollections.map("type", "hostKey", "requestId", id, "ticketId", ticket.id,
-                                        "binding", ticket.binding, "host", ticket.host, "port", ticket.port,
-                                        "keyType", ticket.keyType, "fingerprint", ticket.fingerprint,
-                                        "remainingMillis", Math.min(30_000L, remaining)));
+                                if (ticket.changed) {
+                                    java.util.List<Map<String, Object>> oldKeys = new java.util.ArrayList<>();
+                                    for (SshHostTrustMaterial.Record row : ticket.oldRecords)
+                                        oldKeys.add(VaultCollections.map("keyType", row.algorithm,
+                                                "fingerprint", row.fingerprint));
+                                    emit(VaultCollections.map("type", "hostKeyChanged", "requestId", id,
+                                            "ticketId", ticket.id, "binding", ticket.binding, "host", ticket.host,
+                                            "port", ticket.port, "source", ticket.source, "keyType", ticket.keyType,
+                                            "fingerprint", ticket.fingerprint, "oldKeys", oldKeys,
+                                            "remainingMillis", Math.min(30_000L, remaining)));
+                                } else {
+                                    emit(VaultCollections.map("type", "hostKey", "requestId", id, "ticketId", ticket.id,
+                                            "binding", ticket.binding, "host", ticket.host, "port", ticket.port,
+                                            "keyType", ticket.keyType, "fingerprint", ticket.fingerprint,
+                                            "remainingMillis", Math.min(30_000L, remaining)));
+                                }
                             });
                         }
                         @Override public void dismiss(SshHostKeyReviewMailbox.Ticket ticket) {
-                            main.post(() -> emit(VaultCollections.map("type", "hostKeyDismissed", "requestId", id,
+                            if (ticket.changed) main.post(() -> emit(VaultCollections.map("type", "hostKeyChangedDismissed",
+                                    "requestId", id, "ticketId", ticket.id, "binding", ticket.binding)));
+                            else main.post(() -> emit(VaultCollections.map("type", "hostKeyDismissed", "requestId", id,
                                     "ticketId", ticket.id)));
                         }
                         @Override public void present(SshKeyboardMailbox.Ticket ticket) throws VaultException {
@@ -564,6 +595,10 @@ final class SshPasswordConnectBridge implements AutoCloseable {
     }
     /** Production dispatch grammar, kept Android-independent for strict MethodCall tests. */
     static boolean authenticationContinuation(MethodCall call) throws VaultException {
+        return authenticationContinuationMode(call) != SshPasswordConnector.ContinuationMode.NONE;
+    }
+
+    static SshPasswordConnector.ContinuationMode authenticationContinuationMode(MethodCall call) throws VaultException {
         boolean passwordExtended = call.arguments instanceof Map && ((Map<?, ?>)call.arguments).containsKey("useSavedPassword");
         boolean keyExtended = call.arguments instanceof Map && ((Map<?, ?>)call.arguments).containsKey("passphrase");
         switch (call.method) {
@@ -587,25 +622,31 @@ final class SshPasswordConnectBridge implements AutoCloseable {
                 else exactWithContinuation(call,"requestId","alias","binding","username","keyId","columns","rows");
                 break;
             case "ssh.keyboardConnect":
-                exact(call,"requestId","host","port","username","columns","rows"); return false;
+                exact(call,"requestId","host","port","username","columns","rows"); return SshPasswordConnector.ContinuationMode.NONE;
             case "ssh.configKeyboardConnect":
-                exact(call,"requestId","alias","binding","username","columns","rows"); return false;
+                exact(call,"requestId","alias","binding","username","columns","rows"); return SshPasswordConnector.ContinuationMode.NONE;
             default: throw parameters();
         }
-        return continuation(call);
-    }
-
-    private static boolean continuation(MethodCall call) throws VaultException {
-        return call.arguments instanceof Map && ((Map<?, ?>)call.arguments).containsKey("continueKeyboardInteractive")
-                && bool(call, "continueKeyboardInteractive");
+        Map<?, ?> arguments = (Map<?, ?>)call.arguments;
+        if (arguments.containsKey("autoKeyboardInteractive") && bool(call, "autoKeyboardInteractive"))
+            return SshPasswordConnector.ContinuationMode.AUTOMATIC;
+        if (arguments.containsKey("continueKeyboardInteractive") && bool(call, "continueKeyboardInteractive"))
+            return SshPasswordConnector.ContinuationMode.STRICT;
+        return SshPasswordConnector.ContinuationMode.NONE;
     }
     private static void exactWithContinuation(MethodCall call, String... required) throws VaultException {
         if (!(call.arguments instanceof Map)) throw parameters();
         Set<String> expected = new HashSet<>(Arrays.asList(required));
-        if (((Map<?, ?>)call.arguments).containsKey("continueKeyboardInteractive")) {
+        Map<?, ?> arguments = (Map<?, ?>)call.arguments;
+        if (arguments.containsKey("continueKeyboardInteractive") && arguments.containsKey("autoKeyboardInteractive"))
+            throw parameters();
+        if (arguments.containsKey("continueKeyboardInteractive")) {
             expected.add("continueKeyboardInteractive"); bool(call, "continueKeyboardInteractive");
         }
-        if (!((Map<?, ?>)call.arguments).keySet().equals(expected)) throw parameters();
+        if (arguments.containsKey("autoKeyboardInteractive")) {
+            expected.add("autoKeyboardInteractive"); bool(call, "autoKeyboardInteractive");
+        }
+        if (!arguments.keySet().equals(expected)) throw parameters();
     }
     private static String id(MethodCall call) throws VaultException {
         String id = text(call, "requestId");

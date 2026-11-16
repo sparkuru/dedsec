@@ -27,8 +27,11 @@ resource rows/caps107328 unchanged. New state6 IDENTITY_HINT only kind1/target0.
 CSCRv1/flags1 and CSCP reject profile modes/frames; profile getters reject generic frames.
 
 Public `ssh.library` host adds optional `identityHints:List<String>` default empty. Keep existing
-alias/binding/host/port/username/keyIds fields; configConnect wire remains exact alias/binding/
-keyId/username/size/phrase fields with no caller-controlled permissive policy flag.
+alias/binding/host/port/username/keyIds fields; configConnect binds exact alias/binding/
+keyId/username/size/phrase fields. Its optional automatic-continuation intent cannot override
+effective config policy; see [the continuation contract](ssh-mfa-authentication.md).
+The protected library selection distinguishes a host choice from an explicit key choice;
+choosing a host returns its target data without requiring a premature authentication choice.
 
 ## 3. Contracts
 
@@ -64,12 +67,18 @@ Existing Account ownership, actual key/public match, CSAS/host/KEX and final typ
 Wrong selected key fails auth without trying another key/password. No new saved default-key table.
 The explicit standalone KBI route has no keyId/phrase and instead rechecks the current native
 KBI flag; it does not weaken any key-route eligibility or use hints as identity authority.
+Choose authentication and, if applicable, the managed private key on the connection form after
+selecting the config target. Do not select the first key automatically. Revalidate a retained
+key against the current host binding, target, metadata and key membership; clear a stale key
+and ask for a fresh choice. Cancelling the key picker keeps the selected target and previous
+authentication choice without restoring cleared password or passphrase text.
 
 ## 4. Validation & Error Matrix
 
 | Condition | Required outcome |
 | --- | --- |
-| No keys / desktop IdentityFile | Preserve config bytes and list profile/hints; require explicit imported-key selection |
+| No keys / desktop IdentityFile | Preserve config bytes and list profile/hints; require explicit imported-key selection only for private-key authentication |
+| Config host chosen or key picker cancelled | Keep target and form authentication choice; never silently choose a key or switch to a manual target |
 | Current selected key has different managed basename | Use exactly that key after normal proof; no config rewrite |
 | Wrong wire/mode/state-kind-target/UTF8/control/limit | Reject entire result and wipe temporary buffers |
 | Missing/wrong Include or trust resource / unsafe config | Existing strict refusal, no hint exception |
@@ -89,7 +98,8 @@ Actual native strict/profile mode separation, tuple/hints/explicit origins and z
 foreign/relative/dynamic/none/duplicates/control/oversize values; wrong-mode getters; negative
 Include/trust/unsafe/Pubkey cases. JVM typed frame and owner cleanup, old source compatibility,
 config-first/key addition/deletion, both pre-save/pre-TCP guards and exact CSAS key selection.
-Flutter no-key profile list, explicit singleton/two-key choice, original hints, cancel/background/
+Flutter host-only profile choice, no-key profile list, explicit singleton/two-key choice, original
+hints, cancelled key picker retaining target, stale metadata/binding, cancel/background/
 stale response, no auto fallback and accessible narrow/large-font dialogs. Real synthetic auth,
 Android JNI/SAF and human experience are distinct gates; report only checks actually run.
 

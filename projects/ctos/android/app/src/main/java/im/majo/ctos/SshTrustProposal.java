@@ -81,6 +81,21 @@ final class SshTrustProposal implements AutoCloseable {
             return forEvidence(CasStatus.COMMITTED, evidence, proposal, "");
         }
 
+        /** Receipt for the distinct signed-CHANGED path; never accepted by the NEW writer. */
+        static CasResult changedCommitted(SshHostKeyAuthority.Evidence evidence, SshTrustProposal proposal,
+                SshManagedKnownHostsProvider.ChangedCommitReceipt committed) throws VaultException {
+            if (committed == null || evidence == null || proposal == null
+                    || !proposal.matchesChangedEvidence(evidence)) throw casFailure();
+            committed.requireMatches(evidence, proposal);
+            byte[] base = proposal.baseDigest(), replacement = proposal.newDigest();
+            try {
+                return new CasResult(CasStatus.COMMITTED, evidence.role.binding(), evidence.role.hop,
+                        evidence.role.targetIdentity, evidence.role.connectionId, evidence.role.host,
+                        evidence.role.port, evidence.classification, evidence.keyType, evidence.fingerprint,
+                        proposal.binding, "", base, replacement);
+            } finally { VaultCodec.wipe(base); VaultCodec.wipe(replacement); }
+        }
+
         static CasResult failed(SshHostKeyAuthority.Evidence evidence, SshTrustProposal proposal,
                 String failureCode) throws VaultException {
             if (evidence == null || evidence.classification != SshHostKeyAuthority.Classification.NEW
@@ -143,6 +158,14 @@ final class SshTrustProposal implements AutoCloseable {
                 VaultCodec.wipe(proposalBase);
                 VaultCodec.wipe(proposalReplacement);
             }
+        }
+
+        boolean matchesChanged(SshHostKeyAuthority.Evidence evidence, SshTrustProposal proposal)
+                throws VaultException {
+            if (evidence == null || proposal == null || !proposal.matchesChangedEvidence(evidence)) return false;
+            byte[] base = proposal.baseDigest(), replacement = proposal.newDigest();
+            try { return matches(evidence, proposal.binding, base, replacement, CasStatus.COMMITTED); }
+            finally { VaultCodec.wipe(base); VaultCodec.wipe(replacement); }
         }
 
         /**
@@ -341,9 +364,19 @@ final class SshTrustProposal implements AutoCloseable {
 
     /** Exact proposal/evidence binding shared by authority and CAS validation. */
     synchronized boolean matchesEvidence(SshHostKeyAuthority.Evidence evidence) throws VaultException {
+        return matchesExactEvidence(evidence, SshHostKeyAuthority.Classification.NEW);
+    }
+
+    /** Separate exact binding for the explicitly reviewed CHANGED candidate. */
+    synchronized boolean matchesChangedEvidence(SshHostKeyAuthority.Evidence evidence) throws VaultException {
+        return matchesExactEvidence(evidence, SshHostKeyAuthority.Classification.CHANGED);
+    }
+
+    private boolean matchesExactEvidence(SshHostKeyAuthority.Evidence evidence,
+            SshHostKeyAuthority.Classification expected) throws VaultException {
         requireOpen();
         if (evidence == null || evidence.role == null || !matchesRole(evidence.role)
-                || evidence.classification != SshHostKeyAuthority.Classification.NEW
+                || evidence.classification != expected
                 || objectType != VaultManifest.FileType.KNOWN_HOSTS
                 || !objectId.matches("[A-Za-z0-9_-]{1,128}")
                 || !targetIdentity.equals(evidence.role.targetIdentity)

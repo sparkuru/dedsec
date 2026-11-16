@@ -1,5 +1,54 @@
 # ctOS 信息入口
 
+2026-11-16：保活无应答、后台和锁屏的指定板合成验证取得结果；期间发现并修复
+[shell 确认前通道输出的兼容性问题](ssh-shell-early-output.md)。修正版已获授权保留
+数据安装，指定板同一时序的连接与输出复测通过，见[验证](verification.md#20261116-ssh-early-output-device)。
+
+2026-11-16：继续 1008 的配置兼容，[SSH 服务器保活](ssh-server-alive.md)已完成本地
+实现与分层验证；用户授权后候选已保留数据安装指定板，并通过真实 Android JNI 到
+受限合成服务的保活应答验证；后续无应答和生命周期结果见上条。用户本人体验待验证。
+[本地结果](verification.md#20261116-ssh-server-alive-local)／
+[设备结果](verification.md#20261116-ssh-server-alive-device)。
+
+2026-11-16 反馈：用户体验新版后回复“正常了”，并询问是否能去掉“服务器交互式认证”
+入口；当前自动续接与独立首认证的区别见[反馈及核对](verification.md#20261116-ssh-interactive-entry-feedback)。
+
+2026-11-16：用户授权后，新版 `1260aae3…` 已[保留数据更新指定板并启动](verification.md#20261116-ssh-auto-question-delivery)；
+限时合成测试服务已开启，后续人工反馈见上条。
+
+2026-11-16 接续 1008：已重新核对新版 APK 和签名，并恢复合成测试夹具及完成本机回环
+自检；后续授权、更新及反馈见上两条。[本次检查](verification.md#20261116-ssh-resume)。
+
+2026-11-13 接续：用户提供 [FileZilla 录像并要求自动显示真实服务器问题](verification.md#20261113-filezilla-ssh-reference)，
+避免交互式选项拖慢 SSH。源码已改为配置先选目标、连接页再选认证，并在密码／私钥
+部分通过后实际需要时弹出服务器问题；连接页及换键弹窗已调整，本地检查和候选构建通过。
+仅提供 KBI 首方法的服务器仍需选择独立入口，不将该范围称为所有认证方式自动发现。
+[本次检查与限制](verification.md#20261113-ssh-auto-question-local)。
+
+2026-11-13 反馈：用户指出新版 SSH 连接页、配置选择层级、指纹弹窗和后续认证引导
+存在严重体验问题；已沿原 1008 任务[记录需求并研究](verification.md#20261113-ssh-flow-critical-feedback)，
+当时尚未修正；最新调整见上条。
+
+2026-11-13 接续：用户授权后，换键一次确认候选已[保留数据更新开发板并启动](verification.md#20261113-ssh-changed-one-decision-install)；
+限时合成测试服务曾重启，后已消失；退出原因未确定，实际换键及人工体验待反馈。
+
+2026-11-13 接续：已实现[换键一次确认并继续、配置主机快捷入口](ssh-host-trust-management.md#2026-11-13-换键后继续连接本地实现)；
+分层检查通过情况及设备限制见[验证](verification.md#20261113-ssh-changed-one-decision)。
+
+2026-11-13 接续：用户反馈配置主机私钥续接功能通过，但指纹变化的恢复流程点击繁多；
+用户选择核对后信任并继续连接；当时方案正在收敛，后续已批准并实施，见上条。
+[反馈与范围](verification.md#20261113-ssh-config-passed-flow-feedback)。
+
+2026-11-13 接续：用户确认手动私钥勾选续接后成功；指定板 config 已安全加入并回读
+测试主机，后续 config 人工反馈见上条。认证提示及指纹对话框圆角已在源码修正并通过本地
+检查，尚未安装／人工验收。[实际操作与范围](verification.md#20261113-ssh-key-config-dialog-feedback)。
+
+2026-11-13 接续：已区分主机证明异常与真实换键；本地合成回调仍可能归为中止，精确
+诊断及取消竞争继续开放。[检查与边界](verification.md#20261113-ssh-proof-errors)。
+
+2026-11-13 接续：用户确认密码后继续交互式认证并进入终端通过；按请求已重新开启
+[私钥／config 合成测试服务](verification.md#20261113-ssh-mfa-key-manual)，结果待反馈。
+
 2026-11-13：SSH 表单、指纹恢复及其 MFA 依赖已按用户许可[部分提交](verification.md#20261113-ssh-partial-commit)；
 新 session 接续先看 [SSH 接管档案](handoff-ssh-terminal-client.md)，父任务继续。
 

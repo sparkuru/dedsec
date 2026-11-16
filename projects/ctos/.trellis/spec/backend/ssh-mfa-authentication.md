@@ -2,7 +2,9 @@
 
 ## 1. Scope / Trigger
 
-Apply to the approved password/publickey PARTIAL→KBI chains for manual/config targets.
+Apply to password/publickey PARTIAL→KBI chains for manual/config targets. The connection
+form now requests automatic continuation; the older strict opt-in remains a supported wire
+contract for existing callers. This does not discover a KBI-only first method.
 Product scope and interface freeze live in [the contract](../../../design/ssh-mfa-authentication.md).
 Local implementation, protocol/JVM/Flutter checks and normal/isolated APK closure passed;
 dated results live in design/verification.md#20261104-ssh-mfa-local, not this contract.
@@ -13,20 +15,22 @@ Do not infer full parent1008, arbitrary MFA, other Android targets or human acce
 ## 2. Signatures
 
 ```text
-ssh.passwordConnect(..., continueKeyboardInteractive?: bool=false)
-ssh.keyConnect(..., continueKeyboardInteractive?: bool=false)
-ssh.configConnect(..., continueKeyboardInteractive?: bool=false)
+ssh.passwordConnect(..., continueKeyboardInteractive?: bool, autoKeyboardInteractive?: bool)
+ssh.keyConnect(..., continueKeyboardInteractive?: bool, autoKeyboardInteractive?: bool)
+ssh.configConnect(..., continueKeyboardInteractive?: bool, autoKeyboardInteractive?: bool)
 ssh.configPasswordConnect(requestId,alias,binding,username,password,
-    useSavedPassword,savePassword,continueKeyboardInteractive?,columns,rows)
+    useSavedPassword,savePassword,continueKeyboardInteractive?,autoKeyboardInteractive?,columns,rows)
 SshNativeSession.continueKeyboardInteractiveAuth()
 NativeBinding.continueKeyboardInteractiveAuth(handle,byte[] planReceipt) -> byte[] CSAPv1
 ctos_ssh_native_client_continue_keyboard_interactive_auth(client,
     expected_plan_receipt[32],out_stage_receipt[92])
 ```
 
-Standalone keyboard/configKeyboard operations accept no continuation permission.
-Existing challenge/response APIs and CSKI/CSKR remain unchanged. RAM reconnect adds
-configPassword and optional strict continuation bool; absent means false.
+For those four methods the two optional fields are mutually exclusive by presence, even
+when false; each must be a bool. With both absent or the chosen field false, continuation
+is disabled. Standalone keyboard/configKeyboard operations accept neither field. Existing
+challenge/response APIs and CSKI/CSKR remain unchanged. RAM reconnect retains optional
+strict or automatic intent, never both; omitted means false.
 
 ## 3. Contracts
 
@@ -70,7 +74,15 @@ both methods enabled/members and explicit first-method ordinal before KBI; absen
 allows the explicitly selected chain. These are consumed relative-order predicates, not
 claims about arbitrary negotiation. v1/v2 decode both false. Reject inconsistent true when
 either base method is disabled. Check initial admission and final preparation before writes
-or sockets; unsupported options remain refused rather than ignored.
+or sockets; unsupported options remain refused rather than ignored. The historical strict
+`continueKeyboardInteractive=true` rejects a disabled/reversed chain at preparation with
+`SSH_MFA_POLICY`. For `autoKeyboardInteractive=true`, evaluate and freeze the actual
+password/key-to-KBI capability from the protected config, compare the two relevant config
+preparations, and include continuation authority only if that capability allows it. An
+ineligible continuation must not stop a complete first-method success. If the first method
+returns PARTIAL with no continuation authority, report neutral `SSH_AUTH_PARTIAL`; it is not
+known which further method the server offered. Reconnect reevaluates the current config rather
+than retaining the previous connection's effective capability.
 
 configPassword uses actual source binding/effective target/user/trust and password policy.
 It cannot reuse the generated manual CONFIG writer or switch trust collections. Saved
@@ -78,8 +90,13 @@ password stays exact actual host/port/user-bound; preserve imported CONFIG/key g
 and existing guarded own-write/NEW-CAS behavior. Reconnect resolves new binding and current
 target, beginning stage1 again; RAM hints never carry secret, receipt, answer or progress.
 
-All KBI-capable UI attempts use common-vault stream readiness, current challenge guards,
-protected route lifetime and original cleanup receipts, including password-save variants.
+CSCP/CSPPv4 retains both v3 chain predicates and adds the separately consumed
+[server-alive policy](ssh-server-alive.md); it does not change MFA authorization.
+
+KBI-capable UI attempts use common-vault current challenge guards, protected route lifetime
+and original cleanup receipts, including password-save variants. For automatic continuation,
+an ordinary first-method success must not depend on receiving a new KBI stream event; admit
+a real challenge only after the vault stream is ready under the original request and deadline.
 Back/cancel/background/lock/stream loss/disposal cancels the entire pending chain. Late
 success after route removal must close the exact newly handed-off session before releasing
 protection. No stage or round renews the original deadline.
@@ -89,11 +106,14 @@ protection. No stage or round renews the original deadline.
 | Condition | Required behavior |
 | --- | --- |
 | Missing continuation bool | Existing single-method behavior |
-| Non-bool/unknown key or standalone permission | Strict request rejection before effects |
-| Disabled/reversed config chain | SSH_MFA_POLICY, no persistence/socket |
+| Both continuation fields present, non-bool/unknown key, or standalone permission | Strict request rejection before effects |
+| Strict continuation and disabled/reversed config chain | SSH_MFA_POLICY, no persistence/socket |
+| Automatic continuation and disabled/reversed config chain | Complete first method can succeed; PARTIAL reports `SSH_AUTH_PARTIAL` without a shell |
 | Stage1 complete SUCCESS | Normal final promotion, no claim of second-factor completion |
 | Stage1 PARTIAL + approved chain + server KBI | One same-owner stage2 transition |
-| Stage1 rejection or unavailable continuation | Fixed authentication failure, no alternative credential |
+| Stage1 PARTIAL with continuation disabled | `SSH_AUTH_PARTIAL`, no second method or shell; do not assume the server offered KBI |
+| Stage1 rejection | `SSH_AUTHENTICATION`, no alternative credential |
+| Stage1 PARTIAL with permission but unavailable continuation | Existing fixed continuation failure, no alternative credential |
 | Wrong hash/cycle/session/stage/owner or repeat transition | Refuse, no renewed or cross-owner authority |
 | Stage2 rejection/PARTIAL | SSH_MFA_AUTH; no shell, no third method |
 | Lock/expiry/cancel/source change | Original typed guard failure and original cleanup |
@@ -101,10 +121,10 @@ protection. No stage or round renews the original deadline.
 
 ## 5. Good / Base / Bad Cases
 
-Good: explicitly select a config private key and allow continuation; the actual same server
-accepts that key partially, asks for an OTP, then completes authentication and PTY.
-Base: absent option retains key-only behavior; an opted-in server that accepts the first
-method completely still opens normally. Bad: copy config host fields to the manual route,
+Good: select a config private key; automatic continuation handles an actual partial result,
+then shows the actual server question before authentication and PTY complete.
+Base: absent wire option retains key-only behavior; a server that accepts the first
+method completely still opens normally even if the config disallows KBI. Bad: copy config host fields to the manual route,
 rewrite selected credential kind after KEX, or treat PARTIAL as permission to start a shell.
 
 ## 6. Tests Required
@@ -117,7 +137,7 @@ rewrite selected credential kind after KEX, or treat PARTIAL as permission to st
 - Java fake-binding tests independently cover CSASv3 and exact CSAP, phase progression,
   mailbox current-stage checks, no callback rewrite, bridge strict parameters and config
   password preservation/target/own-write/cancellation plus current reconnect resolution.
-- Flutter tests cover all entry variants/default-off/method switching/config retention,
+- Flutter tests cover all entry variants/automatic intent/method switching/config retention,
   continued question lifecycle and late success cleanup including password save, strict
   reconnect and legacy flows; actual-font captures cover narrow/keyboard/landscape/large text.
 - Build/lint/APK provenance, Android synthetic service and human review are separate gates.
@@ -126,7 +146,8 @@ rewrite selected credential kind after KEX, or treat PARTIAL as permission to st
 ## 7. Wrong vs Correct
 
 Wrong: change `authenticationSelection` from key to KBI and clear the consumed marker so
-the old owner can begin another method; or accept the Flutter checkbox as phase authority.
+the old owner can begin another method; or treat a UI option as phase authority. Simply
+setting the old strict field true also breaks single-factor servers when config forbids KBI.
 
 Correct: freeze a two-stage plan before open, preserve the original selection and consumed
 secret, and consume one native proof-bound transition only after the actual server PARTIAL.

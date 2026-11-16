@@ -9,33 +9,54 @@ import 'api.dart';
 import 'config_editor_page.dart';
 import 'host_trust_page.dart';
 
+enum SshLibrarySelectionKind { host, key }
+
 class SshLibrarySelection {
-  const SshLibrarySelection({
-    this.key,
-    this.host,
-    this.keyboardInteractive = false,
-    this.password = false,
-  });
+  const SshLibrarySelection.host(SshConfigHost value)
+    : kind = SshLibrarySelectionKind.host,
+      host = value,
+      key = null;
+
+  const SshLibrarySelection.key(SshIdentity value)
+    : kind = SshLibrarySelectionKind.key,
+      host = null,
+      key = value;
+
+  final SshLibrarySelectionKind kind;
   final SshIdentity? key;
   final SshConfigHost? host;
-  final bool keyboardInteractive;
-  final bool password;
 }
 
 Future<SshLibrarySelection?> showSshLibrary(
   BuildContext context, {
   required SshPasswordApi api,
   bool keysOnly = false,
+  bool hostsOnly = false,
+  SshConfigHost? selectedHost,
 }) => showSensitiveSecretRoute<SshLibrarySelection>(
   context,
   api: api.vault,
-  builder: (_) => SshLibraryPage(api: api, keysOnly: keysOnly),
+  builder: (_) => SshLibraryPage(
+    api: api,
+    keysOnly: keysOnly,
+    hostsOnly: hostsOnly,
+    selectedHost: selectedHost,
+  ),
 );
 
 class SshLibraryPage extends StatefulWidget {
-  const SshLibraryPage({super.key, required this.api, this.keysOnly = false});
+  const SshLibraryPage({
+    super.key,
+    required this.api,
+    this.keysOnly = false,
+    this.hostsOnly = false,
+    this.selectedHost,
+  }) : assert(!keysOnly || !hostsOnly),
+       assert(selectedHost == null || keysOnly);
   final SshPasswordApi api;
   final bool keysOnly;
+  final bool hostsOnly;
+  final SshConfigHost? selectedHost;
   @override
   State<SshLibraryPage> createState() => _SshLibraryPageState();
 }
@@ -876,12 +897,22 @@ class _SshLibraryPageState extends State<SshLibraryPage>
     await _review(preview, revision);
   }
 
-  Future<void> _select(SshIdentity key, {SshConfigHost? host}) async {
-    if (_busy || !_current || !_healthy) return;
+  Future<void> _select(SshIdentity key) async {
+    if (_busy ||
+        !_current ||
+        !_healthy ||
+        _leaving ||
+        _library?.keys.any((current) => identical(current, key)) != true)
+      return;
+    final revision = _revision;
     _leaving = true;
     await _retireRead();
-    if (mounted && _route?.isCurrent != false)
-      Navigator.of(context).pop(SshLibrarySelection(key: key, host: host));
+    if (!_current || !_healthy || _closing || revision != _revision) {
+      _leaving = false;
+      if (mounted) _invalidate('SSH 资料已变化，请重新选择。');
+      return;
+    }
+    Navigator.of(context).pop(SshLibrarySelection.key(key));
   }
 
   Future<void> _openHostTrust() async {
@@ -914,154 +945,26 @@ class _SshLibraryPageState extends State<SshLibraryPage>
   }
 
   Future<void> _selectHost(SshConfigHost host) async {
-    if (_busy || !_current || !_healthy) return;
+    if (_busy ||
+        !_current ||
+        !_healthy ||
+        _leaving ||
+        _library?.hosts.any((current) => identical(current, host)) != true)
+      return;
     final error = host.error;
     if (error != null || host.missingIdentityPaths.isNotEmpty) {
       setState(() => _error = _hostDescription(host));
       return;
     }
-    final eligible = _library!.keys
-        .where((key) => host.keyIds.contains(key.id))
-        .toList(growable: false);
     final revision = _revision;
-    late final DialogRoute<SshLibrarySelection> dialog;
-    dialog = DialogRoute<SshLibrarySelection>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        key: const Key('ssh-config-key-choice'),
-        title: Text('选择 ${host.alias} 的认证方式'),
-        scrollable: true,
-        content: SizedBox(
-          width: double.maxFinite,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (host.identityHints.isNotEmpty) ...[
-                const Text('配置中的私钥路径（仅供参考）'),
-                const SizedBox(height: 8),
-                for (final hint in host.identityHints)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 8),
-                    child: Text(
-                      hint,
-                      style: Theme.of(context).textTheme.bodySmall,
-                    ),
-                  ),
-                const SizedBox(height: 8),
-              ],
-              Text(
-                eligible.isEmpty
-                    ? '尚未导入可用私钥。可选择密码或服务器交互式认证，或返回导入私钥。'
-                    : '请选择本次连接使用的认证方式。',
-              ),
-              const SizedBox(height: 12),
-              OutlinedButton.icon(
-                key: const Key('ssh-config-password-choice'),
-                style: OutlinedButton.styleFrom(
-                  minimumSize: const Size.fromHeight(48),
-                ),
-                onPressed: () {
-                  if (_foreground &&
-                      _healthy &&
-                      revision == _revision &&
-                      identical(_dialog, dialog) &&
-                      dialog.isCurrent) {
-                    Navigator.of(
-                      dialogContext,
-                    ).pop(SshLibrarySelection(host: host, password: true));
-                  }
-                },
-                icon: const Icon(Icons.password_outlined),
-                label: const Text('密码'),
-              ),
-              const SizedBox(height: 8),
-              OutlinedButton.icon(
-                key: const Key('ssh-config-keyboard-choice'),
-                style: OutlinedButton.styleFrom(
-                  minimumSize: const Size.fromHeight(48),
-                ),
-                onPressed: () {
-                  if (_foreground &&
-                      _healthy &&
-                      revision == _revision &&
-                      identical(_dialog, dialog) &&
-                      dialog.isCurrent) {
-                    Navigator.of(dialogContext).pop(
-                      SshLibrarySelection(
-                        host: host,
-                        keyboardInteractive: true,
-                      ),
-                    );
-                  }
-                },
-                icon: const Icon(Icons.keyboard_outlined),
-                label: const Text('服务器交互式认证'),
-              ),
-              for (final key in eligible)
-                Padding(
-                  padding: const EdgeInsets.only(top: 16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(key.label),
-                      const SizedBox(height: 4),
-                      Text(key.path),
-                      Text(key.algorithm),
-                      Text(
-                        key.fingerprint,
-                        style: Theme.of(context).textTheme.bodySmall,
-                      ),
-                      const SizedBox(height: 8),
-                      OutlinedButton(
-                        key: Key('ssh-config-key-${key.id}'),
-                        style: OutlinedButton.styleFrom(
-                          minimumSize: const Size.fromHeight(48),
-                        ),
-                        onPressed: () {
-                          if (_foreground &&
-                              _healthy &&
-                              revision == _revision &&
-                              identical(_dialog, dialog) &&
-                              dialog.isCurrent)
-                            Navigator.of(
-                              dialogContext,
-                            ).pop(SshLibrarySelection(key: key, host: host));
-                        },
-                        child: Text(
-                          '使用此私钥',
-                          semanticsLabel: '使用私钥 ${key.label}',
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(
-            key: const Key('ssh-config-key-cancel'),
-            onPressed: () {
-              if (_foreground &&
-                  revision == _revision &&
-                  identical(_dialog, dialog) &&
-                  dialog.isCurrent)
-                Navigator.of(dialogContext).pop();
-            },
-            child: Text(eligible.isEmpty ? '返回' : '取消'),
-          ),
-        ],
-      ),
-    );
-    final selection = await _show(dialog);
-    if (!_current || revision != _revision || selection == null) return;
     _leaving = true;
     await _retireRead();
-    if (mounted && _route?.isCurrent != false) {
-      Navigator.of(context).pop(selection);
+    if (!_current || !_healthy || _closing || revision != _revision) {
+      _leaving = false;
+      if (mounted) _invalidate('SSH 资料已变化，请重新选择。');
+      return;
     }
+    Navigator.of(context).pop(SshLibrarySelection.host(host));
   }
 
   String _hostDescription(SshConfigHost host) {
@@ -1116,7 +1019,13 @@ class _SshLibraryPageState extends State<SshLibraryPage>
     },
     child: Scaffold(
       appBar: AppBar(
-        title: const Text('SSH 私钥与配置'),
+        title: Text(
+          widget.hostsOnly
+              ? '选择配置主机'
+              : widget.keysOnly
+              ? '选择私钥'
+              : 'SSH 私钥与配置',
+        ),
         leading: IconButton(
           tooltip: '返回',
           icon: const Icon(Icons.arrow_back),
@@ -1147,141 +1056,158 @@ class _SshLibraryPageState extends State<SshLibraryPage>
                 Semantics(liveRegion: true, child: Text(_error!)),
                 const SizedBox(height: 16),
               ],
-              Wrap(
-                spacing: 12,
-                runSpacing: 8,
-                children: [
-                  OutlinedButton.icon(
-                    key: const Key('ssh-import-key'),
-                    onPressed: _busy || !_foreground || !_healthy
-                        ? null
-                        : () => unawaited(_import(SshImportKind.privateKey)),
-                    icon: const Icon(Icons.key),
-                    label: const Text('导入私钥'),
-                  ),
-                  OutlinedButton.icon(
-                    key: const Key('ssh-import-config'),
-                    onPressed: _busy || !_foreground || !_healthy
-                        ? null
-                        : () => unawaited(_import(SshImportKind.config)),
-                    icon: const Icon(Icons.file_open_outlined),
-                    label: const Text('导入配置'),
-                  ),
-                  OutlinedButton.icon(
-                    key: const Key('ssh-edit-config'),
-                    onPressed: _busy || !_foreground || !_healthy
-                        ? null
-                        : () => unawaited(_edit()),
-                    icon: const Icon(Icons.edit_outlined),
-                    label: const Text('编辑配置'),
-                  ),
-                  OutlinedButton.icon(
-                    key: const Key('ssh-host-trust'),
-                    onPressed: _busy || !_foreground || !_healthy
-                        ? null
-                        : () => unawaited(_openHostTrust()),
-                    icon: const Icon(Icons.verified_user_outlined),
-                    label: const Text('主机信任'),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 24),
-              Text('私钥', style: Theme.of(context).textTheme.titleLarge),
-              if (_library != null && _library!.keys.isEmpty)
-                const Padding(
-                  padding: EdgeInsets.only(top: 12),
-                  child: Text('尚未导入私钥。请选择 SSH 私钥，公钥应已添加到目标账号。'),
+              if (!widget.hostsOnly) ...[
+                Wrap(
+                  spacing: 12,
+                  runSpacing: 8,
+                  children: [
+                    OutlinedButton.icon(
+                      key: const Key('ssh-import-key'),
+                      onPressed: _busy || !_foreground || !_healthy
+                          ? null
+                          : () => unawaited(_import(SshImportKind.privateKey)),
+                      icon: const Icon(Icons.key),
+                      label: const Text('导入私钥'),
+                    ),
+                    if (!widget.keysOnly)
+                      OutlinedButton.icon(
+                        key: const Key('ssh-import-config'),
+                        onPressed: _busy || !_foreground || !_healthy
+                            ? null
+                            : () => unawaited(_import(SshImportKind.config)),
+                        icon: const Icon(Icons.file_open_outlined),
+                        label: const Text('导入配置'),
+                      ),
+                    if (!widget.keysOnly)
+                      OutlinedButton.icon(
+                        key: const Key('ssh-edit-config'),
+                        onPressed: _busy || !_foreground || !_healthy
+                            ? null
+                            : () => unawaited(_edit()),
+                        icon: const Icon(Icons.edit_outlined),
+                        label: const Text('编辑配置'),
+                      ),
+                    if (!widget.keysOnly)
+                      OutlinedButton.icon(
+                        key: const Key('ssh-host-trust'),
+                        onPressed: _busy || !_foreground || !_healthy
+                            ? null
+                            : () => unawaited(_openHostTrust()),
+                        icon: const Icon(Icons.verified_user_outlined),
+                        label: const Text('主机信任'),
+                      ),
+                  ],
                 ),
-              if (_library != null)
-                for (final key in _library!.keys)
-                  Card(
-                    child: Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          Text(
-                            key.label,
-                            style: Theme.of(context).textTheme.titleMedium,
-                          ),
-                          const SizedBox(height: 8),
-                          Text(key.algorithm),
-                          const SizedBox(height: 8),
-                          Text(key.path),
-                          const SizedBox(height: 8),
-                          SelectableText(key.fingerprint),
-                          if (key.encrypted) ...[
-                            const SizedBox(height: 8),
+                const SizedBox(height: 24),
+                Text('私钥', style: Theme.of(context).textTheme.titleLarge),
+                if (widget.selectedHost?.identityHints.isNotEmpty == true) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    '配置中的私钥路径（仅供参考）',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                  for (final hint in widget.selectedHost!.identityHints)
+                    Text(hint, style: Theme.of(context).textTheme.bodySmall),
+                ],
+                if (_library != null && _library!.keys.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.only(top: 12),
+                    child: Text('尚未导入私钥。请选择 SSH 私钥，公钥应已添加到目标账号。'),
+                  ),
+                if (_library != null)
+                  for (final key in _library!.keys)
+                    Card(
+                      child: Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
                             Text(
-                              key.hasSavedPassphrase
-                                  ? '加密私钥 · 口令已保存'
-                                  : '加密私钥 · 连接时输入口令',
+                              key.label,
+                              style: Theme.of(context).textTheme.titleMedium,
                             ),
-                          ],
-                          const SizedBox(height: 12),
-                          Wrap(
-                            spacing: 12,
-                            runSpacing: 8,
-                            children: [
-                              OutlinedButton.icon(
-                                key: Key('ssh-key-${key.id}'),
-                                onPressed: _busy || !_foreground
-                                    ? null
-                                    : () => unawaited(_select(key)),
-                                icon: const Icon(Icons.key),
-                                label: const Text('使用此私钥'),
-                              ),
-                              if (key.hasSavedPassphrase)
-                                OutlinedButton(
-                                  key: Key('ssh-forget-passphrase-${key.id}'),
-                                  style: OutlinedButton.styleFrom(
-                                    shape: const RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.all(
-                                        Radius.circular(12),
-                                      ),
-                                    ),
-                                  ),
-                                  onPressed: _busy || !_foreground
-                                      ? null
-                                      : () => unawaited(
-                                          _forgetPassphrase(key: key),
-                                        ),
-                                  child: const Text('忘记此私钥口令'),
-                                ),
-                              OutlinedButton.icon(
-                                key: Key('ssh-key-delete-${key.id}'),
-                                style: OutlinedButton.styleFrom(
-                                  foregroundColor: Theme.of(
-                                    context,
-                                  ).colorScheme.error,
-                                  shape: const RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.all(
-                                      Radius.circular(12),
-                                    ),
-                                  ),
-                                ),
-                                onPressed: _busy || !_foreground || !_healthy
-                                    ? null
-                                    : () => unawaited(_deleteKey(key)),
-                                icon: const Icon(Icons.delete_outline),
-                                label: const Text('删除私钥'),
+                            const SizedBox(height: 8),
+                            Text(key.algorithm),
+                            const SizedBox(height: 8),
+                            Text(key.path),
+                            const SizedBox(height: 8),
+                            SelectableText(key.fingerprint),
+                            if (key.encrypted) ...[
+                              const SizedBox(height: 8),
+                              Text(
+                                key.hasSavedPassphrase
+                                    ? '加密私钥 · 口令已保存'
+                                    : '加密私钥 · 连接时输入口令',
                               ),
                             ],
-                          ),
-                        ],
+                            const SizedBox(height: 12),
+                            Wrap(
+                              spacing: 12,
+                              runSpacing: 8,
+                              children: [
+                                OutlinedButton.icon(
+                                  key: Key('ssh-key-${key.id}'),
+                                  onPressed: _busy || !_foreground
+                                      ? null
+                                      : () => unawaited(_select(key)),
+                                  icon: const Icon(Icons.key),
+                                  label: const Text('使用此私钥'),
+                                ),
+                                if (!widget.keysOnly && key.hasSavedPassphrase)
+                                  OutlinedButton(
+                                    key: Key('ssh-forget-passphrase-${key.id}'),
+                                    style: OutlinedButton.styleFrom(
+                                      shape: const RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.all(
+                                          Radius.circular(12),
+                                        ),
+                                      ),
+                                    ),
+                                    onPressed: _busy || !_foreground
+                                        ? null
+                                        : () => unawaited(
+                                            _forgetPassphrase(key: key),
+                                          ),
+                                    child: const Text('忘记此私钥口令'),
+                                  ),
+                                if (!widget.keysOnly)
+                                  OutlinedButton.icon(
+                                    key: Key('ssh-key-delete-${key.id}'),
+                                    style: OutlinedButton.styleFrom(
+                                      foregroundColor: Theme.of(
+                                        context,
+                                      ).colorScheme.error,
+                                      shape: const RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.all(
+                                          Radius.circular(12),
+                                        ),
+                                      ),
+                                    ),
+                                    onPressed:
+                                        _busy || !_foreground || !_healthy
+                                        ? null
+                                        : () => unawaited(_deleteKey(key)),
+                                    icon: const Icon(Icons.delete_outline),
+                                    label: const Text('删除私钥'),
+                                  ),
+                              ],
+                            ),
+                          ],
+                        ),
                       ),
                     ),
+                if (!widget.keysOnly &&
+                    _library?.keys.any((key) => key.hasSavedPassphrase) == true)
+                  TextButton(
+                    key: const Key('ssh-forget-all-passphrases'),
+                    onPressed: _busy || !_foreground
+                        ? null
+                        : () => unawaited(_forgetPassphrase(all: true)),
+                    child: const Text('忘记全部私钥口令'),
                   ),
-              if (_library?.keys.any((key) => key.hasSavedPassphrase) == true)
-                TextButton(
-                  key: const Key('ssh-forget-all-passphrases'),
-                  onPressed: _busy || !_foreground
-                      ? null
-                      : () => unawaited(_forgetPassphrase(all: true)),
-                  child: const Text('忘记全部私钥口令'),
-                ),
+              ],
               if (!widget.keysOnly) ...[
-                const SizedBox(height: 24),
+                if (!widget.hostsOnly) const SizedBox(height: 24),
                 Text('配置主机', style: Theme.of(context).textTheme.titleLarge),
                 if (_library != null && _library!.hosts.isEmpty)
                   Padding(
@@ -1292,6 +1218,32 @@ class _SshLibraryPageState extends State<SshLibraryPage>
                           : '导入 .ssh/config 后显示 Host 别名。',
                     ),
                   ),
+                if (widget.hostsOnly &&
+                    _library != null &&
+                    _library!.hosts.isEmpty) ...[
+                  const SizedBox(height: 12),
+                  Align(
+                    alignment: AlignmentDirectional.centerStart,
+                    child: OutlinedButton.icon(
+                      key: Key(
+                        _library!.hasConfig
+                            ? 'ssh-host-picker-edit-config'
+                            : 'ssh-host-picker-import-config',
+                      ),
+                      onPressed: _busy || !_foreground || !_healthy
+                          ? null
+                          : _library!.hasConfig
+                          ? () => unawaited(_edit())
+                          : () => unawaited(_import(SshImportKind.config)),
+                      icon: Icon(
+                        _library!.hasConfig
+                            ? Icons.edit_outlined
+                            : Icons.file_open_outlined,
+                      ),
+                      label: Text(_library!.hasConfig ? '编辑配置' : '导入配置'),
+                    ),
+                  ),
+                ],
                 if (_library != null)
                   for (final host in _library!.hosts)
                     Card(

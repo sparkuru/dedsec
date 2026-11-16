@@ -17,6 +17,8 @@ struct jni_callback_target {
     jmethodID host_evidence;
     jmethodID known_hosts_candidate;
     jmethodID known_hosts_candidate_abort;
+    jmethodID changed_host_candidate;
+    jmethodID changed_host_review;
     jmethodID kex_complete;
     jmethodID credential;
     jmethodID credential_bytes;
@@ -418,6 +420,119 @@ done:
     return callback_result;
 }
 
+static int jni_changed_host_candidate(void *context, void *environment,
+    const struct ctos_ssh_changed_host_candidate *changed) {
+    struct jni_callback_target *target = context;
+    JNIEnv *env = environment;
+    const struct ctos_ssh_known_hosts_candidate *candidate;
+    const struct ctos_ssh_host_evidence *evidence;
+    jstring connection = NULL, target_identity = NULL, host = NULL;
+    jstring key = NULL, fingerprint = NULL, candidate_id = NULL;
+    jbyteArray base = NULL, replacement = NULL, body = NULL, records = NULL;
+    jsize body_length = 0, records_length = 0;
+    int result = EIO;
+
+    if (changed == NULL) return EINVAL;
+    candidate = &changed->candidate;
+    evidence = &candidate->evidence;
+    if (attached(target, environment) != 0 || target->changed_host_candidate == NULL
+        || evidence->classification != CTOS_SSH_CALLBACK_HOST_CHANGED
+        || candidate->replacement_body == NULL || candidate->replacement_body_length == 0
+        || candidate->replacement_body_length > CTOS_SSH_CALLBACK_MAX_FILE_BYTES
+        || changed->old_records == NULL || changed->old_records_length < 88U
+        || changed->old_records_length > CTOS_SSH_CALLBACK_CHANGED_RECORDS_BYTES
+        || ascii_field(evidence->connection_id, CTOS_SSH_ROLE_CONNECTION_ID_BYTES) != 0
+        || ascii_field(evidence->target_identity, CTOS_SSH_ROLE_TARGET_ID_BYTES) != 0
+        || ascii_field(evidence->host, CTOS_SSH_ROLE_HOST_BYTES) != 0
+        || ascii_field(evidence->key_type, CTOS_SSH_CALLBACK_HOST_KEY_TYPE_BYTES - 1U) != 0
+        || ascii_field(evidence->fingerprint, CTOS_SSH_CALLBACK_HOST_FINGERPRINT_BYTES - 1U) != 0
+        || ascii_field(candidate->candidate_id, CTOS_SSH_CALLBACK_CANDIDATE_ID_BYTES - 1U) != 0)
+        return EINVAL;
+    body_length = (jsize)candidate->replacement_body_length;
+    records_length = (jsize)changed->old_records_length;
+    connection = (*env)->NewStringUTF(env, evidence->connection_id);
+    target_identity = (*env)->NewStringUTF(env, evidence->target_identity);
+    host = (*env)->NewStringUTF(env, evidence->host);
+    key = (*env)->NewStringUTF(env, evidence->key_type);
+    fingerprint = (*env)->NewStringUTF(env, evidence->fingerprint);
+    candidate_id = (*env)->NewStringUTF(env, candidate->candidate_id);
+    base = (*env)->NewByteArray(env, 32);
+    replacement = (*env)->NewByteArray(env, 32);
+    body = (*env)->NewByteArray(env, body_length);
+    records = (*env)->NewByteArray(env, records_length);
+    if (connection == NULL || target_identity == NULL || host == NULL || key == NULL
+        || fingerprint == NULL || candidate_id == NULL || base == NULL || replacement == NULL
+        || body == NULL || records == NULL || (*env)->ExceptionCheck(env)) goto done;
+    (*env)->SetByteArrayRegion(env, base, 0, 32, (const jbyte *)evidence->base_digest);
+    (*env)->SetByteArrayRegion(env, replacement, 0, 32, (const jbyte *)evidence->replacement_digest);
+    (*env)->SetByteArrayRegion(env, body, 0, body_length, (const jbyte *)candidate->replacement_body);
+    (*env)->SetByteArrayRegion(env, records, 0, records_length, (const jbyte *)changed->old_records);
+    if ((*env)->ExceptionCheck(env)) goto done;
+    result = (*env)->CallBooleanMethod(env, target->object, target->changed_host_candidate,
+        (jlong)evidence->role, (jint)evidence->hop, (jint)evidence->port, connection,
+        target_identity, host, (jint)evidence->classification, key, fingerprint,
+        base, replacement, candidate_id, body, records) ? 0 : EIO;
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); result = EFAULT; }
+done:
+    if (body != NULL && body_length > 0 && zero_java_array(env, body, body_length) != 0) result = EFAULT;
+    if (records != NULL && records_length > 0 && zero_java_array(env, records, records_length) != 0) result = EFAULT;
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); result = EFAULT; }
+    if (connection != NULL) (*env)->DeleteLocalRef(env, connection);
+    if (target_identity != NULL) (*env)->DeleteLocalRef(env, target_identity);
+    if (host != NULL) (*env)->DeleteLocalRef(env, host);
+    if (key != NULL) (*env)->DeleteLocalRef(env, key);
+    if (fingerprint != NULL) (*env)->DeleteLocalRef(env, fingerprint);
+    if (candidate_id != NULL) (*env)->DeleteLocalRef(env, candidate_id);
+    if (base != NULL) (*env)->DeleteLocalRef(env, base);
+    if (replacement != NULL) (*env)->DeleteLocalRef(env, replacement);
+    if (body != NULL) (*env)->DeleteLocalRef(env, body);
+    if (records != NULL) (*env)->DeleteLocalRef(env, records);
+    return result;
+}
+
+static int jni_changed_host_review(void *context, void *environment,
+    const struct ctos_ssh_host_evidence *evidence) {
+    struct jni_callback_target *target = context;
+    JNIEnv *env = environment;
+    jstring connection = NULL, target_identity = NULL, host = NULL, key = NULL, fingerprint = NULL;
+    jbyteArray base = NULL, replacement = NULL;
+    int result = EIO;
+    if (evidence == NULL || attached(target, environment) != 0 || target->changed_host_review == NULL
+        || evidence->classification != CTOS_SSH_CALLBACK_HOST_CHANGED
+        || ascii_field(evidence->connection_id, CTOS_SSH_ROLE_CONNECTION_ID_BYTES) != 0
+        || ascii_field(evidence->target_identity, CTOS_SSH_ROLE_TARGET_ID_BYTES) != 0
+        || ascii_field(evidence->host, CTOS_SSH_ROLE_HOST_BYTES) != 0
+        || ascii_field(evidence->key_type, CTOS_SSH_CALLBACK_HOST_KEY_TYPE_BYTES - 1U) != 0
+        || ascii_field(evidence->fingerprint, CTOS_SSH_CALLBACK_HOST_FINGERPRINT_BYTES - 1U) != 0)
+        return EINVAL;
+    connection = (*env)->NewStringUTF(env, evidence->connection_id);
+    target_identity = (*env)->NewStringUTF(env, evidence->target_identity);
+    host = (*env)->NewStringUTF(env, evidence->host);
+    key = (*env)->NewStringUTF(env, evidence->key_type);
+    fingerprint = (*env)->NewStringUTF(env, evidence->fingerprint);
+    base = (*env)->NewByteArray(env, 32);
+    replacement = (*env)->NewByteArray(env, 32);
+    if (connection == NULL || target_identity == NULL || host == NULL || key == NULL
+        || fingerprint == NULL || base == NULL || replacement == NULL || (*env)->ExceptionCheck(env)) goto done;
+    (*env)->SetByteArrayRegion(env, base, 0, 32, (const jbyte *)evidence->base_digest);
+    (*env)->SetByteArrayRegion(env, replacement, 0, 32, (const jbyte *)evidence->replacement_digest);
+    if ((*env)->ExceptionCheck(env)) goto done;
+    result = (*env)->CallBooleanMethod(env, target->object, target->changed_host_review,
+        (jlong)evidence->role, (jint)evidence->hop, (jint)evidence->port, connection,
+        target_identity, host, (jint)evidence->classification, key, fingerprint, base, replacement) ? 0 : EIO;
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); result = EFAULT; }
+done:
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); result = EFAULT; }
+    if (connection != NULL) (*env)->DeleteLocalRef(env, connection);
+    if (target_identity != NULL) (*env)->DeleteLocalRef(env, target_identity);
+    if (host != NULL) (*env)->DeleteLocalRef(env, host);
+    if (key != NULL) (*env)->DeleteLocalRef(env, key);
+    if (fingerprint != NULL) (*env)->DeleteLocalRef(env, fingerprint);
+    if (base != NULL) (*env)->DeleteLocalRef(env, base);
+    if (replacement != NULL) (*env)->DeleteLocalRef(env, replacement);
+    return result;
+}
+
 static int jni_known_hosts_candidate_abort(void *context, void *environment) {
     struct jni_callback_target *target = context;
     JNIEnv *env = environment;
@@ -628,6 +743,14 @@ JNIEXPORT jlong JNICALL Java_im_majo_ctos_SshNativeCallbackAdapter_00024Native_o
         || context->known_hosts_candidate_abort == NULL
         || context->kex_complete == NULL || context->credential == NULL
         || (*env)->ExceptionCheck(env)) goto failed;
+    context->changed_host_candidate = (*env)->GetMethodID(env, callback_class,
+        "onNativeChangedHostCandidate",
+        "(JIILjava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/String;Ljava/lang/String;[B[BLjava/lang/String;[B[B)Z");
+    if (context->changed_host_candidate == NULL || (*env)->ExceptionCheck(env)) goto failed;
+    context->changed_host_review = (*env)->GetMethodID(env, callback_class,
+        "onNativeChangedHostReview",
+        "(JIILjava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/String;Ljava/lang/String;[B[B)Z");
+    if (context->changed_host_review == NULL || (*env)->ExceptionCheck(env)) goto failed;
     context->credential_bytes = (*env)->GetMethodID(env, callback_class,
         "onNativeCredentialBytes", "(I)[B");
     if ((*env)->ExceptionCheck(env)) {
@@ -654,6 +777,8 @@ JNIEXPORT jlong JNICALL Java_im_majo_ctos_SshNativeCallbackAdapter_00024Native_o
     target.destroy = jni_destroy;
     target.credential_bytes = jni_credential_bytes;
     target.credential_bytes_selected = jni_credential_bytes_selected;
+    target.changed_host_candidate = jni_changed_host_candidate;
+    target.changed_host_review = jni_changed_host_review;
     if (ctos_ssh_callback_open(&target, (ctos_ssh_role_token)role, owner_uid,
             (uint64_t)deadline, env, &callback) != 0 || callback == 0) goto failed;
     if (callback_class != NULL) (*env)->DeleteLocalRef(env, callback_class);

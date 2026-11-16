@@ -19,6 +19,10 @@ struct callback_slot {
     int failed;
     int known_hosts_candidate_used;
     int known_hosts_candidate_aborted;
+    int changed_candidate_pending;
+    int changed_candidate_reviewed;
+    int changed_candidate_committed;
+    struct ctos_ssh_host_evidence changed_candidate_evidence;
     ctos_ssh_callback_token callback;
     ctos_ssh_role_token role;
     uid_t owner_uid;
@@ -140,6 +144,61 @@ static int valid_fingerprint(const char *value) {
         }
     }
     return 0;
+}
+
+static uint32_t read_be32(const unsigned char *bytes) {
+    return (uint32_t)bytes[0] << 24 | (uint32_t)bytes[1] << 16
+        | (uint32_t)bytes[2] << 8 | (uint32_t)bytes[3];
+}
+
+static int valid_changed_records(const unsigned char *wire, size_t length,
+    const unsigned char base_digest[32]) {
+    uint32_t count, previous = 0;
+    if (wire == NULL || base_digest == NULL || length < 88U
+        || length > CTOS_SSH_CALLBACK_CHANGED_RECORDS_BYTES
+        || read_be32(wire) != 0x43534854U || read_be32(wire + 4) != 1U
+        || read_be32(wire + 8) != 0U || read_be32(wire + 12) != 1U
+        || (count = read_be32(wire + 16)) == 0U || count > 128U
+        || read_be32(wire + 20) != 0U || length != 88U + count * 216U
+        || memcmp(wire + 24, base_digest, 32U) != 0) return -1;
+    for (size_t i = 56U; i < 88U; i++) if (wire[i] != 0U) return -1;
+    for (uint32_t i = 0; i < count; i++) {
+        const unsigned char *row = wire + 88U + i * 216U;
+        uint32_t line = read_be32(row), algorithm_length = read_be32(row + 16);
+        uint32_t fingerprint_length = read_be32(row + 20);
+        char fingerprint[51];
+        if (line <= previous || line > 16384U || read_be32(row + 4) != 0U
+            || read_be32(row + 8) > 1U || read_be32(row + 12) != 0U
+            || algorithm_length == 0U || algorithm_length > 128U
+            || fingerprint_length != 50U) return -1;
+        previous = line;
+        for (uint32_t j = 0; j < 128U; j++) {
+            unsigned char ch = row[24U + j];
+            if (j >= algorithm_length) { if (ch != 0U) return -1; continue; }
+            if (!((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z')
+                || (ch >= '0' && ch <= '9') || ch == '@' || ch == '.'
+                || ch == '_' || ch == '+' || ch == '-')) return -1;
+        }
+        memcpy(fingerprint, row + 152U, 50U);
+        fingerprint[50] = '\0';
+        if (valid_fingerprint(fingerprint) != 0) return -1;
+        for (size_t j = 50U; j < 64U; j++) if (row[152U + j] != 0U) return -1;
+    }
+    return 0;
+}
+
+static int same_host_evidence(const struct ctos_ssh_host_evidence *left,
+    const struct ctos_ssh_host_evidence *right) {
+    return left != NULL && right != NULL && left->role == right->role
+        && left->hop == right->hop && left->port == right->port
+        && left->classification == right->classification
+        && strcmp(left->connection_id, right->connection_id) == 0
+        && strcmp(left->target_identity, right->target_identity) == 0
+        && strcmp(left->host, right->host) == 0
+        && strcmp(left->key_type, right->key_type) == 0
+        && strcmp(left->fingerprint, right->fingerprint) == 0
+        && memcmp(left->base_digest, right->base_digest, 32U) == 0
+        && memcmp(left->replacement_digest, right->replacement_digest, 32U) == 0;
 }
 
 static int valid_binding(const char *value, int allow_empty) {
@@ -386,6 +445,9 @@ static int valid_target(const struct ctos_ssh_callback_target *target) {
         && (target->host_key != NULL || target->host_evidence != NULL)
         && (target->known_hosts_candidate == NULL
             || target->known_hosts_candidate_abort != NULL)
+        && ((target->changed_host_candidate == NULL && target->changed_host_review == NULL)
+            || (target->changed_host_candidate != NULL && target->changed_host_review != NULL
+                && target->known_hosts_candidate_abort != NULL))
         && target->kex_complete != NULL && target->credential != NULL
         && target->release != NULL;
 }
@@ -530,20 +592,33 @@ static int abort_known_hosts_candidate(struct callback_slot *slot,
         errno = ENOSYS;
         return -1;
     }
+    if (slot->changed_candidate_pending) {
+        /* Even failed cleanup must never revive provisional authority. */
+        slot->cancelled = 1;
+        slot->failed = 1;
+    }
     slot->known_hosts_candidate_aborted = 1;
+    /* Keep the slot alive while external cleanup runs; close/re-entry must
+     * not release it and reuse the same table position under this call. */
+    slot->in_callback = 1;
     target = slot->target;
     pthread_mutex_unlock(&callbacks_lock);
 
     callback_result = target.known_hosts_candidate_abort(target.context, environment);
+    if (pthread_mutex_lock(&callbacks_lock) != 0) { errno = EBUSY; return -1; }
+    slot->in_callback = 0;
     if (callback_result != 0) {
-        if (pthread_mutex_lock(&callbacks_lock) == 0) {
-            slot->known_hosts_candidate_aborted = 0;
-            pthread_mutex_unlock(&callbacks_lock);
-        }
+        slot->known_hosts_candidate_aborted = 0;
+        pthread_mutex_unlock(&callbacks_lock);
         errno = callback_result >= 1 && callback_result <= 4095
             ? callback_result : EIO;
         return -1;
     }
+    slot->changed_candidate_pending = slot->changed_candidate_reviewed = 0;
+    slot->changed_candidate_committed = 0;
+    wipe_bytes((unsigned char *)&slot->changed_candidate_evidence,
+        sizeof(slot->changed_candidate_evidence));
+    pthread_mutex_unlock(&callbacks_lock);
     return 0;
 }
 
@@ -655,6 +730,14 @@ int ctos_ssh_callback_check_live(ctos_ssh_callback_token callback, void *environ
 
     if (begin_callback(callback, environment, &slot, &target) != 0) return -1;
     return finish_callback(slot, 0);
+}
+
+int ctos_ssh_callback_supports_changed(ctos_ssh_callback_token callback, void *environment) {
+    struct callback_slot *slot;
+    struct ctos_ssh_callback_target target;
+    if (begin_callback(callback, environment, &slot, &target) != 0) return -1;
+    int supported = target.changed_host_candidate != NULL && target.changed_host_review != NULL;
+    return finish_callback(slot, 0) == 0 ? supported : -1;
 }
 
 int ctos_ssh_callback_promote_transport(ctos_ssh_callback_token callback,
@@ -861,6 +944,111 @@ done:
     return 0;
 }
 
+int ctos_ssh_callback_changed_host_candidate(ctos_ssh_callback_token callback,
+    void *environment, const char *candidate_id, const char *key_type,
+    const char *fingerprint, const unsigned char base_digest[32],
+    const unsigned char replacement_digest[32], unsigned char *replacement_body,
+    size_t replacement_body_length, unsigned char *old_records, size_t old_records_length) {
+    struct callback_slot *slot = NULL;
+    struct ctos_ssh_callback_target target = {0};
+    struct ctos_ssh_changed_host_candidate candidate = {0};
+    int callback_result = EINVAL, callback_started = 0;
+
+    if (replacement_body == NULL || replacement_body_length == 0
+        || replacement_body_length > CTOS_SSH_CALLBACK_MAX_FILE_BYTES
+        || old_records == NULL || valid_candidate_id(candidate_id) != 0
+        || valid_key_type(key_type) != 0 || valid_fingerprint(fingerprint) != 0
+        || !nonzero32(base_digest) || !nonzero32(replacement_digest)
+        || valid_changed_records(old_records, old_records_length, base_digest) != 0)
+        goto done;
+    if (begin_callback(callback, environment, &slot, &target) != 0) {
+        callback_result = errno == 0 ? ECANCELED : errno;
+        goto done;
+    }
+    callback_started = 1;
+    if (claim_known_hosts_candidate(slot) != 0) {
+        callback_result = errno == 0 ? EALREADY : errno;
+        callback_started = 0;
+        goto done;
+    }
+    if (target.changed_host_candidate == NULL || target.changed_host_review == NULL) {
+        callback_result = ENOSYS;
+        goto finish;
+    }
+    if (fill_host_evidence(slot, CTOS_SSH_CALLBACK_HOST_CHANGED, key_type, fingerprint,
+            base_digest, replacement_digest, &candidate.candidate.evidence) != 0) {
+        callback_result = errno == 0 ? EINVAL : errno;
+        goto finish;
+    }
+    memcpy(candidate.candidate.candidate_id, candidate_id, strlen(candidate_id) + 1U);
+    candidate.candidate.replacement_body = replacement_body;
+    candidate.candidate.replacement_body_length = replacement_body_length;
+    candidate.old_records = old_records;
+    candidate.old_records_length = old_records_length;
+    callback_result = target.changed_host_candidate(target.context, environment, &candidate);
+    if (callback_result == 0) {
+        if (pthread_mutex_lock(&callbacks_lock) != 0) callback_result = EBUSY;
+        else {
+            if (!slot->live || !slot->in_callback || slot->cancelled || slot->closing
+                || slot->failed || slot->changed_candidate_pending) callback_result = ECANCELED;
+            else {
+                slot->changed_candidate_evidence = candidate.candidate.evidence;
+                slot->changed_candidate_pending = 1;
+            }
+            pthread_mutex_unlock(&callbacks_lock);
+        }
+    }
+finish:
+    if (callback_started && finish_callback(slot, callback_result) != 0) {
+        callback_result = errno == 0 ? EIO : errno;
+        (void)abort_known_hosts_candidate(slot, environment);
+    } else if (callback_started) callback_result = 0;
+done:
+    if (replacement_body != NULL) {
+        size_t length = replacement_body_length > CTOS_SSH_CALLBACK_MAX_FILE_BYTES
+            ? CTOS_SSH_CALLBACK_MAX_FILE_BYTES : replacement_body_length;
+        wipe_bytes(replacement_body, length);
+    }
+    if (old_records != NULL) {
+        size_t length = old_records_length > CTOS_SSH_CALLBACK_CHANGED_RECORDS_BYTES
+            ? CTOS_SSH_CALLBACK_CHANGED_RECORDS_BYTES : old_records_length;
+        wipe_bytes(old_records, length);
+    }
+    wipe_bytes((unsigned char *)&candidate, sizeof(candidate));
+    if (callback_result != 0) {
+        errno = callback_result >= 1 && callback_result <= 4095 ? callback_result : EIO;
+        return -1;
+    }
+    return 0;
+}
+
+int ctos_ssh_callback_changed_host_review(ctos_ssh_callback_token callback,
+    void *environment, const char *key_type, const char *fingerprint,
+    const unsigned char base_digest[32], const unsigned char replacement_digest[32]) {
+    struct callback_slot *slot;
+    struct ctos_ssh_callback_target target;
+    struct ctos_ssh_host_evidence evidence = {0};
+    int callback_result = EINVAL;
+
+    if (begin_callback(callback, environment, &slot, &target) != 0) return -1;
+    if (fill_host_evidence(slot, CTOS_SSH_CALLBACK_HOST_CHANGED, key_type, fingerprint,
+            base_digest, replacement_digest, &evidence) != 0) goto finish;
+    if (pthread_mutex_lock(&callbacks_lock) != 0) { callback_result = EBUSY; goto finish; }
+    if (!slot->changed_candidate_pending || slot->changed_candidate_reviewed
+        || !same_host_evidence(&slot->changed_candidate_evidence, &evidence)) {
+        pthread_mutex_unlock(&callbacks_lock);
+        callback_result = EACCES;
+        goto finish;
+    }
+    slot->changed_candidate_reviewed = 1;
+    pthread_mutex_unlock(&callbacks_lock);
+    callback_result = target.changed_host_review == NULL ? ENOSYS
+        : target.changed_host_review(target.context, environment, &evidence);
+finish:
+    wipe_bytes((unsigned char *)&evidence, sizeof(evidence));
+    return finish_callback(slot, callback_result);
+}
+
 int ctos_ssh_callback_known_hosts_candidate_abort(
     ctos_ssh_callback_token callback, void *environment) {
     struct callback_slot *slot;
@@ -886,8 +1074,33 @@ int ctos_ssh_callback_kex_complete(ctos_ssh_callback_token callback, void *envir
         errno = EINVAL; return -1;
     }
     if (begin_callback(callback, environment, &slot, &target) != 0) return -1;
-    int result = target.kex_complete(target.context, environment, cycle, session_digest);
+    if (pthread_mutex_lock(&callbacks_lock) != 0) return finish_callback(slot, EBUSY);
+    int changed = slot->changed_candidate_pending;
+    int allowed = !changed || (slot->changed_candidate_reviewed && !slot->changed_candidate_committed);
+    pthread_mutex_unlock(&callbacks_lock);
+    int result = allowed ? target.kex_complete(target.context, environment, cycle, session_digest)
+        : EACCES;
+    if (result == 0 && changed) {
+        if (pthread_mutex_lock(&callbacks_lock) != 0) result = EBUSY;
+        else {
+            if (!slot->live || !slot->in_callback || slot->cancelled || slot->closing
+                || slot->failed || !slot->changed_candidate_pending
+                || !slot->changed_candidate_reviewed || slot->changed_candidate_committed)
+                result = ECANCELED;
+            else slot->changed_candidate_committed = 1;
+            pthread_mutex_unlock(&callbacks_lock);
+        }
+    }
     return finish_callback(slot, result);
+}
+
+static int credential_authorized(const struct callback_slot *slot) {
+    int authorized;
+    if (pthread_mutex_lock(&callbacks_lock) != 0) return -1;
+    authorized = slot != NULL && slot->live && slot->in_callback
+        && (!slot->changed_candidate_pending || slot->changed_candidate_committed);
+    pthread_mutex_unlock(&callbacks_lock);
+    return authorized;
 }
 
 int ctos_ssh_callback_credential(ctos_ssh_callback_token callback, void *environment,
@@ -897,7 +1110,9 @@ int ctos_ssh_callback_credential(ctos_ssh_callback_token callback, void *environ
     if (kind < CTOS_SSH_CALLBACK_CREDENTIAL_PASSWORD
         || kind > CTOS_SSH_CALLBACK_CREDENTIAL_PRIVATE_KEY) { errno = EINVAL; return -1; }
     if (begin_callback(callback, environment, &slot, &target) != 0) return -1;
-    int result = target.credential(target.context, environment, kind);
+    int allowed = credential_authorized(slot);
+    int result = allowed < 0 ? EBUSY : allowed
+        ? target.credential(target.context, environment, kind) : EACCES;
     return finish_callback(slot, result);
 }
 
@@ -939,7 +1154,10 @@ static int credential_bytes_common(ctos_ssh_callback_token callback,
     }
     if (begin_callback(callback, environment, &slot, &target) != 0) return -1;
 
-    if (selected) {
+    int allowed = credential_authorized(slot);
+    if (allowed <= 0) {
+        result = allowed < 0 ? EBUSY : EACCES;
+    } else if (selected) {
         result = target.credential_bytes_selected == NULL ? ENOSYS
             : target.credential_bytes_selected(target.context, environment, kind,
                 selection_receipt, cycle, session_digest, output, capacity, length);
