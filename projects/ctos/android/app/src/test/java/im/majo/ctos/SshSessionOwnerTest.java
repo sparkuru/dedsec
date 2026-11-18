@@ -17,7 +17,8 @@ public final class SshSessionOwnerTest {
         final AtomicReference<Thread> owner = new AtomicReference<>();
         Runnable cancellation;
         int closeFailures;
-        CountDownLatch createEntered, allowCreate;
+        Exception createFailure;
+        CountDownLatch createEntered, allowCreate, closeEntered, allowClose;
         @Override public SshNativeSession create(BooleanSupplier cancelled) throws Exception {
             owner.set(Thread.currentThread());
             creates.incrementAndGet();
@@ -25,6 +26,7 @@ public final class SshSessionOwnerTest {
                 createEntered.countDown();
                 assertTrue(allowCreate.await(5, TimeUnit.SECONDS));
             }
+            if (createFailure != null) throw createFailure;
             throw new IOException("injected pre-auth failure");
         }
         @Override public void cancellationAction(Runnable action) { cancellation = action; }
@@ -33,6 +35,10 @@ public final class SshSessionOwnerTest {
             if (original == null) owner.compareAndSet(null, Thread.currentThread());
             assertSame(owner.get(), Thread.currentThread());
             closes.incrementAndGet();
+            if (closeEntered != null) {
+                closeEntered.countDown();
+                assertTrue(allowClose.await(5, TimeUnit.SECONDS));
+            }
             if (closeFailures-- > 0) throw new IOException("injected cleanup retry");
         }
     }
@@ -138,6 +144,52 @@ public final class SshSessionOwnerTest {
         assertEquals(1, factory.closes.get());
         assertEquals("closed", events.snapshot().get("state"));
         assertEquals("SSH_SCREEN_LOCKED", events.snapshot().get("reason"));
+    }
+
+    @Test public void proofFailurePublicationRespectsEarlierCancellationAndScreenLock() throws Exception {
+        for (int mode = 0; mode < 3; mode++) {
+            Factory factory = new Factory();
+            factory.createEntered = new CountDownLatch(1);
+            factory.allowCreate = new CountDownLatch(1);
+            factory.createFailure = new VaultException(SshHostKeyAuthority.PROOF_INVALID, "synthetic proof failure");
+            CountDownLatch released = new CountDownLatch(1);
+            SshSessionOwner owner = create(factory, released);
+            owner.begin();
+            try {
+                assertTrue(factory.createEntered.await(5, TimeUnit.SECONDS));
+                if (mode == 1) factory.cancellation.run();
+                if (mode == 2) assertTrue(owner.stopForScreenLock(owner.id));
+            } finally { factory.allowCreate.countDown(); }
+            try { owner.connected.get(5, TimeUnit.SECONDS); fail("The connection must fail"); }
+            catch (java.util.concurrent.ExecutionException failure) {
+                String expected = mode == 0 ? SshHostKeyAuthority.PROOF_INVALID
+                        : mode == 1 ? "SSH_CANCELLED" : "SSH_SCREEN_LOCKED";
+                assertEquals(expected, ((VaultException)failure.getCause()).code);
+            }
+            assertTrue(released.await(5, TimeUnit.SECONDS));
+            assertEquals(1, factory.creates.get());
+            assertEquals(1, factory.closes.get());
+        }
+    }
+
+    @Test public void cancellationAfterProofFailurePublicationDoesNotRewriteTheReceipt() throws Exception {
+        Factory factory = new Factory();
+        factory.closeEntered = new CountDownLatch(1);
+        factory.allowClose = new CountDownLatch(1);
+        factory.createFailure = new VaultException(SshHostKeyAuthority.PROOF_INVALID, "synthetic proof failure");
+        CountDownLatch released = new CountDownLatch(1);
+        SshSessionOwner owner = create(factory, released);
+        owner.begin();
+        try {
+            assertTrue(factory.closeEntered.await(5, TimeUnit.SECONDS));
+            factory.cancellation.run();
+            try { owner.connected.get(5, TimeUnit.SECONDS); fail("The connection must fail"); }
+            catch (java.util.concurrent.ExecutionException failure) {
+                assertEquals(SshHostKeyAuthority.PROOF_INVALID, ((VaultException)failure.getCause()).code);
+            }
+        } finally { factory.allowClose.countDown(); }
+        assertTrue(released.await(5, TimeUnit.SECONDS));
+        assertEquals(1, factory.closes.get());
     }
 
     @Test public void oldScreenLockCallbackCannotCancelAReplacementOwner() throws Exception {

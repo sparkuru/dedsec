@@ -1,5 +1,30 @@
 # Terminal interaction contract
 
+## 2026-11-16 server-driven connection update
+
+The default SSH form takes the target and an optional explicitly selected key;
+it never asks for the login password before the host key is verified. The automatic
+connector emits a separate one-use password or selected-key passphrase request
+only after the server actually offers the corresponding method. Show KBI using
+the server's real challenge, never as a fabricated password prompt. Keep input
+masked, bounded, clear it on submit/disposal, and bind each response to the
+request/ticket/original protected foreground session. Cancellation, expiry,
+route coverage, lock and late results must not revive a connection. Wait for all
+accepted input acknowledgements and the original connection outcome before
+handoff. When switching between KBI and password dialogs, remove the old protected
+dialog before opening the next; the short removal interval remains owned by the
+same route. Reconnect retains only target, config alias and optional selected key.
+
+The automatic password and passphrase dialogs default to one-use input. Show
+the explicit saved choice only for that prompt's `savedAvailable` flag. Clear any
+typed input when choosing it and disable saving that response. Keep the save
+choice unchecked by default, with validation beside the masked field and a
+working cancel action when the keyboard is open. Treat automatic connections
+as potentially mutating so protected-route exit waits for the connection write
+receipt when needed. Keep the previous explicit password/key/KBI flows under
+“其他认证方式” while product and real-server acceptance remains open. The
+2026-11-13 rules below describe those existing modes where they differ.
+
 2026-11-13: choosing a config Host selects the target only. Select password, a managed
 private key, or standalone server-question authentication on the connection page; never
 silently select a key. Revalidate any retained key against the current host, binding and

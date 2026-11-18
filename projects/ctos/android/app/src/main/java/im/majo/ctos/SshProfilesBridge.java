@@ -295,19 +295,14 @@ final class SshProfilesBridge implements AutoCloseable {
                 try {
                     SshConfigEvaluator.ProfilePlan plan = SshConnectionMaterial.profilePlan(source.manifest,
                             SshConnectionMaterial.ROOT, alias.alias, "", deadline, request::check, share);
-                    List<String> eligible = new ArrayList<>();
+                    List<String> availableKeys = new ArrayList<>();
                     hintCount += plan.identityHints.size();
                     for (String hint : plan.identityHints) hintBytes += hint.getBytes(StandardCharsets.UTF_8).length;
                     if (hintCount > 4096 || hintBytes > 1024 * 1024)
                         throw failure("SSH_CONFIG_LIMIT");
-                    if (plan.pubkeyAuthentication)
-                        for (SshConnectionMaterial.Key key : material) eligible.add(key.id);
-                    Map<String, Object> row = new HashMap<>(VaultCollections.map("alias", alias.alias, "host", plan.hostname,
-                            "port", plan.port, "username", plan.user, "keyIds", VaultCollections.copyList(eligible),
-                            "identityHints", plan.identityHints,
-                            "binding", SshConnectionMaterial.configBinding(source, alias.alias)));
-                    if (!plan.pubkeyAuthentication) row.put("error", "SSH_KEY_SELECTION");
-                    hosts.add(java.util.Collections.unmodifiableMap(row));
+                    for (SshConnectionMaterial.Key key : material) availableKeys.add(key.id);
+                    hosts.add(profileHostRow(alias.alias, SshConnectionMaterial.configBinding(source, alias.alias),
+                            plan, availableKeys));
                 } catch (IOException | VaultException failure) {
                     if (failure instanceof VaultException && ((VaultException)failure).code.equals("SSH_CONFIG_LIMIT"))
                         throw failure;
@@ -318,6 +313,16 @@ final class SshProfilesBridge implements AutoCloseable {
             }
         }
         return VaultCollections.map("keys", keys, "hosts", hosts, "hasConfig", configured);
+    }
+
+    static Map<String, Object> profileHostRow(String alias, String binding,
+            SshConfigEvaluator.ProfilePlan plan, List<String> availableKeys) {
+        // A host remains usable for password, KBI, or a real none success even when
+        // its effective configuration disables public-key authentication.
+        List<String> eligible = plan.pubkeyAuthentication ? availableKeys : List.of();
+        return java.util.Collections.unmodifiableMap(new HashMap<>(VaultCollections.map("alias", alias, "host", plan.hostname,
+                "port", plan.port, "username", plan.user, "keyIds", VaultCollections.copyList(eligible),
+                "identityHints", plan.identityHints, "binding", binding)));
     }
 
     private void deletePreview(MethodCall call, MethodChannel.Result result) throws VaultException {

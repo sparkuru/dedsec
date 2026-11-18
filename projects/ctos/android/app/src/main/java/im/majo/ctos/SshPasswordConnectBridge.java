@@ -89,6 +89,26 @@ final class SshPasswordConnectBridge implements AutoCloseable {
                 case "ssh.configConnect": connectKey(call, result, true); break;
                 case "ssh.keyboardConnect": connectKeyboard(call, result, false); break;
                 case "ssh.configKeyboardConnect": connectKeyboard(call, result, true); break;
+                case "ssh.autoConnect": connectAutomatic(call, result, false); break;
+                case "ssh.configAutoConnect": connectAutomatic(call, result, true); break;
+                case "ssh.passwordResponse": {
+                    Object value = call.argument("password");
+                    if (!(value instanceof byte[])) throw parameters();
+                    byte[] password = (byte[])value;
+                    try {
+                        SshPasswordMailbox.Choice choice = passwordResponseChoice(call, password);
+                        String id = id(call), ticket = text(call, "ticketId"), binding = text(call, "binding");
+                        if (!ticket.matches("[A-Za-z0-9_-]{1,128}") || !binding.matches("[0-9a-f]{64}"))
+                            throw parameters();
+                        boolean accepted = false;
+                        if (active != null && active.id.equals(id)) {
+                            secrets.requireSshConsumer();
+                            accepted = active.connector.respondPassword(ticket, binding, password, choice);
+                        }
+                        result.success(VaultCollections.map("accepted", accepted));
+                    } finally { VaultCodec.wipe(password); }
+                    break;
+                }
                 case "ssh.keyboardResponse": {
                     exact(call, "requestId", "ticketId", "binding", "answers");
                     String id = id(call), ticket = text(call, "ticketId"), binding = text(call, "binding");
@@ -416,6 +436,36 @@ final class SshPasswordConnectBridge implements AutoCloseable {
         attach(id, connector, columns, rows, result);
     }
 
+    static void automaticArguments(MethodCall call, boolean configured) throws VaultException {
+        if (configured) exact(call, "requestId", "alias", "binding", "username", "keyId", "columns", "rows");
+        else exact(call, "requestId", "host", "port", "username", "keyId", "columns", "rows");
+        String keyId = text(call, "keyId");
+        if (!keyId.isEmpty()) VaultManifest.identifier(keyId);
+    }
+
+    private void connectAutomatic(MethodCall call, MethodChannel.Result result, boolean configured) throws VaultException {
+        automaticArguments(call, configured);
+        String id = id(call), keyId = text(call, "keyId"), username = text(call, "username");
+        secrets.requireSshConsumer();
+        if (active != null || mutating != null || profiles.busy() || idle != null && idle.loading) throw failure("BUSY");
+        if (sink == null) throw failure("SSH_CANCELLED");
+        String alias = configured ? text(call, "alias") : "";
+        String binding = configured ? text(call, "binding") : "";
+        if (configured && (alias.isEmpty() || alias.length() > 255 || !binding.matches("[0-9a-f]{64}"))) throw parameters();
+        if (!username.isEmpty()) VaultCodec.wipe(VaultCodec.sshText(username, 255));
+        SshPasswordProfile manual = configured ? null : new SshPasswordProfile(text(call, "host"),
+                integer(call, "port", 1, 65535), username);
+        int columns = integer(call, "columns", 1, 4096), rows = integer(call, "rows", 1, 4096);
+        admit(id); retireIdle(); profiles.cancelReads();
+        AppSecrets.EffectGuard guard = () -> { if (closed) throw failure("SSH_CANCELLED"); secrets.requireSshConsumer(); };
+        long deadline = SystemClock.elapsedRealtime() + 60_000;
+        SshPasswordConnector connector = keyId.isEmpty()
+                ? new SshPasswordConnector(vault, manual, alias, binding, username, deadline, guard, events(id))
+                : new SshPasswordConnector(vault, manual, keyId, alias, binding, username, deadline, guard, events(id));
+        connector.useServerDrivenAuthentication();
+        attach(id, connector, columns, rows, result);
+    }
+
     boolean onActivityResult(int requestCode, int resultCode, android.content.Intent data) {
         return profiles.onActivityResult(requestCode, resultCode, data);
     }
@@ -437,6 +487,8 @@ final class SshPasswordConnectBridge implements AutoCloseable {
                         connector.cancel(); completionFailure = invalidated.code;
                     }
                 }
+                if (completionFailure != null && connector.automaticCredentialWritten())
+                    completionFailure = "VAULT_COMMIT_UNCERTAIN";
                 completionFailure = completionFailure(vault, completionFailure,
                         connector.changedTrustPublicationUncertain(), connector.durableWrite());
                 if (completionFailure == null) {
@@ -535,7 +587,43 @@ final class SshPasswordConnectBridge implements AutoCloseable {
                             main.post(() -> emit(VaultCollections.map("type", "keyboardChallengeDismissed", "requestId", id,
                                     "ticketId", ticket.id)));
                         }
+                        @Override public void present(SshPasswordMailbox.Ticket ticket) throws VaultException {
+                            if (closed) throw failure("SSH_CANCELLED");
+                            main.post(() -> {
+                                if (active == null || !active.id.equals(id) || sink == null) return;
+                                try {
+                                    secrets.requireSshConsumer();
+                                    if (!active.connector.passwordPending(ticket)) return;
+                                    long remaining = ticket.deadline - SystemClock.elapsedRealtime();
+                                    if (remaining <= 0) { active.connector.cancel(); return; }
+                                    emit(VaultCollections.map("type", ticket.purpose == SshPasswordMailbox.Purpose.PASSWORD
+                                                    ? "passwordRequest" : "keyPassphraseRequest", "requestId", id,
+                                            "ticketId", ticket.id, "binding", ticket.binding,
+                                            "savedAvailable", ticket.savedAvailable,
+                                            "remainingMillis", Math.min(60_000L, remaining)));
+                                } catch (VaultException | RuntimeException failure) { active.connector.cancel(); }
+                            });
+                        }
+                        @Override public void dismiss(SshPasswordMailbox.Ticket ticket) {
+                            main.post(() -> emit(VaultCollections.map("type", "passwordRequestDismissed", "requestId", id,
+                                    "ticketId", ticket.id)));
+                        }
                     };
+    }
+
+    static SshPasswordMailbox.Choice passwordResponseChoice(MethodCall call, byte[] secret) throws VaultException {
+        boolean extended = call.arguments instanceof Map && (((Map<?, ?>)call.arguments).containsKey("useSaved")
+                || ((Map<?, ?>)call.arguments).containsKey("save"));
+        if (extended) exact(call, "requestId", "ticketId", "binding", "password", "useSaved", "save");
+        else exact(call, "requestId", "ticketId", "binding", "password");
+        boolean useSaved = extended && bool(call, "useSaved");
+        boolean save = extended && bool(call, "save");
+        if (useSaved) {
+            if (save || secret.length != 0) throw parameters();
+            return SshPasswordMailbox.Choice.SAVED;
+        }
+        SshSavedPassword.validateSecret(secret);
+        return save ? SshPasswordMailbox.Choice.SAVE : SshPasswordMailbox.Choice.ONCE;
     }
 
     private void monitor(Defaults request) {

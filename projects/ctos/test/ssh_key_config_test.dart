@@ -1963,6 +1963,7 @@ class _Ui {
                       api: api,
                       columns: 81,
                       rows: 25,
+                      initialAuthentication: SshInitialAuthentication.password,
                     ),
                   );
                 else

@@ -73,6 +73,31 @@ final class SshNativeSession implements AutoCloseable {
         }
     }
 
+    enum AuthDiscoveryResult {
+        NOT_STARTED(0), PENDING(1), METHODS(2), NONE_SUCCESS(3), PARTIAL(4);
+        final int tag;
+        AuthDiscoveryResult(int tag) { this.tag = tag; }
+        private static AuthDiscoveryResult fromNative(int tag) throws IOException {
+            for (AuthDiscoveryResult result : values()) if (result.tag == tag) return result;
+            throw new IOException("invalid SSH discovery result");
+        }
+    }
+
+    static final class AuthDiscoveryStatus {
+        static final int PUBLIC_KEY = 1, KEYBOARD_INTERACTIVE = 2, PASSWORD = 4, OTHER = 8;
+        final AuthDiscoveryResult result;
+        final int methods;
+        private AuthDiscoveryStatus(int[] values) throws IOException {
+            if (values == null || values.length != 2 || values[1] < 0 || values[1] > 15)
+                throw new IOException("invalid SSH discovery status");
+            result = AuthDiscoveryResult.fromNative(values[0]);
+            methods = values[1];
+            if ((result == AuthDiscoveryResult.NOT_STARTED || result == AuthDiscoveryResult.PENDING
+                    || result == AuthDiscoveryResult.NONE_SUCCESS) && methods != 0)
+                throw new IOException("invalid SSH discovery methods");
+        }
+    }
+
     enum ShellPhase {
         DISABLED(0), OPENING(1), PTY_PENDING(2), SHELL_PENDING(3), RUNNING(4), CLOSED(5), REJECTED(6);
 
@@ -121,7 +146,7 @@ final class SshNativeSession implements AutoCloseable {
         }
     }
 
-    private enum Phase { KEX_ONLY, SERVICE_PENDING, SERVICE_READY, PASSWORD_PENDING,
+    private enum Phase { KEX_ONLY, SERVICE_PENDING, SERVICE_READY, DISCOVERY_PENDING, PASSWORD_PENDING,
         PRIVATE_KEY_PENDING, KEYBOARD_PENDING, FINISHED }
 
     /** A public-only view token with deferred cleanup support. */
@@ -162,11 +187,29 @@ final class SshNativeSession implements AutoCloseable {
         default void beginPasswordAuth(long handle) throws IOException {
             throw new IOException("SSH password authentication is unavailable");
         }
+        default byte[] beginDiscoveredPassword(long handle, byte[] planReceipt, byte[] password) throws IOException {
+            throw new IOException("SSH discovered password authentication is unavailable");
+        }
+        default void beginAuthDiscovery(long handle) throws IOException {
+            throw new IOException("SSH method discovery is unavailable");
+        }
+        default int[] authDiscoveryResult(long handle) throws IOException {
+            throw new IOException("SSH method discovery is unavailable");
+        }
+        default int authContinuationMethods(long handle) throws IOException {
+            throw new IOException("SSH continuation methods are unavailable");
+        }
+        default void pollAuthPrompt(long handle, byte[] planReceipt, int method) throws IOException {
+            throw new IOException("SSH prompt transport polling is unavailable");
+        }
         default int passwordAuthResult(long handle) throws IOException {
             throw new IOException("SSH password authentication is unavailable");
         }
         default void beginPrivateKeyAuth(long handle) throws IOException {
             throw new IOException("SSH private-key authentication is unavailable");
+        }
+        default byte[] continuePrivateKeyAuth(long handle, byte[] planReceipt) throws IOException {
+            throw new IOException("SSH private-key continuation is unavailable");
         }
         default int privateKeyAuthResult(long handle) throws IOException {
             throw new IOException("SSH private-key authentication is unavailable");
@@ -176,6 +219,9 @@ final class SshNativeSession implements AutoCloseable {
         }
         default byte[] continueKeyboardInteractiveAuth(long handle, byte[] planReceipt) throws IOException {
             throw new IOException("SSH authentication continuation is unavailable");
+        }
+        default byte[] beginDiscoveredKeyboard(long handle, byte[] planReceipt) throws IOException {
+            throw new IOException("SSH discovered authentication is unavailable");
         }
         default int keyboardInteractiveAuthResult(long handle) throws IOException {
             throw new IOException("SSH keyboard-interactive authentication is unavailable");
@@ -188,6 +234,9 @@ final class SshNativeSession implements AutoCloseable {
         }
         default void configureServerAlive(long handle, int interval, int countMax) throws IOException {
             throw new IOException("SSH server-alive policy is unavailable");
+        }
+        default void configureNoPty(long handle) throws IOException {
+            throw new IOException("SSH no-PTY policy is unavailable");
         }
         default void beginShell(long handle, int columns, int rows) throws IOException {
             throw new IOException("SSH shell is unavailable");
@@ -303,12 +352,30 @@ final class SshNativeSession implements AutoCloseable {
         @Override public void beginPasswordAuth(long handle) throws IOException {
             Native.beginPasswordAuth(handle);
         }
+        @Override public byte[] beginDiscoveredPassword(long handle, byte[] planReceipt, byte[] password) throws IOException {
+            return Native.beginDiscoveredPassword(handle, planReceipt, password);
+        }
+        @Override public void beginAuthDiscovery(long handle) throws IOException {
+            Native.beginAuthDiscovery(handle);
+        }
+        @Override public int[] authDiscoveryResult(long handle) throws IOException {
+            return Native.authDiscoveryResult(handle);
+        }
+        @Override public int authContinuationMethods(long handle) throws IOException {
+            return Native.authContinuationMethods(handle);
+        }
+        @Override public void pollAuthPrompt(long handle, byte[] planReceipt, int method) throws IOException {
+            Native.pollAuthPrompt(handle, planReceipt, method);
+        }
 
         @Override public int passwordAuthResult(long handle) throws IOException {
             return Native.passwordAuthResult(handle);
         }
         @Override public void beginPrivateKeyAuth(long handle) throws IOException {
             Native.beginPrivateKeyAuth(handle);
+        }
+        @Override public byte[] continuePrivateKeyAuth(long handle, byte[] planReceipt) throws IOException {
+            return Native.continuePrivateKeyAuth(handle, planReceipt);
         }
         @Override public int privateKeyAuthResult(long handle) throws IOException {
             return Native.privateKeyAuthResult(handle);
@@ -322,6 +389,9 @@ final class SshNativeSession implements AutoCloseable {
         @Override public byte[] continueKeyboardInteractiveAuth(long handle, byte[] planReceipt) throws IOException {
             return Native.continueKeyboardInteractiveAuth(handle, planReceipt);
         }
+        @Override public byte[] beginDiscoveredKeyboard(long handle, byte[] planReceipt) throws IOException {
+            return Native.beginDiscoveredKeyboard(handle, planReceipt);
+        }
         @Override public byte[] keyboardInteractiveChallenge(long handle) throws IOException {
             return Native.keyboardInteractiveChallenge(handle);
         }
@@ -331,6 +401,9 @@ final class SshNativeSession implements AutoCloseable {
 
         @Override public void configureServerAlive(long handle, int interval, int countMax) throws IOException {
             Native.configureServerAlive(handle, interval, countMax);
+        }
+        @Override public void configureNoPty(long handle) throws IOException {
+            Native.configureNoPty(handle);
         }
         @Override public void beginShell(long handle, int columns, int rows) throws IOException {
             Native.beginShell(handle, columns, rows);
@@ -389,15 +462,23 @@ final class SshNativeSession implements AutoCloseable {
         static native void beginUserauthService(long handle) throws IOException;
         static native boolean userauthServiceReady(long handle) throws IOException;
         static native void beginPasswordAuth(long handle) throws IOException;
+        static native byte[] beginDiscoveredPassword(long handle, byte[] planReceipt, byte[] password) throws IOException;
+        static native void beginAuthDiscovery(long handle) throws IOException;
+        static native int[] authDiscoveryResult(long handle) throws IOException;
+        static native int authContinuationMethods(long handle) throws IOException;
+        static native void pollAuthPrompt(long handle, byte[] planReceipt, int method) throws IOException;
         static native int passwordAuthResult(long handle) throws IOException;
         static native void beginPrivateKeyAuth(long handle) throws IOException;
+        static native byte[] continuePrivateKeyAuth(long handle, byte[] planReceipt) throws IOException;
         static native int privateKeyAuthResult(long handle) throws IOException;
         static native void beginKeyboardInteractiveAuth(long handle) throws IOException;
         static native byte[] continueKeyboardInteractiveAuth(long handle, byte[] planReceipt) throws IOException;
+        static native byte[] beginDiscoveredKeyboard(long handle, byte[] planReceipt) throws IOException;
         static native int keyboardInteractiveAuthResult(long handle) throws IOException;
         static native byte[] keyboardInteractiveChallenge(long handle) throws IOException;
         static native void respondKeyboardInteractive(long handle, byte[] response) throws IOException;
         static native void configureServerAlive(long handle, int interval, int countMax) throws IOException;
+        static native void configureNoPty(long handle) throws IOException;
         static native void beginShell(long handle, int columns, int rows) throws IOException;
         static native int[] shellStatus(long handle) throws IOException;
         static native int writeShell(long handle, byte[] bytes) throws IOException;
@@ -426,15 +507,21 @@ final class SshNativeSession implements AutoCloseable {
     private boolean viewReleased;
     private boolean destroyed;
     private boolean complete;
-    private Phase phase = Phase.KEX_ONLY;
+    private volatile Phase phase = Phase.KEX_ONLY;
     private ShellPhase shellPhase = ShellPhase.DISABLED;
     private boolean serverAliveConfigured;
+    private boolean noPtyConfigured;
     private ShellStatus lastShellStatus;
     private boolean shellEofAccepted;
     private volatile boolean established;
     private volatile boolean authenticationRetired;
     private AppSecrets.EffectGuard authenticationRetirement;
+    private AppSecrets.EffectGuard shellConfirmation;
+    private volatile boolean shellConfirmationPending;
     private PasswordAuthResult authenticationResult = PasswordAuthResult.NOT_STARTED;
+    private AuthDiscoveryResult discoveryResult = AuthDiscoveryResult.NOT_STARTED;
+    private int discoveryMethods;
+    private int authenticationStage = 1;
     private PrivateKeyAuthResult privateKeyResult = PrivateKeyAuthResult.NOT_STARTED;
     private boolean privateKeyAuthentication;
     private boolean keyboardInteractiveAuthentication;
@@ -442,6 +529,10 @@ final class SshNativeSession implements AutoCloseable {
     private SshKeyboardChallenge keyboardChallenge;
     private int keyboardRound;
     private volatile Object keyboardStage;
+    private volatile Object passwordPromptStage;
+    private boolean passwordPromptIssued;
+    private volatile Object privateKeyPromptStage;
+    private boolean privateKeyPromptIssued;
     private volatile boolean cancellationRequested;
     private volatile String terminalFailure;
 
@@ -698,6 +789,7 @@ final class SshNativeSession implements AutoCloseable {
                 requireTransportLive();
                 if (shellPhase != ShellPhase.DISABLED) queryShellStatus();
                 else if (phase == Phase.SERVICE_PENDING) queryServiceReady();
+                else if (phase == Phase.DISCOVERY_PENDING) queryAuthDiscovery();
                 else if (phase == Phase.PASSWORD_PENDING) queryPasswordResult();
                 else if (phase == Phase.PRIVATE_KEY_PENDING) queryPrivateKeyResult();
                 else if (phase == Phase.KEYBOARD_PENDING) queryKeyboardInteractiveResult();
@@ -747,14 +839,115 @@ final class SshNativeSession implements AutoCloseable {
         } finally { NATIVE_ENTRY.remove(); }
     }
 
+    void beginAuthDiscovery() throws VaultException {
+        requireOwnerThread();
+        enterNative();
+        try {
+            requireProtocolState();
+            if (phase != Phase.SERVICE_READY || discoveryResult != AuthDiscoveryResult.NOT_STARTED)
+                throw phaseFailure();
+            if (expectedSelectionReceipt == null) throw SshAuthenticationSelection.invalid();
+            requireProtocolLive();
+            try {
+                nativeBinding.beginAuthDiscovery(nativeHandle);
+                requireProtocolLive();
+                discoveryResult = AuthDiscoveryResult.PENDING;
+                phase = Phase.DISCOVERY_PENDING;
+            } catch (IOException | LinkageError | RuntimeException nativeFailure) {
+                throw protocolNativeFailure("SSH_SESSION_AUTH_DISCOVERY");
+            } catch (Error nativeFailure) {
+                terminalFailure = "SSH_SESSION_AUTH_DISCOVERY";
+                throw nativeFailure;
+            }
+        } finally { NATIVE_ENTRY.remove(); }
+    }
+
+    AuthDiscoveryStatus authDiscoveryResult() throws VaultException {
+        requireOwnerThread();
+        enterNative();
+        try {
+            requireProtocolState();
+            if (discoveryResult == AuthDiscoveryResult.NOT_STARTED
+                    || (phase != Phase.DISCOVERY_PENDING && phase != Phase.SERVICE_READY
+                            && !(phase == Phase.FINISHED && discoveryResult == AuthDiscoveryResult.NONE_SUCCESS)))
+                throw phaseFailure();
+            requireProtocolLive();
+            return queryAuthDiscovery();
+        } finally { NATIVE_ENTRY.remove(); }
+    }
+
+    private AuthDiscoveryStatus queryAuthDiscovery() throws VaultException {
+        try {
+            AuthDiscoveryStatus result = new AuthDiscoveryStatus(nativeBinding.authDiscoveryResult(nativeHandle));
+            requireProtocolLive();
+            if (phase == Phase.DISCOVERY_PENDING) {
+                if (result.result == AuthDiscoveryResult.NOT_STARTED)
+                    throw new IOException("SSH discovery state regressed");
+                discoveryResult = result.result;
+                discoveryMethods = result.methods;
+                if (result.result == AuthDiscoveryResult.NONE_SUCCESS) phase = Phase.FINISHED;
+                else if (result.result != AuthDiscoveryResult.PENDING) phase = Phase.SERVICE_READY;
+            } else if (result.result != discoveryResult || result.methods != discoveryMethods) {
+                throw new IOException("SSH discovery result changed");
+            }
+            return result;
+        } catch (IOException | LinkageError | RuntimeException nativeFailure) {
+            throw protocolNativeFailure("SSH_SESSION_AUTH_DISCOVERY");
+        } catch (Error nativeFailure) {
+            recordProtocolError("SSH_SESSION_AUTH_DISCOVERY");
+            throw nativeFailure;
+        }
+    }
+
+    private boolean discoveryAllows(int method) {
+        return discoveryResult == AuthDiscoveryResult.NOT_STARTED
+                || (discoveryResult == AuthDiscoveryResult.METHODS || discoveryResult == AuthDiscoveryResult.PARTIAL)
+                && (discoveryMethods & method) != 0;
+    }
+
+    int authContinuationMethods() throws VaultException {
+        requireOwnerThread(); enterNative();
+        try {
+            requireProtocolState(); requireProtocolLive();
+            if (phase != Phase.FINISHED || !authenticationCanContinue()) throw phaseFailure();
+            callback.requireAutomaticSelection();
+            try {
+                int methods = nativeBinding.authContinuationMethods(nativeHandle);
+                requireProtocolLive();
+                if (methods < 0 || methods > 15) throw new IOException("invalid SSH continuation methods");
+                return methods;
+            } catch (IOException | LinkageError | RuntimeException nativeFailure) {
+                throw protocolNativeFailure("SSH_MFA_AUTH");
+            } catch (Error nativeFailure) { terminalFailure = "SSH_MFA_AUTH"; throw nativeFailure; }
+        } finally { NATIVE_ENTRY.remove(); }
+    }
+
+    private boolean authenticationPartial() {
+        return keyboardInteractiveAuthentication ? keyboardResult == KeyboardInteractiveAuthResult.PARTIAL
+                : privateKeyAuthentication ? privateKeyResult == PrivateKeyAuthResult.PARTIAL
+                : authenticationResult == PasswordAuthResult.PARTIAL;
+    }
+
+    private boolean authenticationRejected() {
+        return keyboardInteractiveAuthentication ? keyboardResult == KeyboardInteractiveAuthResult.REJECTED
+                : privateKeyAuthentication ? privateKeyResult == PrivateKeyAuthResult.REJECTED
+                : authenticationResult == PasswordAuthResult.REJECTED;
+    }
+
+    private boolean authenticationCanContinue() {
+        return authenticationPartial() || authenticationRejected();
+    }
+
     void beginPasswordAuth() throws VaultException {
         requireOwnerThread();
         enterNative();
         try {
             requireProtocolState();
-            if (phase != Phase.SERVICE_READY) throw phaseFailure();
+            if (phase != Phase.SERVICE_READY || !discoveryAllows(AuthDiscoveryStatus.PASSWORD)) throw phaseFailure();
             if (expectedSelectionReceipt == null) throw SshAuthenticationSelection.invalid();
             requireProtocolLive();
+            if (!callback.authenticationSelectionAllows(AuthDiscoveryStatus.PASSWORD,
+                    discoveryResult == AuthDiscoveryResult.METHODS || discoveryResult == AuthDiscoveryResult.PARTIAL)) throw phaseFailure();
             try {
                 nativeBinding.beginPasswordAuth(nativeHandle);
                 requireProtocolLive();
@@ -769,12 +962,129 @@ final class SshNativeSession implements AutoCloseable {
         } finally { NATIVE_ENTRY.remove(); }
     }
 
+    Object passwordPromptStage() throws VaultException {
+        requireOwnerThread();
+        requireProtocolState(); requireProtocolLive();
+        boolean initial = phase == Phase.SERVICE_READY
+                && (discoveryResult == AuthDiscoveryResult.METHODS || discoveryResult == AuthDiscoveryResult.PARTIAL)
+                && (discoveryMethods & AuthDiscoveryStatus.PASSWORD) != 0;
+        boolean continuation = phase == Phase.FINISHED && authenticationCanContinue() && authenticationStage < 4;
+        if (passwordPromptIssued || expectedSelectionReceipt == null || (!initial && !continuation)) throw phaseFailure();
+        callback.requireDiscoveredPasswordSelection();
+        if (continuation && (authContinuationMethods() & AuthDiscoveryStatus.PASSWORD) == 0) throw phaseFailure();
+        if (callback.kexProof() == null || callback.hostProof() == null) throw SshAuthenticationSelection.invalid();
+        passwordPromptIssued = true;
+        passwordPromptStage = new Object();
+        return passwordPromptStage;
+    }
+
+    /** Metadata-only; safe on the event publisher thread. */
+    void requirePasswordPromptStageLive(Object stage) throws VaultException {
+        requireProtocolState(); requireProtocolLive();
+        if (stage == null || passwordPromptStage != stage
+                || !(phase == Phase.SERVICE_READY || phase == Phase.FINISHED && authenticationCanContinue())) throw phaseFailure();
+    }
+
+    int passwordPromptMethods(Object stage) throws VaultException {
+        requireOwnerThread(); requirePasswordPromptStageLive(stage);
+        return phase == Phase.FINISHED ? authContinuationMethods() : authDiscoveryResult().methods;
+    }
+
+    void pollPasswordPrompt(Object stage) throws VaultException {
+        pollAuthPrompt(stage, false);
+    }
+
+    Object privateKeyPromptStage() throws VaultException {
+        requireOwnerThread(); requireProtocolState(); requireProtocolLive();
+        boolean initial = phase == Phase.SERVICE_READY
+                && (discoveryResult == AuthDiscoveryResult.METHODS || discoveryResult == AuthDiscoveryResult.PARTIAL)
+                && (discoveryMethods & AuthDiscoveryStatus.PUBLIC_KEY) != 0;
+        boolean continuation = phase == Phase.FINISHED && authenticationCanContinue() && authenticationStage < 4;
+        if (privateKeyPromptIssued || expectedSelectionReceipt == null || (!initial && !continuation)) throw phaseFailure();
+        callback.requireAutomaticKeySelection();
+        if (continuation && (authContinuationMethods() & AuthDiscoveryStatus.PUBLIC_KEY) == 0) throw phaseFailure();
+        if (callback.kexProof() == null || callback.hostProof() == null) throw SshAuthenticationSelection.invalid();
+        privateKeyPromptIssued = true; privateKeyPromptStage = new Object();
+        return privateKeyPromptStage;
+    }
+
+    void requirePrivateKeyPromptStageLive(Object stage) throws VaultException {
+        requireProtocolState(); requireProtocolLive();
+        if (stage == null || privateKeyPromptStage != stage
+                || !(phase == Phase.SERVICE_READY || phase == Phase.FINISHED && authenticationCanContinue())) throw phaseFailure();
+    }
+
+    int privateKeyPromptMethods(Object stage) throws VaultException {
+        requireOwnerThread(); requirePrivateKeyPromptStageLive(stage);
+        return phase == Phase.FINISHED ? authContinuationMethods() : authDiscoveryResult().methods;
+    }
+
+    void pollPrivateKeyPrompt(Object stage) throws VaultException {
+        pollAuthPrompt(stage, true);
+    }
+
+    private void pollAuthPrompt(Object stage, boolean key) throws VaultException {
+        requireOwnerThread(); enterNative();
+        byte[] expected = null;
+        try {
+            if (key) requirePrivateKeyPromptStageLive(stage); else requirePasswordPromptStageLive(stage);
+            if (expectedSelectionReceipt == null) throw SshAuthenticationSelection.invalid();
+            expected = expectedSelectionReceipt.clone();
+            try {
+                nativeBinding.pollAuthPrompt(nativeHandle, expected,
+                        key ? AuthDiscoveryStatus.PUBLIC_KEY : AuthDiscoveryStatus.PASSWORD);
+                if (key) requirePrivateKeyPromptStageLive(stage); else requirePasswordPromptStageLive(stage);
+            } catch (IOException | LinkageError | RuntimeException nativeFailure) {
+                throw protocolNativeFailure("SSH_SESSION_STEP");
+            } catch (Error nativeFailure) { terminalFailure = "SSH_SESSION_STEP"; throw nativeFailure; }
+        } finally { VaultCodec.wipe(expected); NATIVE_ENTRY.remove(); }
+    }
+
+    void finishPrivateKeyPrompt(Object stage) throws VaultException {
+        requireOwnerThread(); requirePrivateKeyPromptStageLive(stage); privateKeyPromptStage = null;
+    }
+
+    void beginDiscoveredPassword(Object stage, byte[] password) throws VaultException {
+        requireOwnerThread();
+        enterNative();
+        byte[] expected = null, received = null, owned = null;
+        try {
+            requireProtocolState(); requireProtocolLive();
+            if (expectedSelectionReceipt == null || authenticationStage >= 4) throw phaseFailure();
+            requirePasswordPromptStageLive(stage);
+            SshSavedPassword.validateSecret(password);
+            int original = callback.requireDiscoveredPasswordSelection();
+            SshKexProof kex = callback.kexProof();
+            SshHostKeyAuthority.Proof host = callback.hostProof();
+            if (kex == null || host == null) throw SshAuthenticationSelection.invalid();
+            expected = expectedSelectionReceipt.clone(); owned = password.clone();
+            passwordPromptStage = null;
+            try {
+                received = nativeBinding.beginDiscoveredPassword(nativeHandle, expected, owned);
+                requireProtocolLive();
+                validateAuthStageReceipt(received, 2, authenticationStage + 1, original, 1, kex, host);
+                authenticationStage++;
+                keyboardInteractiveAuthentication = false; keyboardStage = null;
+                privateKeyAuthentication = false;
+                authenticationResult = PasswordAuthResult.PENDING;
+                phase = Phase.PASSWORD_PENDING;
+            } catch (IOException | LinkageError | RuntimeException nativeFailure) {
+                throw protocolNativeFailure("SSH_SESSION_AUTH");
+            } catch (Error nativeFailure) {
+                terminalFailure = "SSH_SESSION_AUTH"; throw nativeFailure;
+            }
+        } finally {
+            VaultCodec.wipe(expected); VaultCodec.wipe(received); VaultCodec.wipe(owned); NATIVE_ENTRY.remove();
+        }
+    }
+
     PasswordAuthResult passwordAuthResult() throws VaultException {
         requireOwnerThread();
         enterNative();
         try {
             requireProtocolState();
-            if (privateKeyAuthentication || keyboardInteractiveAuthentication) throw phaseFailure();
+            if (privateKeyAuthentication || keyboardInteractiveAuthentication
+                    || discoveryResult == AuthDiscoveryResult.NONE_SUCCESS) throw phaseFailure();
             if (phase != Phase.SERVICE_READY && phase != Phase.PASSWORD_PENDING
                     && phase != Phase.FINISHED) throw phaseFailure();
             requireProtocolLive();
@@ -826,9 +1136,12 @@ final class SshNativeSession implements AutoCloseable {
         enterNative();
         try {
             requireProtocolState();
-            if (phase != Phase.SERVICE_READY) throw phaseFailure();
+            if (phase != Phase.SERVICE_READY || privateKeyPromptStage != null
+                    || !discoveryAllows(AuthDiscoveryStatus.PUBLIC_KEY)) throw phaseFailure();
             if (expectedSelectionReceipt == null) throw SshAuthenticationSelection.invalid();
             requireProtocolLive();
+            if (!callback.authenticationSelectionAllows(AuthDiscoveryStatus.PUBLIC_KEY,
+                    discoveryResult == AuthDiscoveryResult.METHODS || discoveryResult == AuthDiscoveryResult.PARTIAL)) throw phaseFailure();
             try {
                 nativeBinding.beginPrivateKeyAuth(nativeHandle);
                 requireProtocolLive();
@@ -842,6 +1155,31 @@ final class SshNativeSession implements AutoCloseable {
                 throw nativeFailure;
             }
         } finally { NATIVE_ENTRY.remove(); }
+    }
+
+    void continuePrivateKeyAuth() throws VaultException {
+        requireOwnerThread(); enterNative();
+        byte[] expected = null, received = null;
+        try {
+            requireProtocolState(); requireProtocolLive();
+            if (phase != Phase.FINISHED || !authenticationCanContinue() || authenticationStage >= 4 || privateKeyPromptStage != null
+                    || expectedSelectionReceipt == null) throw phaseFailure();
+            callback.requireAutomaticKeySelection();
+            SshKexProof kex = callback.kexProof(); SshHostKeyAuthority.Proof host = callback.hostProof();
+            if (kex == null || host == null) throw SshAuthenticationSelection.invalid();
+            expected = expectedSelectionReceipt.clone();
+            try {
+                received = nativeBinding.continuePrivateKeyAuth(nativeHandle, expected);
+                requireProtocolLive();
+                validateAuthStageReceipt(received, 2, authenticationStage + 1, 4, 4, kex, host);
+                authenticationStage++;
+                keyboardInteractiveAuthentication = false; keyboardStage = null;
+                privateKeyAuthentication = true; privateKeyResult = PrivateKeyAuthResult.PENDING;
+                phase = Phase.PRIVATE_KEY_PENDING;
+            } catch (IOException | LinkageError | RuntimeException nativeFailure) {
+                throw protocolNativeFailure("SSH_MFA_AUTH");
+            } catch (Error nativeFailure) { terminalFailure = "SSH_MFA_AUTH"; throw nativeFailure; }
+        } finally { VaultCodec.wipe(expected); VaultCodec.wipe(received); NATIVE_ENTRY.remove(); }
     }
 
     PrivateKeyAuthResult privateKeyAuthResult() throws VaultException {
@@ -884,9 +1222,11 @@ final class SshNativeSession implements AutoCloseable {
         enterNative();
         try {
             requireProtocolState();
-            if (phase != Phase.SERVICE_READY) throw phaseFailure();
+            if (phase != Phase.SERVICE_READY || !discoveryAllows(AuthDiscoveryStatus.KEYBOARD_INTERACTIVE)) throw phaseFailure();
             if (expectedSelectionReceipt == null) throw SshAuthenticationSelection.invalid();
             requireProtocolLive();
+            if (!callback.authenticationSelectionAllows(AuthDiscoveryStatus.KEYBOARD_INTERACTIVE,
+                    discoveryResult == AuthDiscoveryResult.METHODS || discoveryResult == AuthDiscoveryResult.PARTIAL)) throw phaseFailure();
             try {
                 nativeBinding.beginKeyboardInteractiveAuth(nativeHandle);
                 requireProtocolLive();
@@ -903,14 +1243,16 @@ final class SshNativeSession implements AutoCloseable {
     void continueKeyboardInteractiveAuth() throws VaultException {
         requireOwnerThread();
         enterNative();
-        byte[] expected = null, received = null, plan = null, digest = null, actualDigest = null;
+        byte[] expected = null, received = null;
         try {
             requireProtocolState(); requireProtocolLive();
             if (phase != Phase.FINISHED || keyboardInteractiveAuthentication || keyboardStage != null
-                    || expectedSelectionReceipt == null
-                    || (privateKeyAuthentication ? privateKeyResult != PrivateKeyAuthResult.PARTIAL
-                            : authenticationResult != PasswordAuthResult.PARTIAL)) throw phaseFailure();
-            callback.requireKeyboardContinuation();
+                    || expectedSelectionReceipt == null) throw phaseFailure();
+            int continuation = callback.keyboardContinuationProof();
+            int version = (continuation & 0x100) != 0 ? 2 : 1;
+            if (!authenticationPartial() && !(version == 2 && authenticationRejected())) throw phaseFailure();
+            int stage = authenticationStage + 1;
+            if (stage > 4) throw phaseFailure();
             SshKexProof kex = callback.kexProof();
             SshHostKeyAuthority.Proof host = callback.hostProof();
             if (kex == null || host == null) throw SshAuthenticationSelection.invalid();
@@ -918,18 +1260,8 @@ final class SshNativeSession implements AutoCloseable {
             try {
                 received = nativeBinding.continueKeyboardInteractiveAuth(nativeHandle, expected);
                 requireProtocolLive();
-                if (callback.kexProof() != kex || callback.hostProof() != host || received == null || received.length != 92)
-                    throw new IOException("SSH authentication stage does not match");
-                java.nio.ByteBuffer buffer = java.nio.ByteBuffer.wrap(received);
-                if (buffer.getInt() != 0x43534150 || buffer.getShort() != 1 || buffer.getShort() != 0
-                        || buffer.getInt() != 2 || buffer.getInt() != (privateKeyAuthentication ? 4 : 1)
-                        || buffer.getInt() != 3) throw new IOException("SSH authentication stage does not match");
-                plan = new byte[32]; buffer.get(plan);
-                long cycle = buffer.getLong();
-                digest = new byte[32]; buffer.get(digest); actualDigest = kex.sessionIdDigest();
-                if (!MessageDigest.isEqual(plan, expectedSelectionReceipt) || cycle != kex.cycle
-                        || !MessageDigest.isEqual(digest, actualDigest) || buffer.hasRemaining())
-                    throw new IOException("SSH authentication stage does not match");
+                validateAuthStageReceipt(received, version, stage, continuation & 0xff, 3, kex, host);
+                authenticationStage = stage;
                 keyboardInteractiveAuthentication = true;
                 keyboardStage = new Object();
                 keyboardResult = KeyboardInteractiveAuthResult.PENDING;
@@ -940,9 +1272,58 @@ final class SshNativeSession implements AutoCloseable {
                 terminalFailure = "SSH_MFA_AUTH"; throw nativeFailure;
             }
         } finally {
-            VaultCodec.wipe(expected); VaultCodec.wipe(received); VaultCodec.wipe(plan);
-            VaultCodec.wipe(digest); VaultCodec.wipe(actualDigest); NATIVE_ENTRY.remove();
+            VaultCodec.wipe(expected); VaultCodec.wipe(received); NATIVE_ENTRY.remove();
         }
+    }
+
+    void beginDiscoveredKeyboard() throws VaultException {
+        requireOwnerThread();
+        enterNative();
+        byte[] expected = null, received = null;
+        try {
+            requireProtocolState(); requireProtocolLive();
+            if (phase != Phase.SERVICE_READY || keyboardStage != null || expectedSelectionReceipt == null
+                    || (discoveryResult != AuthDiscoveryResult.METHODS && discoveryResult != AuthDiscoveryResult.PARTIAL)
+                    || (discoveryMethods & AuthDiscoveryStatus.KEYBOARD_INTERACTIVE) == 0) throw phaseFailure();
+            callback.requireDiscoveredKeyboardSelection();
+            SshKexProof kex = callback.kexProof();
+            SshHostKeyAuthority.Proof host = callback.hostProof();
+            if (kex == null || host == null) throw SshAuthenticationSelection.invalid();
+            expected = expectedSelectionReceipt.clone();
+            try {
+                received = nativeBinding.beginDiscoveredKeyboard(nativeHandle, expected);
+                requireProtocolLive();
+                validateAuthStageReceipt(received, 2, 2, 4, 3, kex, host);
+                authenticationStage = 2;
+                keyboardInteractiveAuthentication = true;
+                keyboardStage = new Object();
+                keyboardResult = KeyboardInteractiveAuthResult.PENDING;
+                phase = Phase.KEYBOARD_PENDING;
+            } catch (IOException | LinkageError | RuntimeException nativeFailure) {
+                throw protocolNativeFailure("SSH_KEYBOARD_AUTH");
+            } catch (Error nativeFailure) {
+                terminalFailure = "SSH_KEYBOARD_AUTH"; throw nativeFailure;
+            }
+        } finally { VaultCodec.wipe(expected); VaultCodec.wipe(received); NATIVE_ENTRY.remove(); }
+    }
+
+    private void validateAuthStageReceipt(byte[] received, int version, int stage, int original, int active,
+            SshKexProof kex, SshHostKeyAuthority.Proof host) throws IOException {
+        if (callback.kexProof() != kex || callback.hostProof() != host || received == null || received.length != 92)
+            throw new IOException("SSH authentication stage does not match");
+        byte[] plan = null, digest = null, actualDigest = null;
+        try {
+            java.nio.ByteBuffer buffer = java.nio.ByteBuffer.wrap(received);
+            if (buffer.getInt() != 0x43534150 || buffer.getShort() != version || buffer.getShort() != 0
+                    || buffer.getInt() != stage || buffer.getInt() != original || buffer.getInt() != active)
+                throw new IOException("SSH authentication stage does not match");
+            plan = new byte[32]; buffer.get(plan);
+            long cycle = buffer.getLong();
+            digest = new byte[32]; buffer.get(digest); actualDigest = kex.sessionIdDigest();
+            if (!MessageDigest.isEqual(plan, expectedSelectionReceipt) || cycle != kex.cycle
+                    || !MessageDigest.isEqual(digest, actualDigest) || buffer.hasRemaining())
+                throw new IOException("SSH authentication stage does not match");
+        } finally { VaultCodec.wipe(plan); VaultCodec.wipe(digest); VaultCodec.wipe(actualDigest); }
     }
 
     Object keyboardStage() throws VaultException {
@@ -1049,10 +1430,11 @@ final class SshNativeSession implements AutoCloseable {
     }
 
     private boolean authenticationSucceeded() {
-        return phase == Phase.FINISHED && (keyboardInteractiveAuthentication
+        return phase == Phase.FINISHED && (discoveryResult == AuthDiscoveryResult.NONE_SUCCESS
+                || (keyboardInteractiveAuthentication
                 ? keyboardResult == KeyboardInteractiveAuthResult.SUCCESS
                 : privateKeyAuthentication ? privateKeyResult == PrivateKeyAuthResult.SUCCESS
-                : authenticationResult == PasswordAuthResult.SUCCESS);
+                : authenticationResult == PasswordAuthResult.SUCCESS));
     }
 
     void configureServerAlive(int interval, int countMax) throws VaultException {
@@ -1063,6 +1445,17 @@ final class SshNativeSession implements AutoCloseable {
             nativeBinding.configureServerAlive(nativeHandle, interval, countMax);
             requireTransportLive();
             serverAliveConfigured = true;
+            return null;
+        });
+    }
+
+    void configureNoPty() throws VaultException {
+        shellEntry("SSH_SESSION_SHELL", () -> {
+            if (!authenticationSucceeded() || shellPhase != ShellPhase.DISABLED
+                    || expectedSelectionReceipt == null || noPtyConfigured) throw phaseFailure();
+            nativeBinding.configureNoPty(nativeHandle);
+            requireTransportLive();
+            noPtyConfigured = true;
             return null;
         });
     }
@@ -1095,6 +1488,21 @@ final class SshNativeSession implements AutoCloseable {
         if (retirement == null || established || authenticationRetirement != null)
             throw phaseFailure();
         authenticationRetirement = retirement;
+    }
+
+    /** One owner-only action after the peer confirms the shell and before it is published. */
+    void confirmShellWith(AppSecrets.EffectGuard confirmation) throws VaultException {
+        requireOwnerThread();
+        if (confirmation == null || established || shellConfirmationPending || !authenticationSucceeded())
+            throw phaseFailure();
+        shellConfirmation = confirmation;
+        shellConfirmationPending = true;
+    }
+
+    void requireShellConfirmationLive() throws VaultException {
+        requireOwnerThread();
+        if (!shellConfirmationPending || shellPhase != ShellPhase.RUNNING) throw phaseFailure();
+        requireTransportLive();
     }
 
     ShellStatus shellStatus() throws VaultException {
@@ -1188,6 +1596,19 @@ final class SshNativeSession implements AutoCloseable {
                 throw new IOException("SSH shell status regressed");
             shellPhase = result.phase;
             lastShellStatus = result;
+            if (result.phase == ShellPhase.RUNNING && shellConfirmation != null) {
+                AppSecrets.EffectGuard confirmation = shellConfirmation;
+                shellConfirmation = null;
+                try {
+                    requireShellConfirmationLive();
+                    confirmation.check();
+                    requireShellConfirmationLive();
+                    shellConfirmationPending = false;
+                } catch (VaultException failure) {
+                    synchronized (stateLock) { terminalFailure = failure.code; }
+                    throw failure;
+                }
+            }
             return result;
         } catch (IOException | LinkageError | RuntimeException nativeFailure) {
             throw protocolNativeFailure("SSH_SESSION_SHELL_STATUS");
@@ -1398,6 +1819,8 @@ final class SshNativeSession implements AutoCloseable {
                     "The native SSH session tombstone is unconfirmed");
         }
         authenticationRetirement = null;
+        shellConfirmation = null;
+        shellConfirmationPending = false;
         synchronized (stateLock) { destroyed = true; }
     }
 
@@ -1409,7 +1832,7 @@ final class SshNativeSession implements AutoCloseable {
             callback.requireEstablishedSessionBound(callbackClaim);
         }
         catch (VaultException lifecycle) { return false; }
-        return authenticationRetired && outputPublicationStateLive();
+        return authenticationRetired && !shellConfirmationPending && outputPublicationStateLive();
     }
 
     private boolean outputPublicationStateLive() {
@@ -1420,6 +1843,7 @@ final class SshNativeSession implements AutoCloseable {
 
     boolean closed() { synchronized (stateLock) { return destroyed; } }
     boolean cancellationRequested() { return cancellationRequested; }
+    boolean ownsCallback(SshNativeCallbackAdapter candidate) { return callback == candidate; }
 
     private void requireOwnerThread() throws VaultException {
         if (Thread.currentThread() != ownerThread) throw new VaultException("SSH_SESSION_THREAD",

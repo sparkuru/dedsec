@@ -89,4 +89,23 @@ public final class SshAuthenticationArgumentsTest {
         }
         refused("ssh.unknownConnect",arguments(method));
     }
+
+    @Test public void serverDrivenRequestsContainOnlyTargetAndOptionalKey() throws Exception {
+        for (String method : new String[]{"ssh.autoConnect", "ssh.configAutoConnect"}) {
+            boolean configured = method.contains("config");
+            Map<String,Object> values = arguments(method); values.put("keyId", "");
+            SshPasswordConnectBridge.automaticArguments(new MethodCall(method, values), configured);
+            values.put("keyId", "key_1");
+            SshPasswordConnectBridge.automaticArguments(new MethodCall(method, values), configured);
+            for (String forbidden : new String[]{"password", "passphrase", "savePassword", "autoKeyboardInteractive"}) {
+                values.put(forbidden, "secret");
+                try { SshPasswordConnectBridge.automaticArguments(new MethodCall(method, values), configured); fail("unexpected input"); }
+                catch (VaultException expected) { assertEquals("PARAMETERS", expected.code); }
+                values.remove(forbidden);
+            }
+            values.put("keyId", "../key");
+            try { SshPasswordConnectBridge.automaticArguments(new MethodCall(method, values), configured); fail("invalid key"); }
+            catch (VaultException expected) { assertNotNull(expected.code); }
+        }
+    }
 }

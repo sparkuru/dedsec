@@ -1,5 +1,22 @@
 # ctOS 信息入口
 
+2026-11-18：用户确认上一版服务器驱动 SSH 认证[逻辑验收通过](verification.md#20261118-ssh-server-driven-acceptance)。自动密码与私钥口令的保存和复用通过本地回归，候选 `8b7cf8da…` 已保留数据安装并启动。开发板用隔离应用与合成账户完成[密码界面、私钥口令桥接及回归测试](verification.md#20261118-ssh-automatic-credentials-device)。
+
+2026-11-16：用户明确新的[服务器驱动 SSH 认证流程](ssh-server-driven-authentication.md)：
+目标和可选私钥先于连接，指纹核验后按服务器要求提示。源码已接入并通过本地分层
+回归；自动提示的保存／复用、Android 实际 JNI、设备及真实服务器仍分别待完成或验证。
+本地 ARM64 候选已构建但尚未安装。[结果与边界](verification.md#20261116-ssh-server-driven-auth)。
+
+2026-11-16：继续 1008 的 R6／AC3，[RequestTTY no](ssh-request-tty.md) 按配置跳过
+PTY 并保留 shell 成功门禁；本地验证及未测范围见[记录](verification.md#20261116-ssh-request-tty)。
+
+2026-11-16：1008 继续覆盖密码／私钥认证启动时的主机证明失败诊断；原认证期限、
+取消及不确定写入保护已完成本地回归。[结果和未测范围](verification.md#20261116-ssh-auth-proof-diagnostic)。
+
+2026-11-16：接续 1008，KEX 主机证明绑定失败在原连接有效且本次无受跟踪写入时显示准确诊断；
+取消、锁屏和不确定写入的优先级已在本地回归。认证启动阶段后续见上条；Android JNI
+与真实服务仍需单独验证，见[结果](verification.md#20261116-ssh-host-proof-diagnostic)。
+
 2026-11-16：保活无应答、后台和锁屏的指定板合成验证取得结果；期间发现并修复
 [shell 确认前通道输出的兼容性问题](ssh-shell-early-output.md)。修正版已获授权保留
 数据安装，指定板同一时序的连接与输出复测通过，见[验证](verification.md#20261116-ssh-early-output-device)。
@@ -22,7 +39,7 @@
 2026-11-13 接续：用户提供 [FileZilla 录像并要求自动显示真实服务器问题](verification.md#20261113-filezilla-ssh-reference)，
 避免交互式选项拖慢 SSH。源码已改为配置先选目标、连接页再选认证，并在密码／私钥
 部分通过后实际需要时弹出服务器问题；连接页及换键弹窗已调整，本地检查和候选构建通过。
-仅提供 KBI 首方法的服务器仍需选择独立入口，不将该范围称为所有认证方式自动发现。
+当时仅提供 KBI 首方法的服务器仍需选择独立入口；新自动首方法实现及当前状态见本页顶部。
 [本次检查与限制](verification.md#20261113-ssh-auto-question-local)。
 
 2026-11-13 反馈：用户指出新版 SSH 连接页、配置选择层级、指纹弹窗和后续认证引导

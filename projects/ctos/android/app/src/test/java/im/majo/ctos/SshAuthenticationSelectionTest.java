@@ -123,6 +123,34 @@ public final class SshAuthenticationSelectionTest {
         rejected(() -> SshAuthenticationSelection.keyboardInteractive(role,"user",clock).withKeyboardContinuation(clock));
     }
 
+    @Test public void versionFourFreezesAutomaticIntentWithoutASelectedPassword() throws Exception {
+        SshRoleContext role = role(4);
+        SshAuthenticationSelection keyboard = SshAuthenticationSelection.keyboardInteractive(role, "user", clock);
+        SshAuthenticationSelection key = SshAuthenticationSelection.privateKey(role, "user", "keys/key",
+                "identity", new byte[] {1, 2, 3}, "phrase", clock);
+        for (SshAuthenticationSelection original : new SshAuthenticationSelection[] {keyboard, key}) {
+            for (int mask = 0; mask <= 7; mask++) {
+                if (original == keyboard && (mask & 1) != 0) continue;
+                SshAuthenticationSelection plan = original.withAutomaticDiscovery(mask, clock);
+                byte[] old = original.encode(9, clock), wire = plan.encode(9, clock);
+                assertEquals(old.length + 4, wire.length); assertEquals(4, wire[5]);
+                assertEquals(mask, java.nio.ByteBuffer.wrap(wire).getInt(wire.length - 4));
+                byte[] same = Arrays.copyOf(wire, old.length); same[5] = old[5];
+                assertArrayEquals(old, same);
+                assertEquals(original.kind, plan.kind); assertEquals(original.entryId, plan.entryId);
+                assertEquals(true, plan.automaticDiscovery); assertEquals(mask, plan.automaticMethods);
+                rejected(() -> plan.withAutomaticDiscovery(0, clock));
+                rejected(() -> plan.withKeyboardContinuation(clock));
+            }
+        }
+        rejected(() -> keyboard.withAutomaticDiscovery(1, clock));
+        rejected(() -> keyboard.withAutomaticDiscovery(-1, clock));
+        rejected(() -> key.withAutomaticDiscovery(8, clock));
+        rejected(() -> SshAuthenticationSelection.password(role, "user", "password", clock)
+                .withAutomaticDiscovery(4, clock));
+        rejected(() -> key.withKeyboardContinuation(clock).withAutomaticDiscovery(2, clock));
+    }
+
     private static byte[] hex(String value) {
         byte[] bytes = new byte[value.length() / 2];
         for (int index = 0; index < bytes.length; index++) {

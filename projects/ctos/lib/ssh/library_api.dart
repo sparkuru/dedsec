@@ -691,6 +691,7 @@ String sshMaterialError(Object error) {
     'SSH_AUTH_REJECTED' ||
     'SSH_KEY_REJECTED' => '私钥登录被拒绝，请核对用户名、公钥授权和所选私钥。',
     'SSH_KEY_ENCRYPTED' || 'SSH_KEY_PASSPHRASE_REQUIRED' => '请输入此私钥的口令后重试。',
+    'SSH_KEY_UNAVAILABLE' => '无法使用所选私钥，请检查私钥及其口令后重试。',
     'SSH_KEY_BAD_PASSPHRASE' || 'SSH_BAD_PASSPHRASE' => '私钥口令错误或文件损坏，请重新输入口令。',
     'SSH_KEY_PASSPHRASE_MISSING' => '此私钥没有已保存口令，请重新输入。',
     'SSH_KEY_MISSING' || 'SSH_IDENTITY_MISSING' => '所选私钥未导入或已变化，请重新导入并选择。',

@@ -23,8 +23,14 @@ final class SshReconnectTarget {
 
     SshReconnectTarget(SshPasswordProfile profile, String keyId, String configAlias, boolean keyboardInteractive,
             boolean continueKeyboardInteractive, boolean autoKeyboardInteractive) throws VaultException {
+        this(profile, keyId, configAlias, keyboardInteractive, continueKeyboardInteractive, autoKeyboardInteractive, false);
+    }
+
+    SshReconnectTarget(SshPasswordProfile profile, String keyId, String configAlias, boolean keyboardInteractive,
+            boolean continueKeyboardInteractive, boolean autoKeyboardInteractive, boolean serverDriven) throws VaultException {
         if (profile == null || configAlias == null || continueKeyboardInteractive && autoKeyboardInteractive
-                || keyboardInteractive && (keyId != null || continueKeyboardInteractive || autoKeyboardInteractive))
+                || serverDriven && (continueKeyboardInteractive || autoKeyboardInteractive)
+                || !serverDriven && keyboardInteractive && (keyId != null || continueKeyboardInteractive || autoKeyboardInteractive))
             throw SshPasswordProfile.parameters();
         if (keyId != null) VaultManifest.identifier(keyId);
         if (!configAlias.isEmpty()) {
@@ -33,7 +39,8 @@ final class SshReconnectTarget {
             byte[] checked = VaultCodec.sshText(configAlias, 255);
             VaultCodec.wipe(checked);
         }
-        mode = keyboardInteractive ? configAlias.isEmpty() ? "keyboard" : "configKeyboard"
+        mode = serverDriven ? configAlias.isEmpty() ? "auto" : "configAuto"
+                : keyboardInteractive ? configAlias.isEmpty() ? "keyboard" : "configKeyboard"
                 : keyId == null ? configAlias.isEmpty() ? "password" : "configPassword" : configAlias.isEmpty() ? "key" : "config";
         host = profile.host;
         port = profile.port;

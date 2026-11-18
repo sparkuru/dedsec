@@ -1,5 +1,9 @@
 # Compatibility
 
+2026-11-16：[RequestTTY no](ssh-request-tty.md)使用现有 CSCP／CSPP 计划字段，
+不更改 wire 版本或手动连接默认 PTY；无 PTY 的控制字符和回显取决于远端。
+本地合成检查与 Android 设备／真实服务器证据分列。
+
 2026-11-16：[早期通道输出](ssh-shell-early-output.md)允许 session channel 打开后在
 PTY／shell 请求答复之前接收有界输出，仍由真实 shell success 决定能否发布。修正不
 新增认证或配置格式；旧候选设备复现、修正版本地回归和[指定板复测](verification.md#20261116-ssh-early-output-device)分开记录。

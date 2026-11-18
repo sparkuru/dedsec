@@ -423,6 +423,32 @@ JNIEXPORT jboolean JNICALL Java_im_majo_ctos_SshNativeSession_00024Native_userau
     return ready == 1 ? JNI_TRUE : JNI_FALSE;
 }
 
+JNIEXPORT void JNICALL Java_im_majo_ctos_SshNativeSession_00024Native_beginAuthDiscovery(
+    JNIEnv *env, jclass type, jlong handle) {
+    (void)type;
+    struct session_slot *slot = lock_session(env, handle);
+    if (slot == NULL) return;
+    int status = ctos_ssh_native_client_begin_auth_discovery(slot->client);
+    pthread_mutex_unlock(&sessions_lock);
+    if (status != 0) fail(env);
+}
+
+JNIEXPORT jintArray JNICALL Java_im_majo_ctos_SshNativeSession_00024Native_authDiscoveryResult(
+    JNIEnv *env, jclass type, jlong handle) {
+    (void)type;
+    struct session_slot *slot = lock_session(env, handle);
+    if (slot == NULL) return NULL;
+    enum ctos_ssh_native_client_discovery_result outcome = CTOS_SSH_DISCOVERY_NOT_STARTED;
+    unsigned int methods = 0;
+    int status = ctos_ssh_native_client_auth_discovery_result(slot->client, &outcome, &methods);
+    pthread_mutex_unlock(&sessions_lock);
+    if (status != 0 || (unsigned int)outcome > 4U || methods > 15U) { fail(env); return NULL; }
+    jint values[2] = {(jint)outcome, (jint)methods};
+    jintArray result = (*env)->NewIntArray(env, 2);
+    if (result != NULL) (*env)->SetIntArrayRegion(env, result, 0, 2, values);
+    return result;
+}
+
 JNIEXPORT void JNICALL Java_im_majo_ctos_SshNativeSession_00024Native_beginPasswordAuth(
     JNIEnv *env, jclass type, jlong handle) {
     struct session_slot *slot;
@@ -494,6 +520,99 @@ JNIEXPORT jbyteArray JNICALL Java_im_majo_ctos_SshNativeSession_00024Native_cont
     struct session_slot *slot = lock_session(env, handle);
     if (slot == NULL) goto out;
     int status = ctos_ssh_native_client_continue_keyboard_interactive_auth(slot->client, plan, stage);
+    pthread_mutex_unlock(&sessions_lock);
+    if (status != 0) { fail(env); goto out; }
+    result = (*env)->NewByteArray(env, 92);
+    if (result != NULL) (*env)->SetByteArrayRegion(env, result, 0, 92, (jbyte *)stage);
+out:
+    wipe_bytes(plan, sizeof(plan)); wipe_bytes(stage, sizeof(stage));
+    return result;
+}
+
+JNIEXPORT jbyteArray JNICALL Java_im_majo_ctos_SshNativeSession_00024Native_beginDiscoveredKeyboard(
+    JNIEnv *env, jclass type, jlong handle, jbyteArray expected) {
+    (void)type;
+    unsigned char plan[32] = {0}, stage[92] = {0};
+    jbyteArray result = NULL;
+    if (expected == NULL || (*env)->GetArrayLength(env, expected) != 32) { fail(env); return NULL; }
+    (*env)->GetByteArrayRegion(env, expected, 0, 32, (jbyte *)plan);
+    if ((*env)->ExceptionCheck(env)) goto out;
+    struct session_slot *slot = lock_session(env, handle);
+    if (slot == NULL) goto out;
+    int status = ctos_ssh_native_client_begin_discovered_keyboard(slot->client, plan, stage);
+    pthread_mutex_unlock(&sessions_lock);
+    if (status != 0) { fail(env); goto out; }
+    result = (*env)->NewByteArray(env, 92);
+    if (result != NULL) (*env)->SetByteArrayRegion(env, result, 0, 92, (jbyte *)stage);
+out:
+    wipe_bytes(plan, sizeof(plan)); wipe_bytes(stage, sizeof(stage));
+    return result;
+}
+
+JNIEXPORT jbyteArray JNICALL Java_im_majo_ctos_SshNativeSession_00024Native_beginDiscoveredPassword(
+    JNIEnv *env, jclass type, jlong handle, jbyteArray expected, jbyteArray input) {
+    (void)type;
+    unsigned char plan[32] = {0}, stage[92] = {0}, *password = NULL;
+    size_t length = 0;
+    jbyteArray result = NULL;
+    if (expected == NULL || (*env)->GetArrayLength(env, expected) != 32) { fail(env); return NULL; }
+    (*env)->GetByteArrayRegion(env, expected, 0, 32, (jbyte *)plan);
+    if ((*env)->ExceptionCheck(env)) goto out;
+    if (copy_array(env, input, CTOS_SSH_NATIVE_CLIENT_MAX_PASSWORD_BYTES, &password, &length) != 0) {
+        fail(env); goto out;
+    }
+    struct session_slot *slot = lock_session(env, handle);
+    if (slot == NULL) goto out;
+    int status = ctos_ssh_native_client_begin_discovered_password(slot->client, plan, password, length, stage);
+    pthread_mutex_unlock(&sessions_lock);
+    if (status != 0) { fail(env); goto out; }
+    result = (*env)->NewByteArray(env, 92);
+    if (result != NULL) (*env)->SetByteArrayRegion(env, result, 0, 92, (jbyte *)stage);
+out:
+    wipe_bytes(password, length); free(password);
+    wipe_bytes(plan, sizeof(plan)); wipe_bytes(stage, sizeof(stage));
+    return result;
+}
+
+JNIEXPORT jint JNICALL Java_im_majo_ctos_SshNativeSession_00024Native_authContinuationMethods(
+    JNIEnv *env, jclass type, jlong handle) {
+    (void)type;
+    struct session_slot *slot = lock_session(env, handle);
+    if (slot == NULL) return -1;
+    unsigned int methods = 0;
+    int status = ctos_ssh_native_client_auth_continuation_methods(slot->client, &methods);
+    pthread_mutex_unlock(&sessions_lock);
+    if (status != 0 || methods > 15U) { fail(env); return -1; }
+    return (jint)methods;
+}
+
+JNIEXPORT void JNICALL Java_im_majo_ctos_SshNativeSession_00024Native_pollAuthPrompt(
+    JNIEnv *env, jclass type, jlong handle, jbyteArray expected, jint method) {
+    (void)type;
+    unsigned char plan[32] = {0};
+    if (expected == NULL || (*env)->GetArrayLength(env, expected) != 32 || method < 0) { fail(env); return; }
+    (*env)->GetByteArrayRegion(env, expected, 0, 32, (jbyte *)plan);
+    if ((*env)->ExceptionCheck(env)) goto out;
+    struct session_slot *slot = lock_session(env, handle);
+    if (slot == NULL) goto out;
+    int status = ctos_ssh_native_client_poll_auth_prompt(slot->client, plan, (unsigned int)method);
+    pthread_mutex_unlock(&sessions_lock);
+    if (status != 0) fail(env);
+out:
+    wipe_bytes(plan, sizeof(plan));
+}
+
+JNIEXPORT jbyteArray JNICALL Java_im_majo_ctos_SshNativeSession_00024Native_continuePrivateKeyAuth(
+    JNIEnv *env, jclass type, jlong handle, jbyteArray expected) {
+    (void)type;
+    unsigned char plan[32] = {0}, stage[92] = {0};
+    jbyteArray result = NULL;
+    if (expected == NULL || (*env)->GetArrayLength(env, expected) != 32) { fail(env); return NULL; }
+    (*env)->GetByteArrayRegion(env, expected, 0, 32, (jbyte *)plan);
+    if ((*env)->ExceptionCheck(env)) goto out;
+    struct session_slot *slot = lock_session(env, handle);
+    if (slot == NULL) goto out;
+    int status = ctos_ssh_native_client_continue_private_key_auth(slot->client, plan, stage);
     pthread_mutex_unlock(&sessions_lock);
     if (status != 0) { fail(env); goto out; }
     result = (*env)->NewByteArray(env, 92);
@@ -591,6 +710,19 @@ JNIEXPORT void JNICALL Java_im_majo_ctos_SshNativeSession_00024Native_configureS
     if (slot == NULL) return;
     result = ctos_ssh_native_client_configure_server_alive(slot->client,
         (unsigned int)interval, (unsigned int)count_max);
+    pthread_mutex_unlock(&sessions_lock);
+    if (result != 0) fail(env);
+}
+
+JNIEXPORT void JNICALL Java_im_majo_ctos_SshNativeSession_00024Native_configureNoPty(
+    JNIEnv *env, jclass type, jlong handle) {
+    struct session_slot *slot;
+    int result;
+
+    (void)type;
+    slot = lock_session(env, handle);
+    if (slot == NULL) return;
+    result = ctos_ssh_native_client_configure_no_pty(slot->client);
     pthread_mutex_unlock(&sessions_lock);
     if (result != 0) fail(env);
 }

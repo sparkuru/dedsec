@@ -14,6 +14,8 @@ final class SshAuthenticationSelection {
     final String path;
     final String keyIdentity;
     final boolean continueKeyboardInteractive;
+    final boolean automaticDiscovery;
+    final int automaticMethods;
     private final byte[] usernameBytes;
     private final byte[] publicKeyBlob;
 
@@ -26,6 +28,13 @@ final class SshAuthenticationSelection {
     private SshAuthenticationSelection(SshRoleContext role, String username,
             SshCredentialBridge.Kind kind, String entryId, String path, String keyIdentity,
             byte[] publicKeyBlob, boolean continuation, SshRoleContext.Clock clock) throws VaultException {
+        this(role, username, kind, entryId, path, keyIdentity, publicKeyBlob, continuation, false, 0, clock);
+    }
+
+    private SshAuthenticationSelection(SshRoleContext role, String username,
+            SshCredentialBridge.Kind kind, String entryId, String path, String keyIdentity,
+            byte[] publicKeyBlob, boolean continuation, boolean automatic, int methods,
+            SshRoleContext.Clock clock) throws VaultException {
         if (role == null || clock == null) throw invalid();
         role.requireActive(clock);
         this.usernameBytes = strictText(username, 255);
@@ -37,6 +46,8 @@ final class SshAuthenticationSelection {
         this.keyIdentity = keyIdentity;
         this.publicKeyBlob = publicKeyBlob.clone();
         this.continueKeyboardInteractive = continuation;
+        this.automaticDiscovery = automatic;
+        this.automaticMethods = methods;
     }
 
     static SshAuthenticationSelection password(SshRoleContext role, String username,
@@ -78,9 +89,17 @@ final class SshAuthenticationSelection {
 
     SshAuthenticationSelection withKeyboardContinuation(SshRoleContext.Clock clock) throws VaultException {
         if (kind != SshCredentialBridge.Kind.PASSWORD && kind != SshCredentialBridge.Kind.PRIVATE_KEY
-                || continueKeyboardInteractive) throw invalid();
+                || continueKeyboardInteractive || automaticDiscovery) throw invalid();
         return new SshAuthenticationSelection(role, username, kind, entryId, path, keyIdentity,
                 publicKeyBlob, true, clock);
+    }
+
+    SshAuthenticationSelection withAutomaticDiscovery(int methods, SshRoleContext.Clock clock) throws VaultException {
+        if (continueKeyboardInteractive || automaticDiscovery || methods < 0 || (methods & ~7) != 0
+                || (kind != SshCredentialBridge.Kind.KEYBOARD_INTERACTIVE && kind != SshCredentialBridge.Kind.PRIVATE_KEY)
+                || kind == SshCredentialBridge.Kind.KEYBOARD_INTERACTIVE && (methods & 1) != 0) throw invalid();
+        return new SshAuthenticationSelection(role, username, kind, entryId, path, keyIdentity,
+                publicKeyBlob, false, true, methods, clock);
     }
 
     /** Canonical metadata only; this digestable record grants no credential authority. */
@@ -98,11 +117,11 @@ final class SshAuthenticationSelection {
             entry = entryId.getBytes(StandardCharsets.UTF_8);
             privatePath = path.getBytes(StandardCharsets.UTF_8);
             identity = keyIdentity.getBytes(StandardCharsets.UTF_8);
-            int length = 108 + (continueKeyboardInteractive ? 4 : 0) + usernameBytes.length + entry.length + privatePath.length
+            int length = 108 + (continueKeyboardInteractive || automaticDiscovery ? 4 : 0) + usernameBytes.length + entry.length + privatePath.length
                     + identity.length + publicKeyBlob.length;
             if (length > MAX_WIRE_BYTES) throw invalid();
             ByteBuffer wire = ByteBuffer.allocate(length);
-            wire.putInt(WIRE_MAGIC).putShort((short) (continueKeyboardInteractive ? 3 : kind == SshCredentialBridge.Kind.PRIVATE_KEY
+            wire.putInt(WIRE_MAGIC).putShort((short) (automaticDiscovery ? 4 : continueKeyboardInteractive ? 3 : kind == SshCredentialBridge.Kind.PRIVATE_KEY
                     && !entryId.isEmpty() ? 2 : 1)).putShort((short) 0)
                     .putLong(roleToken).putInt(role.hop).put(nonce).put(binding)
                     .putInt(kind == SshCredentialBridge.Kind.PASSWORD ? 1
@@ -111,6 +130,7 @@ final class SshAuthenticationSelection {
                 wire.putInt(field.length).put(field);
             }
             if (continueKeyboardInteractive) wire.putInt(3);
+            if (automaticDiscovery) wire.putInt(automaticMethods);
             return wire.array();
         } finally {
             VaultCodec.wipe(nonce);

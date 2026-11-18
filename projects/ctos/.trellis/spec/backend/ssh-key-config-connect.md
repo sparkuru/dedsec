@@ -1,5 +1,13 @@
 # Config and private-key connections
 
+2026-11-16: [ordered authentication options](ssh-authentication-order.md) extend
+CSCP/CSPP to v5 for the planned server-driven flow. Existing explicit paths and
+legacy v1–v4 decode remain; a missing order is unknown, never guessed.
+
+2026-11-16: [RequestTTY](ssh-request-tty.md) consumes the existing direct-plan field;
+`no`/`false` bind a no-PTY shell to the authenticated owner. Manual/default behavior,
+other unconsumed-option refusals and config/credential guards remain unchanged.
+
 2026-11-02: [standalone KBI](ssh-keyboard-interactive.md) extends CSCP/CSPP to v2 with an
 actual keyboardInteractiveAuthentication flag. Explicit config KBI has no selected key,
 retains current source/effective target/trust checks and never falls back to key/password.

@@ -72,4 +72,17 @@ public final class SshReconnectTargetTest {
         try { new SshReconnectTarget(profile,null,"configured",true,false,true); fail("Standalone KBI has no continuation"); }
         catch (VaultException expected) { assertEquals("PARAMETERS",expected.code); }
     }
+
+    @Test public void serverDrivenReconnectContainsOnlyTargetAndOptionalExplicitKey() throws Exception {
+        SshPasswordProfile profile = new SshPasswordProfile("host.invalid", 22, "user");
+        for (boolean configured : new boolean[]{false, true}) for (boolean key : new boolean[]{false, true}) {
+            SshReconnectTarget target = new SshReconnectTarget(profile, key ? "key_1" : null,
+                    configured ? "configured" : "", !key, false, false, true);
+            Set<String> expected = new java.util.HashSet<>(Set.of("mode", "host", "port", "username"));
+            if (key) expected.add("keyId");
+            if (configured) expected.add("configAlias");
+            assertEquals(expected, target.wire().keySet());
+            assertEquals(configured ? "configAuto" : "auto", target.mode);
+        }
+    }
 }

@@ -15,6 +15,757 @@ import 'package:flutter_test/flutter_test.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
+  testWidgets('automatic connection asks for password only after host review', (
+    tester,
+  ) async {
+    final host = _SshHost(tester);
+    await host.mount(automatic: true);
+    await tester.tap(find.text('Open SSH'));
+    await host.advance();
+    expect(find.byKey(const Key('ssh-password')), findsNothing);
+    expect(find.text('私钥（可选）'), findsOneWidget);
+    for (final field in {
+      'ssh-host': 'server.invalid',
+      'ssh-port': '2222',
+      'ssh-username': 'alice',
+    }.entries) {
+      await tester.enterText(find.byKey(Key(field.key)), field.value);
+    }
+    await host.tapConnect();
+    final request = host._arguments('ssh.autoConnect').single;
+    expect(request['keyId'], '');
+    expect(request.containsKey('password'), isFalse);
+    expect(request.containsKey('passphrase'), isFalse);
+    final id = request['requestId'] as String;
+    await host.emit(_ticket(id));
+    expect(find.text('信任并保存'), findsOneWidget);
+    expect(find.byKey(const Key('ssh-secret-dialog')), findsNothing);
+    await tester.tap(find.text('信任并保存'));
+    await host.advance();
+    await host.emit({
+      'type': 'passwordRequest',
+      'requestId': id,
+      'ticketId': 'prompt_1',
+      'binding': 'c' * 64,
+      'remainingMillis': 25000,
+    });
+    await host.advance();
+    expect(find.text('输入登录密码'), findsOneWidget);
+    final input = tester.widget<EditableText>(
+      find.descendant(
+        of: find.byKey(const Key('ssh-secret-input')),
+        matching: find.byType(EditableText),
+      ),
+    );
+    expect(input.obscureText, isTrue);
+    await tester.enterText(
+      find.byKey(const Key('ssh-secret-input')),
+      'synthetic',
+    );
+    await tester.tap(find.byKey(const Key('ssh-secret-submit')));
+    await host.advance();
+    final response = host._arguments('ssh.passwordResponse').single;
+    expect(response['ticketId'], 'prompt_1');
+    expect(response['binding'], 'c' * 64);
+    await host.emit({
+      'type': 'passwordRequestDismissed',
+      'requestId': id,
+      'ticketId': 'prompt_1',
+    });
+    host.connectResults.single.complete({
+      'requestId': id,
+      'status': 'connected',
+    });
+    await host.advance();
+    await host.advance();
+    expect(find.byType(SshPasswordConnectPage), findsNothing);
+    await host.remove();
+  });
+
+  testWidgets(
+    'automatic selected key asks for its passphrase only after connecting',
+    (tester) async {
+      final host = _SshHost(tester)
+        ..libraryValues = _reconnectLibrary(encrypted: true);
+      await host.mount(
+        automatic: true,
+        scale: 1.4,
+        keyboard: 200,
+        reconnect: const SshReconnectTarget(
+          mode: SshReconnectMode.auto,
+          host: 'server.invalid',
+          port: 2222,
+          username: 'alice',
+          keyId: 'key_a',
+        ),
+      );
+      await tester.tap(find.text('Open SSH'));
+      await host.advance();
+      expect(find.text('Current fixture key'), findsOneWidget);
+      expect(find.byKey(const Key('ssh-key-passphrase')), findsNothing);
+      await host.tapConnect();
+      final request = host._arguments('ssh.autoConnect').single;
+      expect(request['keyId'], 'key_a');
+      expect(request.containsKey('passphrase'), isFalse);
+      final id = request['requestId'] as String;
+      await host.emit({
+        'type': 'keyPassphraseRequest',
+        'requestId': id,
+        'ticketId': 'key_prompt',
+        'binding': 'd' * 64,
+        'remainingMillis': 25000,
+      });
+      await host.advance();
+      expect(find.text('输入私钥口令'), findsOneWidget);
+      expect(find.byKey(const Key('ssh-secret-input')), findsOneWidget);
+      await tester.enterText(
+        find.byKey(const Key('ssh-secret-input')),
+        'synthetic',
+      );
+      final save = find.byKey(const Key('ssh-secret-save'));
+      await tester.ensureVisible(save);
+      expect(tester.widget<CheckboxListTile>(save).value, isFalse);
+      await tester.tap(save);
+      await tester.tap(find.byKey(const Key('ssh-secret-submit')));
+      await host.advance();
+      final response = host._arguments('ssh.passwordResponse').single;
+      expect(response['ticketId'], 'key_prompt');
+      expect(response['save'], isTrue);
+      expect(response['useSaved'], isFalse);
+      await host.emit({
+        'type': 'passwordRequestDismissed',
+        'requestId': id,
+        'ticketId': 'key_prompt',
+      });
+      host.connectResults.single.complete({
+        'requestId': id,
+        'status': 'connected',
+      });
+      await host.advance();
+      await host.advance();
+      expect(find.byType(SshPasswordConnectPage), findsNothing);
+      await host.remove();
+    },
+  );
+
+  testWidgets(
+    'automatic saved password stays explicit and clears typed draft',
+    (tester) async {
+      final host = _SshHost(tester);
+      await host.mount(
+        automatic: true,
+        reconnect: const SshReconnectTarget(
+          mode: SshReconnectMode.auto,
+          host: 'server.invalid',
+          port: 2222,
+          username: 'alice',
+        ),
+      );
+      await tester.tap(find.text('Open SSH'));
+      await host.advance();
+      await host.tapConnect();
+      final id =
+          host._arguments('ssh.autoConnect').single['requestId'] as String;
+      await host.emit({
+        'type': 'passwordRequest',
+        'requestId': id,
+        'ticketId': 'prompt_saved',
+        'binding': 'c' * 64,
+        'remainingMillis': 25000,
+        'savedAvailable': true,
+      });
+      await host.advance();
+      final saved = find.byKey(const Key('ssh-secret-use-saved'));
+      final input = find.byKey(const Key('ssh-secret-input'));
+      final save = find.byKey(const Key('ssh-secret-save'));
+      expect(tester.widget<CheckboxListTile>(saved).value, isFalse);
+      expect(tester.widget<CheckboxListTile>(save).value, isFalse);
+      expect(host._arguments('ssh.passwordResponse'), isEmpty);
+      await tester.enterText(input, 'synthetic-draft');
+      await tester.tap(save);
+      await tester.tap(saved);
+      await host.advance();
+      expect(input, findsNothing);
+      expect(save, findsNothing);
+      await tester.tap(saved);
+      await host.advance();
+      expect(tester.widget<TextFormField>(input).controller!.text, isEmpty);
+      expect(tester.widget<CheckboxListTile>(save).value, isFalse);
+      await tester.tap(saved);
+      await host.advance();
+      await tester.tap(find.byKey(const Key('ssh-secret-submit')));
+      await host.advance();
+      final response = host._arguments('ssh.passwordResponse').single;
+      expect(response['ticketId'], 'prompt_saved');
+      expect(response['useSaved'], isTrue);
+      expect(response['save'], isFalse);
+      expect(response['password'], isEmpty);
+      await host.emit({
+        'type': 'passwordRequestDismissed',
+        'requestId': id,
+        'ticketId': 'prompt_saved',
+      });
+      host.connectResults.single.complete({
+        'requestId': id,
+        'status': 'connected',
+      });
+      await host.advance();
+      await host.advance();
+      expect(find.byType(SshPasswordConnectPage), findsNothing);
+      await host.remove();
+    },
+  );
+
+  testWidgets(
+    'automatic save cancellation waits for the guarded vault outcome',
+    (tester) async {
+      final host = _SshHost(tester);
+      await host.mount(
+        automatic: true,
+        reconnect: const SshReconnectTarget(
+          mode: SshReconnectMode.auto,
+          host: 'server.invalid',
+          port: 2222,
+          username: 'alice',
+        ),
+      );
+      await tester.tap(find.text('Open SSH'));
+      await host.advance();
+      await host.tapConnect();
+      final id =
+          host._arguments('ssh.autoConnect').single['requestId'] as String;
+      await host.emit({
+        'type': 'passwordRequest',
+        'requestId': id,
+        'ticketId': 'pending_save',
+        'binding': 'c' * 64,
+        'remainingMillis': 25000,
+      });
+      await host.advance();
+      await tester.enterText(
+        find.byKey(const Key('ssh-secret-input')),
+        'synthetic',
+      );
+      await tester.tap(find.byKey(const Key('ssh-secret-save')));
+      await tester.tap(find.byKey(const Key('ssh-secret-submit')));
+      await host.advance();
+      expect(host._arguments('ssh.passwordResponse').single['save'], isTrue);
+      await tester.tap(find.byKey(const Key('ssh-secret-cancel')));
+      await host.advance();
+      expect(host.cancelled, contains(id));
+      expect(host.releases, isEmpty);
+      host.connectResults.single.completeError(
+        PlatformException(code: 'VAULT_COMMIT_UNCERTAIN'),
+      );
+      await host.advance();
+      expect(find.text('认证凭据操作结果'), findsOneWidget);
+      expect(host.releases, isEmpty);
+      await tester.tap(find.text('知道了'));
+      await host.advance();
+      expect(host.releases, isNotEmpty);
+      await host.remove();
+    },
+  );
+
+  testWidgets(
+    'automatic password request cannot bypass an outstanding host review',
+    (tester) async {
+      final host = _SshHost(tester);
+      await host.mount(automatic: true);
+      await tester.tap(find.text('Open SSH'));
+      await host.advance();
+      for (final field in {
+        'ssh-host': 'server.invalid',
+        'ssh-port': '2222',
+        'ssh-username': 'alice',
+      }.entries) {
+        await tester.enterText(find.byKey(Key(field.key)), field.value);
+      }
+      await host.tapConnect();
+      final id =
+          host._arguments('ssh.autoConnect').single['requestId'] as String;
+      await host.emit(_ticket(id));
+      expect(find.text('信任并保存'), findsOneWidget);
+      await host.emit({
+        'type': 'passwordRequest',
+        'requestId': id,
+        'ticketId': 'prompt_1',
+        'binding': 'c' * 64,
+        'remainingMillis': 25000,
+      });
+      await host.advance();
+      expect(find.byKey(const Key('ssh-secret-dialog')), findsNothing);
+      expect(host._arguments('ssh.passwordResponse'), isEmpty);
+      expect(host.cancelled, contains(id));
+      host.connectResults.single.completeError(
+        PlatformException(code: 'SSH_CANCELLED'),
+      );
+      await host.advance();
+      await host.remove();
+    },
+  );
+
+  testWidgets(
+    'automatic public-key-only rejection asks the user to select a key',
+    (tester) async {
+      final host = _SshHost(tester);
+      await host.mount(automatic: true);
+      await tester.tap(find.text('Open SSH'));
+      await host.advance();
+      for (final field in {
+        'ssh-host': 'server.invalid',
+        'ssh-port': '2222',
+        'ssh-username': 'alice',
+      }.entries) {
+        await tester.enterText(find.byKey(Key(field.key)), field.value);
+      }
+      await host.tapConnect();
+      host.connectResults.single.completeError(
+        PlatformException(code: 'SSH_PUBLICKEY_REQUIRED'),
+      );
+      await host.advance();
+      expect(find.text('服务器要求公钥登录，请选择对应私钥后重试。'), findsOneWidget);
+      expect(find.byKey(const Key('ssh-secret-dialog')), findsNothing);
+      await host.leave();
+      await host.remove();
+    },
+  );
+
+  testWidgets(
+    'automatic rejected selected key shows the key error from either failure path',
+    (tester) async {
+      for (final eventFirst in [false, true]) {
+        final host = _SshHost(tester)..libraryValues = _reconnectLibrary();
+        await host.mount(
+          automatic: true,
+          reconnect: const SshReconnectTarget(
+            mode: SshReconnectMode.auto,
+            host: 'server.invalid',
+            port: 2222,
+            username: 'alice',
+            keyId: 'key_a',
+          ),
+        );
+        await tester.tap(find.text('Open SSH'));
+        await host.advance();
+        await host.tapConnect();
+        final id =
+            host._arguments('ssh.autoConnect').single['requestId'] as String;
+        final failure = {
+          'type': 'state',
+          'requestId': id,
+          'state': 'failed',
+          'reason': 'SSH_KEY_REJECTED',
+        };
+        if (eventFirst) await host.emit(failure);
+        host.connectResults.single.completeError(
+          PlatformException(code: 'SSH_KEY_REJECTED'),
+        );
+        await host.advance();
+        if (!eventFirst) await host.emit(failure);
+        await host.advance();
+        expect(find.text('私钥登录被拒绝，请核对用户名、公钥授权和所选私钥。'), findsOneWidget);
+        expect(find.byKey(const Key('ssh-secret-dialog')), findsNothing);
+        await host.leave();
+        await host.remove();
+      }
+    },
+  );
+
+  testWidgets(
+    'automatic page retains the standalone keyboard-interactive entry',
+    (tester) async {
+      final host = _SshHost(tester);
+      await host.mount(automatic: true);
+      await tester.tap(find.text('Open SSH'));
+      await host.advance();
+      for (final field in {
+        'ssh-host': 'server.invalid',
+        'ssh-port': '2222',
+        'ssh-username': 'alice',
+      }.entries) {
+        await tester.enterText(find.byKey(Key(field.key)), field.value);
+      }
+      await tester.tap(find.byKey(const Key('ssh-other-authentication')));
+      await host.advance();
+      await tester.tap(find.byKey(const Key('ssh-auth-keyboard')));
+      await host.advance();
+      await host.tapConnect();
+      final request = host._arguments('ssh.keyboardConnect').single;
+      expect(request.containsKey('password'), isFalse);
+      host.connectResults.single.completeError(
+        PlatformException(code: 'SSH_KEYBOARD_AUTH'),
+      );
+      await host.advance();
+      await host.leave();
+      await host.remove();
+    },
+  );
+
+  testWidgets(
+    'automatic configured host can connect without any available private key',
+    (tester) async {
+      final host = _SshHost(tester)
+        ..libraryValues = {
+          'keys': <Object>[],
+          'hosts': [
+            {
+              'alias': 'fixture',
+              'binding': 'b' * 64,
+              'host': 'server.invalid',
+              'port': 2222,
+              'username': 'alice',
+              'keyIds': <String>[],
+            },
+          ],
+          'hasConfig': true,
+        };
+      await host.mount(
+        automatic: true,
+        reconnect: const SshReconnectTarget(
+          mode: SshReconnectMode.configAuto,
+          host: 'server.invalid',
+          port: 2222,
+          username: 'alice',
+          configAlias: 'fixture',
+        ),
+      );
+      await tester.tap(find.text('Open SSH'));
+      await host.advance();
+      expect(find.text('配置：fixture'), findsOneWidget);
+      expect(find.byKey(const Key('ssh-password')), findsNothing);
+      await host.tapConnect();
+      final request = host._arguments('ssh.configAutoConnect').single;
+      expect(request['keyId'], '');
+      expect(request['alias'], 'fixture');
+      expect(request.containsKey('password'), isFalse);
+      final id = request['requestId'] as String;
+      host.connectResults.single.complete({
+        'requestId': id,
+        'status': 'connected',
+      });
+      await host.advance();
+      await host.advance();
+      expect(find.byType(SshPasswordConnectPage), findsNothing);
+      await host.remove();
+    },
+  );
+
+  testWidgets(
+    'automatic reconnect never silently drops an unavailable selected key or config',
+    (tester) async {
+      final host = _SshHost(tester)
+        ..libraryValues = _reconnectLibrary(includeKey: false);
+      await host.mount(
+        automatic: true,
+        reconnect: const SshReconnectTarget(
+          mode: SshReconnectMode.auto,
+          host: 'server.invalid',
+          port: 2222,
+          username: 'alice',
+          keyId: 'key_a',
+        ),
+      );
+      await tester.tap(find.text('Open SSH'));
+      await host.advance();
+      await host.tapConnect();
+      await host.advance();
+      expect(host.connectResults, isEmpty);
+      expect(find.text('上次选择的私钥已不可用，请重新选择或明确选择不使用私钥。'), findsOneWidget);
+      await tester.ensureVisible(
+        find.byKey(const Key('ssh-clear-private-key')),
+      );
+      await tester.tap(find.byKey(const Key('ssh-clear-private-key')));
+      await host.advance();
+      await host.tapConnect();
+      final request = host._arguments('ssh.autoConnect').single;
+      expect(request['keyId'], '');
+      host.connectResults.single.completeError(
+        PlatformException(code: 'SSH_CANCELLED'),
+      );
+      await host.advance();
+      await host.leave();
+      await host.remove();
+
+      final changed = _SshHost(tester)
+        ..libraryValues = _reconnectLibrary(includeKey: false);
+      await changed.mount(
+        automatic: true,
+        reconnect: const SshReconnectTarget(
+          mode: SshReconnectMode.configAuto,
+          host: 'server.invalid',
+          port: 2222,
+          username: 'alice',
+          configAlias: 'fixture',
+        ),
+      );
+      await tester.tap(find.text('Open SSH'));
+      await changed.advance();
+      expect(find.byKey(const Key('ssh-connect')), findsNothing);
+      expect(changed.connectResults, isEmpty);
+      await changed.leave();
+      await changed.remove();
+    },
+  );
+
+  testWidgets(
+    'automatic success waits for the exact password response acknowledgement',
+    (tester) async {
+      for (final accepted in [true, false]) {
+        final host = _SshHost(tester)
+          ..pendingSecretResponse = Completer<Map<String, Object>>();
+        await host.mount(automatic: true);
+        await tester.tap(find.text('Open SSH'));
+        await host.advance();
+        for (final field in {
+          'ssh-host': 'server.invalid',
+          'ssh-port': '2222',
+          'ssh-username': 'alice',
+        }.entries) {
+          await tester.enterText(find.byKey(Key(field.key)), field.value);
+        }
+        await host.tapConnect();
+        final id =
+            host._arguments('ssh.autoConnect').single['requestId'] as String;
+        await host.emit({
+          'type': 'passwordRequest',
+          'requestId': id,
+          'ticketId': 'prompt_1',
+          'binding': 'c' * 64,
+          'remainingMillis': 25000,
+        });
+        await host.advance();
+        await tester.enterText(
+          find.byKey(const Key('ssh-secret-input')),
+          'synthetic',
+        );
+        await tester.tap(find.byKey(const Key('ssh-secret-submit')));
+        await host.advance();
+        await host.emit({
+          'type': 'passwordRequestDismissed',
+          'requestId': id,
+          'ticketId': 'prompt_1',
+        });
+        host.connectResults.single.complete({
+          'requestId': id,
+          'status': 'connected',
+        });
+        await host.advance();
+        expect(find.byType(SshPasswordConnectPage), findsOneWidget);
+        host.pendingSecretResponse!.complete({'accepted': accepted});
+        await host.advance();
+        await host.advance();
+        if (accepted)
+          expect(find.byType(SshPasswordConnectPage), findsNothing);
+        else {
+          expect(host.cancelled, contains(id));
+          expect(find.byType(SshPasswordConnectPage), findsOneWidget);
+        }
+        await host.remove();
+      }
+    },
+  );
+
+  testWidgets(
+    'automatic prompt is destroyed on background and late replies cannot reconnect',
+    (tester) async {
+      final host = _SshHost(tester);
+      await host.mount(automatic: true);
+      await tester.tap(find.text('Open SSH'));
+      await host.advance();
+      for (final field in {
+        'ssh-host': 'server.invalid',
+        'ssh-port': '2222',
+        'ssh-username': 'alice',
+      }.entries) {
+        await tester.enterText(find.byKey(Key(field.key)), field.value);
+      }
+      await host.tapConnect();
+      final id =
+          host._arguments('ssh.autoConnect').single['requestId'] as String;
+      final event = <String, Object>{
+        'type': 'passwordRequest',
+        'requestId': id,
+        'ticketId': 'prompt_1',
+        'binding': 'c' * 64,
+        'remainingMillis': 25000,
+      };
+      await host.emit(event);
+      await host.advance();
+      await tester.enterText(
+        find.byKey(const Key('ssh-secret-input')),
+        'synthetic',
+      );
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      await host.advance();
+      expect(find.byKey(const Key('ssh-secret-dialog')), findsNothing);
+      expect(host.cancelled, contains(id));
+      expect(host._arguments('ssh.passwordResponse'), isEmpty);
+      await host.emit(event);
+      expect(find.byKey(const Key('ssh-secret-dialog')), findsNothing);
+      host.connectResults.single.completeError(
+        PlatformException(code: 'SSH_CANCELLED'),
+      );
+      await host.advance();
+      await host.remove();
+    },
+  );
+
+  testWidgets(
+    'automatic authentication switches between server questions and password',
+    (tester) async {
+      for (final keyboardFirst in [true, false]) {
+        final host = _SshHost(tester);
+        await host.mount(automatic: true);
+        await tester.tap(find.text('Open SSH'));
+        await host.advance();
+        for (final field in {
+          'ssh-host': 'server.invalid',
+          'ssh-port': '2222',
+          'ssh-username': 'alice',
+        }.entries) {
+          await tester.enterText(find.byKey(Key(field.key)), field.value);
+        }
+        await host.tapConnect();
+        final id =
+            host._arguments('ssh.autoConnect').single['requestId'] as String;
+        Future<void> password() async {
+          await host.emit({
+            'type': 'passwordRequest',
+            'requestId': id,
+            'ticketId': 'password_ticket',
+            'binding': 'c' * 64,
+            'remainingMillis': 25000,
+          });
+          await host.advance();
+          expect(find.text('输入登录密码'), findsOneWidget);
+          await tester.enterText(
+            find.byKey(const Key('ssh-secret-input')),
+            'synthetic',
+          );
+          await tester.tap(find.byKey(const Key('ssh-secret-submit')));
+          await host.advance();
+          await host.emit({
+            'type': 'passwordRequestDismissed',
+            'requestId': id,
+            'ticketId': 'password_ticket',
+          });
+        }
+
+        Future<void> keyboard() async {
+          await host.emit({
+            'type': 'keyboardChallenge',
+            'requestId': id,
+            'ticketId': 'question_ticket',
+            'binding': 'e' * 64,
+            'round': 1,
+            'name': '',
+            'instruction': '',
+            'prompts': [
+              {'text': 'Code:', 'echo': false},
+            ],
+            'remainingMillis': 25000,
+          });
+          await host.advance();
+          expect(find.text('Code:'), findsOneWidget);
+          await tester.enterText(
+            find.byKey(const Key('ssh-keyboard-answer-0')),
+            'synthetic',
+          );
+          await tester.tap(find.byKey(const Key('ssh-keyboard-submit')));
+          await host.advance();
+          await host.emit({
+            'type': 'keyboardChallengeDismissed',
+            'requestId': id,
+            'ticketId': 'question_ticket',
+          });
+        }
+
+        if (keyboardFirst) {
+          await keyboard();
+          await password();
+        } else {
+          await password();
+          await keyboard();
+        }
+        expect(host._arguments('ssh.passwordResponse'), hasLength(1));
+        expect(host._arguments('ssh.keyboardResponse'), hasLength(1));
+        host.connectResults.single.complete({
+          'requestId': id,
+          'status': 'connected',
+        });
+        await host.advance();
+        await host.advance();
+        expect(find.byType(SshPasswordConnectPage), findsNothing);
+        await host.remove();
+      }
+    },
+  );
+
+  testWidgets(
+    'automatic secret prompt remains usable on narrow and large-text displays',
+    (tester) async {
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetDevicePixelRatio);
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetViewInsets);
+      for (final scenario in [
+        (const Size(320, 680), 2.0, 230.0),
+        (const Size(640, 360), 2.0, 110.0),
+      ]) {
+        tester.view.physicalSize = scenario.$1;
+        final host = _SshHost(tester);
+        await host.mount(
+          automatic: true,
+          scale: scenario.$2,
+          keyboard: scenario.$3,
+        );
+        await tester.tap(find.text('Open SSH'));
+        await host.advance();
+        for (final field in {
+          'ssh-host': 'server.invalid',
+          'ssh-port': '2222',
+          'ssh-username': 'alice',
+        }.entries) {
+          await tester.ensureVisible(find.byKey(Key(field.key)));
+          await tester.enterText(find.byKey(Key(field.key)), field.value);
+        }
+        await host.tapConnect();
+        final id =
+            host._arguments('ssh.autoConnect').single['requestId'] as String;
+        await host.emit({
+          'type': 'passwordRequest',
+          'requestId': id,
+          'ticketId': 'prompt_1',
+          'binding': 'c' * 64,
+          'remainingMillis': 25000,
+          'savedAvailable': true,
+        });
+        await host.advance();
+        expect(tester.takeException(), isNull);
+        await tester.ensureVisible(find.byKey(const Key('ssh-secret-save')));
+        expect(
+          tester.getSize(find.byKey(const Key('ssh-secret-save'))).height,
+          greaterThanOrEqualTo(48),
+        );
+        await tester.ensureVisible(find.byKey(const Key('ssh-secret-submit')));
+        expect(
+          tester.getSize(find.byKey(const Key('ssh-secret-submit'))).height,
+          greaterThanOrEqualTo(48),
+        );
+        await tester.tap(find.byKey(const Key('ssh-secret-cancel')));
+        await tester.pump();
+        host.connectResults.single.completeError(
+          PlatformException(code: 'SSH_CANCELLED'),
+        );
+        await host.advance();
+        await host.advance();
+        expect(host.cancelled, contains(id));
+        await host.remove();
+      }
+    },
+  );
+
   testWidgets(
     'password retry prepares its exact endpoint with no retained password or automatic submit',
     (tester) async {
@@ -399,7 +1150,7 @@ void main() {
     await tester.ensureVisible(find.byKey(const Key('terminal-ssh-entry')));
     await tester.tap(find.byKey(const Key('terminal-ssh-entry')));
     await host.advance();
-    expect(find.byKey(const Key('ssh-password')), findsOneWidget);
+    expect(find.byKey(const Key('ssh-other-authentication')), findsOneWidget);
     final methods = host.calls.map((call) => call.method).toList();
     expect(
       methods.indexOf('ssh.requestNotifications'),
@@ -415,7 +1166,7 @@ void main() {
     );
     await tester.tap(find.byKey(const Key('terminal-ssh-entry')));
     await host.advance();
-    expect(find.byKey(const Key('ssh-password')), findsOneWidget);
+    expect(find.byKey(const Key('ssh-other-authentication')), findsOneWidget);
     expect(
       host.calls.where((call) => call.method == 'ssh.requestNotifications'),
       hasLength(1),
@@ -488,7 +1239,7 @@ void main() {
       );
       _resumeApp(tester);
       await host.advance();
-      expect(find.byKey(const Key('ssh-password')), findsOneWidget);
+      expect(find.byKey(const Key('ssh-other-authentication')), findsOneWidget);
       await host.leave();
       await host.remove();
     },
@@ -701,7 +1452,7 @@ void main() {
     await tester.ensureVisible(find.byKey(const Key('terminal-ssh-entry')));
     await tester.tap(find.byKey(const Key('terminal-ssh-entry')));
     await host.advance();
-    expect(find.byKey(const Key('ssh-password')), findsOneWidget);
+    expect(find.byKey(const Key('ssh-other-authentication')), findsOneWidget);
     await host.leave();
     await tester.pumpAndSettle();
     expect(
@@ -1039,7 +1790,7 @@ void main() {
       await host.advance();
       expect(find.byKey(const Key('ssh-password')), findsNothing);
       expect(find.text('已忘记保存的密码。'), findsNothing);
-      expect(find.text('保存结果未能确认，请重新解锁并核验连接信息、已保存密码或主机密钥。'), findsOneWidget);
+      expect(find.text('保存结果未能确认，请重新解锁并核验连接信息、SSH 凭据或主机密钥。'), findsOneWidget);
       await host.remove();
     },
   );
@@ -1150,7 +1901,7 @@ void main() {
       );
       await host.advance();
       expect(find.text('密码操作结果'), findsOneWidget);
-      expect(find.text('保存结果未能确认，请重新解锁并核验连接信息、已保存密码或主机密钥。'), findsWidgets);
+      expect(find.text('保存结果未能确认，请重新解锁并核验连接信息、SSH 凭据或主机密钥。'), findsWidgets);
       expect(host.releases, isEmpty);
       final staleAcknowledge = tester
           .widget<TextButton>(find.widgetWithText(TextButton, '知道了'))
@@ -1500,7 +2251,7 @@ void main() {
         error: PlatformException(code: 'VAULT_COMMIT_UNCERTAIN'),
       );
       await host.advance();
-      expect(find.text('保存结果未能确认，请重新解锁并核验连接信息、已保存密码或主机密钥。'), findsOneWidget);
+      expect(find.text('保存结果未能确认，请重新解锁并核验连接信息、SSH 凭据或主机密钥。'), findsOneWidget);
       expect(find.text('Open SSH'), findsNothing);
       await host.leave();
       expect(find.text('密码操作结果'), findsOneWidget);
@@ -2613,6 +3364,7 @@ Map<String, Object> _trustPreview() => {
 
 Map<String, Object> _reconnectLibrary({
   bool includeKey = true,
+  bool encrypted = false,
   String configHost = 'server.invalid',
 }) => {
   'keys': [
@@ -2623,6 +3375,7 @@ Map<String, Object> _reconnectLibrary({
         'path': '.ssh/id_fixture',
         'algorithm': 'ssh-ed25519',
         'fingerprint': 'SHA256:${List.filled(43, 'A').join()}',
+        if (encrypted) 'encrypted': true,
       },
   ],
   'hosts': [
@@ -2671,6 +3424,7 @@ class _SshHost {
   Completer<Map<String, Object>>? notificationPermission;
   Completer<Map<String, Object>>? pendingLibrary;
   Completer<Map<String, Object>>? pendingDecision;
+  Completer<Map<String, Object>>? pendingSecretResponse;
   Object? forgetError;
   Completer<Map<String, Object>>? pendingForget;
   Map<String, Object> defaultValues = {'host': '', 'port': 22, 'username': ''};
@@ -2762,6 +3516,10 @@ class _SshHost {
       case 'ssh.passwordConnect':
       case 'ssh.keyConnect':
       case 'ssh.configConnect':
+      case 'ssh.autoConnect':
+      case 'ssh.configAutoConnect':
+      case 'ssh.keyboardConnect':
+      case 'ssh.configKeyboardConnect':
         final pending = Completer<Map<String, Object>>();
         connectResults.add(pending);
         return pending.future;
@@ -2769,6 +3527,10 @@ class _SshHost {
         return {'cancelled': true};
       case 'ssh.hostKeyDecision':
         return pendingDecision?.future ?? {'accepted': true};
+      case 'ssh.passwordResponse':
+        return pendingSecretResponse?.future ?? {'accepted': true};
+      case 'ssh.keyboardResponse':
+        return {'accepted': true};
       case 'rootAuto':
         return jsonEncode({'root': false, 'attempted': false});
       case 'snapshot':
@@ -2801,6 +3563,7 @@ class _SshHost {
     double keyboard = 0,
     SshReconnectTarget? reconnect,
     bool connectOnOpen = false,
+    bool automatic = false,
   }) async {
     _root = root;
     api = SshPasswordApi(requestIdFactory: () => 'request_${++_sequence}');
@@ -2872,6 +3635,9 @@ class _SshHost {
                       api: api,
                       columns: 81,
                       rows: 25,
+                      initialAuthentication: automatic
+                          ? SshInitialAuthentication.automatic
+                          : SshInitialAuthentication.password,
                       reconnect: reconnect,
                       connectOnOpen: connectOnOpen,
                     ),

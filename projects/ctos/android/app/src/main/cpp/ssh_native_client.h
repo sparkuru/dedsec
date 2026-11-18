@@ -46,6 +46,19 @@ enum ctos_ssh_native_client_keyboard_interactive_auth_result {
     CTOS_SSH_KEYBOARD_AUTH_CHALLENGE = 5
 };
 
+enum ctos_ssh_native_client_discovery_result {
+    CTOS_SSH_DISCOVERY_NOT_STARTED = 0,
+    CTOS_SSH_DISCOVERY_PENDING = 1,
+    CTOS_SSH_DISCOVERY_METHODS = 2,
+    CTOS_SSH_DISCOVERY_NONE_SUCCESS = 3,
+    CTOS_SSH_DISCOVERY_PARTIAL = 4
+};
+
+#define CTOS_SSH_DISCOVERY_PUBLICKEY 1U
+#define CTOS_SSH_DISCOVERY_KEYBOARD_INTERACTIVE 2U
+#define CTOS_SSH_DISCOVERY_PASSWORD 4U
+#define CTOS_SSH_DISCOVERY_OTHER 8U
+
 enum ctos_ssh_native_shell_phase {
     CTOS_SSH_SHELL_DISABLED = 0,
     CTOS_SSH_SHELL_OPENING = 1,
@@ -172,9 +185,23 @@ int ctos_ssh_native_client_authentication_selection_receipt(
 int ctos_ssh_native_client_selected_credential_bytes(struct ctos_ssh_native_client *,
     unsigned char *output, size_t capacity, size_t *length);
 
+/* One same-owner, credential-free discovery on the existing selected session.
+ * The result is a method bitmask, a distinct none success, or partial success. */
+int ctos_ssh_native_client_begin_auth_discovery(struct ctos_ssh_native_client *);
+int ctos_ssh_native_client_auth_discovery_result(const struct ctos_ssh_native_client *,
+    enum ctos_ssh_native_client_discovery_result *, unsigned int *);
+/* CSASv4 may read the latest server list after PARTIAL or ordinary rejection. */
+int ctos_ssh_native_client_auth_continuation_methods(const struct ctos_ssh_native_client *, unsigned int *);
+/* Pump only banners/disconnects while a server-listed password/key prompt is pending. */
+int ctos_ssh_native_client_poll_auth_prompt(struct ctos_ssh_native_client *,
+    const unsigned char expected_plan_receipt[32], unsigned int method);
 /* One explicit password request using owned selection and the shared selected
  * attempt. No retries or password-change continuation; all remote text is discarded. */
 int ctos_ssh_native_client_begin_password_auth(struct ctos_ssh_native_client *);
+/* CSASv4, same-owner discovery -> one newly supplied password, CSAPv2 proof. */
+int ctos_ssh_native_client_begin_discovered_password(struct ctos_ssh_native_client *,
+    const unsigned char expected_plan_receipt[32], const unsigned char *, size_t,
+    unsigned char stage_receipt[92]);
 /* Owner/live-proof-only read. Errors clear out and do not mutate the client. */
 int ctos_ssh_native_client_password_auth_result(
     const struct ctos_ssh_native_client *,
@@ -183,6 +210,8 @@ int ctos_ssh_native_client_password_auth_result(
 /* One direct signed publickey request; expected identity comes only from owned
  * CSAS and private material only from the selected one-shot credential callback. */
 int ctos_ssh_native_client_begin_private_key_auth(struct ctos_ssh_native_client *);
+int ctos_ssh_native_client_continue_private_key_auth(struct ctos_ssh_native_client *,
+    const unsigned char expected_plan_receipt[32], unsigned char stage_receipt[92]);
 int ctos_ssh_native_client_private_key_auth_result(
     const struct ctos_ssh_native_client *,
     enum ctos_ssh_native_client_private_key_auth_result *);
@@ -191,9 +220,13 @@ int ctos_ssh_native_client_private_key_auth_result(
  * is a bounded CSKIv1 public copy. CSKRv1 answers consume exactly the current
  * round once, under the original selected role/KEX/view/deadline proof. */
 int ctos_ssh_native_client_begin_keyboard_interactive_auth(struct ctos_ssh_native_client *);
-/* One CSASv3-authorized first-method PARTIAL -> KBI transition on this owner.
- * CSAPv1 is exactly 92 bytes and binds the immutable plan and original KEX. */
+/* Server-listed KBI allows the authorized same-owner transition after PARTIAL;
+ * CSASv4 also permits an untried KBI alternative after ordinary rejection.
+ * CSASv3 receives CSAPv1; CSASv4 receives CSAPv2 with the actual stage number.
+ * Both receipts are 92 bytes and bind the original plan and KEX. */
 int ctos_ssh_native_client_continue_keyboard_interactive_auth(struct ctos_ssh_native_client *,
+    const unsigned char expected_plan_receipt[32], unsigned char stage_receipt[92]);
+int ctos_ssh_native_client_begin_discovered_keyboard(struct ctos_ssh_native_client *,
     const unsigned char expected_plan_receipt[32], unsigned char stage_receipt[92]);
 int ctos_ssh_native_client_keyboard_interactive_auth_result(
     const struct ctos_ssh_native_client *,
@@ -214,6 +247,7 @@ int ctos_ssh_native_client_begin_userauth_service(struct ctos_ssh_native_client 
 int ctos_ssh_native_client_userauth_service_ready(
     const struct ctos_ssh_native_client *);
 
+int ctos_ssh_native_client_configure_no_pty(struct ctos_ssh_native_client *);
 int ctos_ssh_native_client_begin_shell(struct ctos_ssh_native_client *, unsigned int, unsigned int);
 int ctos_ssh_native_client_shell_status(const struct ctos_ssh_native_client *,
     struct ctos_ssh_native_shell_status *);

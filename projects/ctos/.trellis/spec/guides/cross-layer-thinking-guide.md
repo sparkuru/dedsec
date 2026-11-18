@@ -18,6 +18,16 @@ Common cross-layer bugs:
 
 ## Before Implementing Cross-Layer Features
 
+### Diagnostic Translation and Delivery
+
+When replacing a lifecycle error with a more specific diagnostic, trace the original code
+through the final UI or API receipt. Another layer may use that code to detect cancellation
+after a durable write and report an uncertain result. Check the window between completing a
+future and delivering its receipt, not just the callback that first failed. Preserve the old
+terminal code or carry equivalent explicit state whenever a write or cancellation can still
+change the outcome; test both orderings and the actual final receipt. The SSH example is in
+[host-trust management](../backend/ssh-host-trust-management.md#scenario-report-a-rejected-host-proof-during-key-exchange).
+
 ### Step 1: Map the Data Flow
 
 Draw out how data moves:

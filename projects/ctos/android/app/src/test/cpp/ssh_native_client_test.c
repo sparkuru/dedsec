@@ -817,7 +817,12 @@ struct fixture {
     unsigned char selection_receipt[32];
     int password_expected;
     int keyboard_continuation;
+    int automatic_selection;
+    unsigned int automatic_methods;
     unsigned int password_requests;
+    int discovery_expected, discovery_reply, discovery_partial, discovery_trailing;
+    unsigned int discovery_requests;
+    const char *discovery_methods;
     unsigned int password_pending_banner_writes;
     enum password_reply password_reply;
     const unsigned char *password_username;
@@ -838,7 +843,7 @@ struct fixture {
     int keyboard_expected;
     unsigned int keyboard_requests, keyboard_responses, keyboard_prompt_count;
     struct ctos_ssh_slice keyboard_answers[CTOS_SSH_NATIVE_CLIENT_KBI_PROMPTS];
-    int shell_expected, shell_stage, shell_reject, shell_early_output_stage, shell_early_close_stage;
+    int shell_expected, shell_stage, shell_reject, shell_early_output_stage, shell_early_close_stage, shell_no_pty;
     int server_alive_expected, server_alive_reply;
     unsigned int server_alive_requests;
     uint32_t shell_window, shell_maxpacket, shell_credit;
@@ -1145,6 +1150,11 @@ static void finish_fixture_setup_selected_mode(struct fixture *fixture,
             fixture->selection_wire.bytes[5] = 3U;
             wire_u32(&fixture->selection_wire, 3U);
         }
+        if (fixture->automatic_selection) {
+            CHECK(!fixture->keyboard_continuation);
+            fixture->selection_wire.bytes[5] = 4U;
+            wire_u32(&fixture->selection_wire, fixture->automatic_methods);
+        }
         if (fixture->password_expected || fixture->private_expected) {
             fixture->password_username = (const unsigned char *)" 用户😀 ";
             fixture->password_username_length = sizeof(" 用户😀 ") - 1U;
@@ -1162,6 +1172,17 @@ static void finish_fixture_setup_selected_mode(struct fixture *fixture,
                 if (bad == 2U) invalid.bytes[5] = 2U;
                 if (bad == 3U) invalid.length--;
                 if (bad == 4U) wire_u32(&invalid, 0U);
+                reject_selection_open(fixture, &config, invalid.bytes, invalid.length, EINVAL);
+            }
+        }
+        if (fixture->automatic_selection) {
+            for (unsigned int bad = 0; bad < (selection_kind == 3U ? 5U : 4U); bad++) {
+                struct wire invalid = fixture->selection_wire;
+                if (bad == 0U) invalid.bytes[invalid.length - 1U] = 8U;
+                if (bad == 1U) invalid.bytes[87] = 1U;
+                if (bad == 2U) invalid.length--;
+                if (bad == 3U) wire_u32(&invalid, 0U);
+                if (bad == 4U) invalid.bytes[invalid.length - 1U] = 1U;
                 reject_selection_open(fixture, &config, invalid.bytes, invalid.length, EINVAL);
             }
         }
@@ -1552,7 +1573,7 @@ static void accept_password_request(struct fixture *fixture) {
     }
     CHECK(sshpkt_get_end(fixture->server) == 0);
     CHECK(++fixture->password_requests == 1U);
-    CHECK(fixture->callback.selected_calls == 1U);
+    CHECK(fixture->callback.selected_calls == (fixture->automatic_selection ? fixture->private_requests : 1U));
     send_password_reply(fixture);
 }
 
@@ -1642,6 +1663,27 @@ static void peer_channel_data(struct fixture *fixture, int extended,
     CHECK(sshpkt_send(fixture->server) == 0);
 }
 
+static void accept_discovery_request(struct fixture *fixture) {
+    const unsigned char *text;
+    size_t length;
+    CHECK(sshpkt_get_string_direct(fixture->server, &text, &length) == 0);
+    CHECK(length == sizeof(" 用户😀 ") - 1U && memcmp(text, " 用户😀 ", length) == 0);
+    CHECK(sshpkt_get_string_direct(fixture->server, &text, &length) == 0);
+    CHECK(length == 14U && memcmp(text, "ssh-connection", 14U) == 0);
+    CHECK(sshpkt_get_string_direct(fixture->server, &text, &length) == 0);
+    CHECK(length == 4U && memcmp(text, "none", 4U) == 0);
+    CHECK(sshpkt_get_end(fixture->server) == 0 && ++fixture->discovery_requests == 1U);
+    CHECK(sshpkt_start(fixture->server, fixture->discovery_reply == 1
+        ? SSH2_MSG_USERAUTH_SUCCESS : SSH2_MSG_USERAUTH_FAILURE) == 0);
+    if (fixture->discovery_reply != 1) {
+        CHECK(fixture->discovery_methods != NULL);
+        CHECK(sshpkt_put_cstring(fixture->server, fixture->discovery_methods) == 0);
+        CHECK(sshpkt_put_u8(fixture->server, (u_char)fixture->discovery_partial) == 0);
+    }
+    if (fixture->discovery_trailing) CHECK(sshpkt_put_u8(fixture->server, 9) == 0);
+    CHECK(sshpkt_send(fixture->server) == 0);
+}
+
 static void accept_shell_packet(struct fixture *fixture, int type) {
     struct ssh *ssh = fixture->server;
     const unsigned char *text;
@@ -1676,6 +1718,7 @@ static void accept_shell_packet(struct fixture *fixture, int type) {
         CHECK(sshpkt_get_string_direct(ssh, &text, &length) == 0);
         CHECK(sshpkt_get_u8(ssh, &flag) == 0);
         if (length == 7U && memcmp(text, "pty-req", 7U) == 0) {
+            CHECK(!fixture->shell_no_pty);
             CHECK(fixture->shell_stage == 1 && flag == 1);
             CHECK(sshpkt_get_string_direct(ssh, &text, &length) == 0
                 && length == 14U && memcmp(text, "xterm-256color", 14U) == 0);
@@ -1686,11 +1729,11 @@ static void accept_shell_packet(struct fixture *fixture, int type) {
             CHECK(sshpkt_get_string_direct(ssh, &text, &length) == 0 && length == 1U && text[0] == 0);
             fixture->shell_stage = 2;
         } else if (length == 5U && memcmp(text, "shell", 5U) == 0) {
-            CHECK(fixture->shell_stage == 2 && flag == 1);
+            CHECK(fixture->shell_stage == (fixture->shell_no_pty ? 1 : 2) && flag == 1);
             fixture->shell_stage = 3;
         } else {
             CHECK(length == 13U && memcmp(text, "window-change", 13U) == 0 && flag == 0);
-            CHECK(fixture->shell_stage == 3);
+            CHECK(fixture->shell_stage == 3 && !fixture->shell_no_pty);
             CHECK(sshpkt_get_u32(ssh, &value) == 0 && value == 132);
             CHECK(sshpkt_get_u32(ssh, &value) == 0 && value == 43);
             CHECK(sshpkt_get_u32(ssh, &value) == 0 && value == 0);
@@ -1797,6 +1840,9 @@ static int pump_synthetic_server(struct fixture *fixture, size_t chunk,
         CHECK(sshpkt_get_end(fixture->server) == 0);
         CHECK(++fixture->service_requests == 1U);
         if (!fixture->service_reply_sent) send_service_reply(fixture);
+    } else if (packet_type == SSH2_MSG_USERAUTH_REQUEST && fixture->discovery_expected
+            && fixture->discovery_requests == 0) {
+        accept_discovery_request(fixture);
     } else if (packet_type == SSH2_MSG_USERAUTH_REQUEST && fixture->password_expected) {
         accept_password_request(fixture);
     } else if (packet_type == SSH2_MSG_USERAUTH_REQUEST && fixture->private_expected) {
@@ -3492,6 +3538,7 @@ static void setup_password_fixture_continuation(struct fixture *fixture, int new
     expect_password_result_error(fixture, EACCES);
     errno = 0;
     CHECK(ctos_ssh_native_client_begin_password_auth(fixture->client) != 0 && errno == EACCES);
+    CHECK(ctos_ssh_native_client_begin_auth_discovery(fixture->client) != 0 && errno == EACCES);
     finish_service_fixture(fixture, new_host, 0);
     errno = 0;
     CHECK(ctos_ssh_native_client_begin_password_auth(fixture->client) != 0 && errno == EACCES);
@@ -3557,7 +3604,8 @@ static void drive_password(struct fixture *fixture,
         assert_password_result(fixture, expected);
         CHECK(ctos_ssh_native_client_userauth_service_ready(fixture->client));
     }
-    CHECK(fixture->callback.selected_calls == 1U && fixture->callback.kex_complete_calls == 1U);
+    CHECK(fixture->callback.selected_calls == (fixture->automatic_selection && fixture->private_requests == 0 ? 0U : 1U)
+        && fixture->callback.kex_complete_calls == 1U);
     CHECK(fixture->callback.credential_calls == 0U && fixture->callback.credential_bytes_calls == 0U);
     errno = 0;
     CHECK(ctos_ssh_native_client_begin_password_auth(fixture->client) != 0 && errno == EALREADY);
@@ -3903,6 +3951,8 @@ static void setup_private_fixture_version_mode(struct fixture *fixture, int new_
     fixture->private_expected = 1;
     fixture->encrypted_identity = version == 2 || version == 4;
     fixture->keyboard_continuation = version == 3 || version == 4;
+    fixture->automatic_selection = version == 5;
+    fixture->automatic_methods = version == 5 ? 7U : 0;
     fixture->identity = identity;
     fixture->identity_blob = expected;
     fixture->identity_blob_length = expected_length;
@@ -4298,14 +4348,173 @@ static void drive_shell_phase(struct fixture *fixture, enum ctos_ssh_native_shel
     CHECK(0);
 }
 
-static void setup_shell_fixture_mode_with_alive(struct fixture *fixture, int kind, uint32_t window,
+struct discovery_owner_attempt {
+    struct ctos_ssh_native_client *client;
+    int result, error, read_result, read_error, password_result, password_error;
+    enum ctos_ssh_native_client_discovery_result outcome;
+    enum ctos_ssh_native_client_password_auth_result password_outcome;
+    unsigned int methods;
+};
+
+static void *discovery_wrong_owner(void *opaque) {
+    struct discovery_owner_attempt *attempt = opaque;
+    errno = 0;
+    attempt->result = ctos_ssh_native_client_begin_auth_discovery(attempt->client);
+    attempt->error = errno;
+    attempt->outcome = CTOS_SSH_DISCOVERY_NONE_SUCCESS; attempt->methods = 99U;
+    errno = 0;
+    attempt->read_result = ctos_ssh_native_client_auth_discovery_result(attempt->client,
+        &attempt->outcome, &attempt->methods);
+    attempt->read_error = errno;
+    attempt->password_outcome = CTOS_SSH_PASSWORD_AUTH_SUCCESS;
+    errno = 0;
+    attempt->password_result = ctos_ssh_native_client_password_auth_result(attempt->client,
+        &attempt->password_outcome);
+    attempt->password_error = errno;
+    return NULL;
+}
+
+static void test_auth_discovery(void) {
+    const char *lists[] = {"publickey,password,keyboard-interactive,hostbased", "publickey",
+        "", "", "password", "password,,publickey", "password", "password",
+        "passwordx,keyboard-interactive-extra", "password"};
+    const unsigned int masks[] = {15U, 1U, 0U, 0U, 4U, 0U, 0U, 0U, 8U, 0U};
+    for (unsigned int scenario = 0; scenario < 10U; scenario++) {
+        struct fixture fixture;
+        enum ctos_ssh_native_client_discovery_result result = CTOS_SSH_DISCOVERY_NONE_SUCCESS;
+        unsigned int methods = 99U;
+        unsigned char bytes[32]; size_t length = 99;
+        setup_password_fixture(&fixture, 0, 15000U);
+        CHECK(ctos_ssh_native_client_auth_discovery_result(fixture.client, &result, &methods) == 0
+            && result == CTOS_SSH_DISCOVERY_NOT_STARTED && methods == 0);
+        struct discovery_owner_attempt attempt = {.client = fixture.client}; pthread_t thread;
+        CHECK(pthread_create(&thread, NULL, discovery_wrong_owner, &attempt) == 0);
+        CHECK(pthread_join(thread, NULL) == 0 && attempt.result != 0 && attempt.error == EPERM);
+        CHECK(attempt.read_result != 0 && attempt.read_error == EPERM
+            && attempt.outcome == CTOS_SSH_DISCOVERY_NOT_STARTED && attempt.methods == 0);
+        CHECK(attempt.password_result != 0 && attempt.password_error == EPERM
+            && attempt.password_outcome == CTOS_SSH_PASSWORD_AUTH_NOT_STARTED);
+        fixture.discovery_expected = 1;
+        fixture.discovery_methods = lists[scenario];
+        fixture.discovery_reply = scenario == 3U ? 1 : 0;
+        fixture.discovery_partial = scenario == 4U ? 255 : 0;
+        fixture.discovery_trailing = scenario == 6U;
+        CHECK(ctos_ssh_native_client_begin_auth_discovery(fixture.client) == 0);
+        CHECK(ctos_ssh_native_client_begin_auth_discovery(fixture.client) != 0 && errno == EALREADY);
+        CHECK(ctos_ssh_native_client_auth_discovery_result(fixture.client, &result, &methods) == 0
+            && result == CTOS_SSH_DISCOVERY_PENDING && methods == 0);
+        CHECK(pthread_create(&thread, NULL, discovery_wrong_owner, &attempt) == 0);
+        CHECK(pthread_join(thread, NULL) == 0 && attempt.result != 0 && attempt.error == EPERM);
+        CHECK(attempt.read_result != 0 && attempt.read_error == EPERM
+            && attempt.outcome == CTOS_SSH_DISCOVERY_NOT_STARTED && attempt.methods == 0);
+        CHECK(attempt.password_result != 0 && attempt.password_error == EPERM
+            && attempt.password_outcome == CTOS_SSH_PASSWORD_AUTH_NOT_STARTED);
+        CHECK(ctos_ssh_native_client_password_auth_result(fixture.client,
+            &(enum ctos_ssh_native_client_password_auth_result){0}) != 0 && errno == EACCES);
+        memset(bytes, 0xa5, sizeof(bytes));
+        CHECK(ctos_ssh_native_client_selected_credential_bytes(fixture.client, bytes, sizeof(bytes), &length) != 0
+            && errno == EACCES && length == 0 && fixture.callback.selected_calls == 0);
+        for (size_t i = 0; i < sizeof(bytes); i++) CHECK(bytes[i] == 0);
+        if (scenario == 7U) {
+            CHECK(ctos_ssh_native_client_step(fixture.client,
+                &(struct ctos_ssh_native_client_step){.cancelled = 1}) != 0 && errno == ECANCELED);
+            CHECK(fixture.discovery_requests == 0 && fixture.callback.selected_calls == 0);
+            cleanup_fixture(&fixture, 1); continue;
+        }
+        if (scenario == 9U) {
+            fixture.view->valid = 0;
+            CHECK(ctos_ssh_native_client_step(fixture.client,
+                &(struct ctos_ssh_native_client_step){0}) != 0 && errno == EACCES);
+            fixture.view->valid = 1;
+            CHECK(fixture.discovery_requests == 0 && fixture.callback.selected_calls == 0);
+            cleanup_fixture(&fixture, 1); continue;
+        }
+        int finished = 0;
+        for (unsigned int turn = 0; turn < 100000U; turn++) {
+            if (shell_turn(&fixture) != 0) {
+                CHECK((scenario == 5U || scenario == 6U) && errno == EPROTO);
+                finished = 1; break;
+            }
+            CHECK(ctos_ssh_native_client_auth_discovery_result(fixture.client, &result, &methods) == 0);
+            if (result != CTOS_SSH_DISCOVERY_PENDING) { finished = 1; break; }
+        }
+        CHECK(finished && fixture.discovery_requests == 1 && fixture.callback.selected_calls == 0);
+        if (scenario == 5U || scenario == 6U) {
+            result = CTOS_SSH_DISCOVERY_NONE_SUCCESS; methods = 99U;
+            CHECK(ctos_ssh_native_client_auth_discovery_result(fixture.client, &result, &methods) != 0
+                && result == CTOS_SSH_DISCOVERY_NOT_STARTED && methods == 0);
+        } else if (scenario == 3U) {
+            CHECK(result == CTOS_SSH_DISCOVERY_NONE_SUCCESS && methods == 0);
+            CHECK(ctos_ssh_native_client_password_auth_result(fixture.client,
+                &(enum ctos_ssh_native_client_password_auth_result){0}) != 0 && errno == EACCES);
+            CHECK(ctos_ssh_native_client_begin_password_auth(fixture.client) != 0 && errno == EALREADY);
+            fixture.shell_expected = 1; fixture.shell_window = 65536U; fixture.shell_maxpacket = 32768U;
+            CHECK(ctos_ssh_native_client_begin_shell(fixture.client, 80, 24) == 0);
+            drive_shell_phase(&fixture, CTOS_SSH_SHELL_RUNNING);
+            CHECK(fixture.shell_stage == 3 && fixture.callback.selected_calls == 0);
+        } else {
+            CHECK(result == (scenario == 4U ? CTOS_SSH_DISCOVERY_PARTIAL : CTOS_SSH_DISCOVERY_METHODS)
+                && methods == masks[scenario]);
+            CHECK(ctos_ssh_native_client_begin_auth_discovery(fixture.client) != 0 && errno == EALREADY);
+            if (scenario == 0U || scenario == 4U) {
+                CHECK(ctos_ssh_native_client_selected_credential_bytes(fixture.client, bytes, sizeof(bytes), &length) != 0
+                    && errno == EACCES && length == 0 && fixture.callback.selected_calls == 0);
+                CHECK(ctos_ssh_native_client_begin_password_auth(fixture.client) == 0);
+                drive_password(&fixture, CTOS_SSH_PASSWORD_AUTH_SUCCESS, 0);
+                CHECK(fixture.callback.selected_calls == 1 && fixture.password_requests == 1);
+            } else {
+                CHECK(ctos_ssh_native_client_begin_password_auth(fixture.client) != 0 && errno == EACCES);
+                CHECK(ctos_ssh_native_client_selected_credential_bytes(fixture.client, bytes, sizeof(bytes), &length) != 0
+                    && errno == EACCES && length == 0 && fixture.callback.selected_calls == 0);
+            }
+        }
+        cleanup_fixture(&fixture, 1);
+    }
+    for (int automatic = 0; automatic <= 1; automatic++) {
+        struct fixture fixture;
+        struct sshkey *key = NULL; unsigned char *blob = NULL; size_t blob_length = 0;
+        struct sshbuf *file = sshbuf_new();
+        CHECK(file != NULL && sshkey_generate(KEY_ED25519, 0, &key) == 0);
+        CHECK(sshkey_to_blob(key, &blob, &blob_length) == 0);
+        CHECK(sshkey_private_to_fileblob(key, file, "", "discovery", SSHKEY_PRIVATE_OPENSSH, NULL, 0) == 0);
+        setup_private_fixture_version_mode(&fixture, 0, key, file, blob, blob_length, NULL, 0, automatic ? 5 : 1,
+            CTOS_SSH_HOST_KEY_PINNED);
+        if (automatic) CHECK(ctos_ssh_native_client_begin_private_key_auth(fixture.client) != 0 && errno == EACCES);
+        fixture.discovery_expected = 1; fixture.discovery_methods = "publickey,password";
+        CHECK(ctos_ssh_native_client_begin_auth_discovery(fixture.client) == 0);
+        enum ctos_ssh_native_client_discovery_result result = CTOS_SSH_DISCOVERY_PENDING;
+        unsigned int methods = 0;
+        for (unsigned int turn = 0; turn < 100000U && result == CTOS_SSH_DISCOVERY_PENDING; turn++) {
+            CHECK(shell_turn(&fixture) == 0);
+            CHECK(ctos_ssh_native_client_auth_discovery_result(fixture.client, &result, &methods) == 0);
+        }
+        CHECK(result == CTOS_SSH_DISCOVERY_METHODS && methods == 5U && fixture.callback.selected_calls == 0);
+        CHECK(ctos_ssh_native_client_begin_private_key_auth(fixture.client) == 0);
+        drive_private(&fixture, CTOS_SSH_PRIVATE_KEY_AUTH_SUCCESS, 0);
+        CHECK(fixture.callback.selected_calls == 1 && fixture.private_requests == 1);
+        cleanup_fixture(&fixture, 1); sshbuf_free(file); free(blob); sshkey_free(key);
+    }
+}
+
+struct no_pty_owner_attempt { struct ctos_ssh_native_client *client; int result, error; };
+
+static void *no_pty_wrong_owner(void *opaque) {
+    struct no_pty_owner_attempt *attempt = opaque;
+    errno = 0;
+    attempt->result = ctos_ssh_native_client_configure_no_pty(attempt->client);
+    attempt->error = errno;
+    return NULL;
+}
+
+static void setup_shell_fixture_mode_with_options(struct fixture *fixture, int kind, uint32_t window,
     uint32_t maximum, int reject, enum ctos_ssh_native_host_key_mode mode, int new_host,
-    int configure_alive, unsigned int interval, unsigned int count_max) {
+    int configure_alive, unsigned int interval, unsigned int count_max, int no_pty) {
     if (kind == 1) {
         setup_password_fixture_mode(fixture, new_host, 60000U, mode);
         CHECK(shell_status(fixture).phase == CTOS_SSH_SHELL_DISABLED);
         CHECK(ctos_ssh_native_client_begin_shell(fixture->client, 80, 24) != 0 && errno == EACCES);
         CHECK(ctos_ssh_native_client_configure_server_alive(fixture->client, 1, 3) != 0 && errno == EACCES);
+        CHECK(ctos_ssh_native_client_configure_no_pty(fixture->client) != 0 && errno == EACCES);
         CHECK(ctos_ssh_native_client_begin_password_auth(fixture->client) == 0);
         drive_password(fixture, CTOS_SSH_PASSWORD_AUTH_SUCCESS, 0);
     } else {
@@ -4333,7 +4542,17 @@ static void setup_shell_fixture_mode_with_alive(struct fixture *fixture, int kin
         CHECK(ctos_ssh_native_client_configure_server_alive(fixture->client, interval, count_max) != 0
             && errno == EALREADY);
     }
+    if (no_pty) {
+        struct no_pty_owner_attempt attempt = {.client = fixture->client};
+        pthread_t thread;
+        CHECK(pthread_create(&thread, NULL, no_pty_wrong_owner, &attempt) == 0);
+        CHECK(pthread_join(thread, NULL) == 0);
+        CHECK(attempt.result != 0 && attempt.error == EPERM);
+        CHECK(ctos_ssh_native_client_configure_no_pty(fixture->client) == 0);
+        CHECK(ctos_ssh_native_client_configure_no_pty(fixture->client) != 0 && errno == EALREADY);
+    }
     fixture->shell_expected = 1;
+    fixture->shell_no_pty = no_pty;
     fixture->shell_window = window;
     fixture->shell_maxpacket = maximum;
     fixture->shell_reject = reject;
@@ -4342,6 +4561,13 @@ static void setup_shell_fixture_mode_with_alive(struct fixture *fixture, int kin
     CHECK(ctos_ssh_native_client_begin_shell(fixture->client, 80, 24) == 0);
     CHECK(ctos_ssh_native_client_begin_shell(fixture->client, 80, 24) != 0 && errno == EALREADY);
     CHECK(shell_status(fixture).phase == CTOS_SSH_SHELL_OPENING);
+}
+
+static void setup_shell_fixture_mode_with_alive(struct fixture *fixture, int kind, uint32_t window,
+    uint32_t maximum, int reject, enum ctos_ssh_native_host_key_mode mode, int new_host,
+    int configure_alive, unsigned int interval, unsigned int count_max) {
+    setup_shell_fixture_mode_with_options(fixture, kind, window, maximum, reject, mode, new_host,
+        configure_alive, interval, count_max, 0);
 }
 
 static void setup_shell_fixture_mode(struct fixture *fixture, int kind, uint32_t window,
@@ -4491,6 +4717,101 @@ static void test_server_alive_protocol(void) {
         wait_for_alive_request(&fixture, previous + 1U);
         drain_alive_response(&fixture);
         cleanup_fixture(&fixture, 1U);
+    }
+}
+
+static void test_shell_no_pty(void) {
+    for (int kind = 1; kind <= 2; kind++) for (int outcome = 0; outcome <= 3; outcome++) {
+        struct fixture fixture;
+        unsigned char output[32];
+        size_t length = 0, accepted = 0;
+        int saw_pending_output = 0;
+        setup_shell_fixture_mode_with_options(&fixture, kind, 65536U, 32768U, outcome == 1 ? 3 : 0,
+            CTOS_SSH_HOST_KEY_PINNED, 0, 1, 0, 3, 1);
+        fixture.shell_early_output_stage = 3;
+        fixture.shell_early_close_stage = outcome == 2 ? 3 : 0;
+        for (unsigned int turn = 0; turn < 40000U; turn++) {
+            CHECK(shell_turn(&fixture) == 0);
+            struct ctos_ssh_native_shell_status status = shell_status(&fixture);
+            if (status.buffered_bytes != 0 && status.phase != CTOS_SSH_SHELL_RUNNING) {
+                memset(output, 0xaa, sizeof(output)); length = 99U;
+                CHECK(status.phase == CTOS_SSH_SHELL_SHELL_PENDING);
+                CHECK(ctos_ssh_native_client_shell_read(fixture.client, output, sizeof(output), &length) != 0
+                    && errno == EACCES && length == 0);
+                CHECK(ctos_ssh_native_client_shell_write(fixture.client, (const unsigned char *)"x", 1,
+                    &accepted) != 0 && accepted == 0);
+                for (size_t i = 0; i < sizeof(output); i++) CHECK(output[i] == 0);
+                saw_pending_output = 1;
+                if (outcome == 3) {
+                    CHECK(ctos_ssh_native_client_step(fixture.client,
+                        &(struct ctos_ssh_native_client_step){.cancelled = 1}) != 0 && errno == ECANCELED);
+                    memset(output, 0xaa, sizeof(output)); length = 99;
+                    CHECK(ctos_ssh_native_client_shell_read(fixture.client, output, sizeof(output), &length) != 0
+                        && length == 0);
+                    for (size_t i = 0; i < sizeof(output); i++) CHECK(output[i] == 0);
+                    break;
+                }
+            }
+            if (status.phase == CTOS_SSH_SHELL_RUNNING || status.phase == CTOS_SSH_SHELL_REJECTED
+                || status.phase == CTOS_SSH_SHELL_CLOSED) break;
+        }
+        CHECK(saw_pending_output && fixture.shell_stage == 3);
+        if (outcome == 3) { cleanup_fixture(&fixture, 1); continue; }
+        struct ctos_ssh_native_shell_status status = shell_status(&fixture);
+        if (outcome != 0) {
+            CHECK(status.phase == (outcome == 1 ? CTOS_SSH_SHELL_REJECTED : CTOS_SSH_SHELL_CLOSED));
+            CHECK(status.buffered_bytes == 0);
+            CHECK(ctos_ssh_native_client_shell_read(fixture.client, output, sizeof(output), &length) != 0
+                && length == 0);
+        } else {
+            CHECK(status.phase == CTOS_SSH_SHELL_RUNNING && status.buffered_bytes == 11U);
+            CHECK(ctos_ssh_native_client_shell_read(fixture.client, output, sizeof(output), &length) == 0
+                && length == 11U && memcmp(output, "earlystderr", 11U) == 0);
+            CHECK(ctos_ssh_native_client_shell_resize(fixture.client, 0, 43) != 0 && errno == EINVAL);
+            CHECK(ctos_ssh_native_client_shell_resize(fixture.client, 132, 43) == 1);
+            CHECK(ctos_ssh_native_client_shell_write(fixture.client, (const unsigned char *)"input\n", 6,
+                &accepted) == 0 && accepted == 6);
+            CHECK(ctos_ssh_native_client_shell_eof(fixture.client) == 1);
+            for (unsigned int turn = 0; turn < 10000U && fixture.shell_eof_count == 0; turn++)
+                CHECK(shell_turn(&fixture) == 0);
+            CHECK(fixture.shell_eof_count == 1 && fixture.shell_resize_count == 0);
+            CHECK(fixture.shell_input_length == 6 && memcmp(fixture.shell_input, "input\n", 6) == 0);
+            peer_channel_data(&fixture, 0, (const unsigned char *)"output", 6);
+            peer_channel_packet(&fixture, SSH2_MSG_CHANNEL_CLOSE);
+            CHECK(sshpkt_send(fixture.server) == 0);
+            drive_shell_phase(&fixture, CTOS_SSH_SHELL_CLOSED);
+            CHECK(ctos_ssh_native_client_shell_read(fixture.client, output, sizeof(output), &length) == 0
+                && length == 6 && memcmp(output, "output", 6) == 0);
+        }
+        cleanup_fixture(&fixture, 1);
+    }
+    {
+        struct fixture fixture;
+        setup_shell_fixture_mode_with_options(&fixture, 1, 65536U, 32768U, 1,
+            CTOS_SSH_HOST_KEY_PINNED, 0, 0, 0, 0, 1);
+        drive_shell_phase(&fixture, CTOS_SSH_SHELL_REJECTED);
+        CHECK(fixture.shell_stage == 1 && fixture.shell_resize_count == 0);
+        cleanup_fixture(&fixture, 1);
+    }
+    {
+        struct fixture fixture;
+        setup_password_fixture(&fixture, 0, 15000U);
+        CHECK(ctos_ssh_native_client_begin_password_auth(fixture.client) == 0);
+        drive_password(&fixture, CTOS_SSH_PASSWORD_AUTH_SUCCESS, 0);
+        fixture.view->valid = 0;
+        CHECK(ctos_ssh_native_client_configure_no_pty(fixture.client) != 0 && errno == EACCES);
+        fixture.view->valid = 1;
+        CHECK(ctos_ssh_native_client_begin_shell(fixture.client, 80, 24) != 0);
+        cleanup_fixture(&fixture, 1);
+    }
+    for (int reply = PASSWORD_REPLY_REJECTED; reply <= PASSWORD_REPLY_CHANGE; reply++) {
+        struct fixture fixture;
+        setup_password_fixture(&fixture, 0, 15000U);
+        fixture.password_reply = (enum password_reply)reply;
+        CHECK(ctos_ssh_native_client_begin_password_auth(fixture.client) == 0);
+        drive_password(&fixture, (enum ctos_ssh_native_client_password_auth_result)(reply + 2), 0);
+        CHECK(ctos_ssh_native_client_configure_no_pty(fixture.client) != 0 && errno == EACCES);
+        cleanup_fixture(&fixture, 1);
     }
 }
 
@@ -5160,10 +5481,12 @@ static void test_managed_host_denials(void) {
     }
 }
 
-static void setup_keyboard_fixture(struct fixture *fixture, int new_host,
-    enum ctos_ssh_native_host_key_mode mode) {
+static void setup_keyboard_fixture_before_auth_mode(struct fixture *fixture, int new_host,
+    enum ctos_ssh_native_host_key_mode mode, int automatic, unsigned int methods) {
     memset(fixture, 0, sizeof(*fixture));
     fixture->keyboard_expected = 1;
+    fixture->automatic_selection = automatic;
+    fixture->automatic_methods = methods;
     fixture->pair[0] = fixture->pair[1] = -1;
     fixture->callback.release_fd = -1;
     CHECK(sshkey_generate(KEY_ED25519, 0, &fixture->private_key) == 0);
@@ -5180,16 +5503,31 @@ static void setup_keyboard_fixture(struct fixture *fixture, int new_host,
         && result == CTOS_SSH_KEYBOARD_AUTH_NOT_STARTED);
     CHECK(ctos_ssh_native_client_begin_password_auth(fixture->client) != 0 && errno == EACCES);
     CHECK(ctos_ssh_native_client_begin_private_key_auth(fixture->client) != 0 && errno == EACCES);
+}
+
+static void setup_keyboard_fixture_before_auth(struct fixture *fixture, int new_host,
+    enum ctos_ssh_native_host_key_mode mode) {
+    setup_keyboard_fixture_before_auth_mode(fixture, new_host, mode, 0, 0);
+}
+
+static void start_keyboard_fixture(struct fixture *fixture) {
     CHECK(ctos_ssh_native_client_begin_keyboard_interactive_auth(fixture->client) == 0);
     CHECK(ctos_ssh_native_client_begin_keyboard_interactive_auth(fixture->client) != 0 && errno == EALREADY);
     unsigned char output[32]; size_t length = 99;
     CHECK(ctos_ssh_native_client_selected_credential_bytes(fixture->client, output, sizeof(output), &length) != 0
-        && errno == EALREADY && length == 0 && fixture->callback.selected_calls == 0);
+        && errno == (fixture->automatic_selection ? EACCES : EALREADY)
+        && length == 0 && fixture->callback.selected_calls == 0);
     for (unsigned int turn = 0; turn < 100000U; turn++) {
         CHECK(shell_turn(fixture) == 0);
         if (fixture->keyboard_requests == 1U) return;
     }
     CHECK(0);
+}
+
+static void setup_keyboard_fixture(struct fixture *fixture, int new_host,
+    enum ctos_ssh_native_host_key_mode mode) {
+    setup_keyboard_fixture_before_auth(fixture, new_host, mode);
+    start_keyboard_fixture(fixture);
 }
 
 static void keyboard_result(struct fixture *fixture,
@@ -5207,7 +5545,8 @@ static void keyboard_result(struct fixture *fixture,
         if (error != 0 && result == CTOS_SSH_KEYBOARD_AUTH_CHALLENGE) continue;
         if (result != CTOS_SSH_KEYBOARD_AUTH_PENDING) {
             CHECK(error == 0 && result == expected);
-            CHECK(fixture->callback.selected_calls == 0 && fixture->callback.credential_calls == 0
+            CHECK(fixture->callback.selected_calls == (fixture->automatic_selection && fixture->private_requests ? 1U : 0U)
+                && fixture->callback.credential_calls == 0
                 && fixture->callback.credential_bytes_calls == 0);
             return;
         }
@@ -5272,6 +5611,517 @@ static void keyboard_finish_packet(struct fixture *fixture, unsigned int outcome
     CHECK(sshpkt_send(fixture->server) == 0);
 }
 
+static void test_keyboard_auth_discovery_case(int automatic) {
+    struct fixture fixture;
+    setup_keyboard_fixture_before_auth_mode(&fixture, 0, CTOS_SSH_HOST_KEY_MANAGED, automatic, 6U);
+    if (automatic) CHECK(ctos_ssh_native_client_begin_keyboard_interactive_auth(fixture.client) != 0 && errno == EACCES);
+    fixture.discovery_expected = 1; fixture.discovery_methods = "keyboard-interactive";
+    CHECK(ctos_ssh_native_client_begin_auth_discovery(fixture.client) == 0);
+    enum ctos_ssh_native_client_discovery_result result = CTOS_SSH_DISCOVERY_PENDING;
+    unsigned int methods = 0;
+    for (unsigned int turn = 0; turn < 100000U && result == CTOS_SSH_DISCOVERY_PENDING; turn++) {
+        CHECK(shell_turn(&fixture) == 0);
+        CHECK(ctos_ssh_native_client_auth_discovery_result(fixture.client, &result, &methods) == 0);
+    }
+    CHECK(result == CTOS_SSH_DISCOVERY_METHODS && methods == CTOS_SSH_DISCOVERY_KEYBOARD_INTERACTIVE
+        && fixture.callback.selected_calls == 0);
+    start_keyboard_fixture(&fixture);
+    keyboard_challenge_packet(&fixture, 1, 0);
+    keyboard_result(&fixture, CTOS_SSH_KEYBOARD_AUTH_CHALLENGE, 0);
+    fixture.keyboard_answers[0] = (struct ctos_ssh_slice){(const unsigned char *)"", 0};
+    keyboard_answer(&fixture, 1);
+    keyboard_finish_packet(&fixture, 2);
+    keyboard_result(&fixture, CTOS_SSH_KEYBOARD_AUTH_SUCCESS, 0);
+    CHECK(fixture.keyboard_responses == 1 && fixture.callback.selected_calls == 0);
+    cleanup_fixture(&fixture, 1);
+}
+
+static void test_keyboard_auth_discovery(void) {
+    test_keyboard_auth_discovery_case(0);
+    test_keyboard_auth_discovery_case(1);
+    {
+        struct fixture fixture;
+        setup_keyboard_fixture_before_auth_mode(&fixture, 0, CTOS_SSH_HOST_KEY_PINNED, 1, 0);
+        fixture.discovery_expected = 1; fixture.discovery_reply = 1;
+        CHECK(ctos_ssh_native_client_begin_keyboard_interactive_auth(fixture.client) != 0 && errno == EACCES);
+        CHECK(ctos_ssh_native_client_begin_auth_discovery(fixture.client) == 0);
+        enum ctos_ssh_native_client_discovery_result result = CTOS_SSH_DISCOVERY_PENDING;
+        unsigned int methods = 99U;
+        for (unsigned int turn = 0; turn < 100000U && result == CTOS_SSH_DISCOVERY_PENDING; turn++) {
+            CHECK(shell_turn(&fixture) == 0);
+            CHECK(ctos_ssh_native_client_auth_discovery_result(fixture.client, &result, &methods) == 0);
+        }
+        CHECK(result == CTOS_SSH_DISCOVERY_NONE_SUCCESS && methods == 0 && fixture.callback.selected_calls == 0);
+        fixture.shell_expected = 1; fixture.shell_window = 65536U; fixture.shell_maxpacket = 32768U;
+        CHECK(ctos_ssh_native_client_begin_shell(fixture.client, 80, 24) == 0);
+        drive_shell_phase(&fixture, CTOS_SSH_SHELL_RUNNING);
+        CHECK(fixture.shell_stage == 3 && fixture.callback.selected_calls == 0);
+        cleanup_fixture(&fixture, 1);
+    }
+}
+
+static void test_discovered_keyboard_with_selected_key(void) {
+    struct fixture fixture;
+    struct sshkey *key = NULL; unsigned char *blob = NULL; size_t blob_length = 0;
+    struct sshbuf *file = sshbuf_new();
+    CHECK(file != NULL && sshkey_generate(KEY_ED25519, 0, &key) == 0);
+    CHECK(sshkey_to_blob(key, &blob, &blob_length) == 0);
+    CHECK(sshkey_private_to_fileblob(key, file, "", "discovered-keyboard", SSHKEY_PRIVATE_OPENSSH, NULL, 0) == 0);
+    setup_private_fixture_version_mode(&fixture, 0, key, file, blob, blob_length, NULL, 0, 5,
+        CTOS_SSH_HOST_KEY_PINNED);
+    fixture.discovery_expected = 1; fixture.discovery_methods = "keyboard-interactive";
+    CHECK(ctos_ssh_native_client_begin_auth_discovery(fixture.client) == 0);
+    enum ctos_ssh_native_client_discovery_result result = CTOS_SSH_DISCOVERY_PENDING;
+    unsigned int methods = 0;
+    for (unsigned int turn = 0; turn < 100000U && result == CTOS_SSH_DISCOVERY_PENDING; turn++) {
+        CHECK(shell_turn(&fixture) == 0);
+        CHECK(ctos_ssh_native_client_auth_discovery_result(fixture.client, &result, &methods) == 0);
+    }
+    CHECK(result == CTOS_SSH_DISCOVERY_METHODS && methods == CTOS_SSH_DISCOVERY_KEYBOARD_INTERACTIVE);
+    unsigned char plan[32], stage[92]; memcpy(plan, fixture.selection_receipt, sizeof(plan)); plan[0] ^= 1U;
+    memset(stage, 0xa5, sizeof(stage));
+    CHECK(ctos_ssh_native_client_begin_discovered_keyboard(fixture.client, plan, stage) != 0 && errno == EACCES);
+    for (size_t i = 0; i < sizeof(stage); i++) CHECK(stage[i] == 0);
+    memcpy(plan, fixture.selection_receipt, sizeof(plan));
+    fixture.private_expected = 0; fixture.keyboard_expected = 1;
+    CHECK(ctos_ssh_native_client_begin_discovered_keyboard(fixture.client, plan, stage) == 0);
+    CHECK(read_u32(stage) == 0x43534150U && read_u32(stage + 4U) == 0x00020000U
+        && read_u32(stage + 8U) == 2U && read_u32(stage + 12U) == 4U && read_u32(stage + 16U) == 3U);
+    CHECK(memcmp(stage + 20U, plan, 32U) == 0 && fixture.callback.selected_calls == 0);
+    CHECK(ctos_ssh_native_client_begin_discovered_keyboard(fixture.client, plan, stage) != 0);
+    for (unsigned int turn = 0; turn < 100000U && fixture.keyboard_requests == 0; turn++) CHECK(shell_turn(&fixture) == 0);
+    CHECK(fixture.keyboard_requests == 1U && fixture.private_requests == 0 && fixture.callback.selected_calls == 0);
+    keyboard_challenge_packet(&fixture, 1, 0);
+    keyboard_result(&fixture, CTOS_SSH_KEYBOARD_AUTH_CHALLENGE, 0);
+    fixture.keyboard_answers[0] = (struct ctos_ssh_slice){(const unsigned char *)"", 0};
+    keyboard_answer(&fixture, 1); keyboard_finish_packet(&fixture, 2);
+    keyboard_result(&fixture, CTOS_SSH_KEYBOARD_AUTH_SUCCESS, 0);
+    CHECK(fixture.keyboard_responses == 1 && fixture.callback.selected_calls == 0);
+    cleanup_fixture(&fixture, 1); sshbuf_free(file); free(blob); sshkey_free(key);
+}
+
+struct prompt_wrong_owner_attempt {
+    struct ctos_ssh_native_client *client;
+    unsigned char plan[32];
+    int result, error;
+};
+
+static void *prompt_wrong_owner(void *context) {
+    struct prompt_wrong_owner_attempt *attempt = context;
+    errno = 0;
+    attempt->result = ctos_ssh_native_client_poll_auth_prompt(attempt->client, attempt->plan,
+        CTOS_SSH_DISCOVERY_PASSWORD);
+    attempt->error = errno;
+    return NULL;
+}
+
+static void test_discovered_password(void) {
+    static const unsigned char password[] = "selected-password";
+    for (int selected_key = 0; selected_key <= 1; selected_key++) {
+        for (int outcome = 0; outcome <= 2; outcome++) {
+            struct fixture fixture;
+            struct sshkey *key = NULL; unsigned char *blob = NULL; size_t blob_length = 0;
+            struct sshbuf *file = NULL;
+            if (selected_key) {
+                file = sshbuf_new();
+                CHECK(file != NULL && sshkey_generate(KEY_ED25519, 0, &key) == 0);
+                CHECK(sshkey_to_blob(key, &blob, &blob_length) == 0);
+                CHECK(sshkey_private_to_fileblob(key, file, "", "auto-password", SSHKEY_PRIVATE_OPENSSH, NULL, 0) == 0);
+                setup_private_fixture_version_mode(&fixture, 0, key, file, blob, blob_length, NULL, 0, 5,
+                    CTOS_SSH_HOST_KEY_PINNED);
+            } else {
+                setup_keyboard_fixture_before_auth_mode(&fixture, 0, CTOS_SSH_HOST_KEY_MANAGED, 1, 6U);
+                fixture.password_username = (const unsigned char *)" 用户😀 ";
+                fixture.password_username_length = sizeof(" 用户😀 ") - 1U;
+            }
+            unsigned char plan[32], stage[92];
+            memcpy(plan, fixture.selection_receipt, sizeof(plan));
+            CHECK(ctos_ssh_native_client_begin_discovered_password(fixture.client, plan, password,
+                sizeof(password) - 1U, stage) != 0 && errno == EACCES);
+            fixture.discovery_expected = 1; fixture.discovery_methods = "password";
+            CHECK(ctos_ssh_native_client_begin_auth_discovery(fixture.client) == 0);
+            enum ctos_ssh_native_client_discovery_result discovery = CTOS_SSH_DISCOVERY_PENDING;
+            unsigned int methods = 0;
+            for (unsigned int turn = 0; turn < 100000U && discovery == CTOS_SSH_DISCOVERY_PENDING; turn++) {
+                CHECK(shell_turn(&fixture) == 0);
+                CHECK(ctos_ssh_native_client_auth_discovery_result(fixture.client, &discovery, &methods) == 0);
+            }
+            CHECK(discovery == CTOS_SSH_DISCOVERY_METHODS && methods == CTOS_SSH_DISCOVERY_PASSWORD);
+            CHECK(ctos_ssh_native_client_step(fixture.client,
+                &(struct ctos_ssh_native_client_step){0}) != 0 && errno == EALREADY);
+            struct prompt_wrong_owner_attempt attempt = {.client = fixture.client};
+            memcpy(attempt.plan, plan, sizeof(plan)); pthread_t thread;
+            CHECK(pthread_create(&thread, NULL, prompt_wrong_owner, &attempt) == 0);
+            CHECK(pthread_join(thread, NULL) == 0 && attempt.result != 0 && attempt.error == EPERM);
+            CHECK(ctos_ssh_native_client_poll_auth_prompt(fixture.client, plan, CTOS_SSH_DISCOVERY_PUBLICKEY) != 0
+                && errno == EACCES);
+            for (int turn = 0; turn < 3; turn++)
+                CHECK(ctos_ssh_native_client_poll_auth_prompt(fixture.client, plan, CTOS_SSH_DISCOVERY_PASSWORD) == 0);
+            CHECK(fixture.callback.selected_calls == 0U);
+            plan[0] ^= 1U; memset(stage, 0xa5, sizeof(stage));
+            CHECK(ctos_ssh_native_client_begin_discovered_password(fixture.client, plan, password,
+                sizeof(password) - 1U, stage) != 0 && errno == EACCES);
+            for (size_t i = 0; i < sizeof(stage); i++) CHECK(stage[i] == 0);
+            plan[0] ^= 1U;
+            CHECK(ctos_ssh_native_client_begin_discovered_password(fixture.client, plan, password, 0, stage) != 0
+                && errno == EINVAL);
+            fixture.private_expected = 0; fixture.keyboard_expected = 0; fixture.password_expected = 1;
+            fixture.callback.selected_body_override = 0;
+            fixture.password_methods = (const unsigned char *)"keyboard-interactive";
+            fixture.password_methods_length = sizeof("keyboard-interactive") - 1U;
+            fixture.password_reply = (enum password_reply)outcome;
+            CHECK(ctos_ssh_native_client_begin_discovered_password(fixture.client, plan, password,
+                sizeof(password) - 1U, stage) == 0);
+            unsigned int next_methods = 99U;
+            CHECK(ctos_ssh_native_client_auth_continuation_methods(fixture.client, &next_methods) != 0
+                && errno == EACCES && next_methods == 0U);
+            CHECK(read_u32(stage) == 0x43534150U && read_u32(stage + 4U) == 0x00020000U
+                && read_u32(stage + 8U) == 2U && read_u32(stage + 12U) == (selected_key ? 4U : 3U)
+                && read_u32(stage + 16U) == 1U && memcmp(stage + 20U, plan, 32U) == 0);
+            CHECK(ctos_ssh_native_client_begin_discovered_password(fixture.client, plan, password,
+                sizeof(password) - 1U, stage) != 0);
+            enum ctos_ssh_native_client_password_auth_result result = CTOS_SSH_PASSWORD_AUTH_PENDING;
+            for (unsigned int turn = 0; turn < 100000U && result == CTOS_SSH_PASSWORD_AUTH_PENDING; turn++) {
+                CHECK(shell_turn(&fixture) == 0);
+                CHECK(ctos_ssh_native_client_password_auth_result(fixture.client, &result) == 0);
+            }
+            CHECK(result == (enum ctos_ssh_native_client_password_auth_result)(outcome + 2));
+            CHECK(fixture.password_requests == 1U && fixture.callback.selected_calls == 0 && fixture.private_requests == 0);
+            next_methods = 99U;
+            if (outcome != 0) CHECK(ctos_ssh_native_client_auth_continuation_methods(fixture.client, &next_methods) == 0
+                && next_methods == CTOS_SSH_DISCOVERY_KEYBOARD_INTERACTIVE);
+            else CHECK(ctos_ssh_native_client_auth_continuation_methods(fixture.client, &next_methods) != 0
+                && errno == EACCES && next_methods == 0U);
+            if (outcome != 0) CHECK(ctos_ssh_native_client_begin_shell(fixture.client, 80, 24) != 0 && errno == EACCES);
+            if (outcome != 0) {
+                fixture.password_expected = 0; fixture.keyboard_expected = 1;
+                CHECK(ctos_ssh_native_client_continue_keyboard_interactive_auth(fixture.client, plan, stage) == 0);
+                CHECK(read_u32(stage + 4U) == 0x00020000U && read_u32(stage + 8U) == 3U
+                    && read_u32(stage + 12U) == (selected_key ? 4U : 3U) && read_u32(stage + 16U) == 3U);
+                CHECK(ctos_ssh_native_client_continue_keyboard_interactive_auth(fixture.client, plan, stage) != 0);
+                for (unsigned int turn = 0; turn < 100000U && fixture.keyboard_requests == 0; turn++) CHECK(shell_turn(&fixture) == 0);
+                CHECK(fixture.keyboard_requests == 1U && fixture.callback.selected_calls == 0U);
+                keyboard_challenge_packet(&fixture, 1, 0);
+                keyboard_result(&fixture, CTOS_SSH_KEYBOARD_AUTH_CHALLENGE, 0);
+                fixture.keyboard_answers[0] = (struct ctos_ssh_slice){(const unsigned char *)"", 0};
+                keyboard_answer(&fixture, 1); keyboard_finish_packet(&fixture, 2);
+                keyboard_result(&fixture, CTOS_SSH_KEYBOARD_AUTH_SUCCESS, 0);
+                CHECK(fixture.keyboard_responses == 1U && fixture.callback.selected_calls == 0U);
+            } else {
+                CHECK(ctos_ssh_native_client_continue_keyboard_interactive_auth(fixture.client, plan, stage) != 0);
+            }
+            cleanup_fixture(&fixture, 1);
+            sshbuf_free(file); free(blob); sshkey_free(key);
+        }
+    }
+}
+
+static void test_discovered_key_then_keyboard(void) {
+    struct fixture fixture;
+    struct sshkey *key = NULL; unsigned char *blob = NULL; size_t blob_length = 0;
+    struct sshbuf *file = sshbuf_new();
+    CHECK(file != NULL && sshkey_generate(KEY_ED25519, 0, &key) == 0);
+    CHECK(sshkey_to_blob(key, &blob, &blob_length) == 0);
+    CHECK(sshkey_private_to_fileblob(key, file, "", "auto-key-mfa", SSHKEY_PRIVATE_OPENSSH, NULL, 0) == 0);
+    setup_private_fixture_version_mode(&fixture, 0, key, file, blob, blob_length, NULL, 0, 5,
+        CTOS_SSH_HOST_KEY_PINNED);
+    fixture.discovery_expected = 1; fixture.discovery_methods = "publickey";
+    CHECK(ctos_ssh_native_client_begin_auth_discovery(fixture.client) == 0);
+    enum ctos_ssh_native_client_discovery_result discovery = CTOS_SSH_DISCOVERY_PENDING;
+    unsigned int methods = 0;
+    for (unsigned int turn = 0; turn < 100000U && discovery == CTOS_SSH_DISCOVERY_PENDING; turn++) {
+        CHECK(shell_turn(&fixture) == 0);
+        CHECK(ctos_ssh_native_client_auth_discovery_result(fixture.client, &discovery, &methods) == 0);
+    }
+    CHECK(discovery == CTOS_SSH_DISCOVERY_METHODS && methods == CTOS_SSH_DISCOVERY_PUBLICKEY);
+    for (int turn = 0; turn < 3; turn++) CHECK(ctos_ssh_native_client_poll_auth_prompt(fixture.client,
+        fixture.selection_receipt, CTOS_SSH_DISCOVERY_PUBLICKEY) == 0);
+    fixture.password_reply = PASSWORD_REPLY_PARTIAL;
+    fixture.password_methods = (const unsigned char *)"keyboard-interactive";
+    fixture.password_methods_length = sizeof("keyboard-interactive") - 1U;
+    CHECK(ctos_ssh_native_client_begin_private_key_auth(fixture.client) == 0);
+    drive_private(&fixture, CTOS_SSH_PRIVATE_KEY_AUTH_PARTIAL, 0);
+    unsigned int next_methods = 0;
+    CHECK(ctos_ssh_native_client_auth_continuation_methods(fixture.client, &next_methods) == 0
+        && next_methods == CTOS_SSH_DISCOVERY_KEYBOARD_INTERACTIVE);
+    unsigned char stage[92];
+    CHECK(ctos_ssh_native_client_continue_keyboard_interactive_auth(fixture.client, fixture.selection_receipt, stage) == 0);
+    CHECK(read_u32(stage + 4U) == 0x00020000U && read_u32(stage + 8U) == 2U
+        && read_u32(stage + 12U) == 4U && read_u32(stage + 16U) == 3U);
+    fixture.private_expected = 0; fixture.keyboard_expected = 1;
+    for (unsigned int turn = 0; turn < 100000U && fixture.keyboard_requests == 0; turn++) CHECK(shell_turn(&fixture) == 0);
+    keyboard_challenge_packet(&fixture, 1, 0); keyboard_result(&fixture, CTOS_SSH_KEYBOARD_AUTH_CHALLENGE, 0);
+    fixture.keyboard_answers[0] = (struct ctos_ssh_slice){(const unsigned char *)"", 0};
+    keyboard_answer(&fixture, 1); keyboard_finish_packet(&fixture, 2);
+    keyboard_result(&fixture, CTOS_SSH_KEYBOARD_AUTH_SUCCESS, 0);
+    CHECK(fixture.callback.selected_calls == 1U && fixture.keyboard_responses == 1U);
+    cleanup_fixture(&fixture, 1); sshbuf_free(file); free(blob); sshkey_free(key);
+}
+
+static void test_discovered_rejected_key_alternatives(void) {
+    static const unsigned char password[] = "selected-password";
+    const char *alternatives[] = {"publickey", "password", "keyboard-interactive"};
+    for (int mode = 0; mode < 3; mode++) {
+        struct fixture fixture;
+        struct sshkey *key = NULL; unsigned char *blob = NULL; size_t blob_length = 0;
+        struct sshbuf *file = sshbuf_new();
+        CHECK(file != NULL && sshkey_generate(KEY_ED25519, 0, &key) == 0);
+        CHECK(sshkey_to_blob(key, &blob, &blob_length) == 0);
+        CHECK(sshkey_private_to_fileblob(key, file, "", "rejected-key", SSHKEY_PRIVATE_OPENSSH, NULL, 0) == 0);
+        setup_private_fixture_version_mode(&fixture, 0, key, file, blob, blob_length, NULL, 0, 5,
+            CTOS_SSH_HOST_KEY_PINNED);
+        fixture.discovery_expected = 1; fixture.discovery_methods = "publickey,password,keyboard-interactive";
+        CHECK(ctos_ssh_native_client_begin_auth_discovery(fixture.client) == 0);
+        enum ctos_ssh_native_client_discovery_result discovery = CTOS_SSH_DISCOVERY_PENDING;
+        unsigned int methods = 0;
+        for (unsigned int turn = 0; turn < 100000U && discovery == CTOS_SSH_DISCOVERY_PENDING; turn++) {
+            CHECK(shell_turn(&fixture) == 0);
+            CHECK(ctos_ssh_native_client_auth_discovery_result(fixture.client, &discovery, &methods) == 0);
+        }
+        CHECK(discovery == CTOS_SSH_DISCOVERY_METHODS && methods == 7U);
+        fixture.password_reply = PASSWORD_REPLY_REJECTED;
+        fixture.password_methods = (const unsigned char *)alternatives[mode];
+        fixture.password_methods_length = strlen(alternatives[mode]);
+        CHECK(ctos_ssh_native_client_begin_private_key_auth(fixture.client) == 0);
+        drive_private(&fixture, CTOS_SSH_PRIVATE_KEY_AUTH_REJECTED, 0);
+        CHECK(ctos_ssh_native_client_auth_continuation_methods(fixture.client, &methods) == 0
+            && methods == (mode == 0 ? CTOS_SSH_DISCOVERY_PUBLICKEY : mode == 1
+                ? CTOS_SSH_DISCOVERY_PASSWORD : CTOS_SSH_DISCOVERY_KEYBOARD_INTERACTIVE));
+        CHECK(ctos_ssh_native_client_begin_shell(fixture.client, 80, 24) != 0 && errno == EACCES);
+        unsigned char stage[92];
+        CHECK(ctos_ssh_native_client_continue_private_key_auth(fixture.client, fixture.selection_receipt, stage) != 0
+            && errno == EACCES);
+        if (mode != 1) CHECK(ctos_ssh_native_client_poll_auth_prompt(fixture.client, fixture.selection_receipt,
+            CTOS_SSH_DISCOVERY_PASSWORD) != 0 && errno == EACCES);
+        if (mode != 2) CHECK(ctos_ssh_native_client_continue_keyboard_interactive_auth(fixture.client,
+            fixture.selection_receipt, stage) != 0 && errno == EACCES);
+        fixture.private_expected = 0;
+        if (mode == 1) {
+            CHECK(ctos_ssh_native_client_poll_auth_prompt(fixture.client, fixture.selection_receipt,
+                CTOS_SSH_DISCOVERY_PASSWORD) == 0);
+            fixture.password_expected = 1; fixture.password_reply = PASSWORD_REPLY_SUCCESS;
+            fixture.callback.selected_body_override = 0;
+            CHECK(ctos_ssh_native_client_begin_discovered_password(fixture.client, fixture.selection_receipt,
+                password, sizeof(password) - 1U, stage) == 0);
+            enum ctos_ssh_native_client_password_auth_result result = CTOS_SSH_PASSWORD_AUTH_PENDING;
+            for (unsigned int turn = 0; turn < 100000U && result == CTOS_SSH_PASSWORD_AUTH_PENDING; turn++) {
+                CHECK(shell_turn(&fixture) == 0);
+                CHECK(ctos_ssh_native_client_password_auth_result(fixture.client, &result) == 0);
+            }
+            CHECK(result == CTOS_SSH_PASSWORD_AUTH_SUCCESS && fixture.password_requests == 1U);
+        } else if (mode == 2) {
+            fixture.keyboard_expected = 1;
+            CHECK(ctos_ssh_native_client_continue_keyboard_interactive_auth(fixture.client,
+                fixture.selection_receipt, stage) == 0);
+            for (unsigned int turn = 0; turn < 100000U && fixture.keyboard_requests == 0; turn++)
+                CHECK(shell_turn(&fixture) == 0);
+            keyboard_challenge_packet(&fixture, 1, 0); keyboard_result(&fixture, CTOS_SSH_KEYBOARD_AUTH_CHALLENGE, 0);
+            fixture.keyboard_answers[0] = (struct ctos_ssh_slice){(const unsigned char *)"", 0};
+            keyboard_answer(&fixture, 1); keyboard_finish_packet(&fixture, 2);
+            keyboard_result(&fixture, CTOS_SSH_KEYBOARD_AUTH_SUCCESS, 0);
+            CHECK(fixture.keyboard_requests == 1U && fixture.keyboard_responses == 1U);
+        }
+        CHECK(fixture.callback.selected_calls == 1U && fixture.private_requests == 1U);
+        cleanup_fixture(&fixture, 1); sshbuf_free(file); free(blob); sshkey_free(key);
+    }
+}
+
+static void test_discovered_keyboard_then_password_or_key(void) {
+    static const unsigned char password[] = "selected-password";
+    for (int mode = 0; mode < 3; mode++) for (int partial = 0; partial <= 1; partial++) {
+        int selected_key = mode != 0, next_key = mode == 2;
+        struct fixture fixture;
+        struct sshkey *key = NULL; unsigned char *blob = NULL; size_t blob_length = 0;
+        struct sshbuf *file = NULL;
+        if (selected_key) {
+            file = sshbuf_new();
+            CHECK(file != NULL && sshkey_generate(KEY_ED25519, 0, &key) == 0);
+            CHECK(sshkey_to_blob(key, &blob, &blob_length) == 0);
+            CHECK(sshkey_private_to_fileblob(key, file, "", "auto-kbi-first", SSHKEY_PRIVATE_OPENSSH, NULL, 0) == 0);
+            setup_private_fixture_version_mode(&fixture, 0, key, file, blob, blob_length, NULL, 0, 5,
+                CTOS_SSH_HOST_KEY_PINNED);
+        } else {
+            setup_keyboard_fixture_before_auth_mode(&fixture, 0, CTOS_SSH_HOST_KEY_MANAGED, 1, 6U);
+            fixture.password_username = (const unsigned char *)" 用户😀 ";
+            fixture.password_username_length = sizeof(" 用户😀 ") - 1U;
+        }
+        fixture.discovery_expected = 1; fixture.discovery_methods = "keyboard-interactive";
+        CHECK(ctos_ssh_native_client_begin_auth_discovery(fixture.client) == 0);
+        enum ctos_ssh_native_client_discovery_result discovery = CTOS_SSH_DISCOVERY_PENDING;
+        unsigned int methods = 0;
+        for (unsigned int turn = 0; turn < 100000U && discovery == CTOS_SSH_DISCOVERY_PENDING; turn++) {
+            CHECK(shell_turn(&fixture) == 0);
+            CHECK(ctos_ssh_native_client_auth_discovery_result(fixture.client, &discovery, &methods) == 0);
+        }
+        CHECK(discovery == CTOS_SSH_DISCOVERY_METHODS && methods == CTOS_SSH_DISCOVERY_KEYBOARD_INTERACTIVE);
+        unsigned char stage[92];
+        fixture.private_expected = 0; fixture.keyboard_expected = 1;
+        if (selected_key) CHECK(ctos_ssh_native_client_begin_discovered_keyboard(fixture.client,
+            fixture.selection_receipt, stage) == 0);
+        else CHECK(ctos_ssh_native_client_begin_keyboard_interactive_auth(fixture.client) == 0);
+        for (unsigned int turn = 0; turn < 100000U && fixture.keyboard_requests == 0; turn++) CHECK(shell_turn(&fixture) == 0);
+        keyboard_challenge_packet(&fixture, 1, 0); keyboard_result(&fixture, CTOS_SSH_KEYBOARD_AUTH_CHALLENGE, 0);
+        fixture.keyboard_answers[0] = (struct ctos_ssh_slice){(const unsigned char *)"", 0};
+        keyboard_answer(&fixture, 1);
+        CHECK(sshpkt_start(fixture.server, SSH2_MSG_USERAUTH_FAILURE) == 0);
+        CHECK(sshpkt_put_cstring(fixture.server, next_key ? "publickey" : "password") == 0);
+        CHECK(sshpkt_put_u8(fixture.server, partial) == 0 && sshpkt_send(fixture.server) == 0);
+        keyboard_result(&fixture, partial ? CTOS_SSH_KEYBOARD_AUTH_PARTIAL : CTOS_SSH_KEYBOARD_AUTH_REJECTED, 0);
+        CHECK(ctos_ssh_native_client_auth_continuation_methods(fixture.client, &methods) == 0
+            && methods == (next_key ? CTOS_SSH_DISCOVERY_PUBLICKEY : CTOS_SSH_DISCOVERY_PASSWORD));
+        CHECK(ctos_ssh_native_client_step(fixture.client,
+            &(struct ctos_ssh_native_client_step){0}) != 0 && errno == EALREADY);
+        for (int turn = 0; turn < 3; turn++) CHECK(ctos_ssh_native_client_poll_auth_prompt(fixture.client,
+            fixture.selection_receipt, methods) == 0);
+        CHECK(ctos_ssh_native_client_begin_shell(fixture.client, 80, 24) != 0 && errno == EACCES);
+        fixture.keyboard_expected = 0;
+        if (next_key) {
+            CHECK(ctos_ssh_native_client_begin_discovered_password(fixture.client, fixture.selection_receipt,
+                password, sizeof(password) - 1U, stage) != 0 && errno == EACCES);
+            fixture.private_expected = 1;
+            CHECK(ctos_ssh_native_client_continue_private_key_auth(fixture.client, fixture.selection_receipt, stage) == 0);
+            CHECK(read_u32(stage + 8U) == 3U && read_u32(stage + 12U) == 4U && read_u32(stage + 16U) == 4U);
+            drive_private(&fixture, CTOS_SSH_PRIVATE_KEY_AUTH_SUCCESS, 0);
+            CHECK(fixture.callback.selected_calls == 1U && fixture.private_requests == 1U);
+        } else {
+            if (selected_key) CHECK(ctos_ssh_native_client_continue_private_key_auth(fixture.client,
+                fixture.selection_receipt, stage) != 0 && errno == EACCES);
+            fixture.password_expected = 1; fixture.callback.selected_body_override = 0;
+            CHECK(ctos_ssh_native_client_begin_discovered_password(fixture.client, fixture.selection_receipt,
+                password, sizeof(password) - 1U, stage) == 0);
+            CHECK(read_u32(stage + 8U) == (selected_key ? 3U : 2U) && read_u32(stage + 16U) == 1U);
+            drive_password(&fixture, CTOS_SSH_PASSWORD_AUTH_SUCCESS, 0);
+            CHECK(fixture.callback.selected_calls == 0U && fixture.password_requests == 1U);
+        }
+        cleanup_fixture(&fixture, 1); sshbuf_free(file); free(blob); sshkey_free(key);
+    }
+}
+
+static void test_auth_prompt_transport(void) {
+    for (int scenario = 0; scenario < 3; scenario++) {
+        struct fixture fixture;
+        setup_keyboard_fixture_before_auth_mode(&fixture, 0, CTOS_SSH_HOST_KEY_MANAGED, 1, 6U);
+        fixture.discovery_expected = 1; fixture.discovery_methods = "password";
+        CHECK(ctos_ssh_native_client_poll_auth_prompt(fixture.client, fixture.selection_receipt,
+            CTOS_SSH_DISCOVERY_PASSWORD) != 0 && errno == EACCES);
+        CHECK(ctos_ssh_native_client_begin_auth_discovery(fixture.client) == 0);
+        enum ctos_ssh_native_client_discovery_result discovery = CTOS_SSH_DISCOVERY_PENDING;
+        unsigned int methods = 0;
+        for (unsigned int turn = 0; turn < 100000U && discovery == CTOS_SSH_DISCOVERY_PENDING; turn++) {
+            CHECK(shell_turn(&fixture) == 0);
+            CHECK(ctos_ssh_native_client_auth_discovery_result(fixture.client, &discovery, &methods) == 0);
+        }
+        CHECK(discovery == CTOS_SSH_DISCOVERY_METHODS && methods == CTOS_SSH_DISCOVERY_PASSWORD);
+        unsigned char wrong[32]; memcpy(wrong, fixture.selection_receipt, sizeof(wrong)); wrong[0] ^= 1U;
+        CHECK(ctos_ssh_native_client_poll_auth_prompt(fixture.client, wrong, CTOS_SSH_DISCOVERY_PASSWORD) != 0
+            && errno == EACCES);
+        if (scenario == 2) CHECK(shutdown(fixture.pair[1], SHUT_WR) == 0);
+        else {
+            CHECK(sshpkt_start(fixture.server, SSH2_MSG_USERAUTH_BANNER) == 0);
+            CHECK(sshpkt_put_cstring(fixture.server, "test notice") == 0 && sshpkt_put_cstring(fixture.server, "") == 0);
+            CHECK(sshpkt_send(fixture.server) == 0);
+            for (int turn = 0; turn < 100; turn++) {
+                CHECK(pump_synthetic_server(&fixture, 64U, NULL, NULL) == 0);
+                CHECK(ctos_ssh_native_client_poll_auth_prompt(fixture.client, fixture.selection_receipt,
+                    CTOS_SSH_DISCOVERY_PASSWORD) == 0);
+            }
+            CHECK(sshpkt_start(fixture.server, scenario == 0 ? SSH2_MSG_USERAUTH_SUCCESS : SSH2_MSG_DISCONNECT) == 0);
+            if (scenario == 1) {
+                CHECK(sshpkt_put_u32(fixture.server, 11U) == 0);
+                CHECK(sshpkt_put_cstring(fixture.server, "test closure") == 0 && sshpkt_put_cstring(fixture.server, "") == 0);
+            }
+            CHECK(sshpkt_send(fixture.server) == 0);
+        }
+        int ended = 0;
+        for (int turn = 0; turn < 10000 && !ended; turn++) {
+            if (scenario != 2) CHECK(pump_synthetic_server(&fixture, 64U, NULL, NULL) == 0);
+            errno = 0;
+            if (ctos_ssh_native_client_poll_auth_prompt(fixture.client, fixture.selection_receipt,
+                    CTOS_SSH_DISCOVERY_PASSWORD) != 0) {
+                CHECK(errno == (scenario == 0 ? EPROTO : scenario == 1 ? ECONNRESET : EPIPE));
+                ended = 1;
+            }
+        }
+        CHECK(ended && fixture.callback.selected_calls == 0U && fixture.password_requests == 0U);
+        CHECK(ctos_ssh_native_client_begin_shell(fixture.client, 80, 24) != 0);
+        cleanup_fixture(&fixture, 1);
+    }
+}
+
+static void test_discovered_three_methods(void) {
+    static const unsigned char password[] = "selected-password";
+    for (int keyboard_first = 0; keyboard_first <= 1; keyboard_first++) {
+        struct fixture fixture;
+        struct sshkey *key = NULL; unsigned char *blob = NULL; size_t blob_length = 0;
+        struct sshbuf *file = sshbuf_new();
+        CHECK(file != NULL && sshkey_generate(KEY_ED25519, 0, &key) == 0);
+        CHECK(sshkey_to_blob(key, &blob, &blob_length) == 0);
+        CHECK(sshkey_private_to_fileblob(key, file, "", "auto-three", SSHKEY_PRIVATE_OPENSSH, NULL, 0) == 0);
+        setup_private_fixture_version_mode(&fixture, 0, key, file, blob, blob_length, NULL, 0, 5,
+            CTOS_SSH_HOST_KEY_PINNED);
+        fixture.discovery_expected = 1; fixture.discovery_methods = keyboard_first ? "keyboard-interactive" : "password";
+        CHECK(ctos_ssh_native_client_begin_auth_discovery(fixture.client) == 0);
+        enum ctos_ssh_native_client_discovery_result discovery = CTOS_SSH_DISCOVERY_PENDING;
+        unsigned int methods = 0;
+        for (unsigned int turn = 0; turn < 100000U && discovery == CTOS_SSH_DISCOVERY_PENDING; turn++) {
+            CHECK(shell_turn(&fixture) == 0);
+            CHECK(ctos_ssh_native_client_auth_discovery_result(fixture.client, &discovery, &methods) == 0);
+        }
+        CHECK(discovery == CTOS_SSH_DISCOVERY_METHODS);
+        unsigned char stage[92];
+        fixture.private_expected = 0;
+        if (keyboard_first) {
+            fixture.keyboard_expected = 1;
+            CHECK(ctos_ssh_native_client_begin_discovered_keyboard(fixture.client, fixture.selection_receipt, stage) == 0);
+            for (unsigned int turn = 0; turn < 100000U && fixture.keyboard_requests == 0; turn++) CHECK(shell_turn(&fixture) == 0);
+            keyboard_challenge_packet(&fixture, 1, 0); keyboard_result(&fixture, CTOS_SSH_KEYBOARD_AUTH_CHALLENGE, 0);
+            fixture.keyboard_answers[0] = (struct ctos_ssh_slice){(const unsigned char *)"", 0};
+            keyboard_answer(&fixture, 1);
+            CHECK(sshpkt_start(fixture.server, SSH2_MSG_USERAUTH_FAILURE) == 0);
+            CHECK(sshpkt_put_cstring(fixture.server, "password") == 0);
+            CHECK(sshpkt_put_u8(fixture.server, 1) == 0 && sshpkt_send(fixture.server) == 0);
+            keyboard_result(&fixture, CTOS_SSH_KEYBOARD_AUTH_PARTIAL, 0);
+            fixture.keyboard_expected = 0;
+        }
+        fixture.password_expected = 1; fixture.callback.selected_body_override = 0;
+        fixture.password_reply = PASSWORD_REPLY_PARTIAL;
+        fixture.password_methods = (const unsigned char *)"publickey";
+        fixture.password_methods_length = sizeof("publickey") - 1U;
+        CHECK(ctos_ssh_native_client_begin_discovered_password(fixture.client, fixture.selection_receipt,
+            password, sizeof(password) - 1U, stage) == 0);
+        CHECK(read_u32(stage + 8U) == (keyboard_first ? 3U : 2U));
+        drive_password(&fixture, CTOS_SSH_PASSWORD_AUTH_PARTIAL, 0);
+        CHECK(ctos_ssh_native_client_auth_continuation_methods(fixture.client, &methods) == 0
+            && methods == CTOS_SSH_DISCOVERY_PUBLICKEY);
+        fixture.password_expected = 0; fixture.private_expected = 1;
+        fixture.callback.selected_body_override = 1; fixture.callback.selected_body = sshbuf_ptr(file);
+        fixture.callback.selected_body_length = sshbuf_len(file);
+        fixture.password_reply = keyboard_first ? PASSWORD_REPLY_SUCCESS : PASSWORD_REPLY_PARTIAL;
+        fixture.password_methods = (const unsigned char *)"keyboard-interactive";
+        fixture.password_methods_length = sizeof("keyboard-interactive") - 1U;
+        CHECK(ctos_ssh_native_client_continue_private_key_auth(fixture.client, fixture.selection_receipt, stage) == 0);
+        CHECK(read_u32(stage + 8U) == (keyboard_first ? 4U : 3U));
+        drive_private(&fixture, keyboard_first ? CTOS_SSH_PRIVATE_KEY_AUTH_SUCCESS : CTOS_SSH_PRIVATE_KEY_AUTH_PARTIAL, 0);
+        if (!keyboard_first) {
+            fixture.private_expected = 0; fixture.keyboard_expected = 1;
+            CHECK(ctos_ssh_native_client_continue_keyboard_interactive_auth(fixture.client, fixture.selection_receipt, stage) == 0);
+            CHECK(read_u32(stage + 8U) == 4U && read_u32(stage + 16U) == 3U);
+            for (unsigned int turn = 0; turn < 100000U && fixture.keyboard_requests == 0; turn++) CHECK(shell_turn(&fixture) == 0);
+            keyboard_challenge_packet(&fixture, 1, 0); keyboard_result(&fixture, CTOS_SSH_KEYBOARD_AUTH_CHALLENGE, 0);
+            fixture.keyboard_answers[0] = (struct ctos_ssh_slice){(const unsigned char *)"", 0};
+            keyboard_answer(&fixture, 1); keyboard_finish_packet(&fixture, 2);
+            keyboard_result(&fixture, CTOS_SSH_KEYBOARD_AUTH_SUCCESS, 0);
+        }
+        fixture.private_expected = fixture.keyboard_expected = 0;
+        fixture.shell_expected = 1; fixture.shell_window = 65536U; fixture.shell_maxpacket = 32768U;
+        CHECK(ctos_ssh_native_client_begin_shell(fixture.client, 80, 24) == 0);
+        drive_shell_phase(&fixture, CTOS_SSH_SHELL_RUNNING);
+        CHECK(fixture.callback.selected_calls == 1U && fixture.password_requests == 1U
+            && fixture.keyboard_responses == 1U && fixture.private_requests == 1U);
+        cleanup_fixture(&fixture, 1); sshbuf_free(file); free(blob); sshkey_free(key);
+    }
+}
+
 static void test_keyboard_rounds_and_outcomes(void) {
     for (unsigned int mode = 0; mode < 2U; mode++) for (unsigned int outcome = 2; outcome <= 4U; outcome++) {
         struct fixture fixture;
@@ -5312,9 +6162,16 @@ static void test_keyboard_rounds_and_outcomes(void) {
         keyboard_finish_packet(&fixture, outcome);
         keyboard_result(&fixture, (enum ctos_ssh_native_client_keyboard_interactive_auth_result)outcome, 0);
         CHECK(fixture.keyboard_requests == 1 && fixture.keyboard_responses == 3 && fixture.callback.selected_calls == 0);
-        if (outcome != 2U) CHECK(ctos_ssh_native_client_begin_shell(fixture.client, 80, 24) != 0 && errno == EACCES);
+        if (outcome != 2U) {
+            CHECK(ctos_ssh_native_client_configure_no_pty(fixture.client) != 0 && errno == EACCES);
+            CHECK(ctos_ssh_native_client_begin_shell(fixture.client, 80, 24) != 0 && errno == EACCES);
+        }
         else {
             fixture.shell_expected = 1; fixture.shell_window = 4096; fixture.shell_maxpacket = 1024;
+            if (mode == 1U) {
+                CHECK(ctos_ssh_native_client_configure_no_pty(fixture.client) == 0);
+                fixture.shell_no_pty = 1;
+            }
             CHECK(ctos_ssh_native_client_begin_shell(fixture.client, 80, 24) == 0);
             drive_shell_phase(&fixture, CTOS_SSH_SHELL_RUNNING);
             CHECK(fixture.shell_stage == 3 && fixture.callback.selected_calls == 0);
@@ -5628,9 +6485,14 @@ static void test_mfa_continuation(void) {
             keyboard_finish_packet(&fixture, scenario == 1U ? 3U : scenario == 2U ? 4U : 2U);
             mfa_keyboard_result(&fixture, scenario == 1U ? CTOS_SSH_KEYBOARD_AUTH_REJECTED
                 : scenario == 2U ? CTOS_SSH_KEYBOARD_AUTH_PARTIAL : CTOS_SSH_KEYBOARD_AUTH_SUCCESS);
-            if (scenario == 1U || scenario == 2U) CHECK(ctos_ssh_native_client_begin_shell(fixture.client, 80, 24) != 0);
+            if (scenario == 1U || scenario == 2U) {
+                CHECK(ctos_ssh_native_client_configure_no_pty(fixture.client) != 0);
+                CHECK(ctos_ssh_native_client_begin_shell(fixture.client, 80, 24) != 0);
+            }
             else {
                 fixture.shell_expected = 1; fixture.shell_window = 65536U; fixture.shell_maxpacket = 32768U;
+                CHECK(ctos_ssh_native_client_configure_no_pty(fixture.client) == 0);
+                fixture.shell_no_pty = 1;
                 CHECK(ctos_ssh_native_client_begin_shell(fixture.client, 80, 24) == 0);
                 for (unsigned int turn = 0; turn < 100000U && fixture.shell_stage != 3; turn++) CHECK(shell_turn(&fixture) == 0);
                 CHECK(fixture.shell_stage == 3 && fixture.callback.kex_complete_calls == 1U);
@@ -5795,7 +6657,21 @@ int main(int argc, char **argv) {
         printf("SSH_NATIVE_SHELL_EARLY_OUTPUT checks=%u gate=pass runtime=synthetic\n", checks);
         return 0;
     }
+    if (argc == 2 && strcmp(argv[1], "--auth-discovery-only") == 0) {
+        test_auth_discovery();
+        test_keyboard_auth_discovery();
+        test_discovered_keyboard_with_selected_key();
+        test_discovered_password();
+        test_discovered_key_then_keyboard();
+        test_discovered_rejected_key_alternatives();
+        test_discovered_keyboard_then_password_or_key();
+        test_discovered_three_methods();
+        test_auth_prompt_transport();
+        printf("SSH_NATIVE_AUTH_DISCOVERY checks=%u gate=pass runtime=synthetic\n", checks);
+        return 0;
+    }
     if (argc == 2 && strcmp(argv[1], "--shell-only") == 0) {
+        test_shell_no_pty();
         test_shell_roundtrip();
         test_shell_rejection_and_auth_gate();
         test_shell_early_output();
@@ -5862,6 +6738,16 @@ int main(int argc, char **argv) {
     test_keyboard_answer_ownership();
     test_mfa_continuation();
     test_server_alive_protocol();
+    test_auth_discovery();
+    test_keyboard_auth_discovery();
+    test_discovered_keyboard_with_selected_key();
+    test_discovered_password();
+    test_discovered_key_then_keyboard();
+    test_discovered_rejected_key_alternatives();
+    test_discovered_keyboard_then_password_or_key();
+    test_discovered_three_methods();
+    test_auth_prompt_transport();
+    test_shell_no_pty();
     test_shell_roundtrip();
     test_shell_rejection_and_auth_gate();
     test_shell_early_output();

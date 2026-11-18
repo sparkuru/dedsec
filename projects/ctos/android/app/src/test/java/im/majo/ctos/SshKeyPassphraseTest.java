@@ -103,8 +103,11 @@ public final class SshKeyPassphraseTest {
     private static byte[] nonce() { byte[] value = new byte[32]; value[0] = 1; return value; }
     private static SshRoleContext role(Fixture f, SshConnectionMaterial.Key key) throws Exception {
         SshConnectionMaterial.KeyAccount account = new SshConnectionMaterial.KeyAccount(f.profile, key);
+        return role(f, f.profile, account.target);
+    }
+    private static SshRoleContext role(Fixture f, SshPasswordProfile profile, String target) throws Exception {
         return SshRoleContext.issue(new SshRoleContext.Bootstrap(SshRoleContext.Program.CLIENT, 42, 0,
-                "key-connection", account.target, f.profile.host, f.profile.port, "key-view", nonce(), nonce(), 31000), () -> true, f.clock);
+                "key-connection", target, profile.host, profile.port, "key-view", nonce(), nonce(), 31000), () -> true, f.clock);
     }
     private static SshHostKeyAuthority.Proof known(SshHostKeyAuthority authority, SshRoleContext role) throws Exception {
         return authority.requireVerified(role, SshHostKeyAuthority.Evidence.fromNative(role,
@@ -142,6 +145,78 @@ public final class SshKeyPassphraseTest {
             byte[] before = f.store.bytes.clone(); f.store.before = () -> f.cancelled.set(true);
             code("VAULT_CANCELLED", () -> f.mutate(0, false, true));
             assertArrayEquals(before, f.store.bytes); assertEquals(0, f.store.writes);
+        }
+    }
+
+    @Test public void automaticPasswordReadBindsExactTupleMethodAndLiveProof() throws Exception {
+        try (Fixture f = new Fixture()) {
+            SshPasswordProfile profile = f.login.profile;
+            SshPasswordMailbox.Purpose purpose = SshPasswordMailbox.Purpose.PASSWORD;
+            int password = SshNativeSession.AuthDiscoveryStatus.PASSWORD;
+            try (SshRoleContext role = role(f, profile, SshPasswordProfile.TARGET)) {
+                SshAuthenticationSelection base = SshAuthenticationSelection.keyboardInteractive(role, profile.username, f.clock);
+                SshAuthenticationSelection selection = base.withAutomaticDiscovery(password, f.clock);
+                SshHostKeyAuthority.Proof host = known(new SshHostKeyAuthority(), role);
+                SshKexProof kex = SshKexProof.fromNative(role, host, 1, nonce());
+                assertTrue(f.vault.automaticPromptCredential(selection, purpose, host, kex, role.deadline, () -> { }, null));
+                byte[][] borrowed = new byte[1][];
+                assertTrue(f.vault.automaticPromptCredential(selection, purpose, host, kex, role.deadline, () -> { }, bytes -> {
+                    assertArrayEquals(PHRASE, bytes);
+                    borrowed[0] = bytes;
+                }));
+                assertArrayEquals(new byte[PHRASE.length], borrowed[0]);
+                code("SSH_AUTH_SELECTION", () -> f.vault.automaticPromptCredential(base.withAutomaticDiscovery(2, f.clock),
+                        purpose, host, kex, role.deadline, () -> { }, bytes -> fail("Unexpected password")));
+                for (SshPasswordProfile different : List.of(
+                        new SshPasswordProfile("other.invalid", profile.port, profile.username),
+                        new SshPasswordProfile(profile.host, 2222, profile.username),
+                        new SshPasswordProfile(profile.host, profile.port, "other-user"))) {
+                    try (SshRoleContext foreign = role(f, different, SshPasswordProfile.TARGET)) {
+                        SshAuthenticationSelection other = SshAuthenticationSelection.keyboardInteractive(foreign,
+                                different.username, f.clock).withAutomaticDiscovery(password, f.clock);
+                        SshHostKeyAuthority.Proof otherHost = known(new SshHostKeyAuthority(), foreign);
+                        SshKexProof otherKex = SshKexProof.fromNative(foreign, otherHost, 1, nonce());
+                        assertFalse(f.vault.automaticPromptCredential(other, purpose, otherHost, otherKex,
+                                foreign.deadline, () -> { }, bytes -> fail("Another tuple has no saved password")));
+                        if (!different.host.equals(profile.host)) {
+                            code("SSH_KEX_REQUIRED", () -> f.vault.automaticPromptCredential(selection, purpose, host,
+                                    otherKex, role.deadline, () -> { }, bytes -> fail("KEX from another host")));
+                        }
+                    }
+                }
+                f.vault.session.lock();
+                code("VAULT_LOCKED", () -> f.vault.automaticPromptCredential(selection, purpose, host, kex,
+                        role.deadline, () -> { }, bytes -> fail("Vault locked")));
+            }
+            assertEquals(0, f.store.writes);
+        }
+    }
+
+    @Test public void automaticPassphraseReadRequiresTheExactManagedKeyBinding() throws Exception {
+        try (Fixture f = new Fixture()) {
+            f.mutate(0, false, true);
+            try (VaultManifest source = f.read()) {
+                SshConnectionMaterial.Key key = f.key(source, 0), other = f.key(source, 1);
+                byte[] blob = key.publicBlob();
+                try (SshRoleContext role = role(f, key)) {
+                    SshPasswordMailbox.Purpose purpose = SshPasswordMailbox.Purpose.KEY_PASSPHRASE;
+                    int publicKey = SshNativeSession.AuthDiscoveryStatus.PUBLIC_KEY;
+                    SshAuthenticationSelection selection = SshAuthenticationSelection.privateKey(role, f.profile.username,
+                            key.path, key.identity, blob, f.clock).withAutomaticDiscovery(publicKey, f.clock);
+                    SshAuthenticationSelection wrong = SshAuthenticationSelection.privateKey(role, f.profile.username,
+                            other.path, other.identity, blob, f.clock).withAutomaticDiscovery(publicKey, f.clock);
+                    SshHostKeyAuthority.Proof host = known(new SshHostKeyAuthority(), role);
+                    SshKexProof kex = SshKexProof.fromNative(role, host, 1, nonce());
+                    assertTrue(f.vault.automaticPromptCredential(selection, purpose, host, kex,
+                            role.deadline, () -> { }, bytes -> assertArrayEquals(PHRASE, bytes)));
+                    code("SSH_AUTH_SELECTION", () -> f.vault.automaticPromptCredential(wrong, purpose, host, kex,
+                            role.deadline, () -> { }, bytes -> fail("Wrong selected key")));
+                    code("SSH_CANCELLED", () -> f.vault.automaticPromptCredential(selection, purpose, host, kex,
+                            role.deadline, () -> { throw new VaultException("SSH_CANCELLED", "Synthetic"); },
+                            bytes -> fail("Prompt invalidated")));
+                } finally { VaultCodec.wipe(blob); }
+            }
+            assertEquals(1, f.store.writes);
         }
     }
 
@@ -199,6 +274,51 @@ public final class SshKeyPassphraseTest {
                         SshCredentialBridge.Kind.PRIVATE_KEY, selected, () -> { }));
                 try (VaultManifest after = f.read()) { assertEquals(2, after.entries.size()); f.unrelated(after); }
                 assertEquals(0, f.store.writes);
+            } finally { VaultCodec.wipe(blob); }
+        }
+    }
+
+    @Test public void deferredPhraseRequiresOriginalHostKexAndSelectionAndIsOneUse() throws Exception {
+        try (Fixture f = new Fixture(); VaultManifest source = f.read()) {
+            SshConnectionMaterial.Key key = f.key(source, 0); byte[] blob = key.publicBlob();
+            try (SshRoleContext role = role(f, key);
+                    SshTransientKey deferred = SshTransientKey.deferred(f.vault, f.profile, key, encryptedBody(),
+                            31000, () -> { if (f.cancelled.get()) throw new VaultException("SSH_CANCELLED", "Synthetic"); }, f.clock)) {
+                SshAuthenticationSelection selected = SshAuthenticationSelection.privateKey(role, f.profile.username,
+                        key.path, key.identity, blob, deferred.entryId, f.clock).withAutomaticDiscovery(7, f.clock);
+                deferred.bind(role, selected);
+                assertTrue(deferred.needsPhrase());
+                SshHostKeyAuthority authority = new SshHostKeyAuthority(); SshHostKeyAuthority.Proof host = known(authority, role);
+                SshKexProof kex = SshKexProof.fromNative(role, host, 1, nonce());
+                deferred.supplyPhrase(role, host, kex, () -> { }, PHRASE);
+                assertFalse(deferred.needsPhrase());
+                SshCredentialBridge bridge = new SshCredentialBridge(f.vault, authority, f.clock, null, deferred);
+                SshManagedProvider provider = new SshManagedProvider(bridge, f.clock, null, null,
+                        (b, r, p, k) -> { throw new AssertionError("No legacy bypass"); });
+                byte[] bundle = provider.credentialBytes(role, host, kex, SshCredentialBridge.Kind.PRIVATE_KEY, selected, () -> { });
+                try { assertEquals(0x43534b42, ByteBuffer.wrap(bundle).getInt()); }
+                finally { VaultCodec.wipe(bundle); }
+                code("SSH_CREDENTIAL_PROVIDER", () -> deferred.supplyPhrase(role, host, kex, () -> { }, PHRASE));
+                assertEquals(0, f.store.writes);
+            } finally { VaultCodec.wipe(blob); }
+        }
+    }
+
+    @Test public void deferredPhraseIsNotPublishedAfterCancellationOrMissingProof() throws Exception {
+        for (boolean cancel : new boolean[] {false, true}) try (Fixture f = new Fixture(); VaultManifest source = f.read()) {
+            SshConnectionMaterial.Key key = f.key(source, 0); byte[] blob = key.publicBlob();
+            try (SshRoleContext role = role(f, key);
+                    SshTransientKey deferred = SshTransientKey.deferred(f.vault, f.profile, key, encryptedBody(),
+                            31000, () -> { if (f.cancelled.get()) throw new VaultException("SSH_CANCELLED", "Synthetic"); }, f.clock)) {
+                SshAuthenticationSelection selected = SshAuthenticationSelection.privateKey(role, f.profile.username,
+                        key.path, key.identity, blob, deferred.entryId, f.clock).withAutomaticDiscovery(7, f.clock);
+                deferred.bind(role, selected);
+                SshHostKeyAuthority authority = new SshHostKeyAuthority(); SshHostKeyAuthority.Proof host = known(authority, role);
+                SshKexProof kex = SshKexProof.fromNative(role, host, 1, nonce());
+                if (cancel) f.cancelled.set(true);
+                code(cancel ? "SSH_CANCELLED" : "SSH_CREDENTIAL_PROVIDER",
+                        () -> deferred.supplyPhrase(role, host, cancel ? kex : null, () -> { }, PHRASE));
+                assertFalse(deferred.needsPhrase()); assertEquals(0, f.store.writes);
             } finally { VaultCodec.wipe(blob); }
         }
     }

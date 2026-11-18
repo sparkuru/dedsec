@@ -278,6 +278,26 @@ public final class SshChangedHostFlowTest {
         assertArrayEquals(OLD, read(OTHER));
     }
 
+    @Test public void proofFailureNeverHidesAnUnconfirmedChangedTrustWrite() throws Exception {
+        assertEquals(SshHostKeyAuthority.PROOF_INVALID, SshPasswordConnectBridge.completionFailure(
+                vault, SshHostKeyAuthority.PROOF_INVALID, false, false));
+        assertTrue(vault.session.unlocked());
+        assertTrue(candidate(records()));
+        assertTrue(review(TOKEN, KEY, FINGERPRINT, digest(OLD), digest(NEW)));
+        assertTrue(callback.onNativeKexComplete(1, bytes(32, 9)));
+        assertTrue(persisted);
+        assertFalse(published);
+        assertEquals("VAULT_COMMIT_UNCERTAIN", SshPasswordConnectBridge.completionFailure(
+                vault, SshHostKeyAuthority.PROOF_INVALID, persisted && !published, false));
+        assertFalse(vault.session.unlocked());
+    }
+
+    @Test public void cancelledConnectionAfterCredentialWriteKeepsUncertainReceipt() throws Exception {
+        assertEquals("VAULT_COMMIT_UNCERTAIN", SshPasswordConnectBridge.completionFailure(
+                vault, "SSH_SESSION_CANCELLED", false, true));
+        assertFalse(vault.session.unlocked());
+    }
+
     @Test public void selectedCredentialCannotBeReadBeforeNativeAcknowledgement() throws Exception {
         assertTrue(candidate(records()));
         assertTrue(review(TOKEN, KEY, FINGERPRINT, digest(OLD), digest(NEW)));

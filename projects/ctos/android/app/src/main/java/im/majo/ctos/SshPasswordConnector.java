@@ -65,11 +65,48 @@ final class SshPasswordConnector implements MainActivity.AuthenticatedSshFactory
         int countMax() { return countMax; }
     }
 
+    /** Preserve the exact effective OpenSSH RequestTTY value across snapshots. */
+    static final class TtyPolicy {
+        private boolean configured;
+        private int requestTty;
+
+        void accept(SshConfigEvaluator.DirectPlan plan) throws VaultException {
+            if (plan == null) throw SshPasswordProfile.parameters();
+            if (configured && requestTty != plan.requestTty) throw changed();
+            requestTty = plan.requestTty;
+            configured = true;
+        }
+
+        boolean configured() { return configured; }
+        boolean noPty() { return configured && requestTty == 1; }
+    }
+
+    /** Preserve ordered config methods across every protected connection snapshot. */
+    static final class AuthenticationOrderPolicy {
+        private boolean configured, known;
+        private java.util.List<SshConfigEvaluator.AuthenticationMethod> order = java.util.Collections.emptyList();
+
+        void accept(SshConfigEvaluator.DirectPlan plan) throws VaultException {
+            if (plan == null) throw SshPasswordProfile.parameters();
+            if (configured && (known != plan.authenticationOrderKnown
+                    || !order.equals(plan.preferredAuthenticationOrder))) throw changed();
+            known = plan.authenticationOrderKnown;
+            order = plan.preferredAuthenticationOrder;
+            configured = true;
+        }
+
+        boolean configured() { return configured; }
+        boolean known() { return known; }
+        java.util.List<SshConfigEvaluator.AuthenticationMethod> order() { return order; }
+    }
+
     interface Events {
         void present(SshHostKeyReviewMailbox.Ticket ticket) throws VaultException;
         void dismiss(SshHostKeyReviewMailbox.Ticket ticket);
         default void present(SshKeyboardMailbox.Ticket ticket) throws VaultException { throw SshKeyboardChallenge.failure(); }
         default void dismiss(SshKeyboardMailbox.Ticket ticket) { }
+        default void present(SshPasswordMailbox.Ticket ticket) throws VaultException { throw SshAuthenticationSelection.invalid(); }
+        default void dismiss(SshPasswordMailbox.Ticket ticket) { }
     }
     private final AppSecrets vault;
     private SshPasswordProfile profile;
@@ -85,9 +122,14 @@ final class SshPasswordConnector implements MainActivity.AuthenticatedSshFactory
     private SshSavedPassword saved;
     private final boolean useSaved;
     private final boolean keyboardInteractive;
+    private boolean serverDrivenAuthentication;
     private AppSecrets.SshEntryMutationContext saveContext;
+    private volatile AppSecrets.BundleContext automaticSaveOrigin;
+    private volatile boolean automaticSaveScheduled, automaticCredentialWritten;
     private ContinuationPolicy continuationPolicy = new ContinuationPolicy(ContinuationMode.NONE, false);
     private final ServerAlivePolicy serverAlivePolicy = new ServerAlivePolicy();
+    private final TtyPolicy ttyPolicy = new TtyPolicy();
+    private final AuthenticationOrderPolicy authenticationOrderPolicy = new AuthenticationOrderPolicy();
     private boolean configuredPassword, saveConfigPassword;
     private byte[] pendingConfigPassword;
     private final AppSecrets.BundleContext origin;
@@ -106,6 +148,7 @@ final class SshPasswordConnector implements MainActivity.AuthenticatedSshFactory
     private int strictHostKeyChecking = 3;
     private long transportDeadline;
     private byte[] pendingSave;
+    private byte[] automaticPasswordSave, automaticPhraseSave;
     private long expectedEpoch;
     private final long initialRevision;
     private volatile boolean started;
@@ -124,6 +167,7 @@ final class SshPasswordConnector implements MainActivity.AuthenticatedSshFactory
     private volatile SshHostKeyReviewMailbox mailbox;
     private volatile SshHostKeyReviewMailbox.Ticket ticket;
     private volatile SshKeyboardMailbox keyboardMailbox;
+    private volatile SshPasswordMailbox passwordMailbox;
     private SshHostKeyAuthority.Review approved;
     private SshHostKeyAuthority.ChangedReview approvedChanged;
     private volatile boolean reviewingChanged;
@@ -209,6 +253,11 @@ final class SshPasswordConnector implements MainActivity.AuthenticatedSshFactory
     }
 
     boolean started() { return started; }
+    void useServerDrivenAuthentication() throws VaultException {
+        if (started || serverDrivenAuthentication || !keyboardInteractive && privateKeyId == null
+                || continuationPolicy.mode != ContinuationMode.NONE) throw SshPasswordProfile.parameters();
+        serverDrivenAuthentication = true;
+    }
     void allowKeyboardContinuation(boolean enabled) throws VaultException {
         setContinuationMode(enabled ? ContinuationMode.STRICT : ContinuationMode.NONE);
     }
@@ -238,6 +287,8 @@ final class SshPasswordConnector implements MainActivity.AuthenticatedSshFactory
         try { check(); } catch (VaultException | RuntimeException | Error failure) { cancel(); throw failure; }
     }
     boolean durableWrite() { return durableWrite; }
+    @Override public boolean tracksCredentialSave() { return automaticSaveScheduled; }
+    boolean automaticCredentialWritten() { return automaticCredentialWritten; }
     boolean changedTrustPublicationUncertain() { return changedTrustWritten && !changedTrustProofPublished; }
     @Override public SshReconnectTarget reconnectTarget() { return reconnectTarget; }
     boolean handoffLive() {
@@ -250,6 +301,7 @@ final class SshPasswordConnector implements MainActivity.AuthenticatedSshFactory
     void cancel() {
         cancelled.set(true);
         vault.cancelBundleContext(origin);
+        vault.cancelBundleContext(automaticSaveOrigin);
         if (password != null) password.close();
         if (transientKey != null) transientKey.close();
         if (keyPassphraseMutation != null) keyPassphraseMutation.cancel();
@@ -258,11 +310,15 @@ final class SshPasswordConnector implements MainActivity.AuthenticatedSshFactory
             VaultCodec.wipe(pendingSave); pendingSave = null;
             VaultCodec.wipe(pendingKeyPassphrase); pendingKeyPassphrase = null;
             VaultCodec.wipe(pendingConfigPassword); pendingConfigPassword = null;
+            VaultCodec.wipe(automaticPasswordSave); automaticPasswordSave = null;
+            VaultCodec.wipe(automaticPhraseSave); automaticPhraseSave = null;
         }
         SshHostKeyReviewMailbox current = mailbox;
         if (current != null) current.cancel();
         SshKeyboardMailbox keyboard = keyboardMailbox;
         if (keyboard != null) keyboard.cancel();
+        SshPasswordMailbox dynamicPassword = passwordMailbox;
+        if (dynamicPassword != null) dynamicPassword.cancel();
         Runnable action = cancellationAction;
         if (action != null) action.run();
     }
@@ -287,6 +343,18 @@ final class SshPasswordConnector implements MainActivity.AuthenticatedSshFactory
     boolean keyboardPending(SshKeyboardMailbox.Ticket pending) throws VaultException {
         check();
         SshKeyboardMailbox current = keyboardMailbox;
+        return current != null && current.pending(pending);
+    }
+
+    boolean respondPassword(String id, String binding, byte[] password, SshPasswordMailbox.Choice choice)
+            throws VaultException {
+        SshPasswordMailbox current = passwordMailbox;
+        return current != null && current.respond(id, binding, password, choice);
+    }
+
+    boolean passwordPending(SshPasswordMailbox.Ticket pending) throws VaultException {
+        check();
+        SshPasswordMailbox current = passwordMailbox;
         return current != null && current.pending(pending);
     }
 
@@ -408,14 +476,19 @@ final class SshPasswordConnector implements MainActivity.AuthenticatedSshFactory
                                 : useSavedKeyPassphrase ? selectedKey.binding.passphraseEntryId : "", clock); }
                 finally { VaultCodec.wipe(blob); }
             }
-            selection = continuationPolicy.select(selection, clock);
+            java.util.List<SshConfigEvaluator.AuthenticationMethod> automaticOrder = serverDrivenAuthentication
+                    ? automaticOrder() : java.util.Collections.emptyList();
+            selection = serverDrivenAuthentication
+                    ? selection.withAutomaticDiscovery(automaticMethodMask(automaticOrder, selectedKey != null), clock)
+                    : continuationPolicy.select(selection, clock);
             if (password != null) password.bind(issued.role, selection);
             if (transientKey != null) transientKey.bind(issued.role, selection);
             callback.selectAuthentication(selection);
             SshSocketOwnership socket = tcp.connect(profile, transportDeadline, this::check);
             session = SshNativeSession.openManaged(callback, view, socket, hostsPath,
                     "candidate-" + UUID.randomUUID(), SshNativeSession.MAX_STEP_BUDGET);
-            while (!session.step().complete) {
+            while (!keyExchangeStep(session, callback, this::checkTransport,
+                    () -> durableWrite || changedTrustWritten).complete) {
                 if (clock.now() >= transportDeadline) throw new VaultException("SSH_TIMED_OUT", "SSH key exchange timed out");
                 pause();
             }
@@ -427,11 +500,14 @@ final class SshPasswordConnector implements MainActivity.AuthenticatedSshFactory
             while (!session.userauthServiceReady()) { session.step(); pause(); }
             check();
             boolean partial = false;
-            if (keyboardInteractive) {
+            if (serverDrivenAuthentication) {
+                completeServerDrivenAuthentication(automaticOrder, selection);
+            } else if (keyboardInteractive) {
                 session.beginKeyboardInteractiveAuth();
                 completeKeyboardAuthentication();
             } else if (selectedKey == null) {
-                session.beginPasswordAuth();
+                beginFirstFactor(session, callback, false, this::check,
+                        () -> durableWrite || changedTrustWritten);
                 SshNativeSession.PasswordAuthResult result;
                 while ((result = session.passwordAuthResult()) == SshNativeSession.PasswordAuthResult.PENDING) {
                     session.step(); pause();
@@ -439,7 +515,8 @@ final class SshPasswordConnector implements MainActivity.AuthenticatedSshFactory
                 partial = firstFactorNeedsContinuation(result == SshNativeSession.PasswordAuthResult.SUCCESS,
                         result == SshNativeSession.PasswordAuthResult.PARTIAL, continuationPolicy.enabled());
             } else {
-                session.beginPrivateKeyAuth();
+                beginFirstFactor(session, callback, true, this::check,
+                        () -> durableWrite || changedTrustWritten);
                 SshNativeSession.PrivateKeyAuthResult result;
                 while ((result = session.privateKeyAuthResult()) == SshNativeSession.PrivateKeyAuthResult.PENDING) {
                     session.step(); pause();
@@ -452,12 +529,16 @@ final class SshPasswordConnector implements MainActivity.AuthenticatedSshFactory
                 completeKeyboardAuthentication();
             }
             check();
-            if (!configAlias.isEmpty() && !serverAlivePolicy.configured()) throw changed();
+            if (!configAlias.isEmpty() && (!serverAlivePolicy.configured() || !ttyPolicy.configured()
+                    || !authenticationOrderPolicy.configured())) throw changed();
             if (serverAlivePolicy.interval() != 0)
                 session.configureServerAlive(serverAlivePolicy.interval(), serverAlivePolicy.countMax());
+            if (ttyPolicy.noPty()) session.configureNoPty();
             reconnectTarget = new SshReconnectTarget(profile, privateKeyId, configAlias, keyboardInteractive,
                     continuationPolicy.mode == ContinuationMode.STRICT,
-                    continuationPolicy.mode == ContinuationMode.AUTOMATIC);
+                    continuationPolicy.mode == ContinuationMode.AUTOMATIC, serverDrivenAuthentication);
+            if (automaticPasswordSave != null || automaticPhraseSave != null)
+                prepareAutomaticSave();
             session.retireAuthenticationWith(this::retireAuthentication);
             returned = true;
             return session;
@@ -474,7 +555,198 @@ final class SshPasswordConnector implements MainActivity.AuthenticatedSshFactory
         throw new VaultException("SSH_AUTHENTICATION", "SSH authentication failed");
     }
 
+    static int automaticMethodMask(java.util.List<SshConfigEvaluator.AuthenticationMethod> order,
+            boolean hasKey) throws VaultException {
+        if (order == null) throw SshPasswordProfile.parameters();
+        int mask = 0;
+        for (SshConfigEvaluator.AuthenticationMethod method : order) {
+            if (method == null) throw SshPasswordProfile.parameters();
+            switch (method) {
+                case PUBLIC_KEY: if (hasKey) mask |= SshNativeSession.AuthDiscoveryStatus.PUBLIC_KEY; break;
+                case KEYBOARD_INTERACTIVE: mask |= SshNativeSession.AuthDiscoveryStatus.KEYBOARD_INTERACTIVE; break;
+                case PASSWORD: mask |= SshNativeSession.AuthDiscoveryStatus.PASSWORD; break;
+            }
+        }
+        return mask;
+    }
+
+    private java.util.List<SshConfigEvaluator.AuthenticationMethod> automaticOrder() throws VaultException {
+        if (configAlias.isEmpty()) return java.util.Arrays.asList(SshConfigEvaluator.AuthenticationMethod.PUBLIC_KEY,
+                SshConfigEvaluator.AuthenticationMethod.KEYBOARD_INTERACTIVE, SshConfigEvaluator.AuthenticationMethod.PASSWORD);
+        if (!authenticationOrderPolicy.configured() || !authenticationOrderPolicy.known()) throw changed();
+        return authenticationOrderPolicy.order();
+    }
+
+    private void completeServerDrivenAuthentication(java.util.List<SshConfigEvaluator.AuthenticationMethod> order,
+            SshAuthenticationSelection selection)
+            throws VaultException {
+        session.beginAuthDiscovery();
+        SshNativeSession.AuthDiscoveryStatus status;
+        while ((status = session.authDiscoveryResult()).result == SshNativeSession.AuthDiscoveryResult.PENDING) {
+            session.step(); pause();
+        }
+        if (status.result == SshNativeSession.AuthDiscoveryResult.NONE_SUCCESS) return;
+        if (status.result != SshNativeSession.AuthDiscoveryResult.METHODS
+                && status.result != SshNativeSession.AuthDiscoveryResult.PARTIAL)
+            throw new VaultException("SSH_AUTHENTICATION", "SSH authentication discovery failed");
+        java.util.List<SshConfigEvaluator.AuthenticationMethod> remaining = new java.util.ArrayList<>(order);
+        int methods = status.methods;
+        boolean initial = true;
+        VaultException lastRejection = null;
+        while (!remaining.isEmpty()) {
+            SshConfigEvaluator.AuthenticationMethod method = nextAutomaticMethod(
+                    remaining, methods, selectedKey != null, initial, lastRejection);
+            remaining.remove(method);
+            boolean partial = false;
+            VaultException rejection = null;
+            switch (method) {
+                case KEYBOARD_INTERACTIVE:
+                    if (!initial) session.continueKeyboardInteractiveAuth();
+                    else if (selectedKey == null) session.beginKeyboardInteractiveAuth();
+                    else session.beginDiscoveredKeyboard();
+                    SshNativeSession.KeyboardInteractiveAuthResult keyboardResult = driveKeyboardAuthentication();
+                    if (keyboardResult == SshNativeSession.KeyboardInteractiveAuthResult.REJECTED)
+                        rejection = new VaultException("SSH_KEYBOARD_AUTH", "The server rejected the authentication answers");
+                    else partial = firstFactorNeedsContinuation(keyboardResult == SshNativeSession.KeyboardInteractiveAuthResult.SUCCESS,
+                            keyboardResult == SshNativeSession.KeyboardInteractiveAuthResult.PARTIAL, true);
+                    break;
+                case PASSWORD:
+                    SshNativeSession.PasswordAuthResult passwordResult = completeDiscoveredPassword(selection);
+                    if (passwordResult == SshNativeSession.PasswordAuthResult.CHANGE_REQUIRED)
+                        throw new VaultException("SSH_PASSWORD_CHANGE_REQUIRED", "The server requires a password change");
+                    if (passwordResult == SshNativeSession.PasswordAuthResult.REJECTED)
+                        rejection = new VaultException("SSH_AUTHENTICATION", "SSH authentication failed");
+                    else partial = firstFactorNeedsContinuation(passwordResult == SshNativeSession.PasswordAuthResult.SUCCESS,
+                            passwordResult == SshNativeSession.PasswordAuthResult.PARTIAL, true);
+                    break;
+                case PUBLIC_KEY:
+                    completeDeferredKeyPhrase(selection);
+                    try {
+                        if (initial) beginFirstFactor(session, callback, true, this::check, () -> durableWrite || changedTrustWritten);
+                        else session.continuePrivateKeyAuth();
+                    } catch (VaultException failure) {
+                        VaultException diagnosed = proofFailureDiagnostic(session, callback, this::check,
+                                () -> durableWrite || changedTrustWritten, failure);
+                        if ("SSH_SESSION_AUTH".equals(diagnosed.code) || "SSH_MFA_AUTH".equals(diagnosed.code))
+                            throw new VaultException("SSH_KEY_UNAVAILABLE", "The selected private key could not be used");
+                        throw diagnosed;
+                    }
+                    SshNativeSession.PrivateKeyAuthResult keyResult;
+                    while ((keyResult = session.privateKeyAuthResult()) == SshNativeSession.PrivateKeyAuthResult.PENDING) {
+                        session.step(); pause();
+                    }
+                    if (keyResult == SshNativeSession.PrivateKeyAuthResult.REJECTED) {
+                        synchronized (this) {
+                            VaultCodec.wipe(automaticPhraseSave); automaticPhraseSave = null;
+                        }
+                        rejection = new VaultException("SSH_KEY_REJECTED", "The selected private key was rejected");
+                    } else partial = firstFactorNeedsContinuation(keyResult == SshNativeSession.PrivateKeyAuthResult.SUCCESS,
+                            keyResult == SshNativeSession.PrivateKeyAuthResult.PARTIAL, true);
+                    break;
+                default: throw SshPasswordProfile.parameters();
+            }
+            if (rejection != null) {
+                lastRejection = rejection;
+                if (!remaining.isEmpty()) methods = session.authContinuationMethods();
+                initial = false;
+                continue;
+            }
+            lastRejection = null;
+            if (!partial) return;
+            methods = session.authContinuationMethods();
+            initial = false;
+        }
+        if (lastRejection != null) throw lastRejection;
+        throw new VaultException("SSH_AUTH_PARTIAL", "The server requires another authentication method");
+    }
+
+    static SshConfigEvaluator.AuthenticationMethod nextAutomaticMethod(
+            java.util.List<SshConfigEvaluator.AuthenticationMethod> remaining, int serverMethods,
+            boolean hasKey, boolean initial, VaultException lastRejection) throws VaultException {
+        try { return chooseAutomaticMethod(remaining, serverMethods, hasKey); }
+        catch (VaultException unavailable) {
+            if (lastRejection != null) throw lastRejection;
+            if (initial || "SSH_PUBLICKEY_REQUIRED".equals(unavailable.code)) throw unavailable;
+            throw new VaultException("SSH_AUTH_PARTIAL", "The server requires another authentication method");
+        }
+    }
+
+    static SshConfigEvaluator.AuthenticationMethod chooseAutomaticMethod(
+            java.util.List<SshConfigEvaluator.AuthenticationMethod> order, int serverMethods,
+            boolean hasKey) throws VaultException {
+        int permitted = automaticMethodMask(order, hasKey);
+        for (SshConfigEvaluator.AuthenticationMethod method : order) {
+            int bit = method == SshConfigEvaluator.AuthenticationMethod.PUBLIC_KEY
+                    ? SshNativeSession.AuthDiscoveryStatus.PUBLIC_KEY
+                    : method == SshConfigEvaluator.AuthenticationMethod.KEYBOARD_INTERACTIVE
+                            ? SshNativeSession.AuthDiscoveryStatus.KEYBOARD_INTERACTIVE
+                            : SshNativeSession.AuthDiscoveryStatus.PASSWORD;
+            if ((permitted & serverMethods & bit) != 0) return method;
+        }
+        if (!hasKey && order.contains(SshConfigEvaluator.AuthenticationMethod.PUBLIC_KEY)
+                && (serverMethods & SshNativeSession.AuthDiscoveryStatus.PUBLIC_KEY) != 0)
+            throw new VaultException("SSH_PUBLICKEY_REQUIRED", "The server requires a selected private key");
+        throw new VaultException("SSH_AUTH_UNSUPPORTED", "The server offered no allowed authentication method");
+    }
+
+    static SshNativeSession.StepResult keyExchangeStep(SshNativeSession session,
+            SshNativeCallbackAdapter callback, AppSecrets.EffectGuard transportGuard,
+            BooleanSupplier trackedWrite) throws VaultException {
+        try { return session.step(); }
+        catch (VaultException failure) {
+            throw proofFailureDiagnostic(session, callback, transportGuard, trackedWrite, failure);
+        }
+    }
+
+    static void beginFirstFactor(SshNativeSession session, SshNativeCallbackAdapter callback,
+            boolean privateKey, AppSecrets.EffectGuard authenticationGuard, BooleanSupplier trackedWrite)
+            throws VaultException {
+        try {
+            if (privateKey) session.beginPrivateKeyAuth();
+            else session.beginPasswordAuth();
+        } catch (VaultException failure) {
+            throw proofFailureDiagnostic(session, callback, authenticationGuard, trackedWrite, failure);
+        }
+    }
+
+    private static VaultException proofFailureDiagnostic(SshNativeSession session,
+            SshNativeCallbackAdapter callback, AppSecrets.EffectGuard guard,
+            BooleanSupplier trackedWrite, VaultException failure) throws VaultException {
+        // The bridge relies on cancellation to flag a write whose receipt becomes uncertain.
+        if ("SSH_SESSION_CANCELLED".equals(failure.code)
+                && session.ownsCallback(callback)
+                && SshHostKeyAuthority.PROOF_INVALID.equals(callback.lastFailureCode())
+                && !trackedWrite.getAsBoolean()) {
+            checkProofFailureGuard(session, callback, guard, failure);
+            if (!trackedWrite.getAsBoolean() && callback.reportableHostProofFailure()) {
+                checkProofFailureGuard(session, callback, guard, failure);
+                if (!trackedWrite.getAsBoolean() && callback.reportableHostProofFailure())
+                    return new VaultException(SshHostKeyAuthority.PROOF_INVALID,
+                            "The SSH host proof could not be verified");
+            }
+        }
+        return failure;
+    }
+
+    private static void checkProofFailureGuard(SshNativeSession session, SshNativeCallbackAdapter callback,
+            AppSecrets.EffectGuard guard, VaultException original) throws VaultException {
+        try { guard.check(); }
+        catch (VaultException failure) {
+            if (!"VAULT_COMMIT_UNCERTAIN".equals(failure.code)
+                    && (session.cancellationRequested() || callback.externallyCancelled())) throw original;
+            throw failure;
+        }
+        if (session.cancellationRequested() || callback.externallyCancelled()) throw original;
+    }
+
     private void completeKeyboardAuthentication() throws VaultException {
+        SshNativeSession.KeyboardInteractiveAuthResult result = driveKeyboardAuthentication();
+        if (result != SshNativeSession.KeyboardInteractiveAuthResult.SUCCESS)
+            throw new VaultException(continuationPolicy.enabled() ? "SSH_MFA_AUTH" : "SSH_KEYBOARD_AUTH",
+                    "SSH keyboard-interactive authentication failed");
+    }
+
+    private SshNativeSession.KeyboardInteractiveAuthResult driveKeyboardAuthentication() throws VaultException {
         SshHostKeyAuthority.Proof actualHost = callback.hostProof();
         SshKexProof actualKex = callback.kexProof();
         Object stage = session.keyboardStage();
@@ -503,9 +775,207 @@ final class SshPasswordConnector implements MainActivity.AuthenticatedSshFactory
             } else { session.step(); pause(); }
         }
         keyboardMailbox.close(); keyboardMailbox = null;
-        if (result != SshNativeSession.KeyboardInteractiveAuthResult.SUCCESS)
-            throw new VaultException(continuationPolicy.enabled() ? "SSH_MFA_AUTH" : "SSH_KEYBOARD_AUTH",
-                    "SSH keyboard-interactive authentication failed");
+        return result;
+    }
+
+    private SshNativeSession.PasswordAuthResult completeDiscoveredPassword(SshAuthenticationSelection selection)
+            throws VaultException {
+        SshHostKeyAuthority.Proof actualHost = callback.hostProof();
+        SshKexProof actualKex = callback.kexProof();
+        Object stage = session.passwordPromptStage();
+        if (actualHost == null || actualKex == null) throw denied();
+        actualKex.requireMatches(issued.role, actualHost);
+        SshPasswordMailbox.LiveCheck live = () -> {
+            check(); callback.requireAuthenticationSelectionLive(); session.requirePasswordPromptStageLive(stage);
+            if (callback.hostProof() != actualHost || callback.kexProof() != actualKex) throw denied();
+            actualKex.requireMatches(issued.role, actualHost);
+        };
+        SshPasswordMailbox.Purpose purpose = SshPasswordMailbox.Purpose.PASSWORD;
+        boolean savedAvailable = vault.automaticPromptCredential(selection, purpose, actualHost, actualKex,
+                deadline, live::check, null);
+        passwordMailbox = new SshPasswordMailbox(issued.role, clock, live, new SshPasswordMailbox.Sink() {
+            @Override public void present(SshPasswordMailbox.Ticket pending) throws VaultException { events.present(pending); }
+            @Override public void dismiss(SshPasswordMailbox.Ticket pending) { events.dismiss(pending); }
+        }, purpose);
+        try (SshPasswordMailbox.Response response = passwordMailbox.await(() -> {
+            session.pollPasswordPrompt(stage);
+            if ((session.passwordPromptMethods(stage) & SshNativeSession.AuthDiscoveryStatus.PASSWORD) == 0)
+                throw new VaultException("SSH_AUTHENTICATION", "SSH password authentication is no longer available");
+        }, savedAvailable)) {
+            live.check(); session.pollPasswordPrompt(stage); live.check();
+            byte[] secret = promptSecret(response, selection, purpose, actualHost, actualKex, live);
+            try { submitDiscoveredPassword(session, stage, secret, live::check); }
+            finally { if (secret != response.bytes) VaultCodec.wipe(secret); }
+            if (response.choice != SshPasswordMailbox.Choice.SAVE) response.close();
+            SshNativeSession.PasswordAuthResult result;
+            while ((result = session.passwordAuthResult()) == SshNativeSession.PasswordAuthResult.PENDING) {
+                session.step(); pause();
+            }
+            if (response.choice == SshPasswordMailbox.Choice.SAVE
+                    && (result == SshNativeSession.PasswordAuthResult.SUCCESS
+                            || result == SshNativeSession.PasswordAuthResult.PARTIAL))
+                rememberAutomaticSave(purpose, response.bytes);
+            return result;
+        } finally {
+            passwordMailbox.close(); passwordMailbox = null;
+        }
+    }
+
+    private byte[] promptSecret(SshPasswordMailbox.Response response, SshAuthenticationSelection selection,
+            SshPasswordMailbox.Purpose purpose, SshHostKeyAuthority.Proof host, SshKexProof kex,
+            SshPasswordMailbox.LiveCheck live) throws VaultException {
+        if (response.choice != SshPasswordMailbox.Choice.SAVED) return response.bytes;
+        byte[][] captured = new byte[1][];
+        boolean delivered = false;
+        try {
+            if (!vault.automaticPromptCredential(selection, purpose, host, kex,
+                    deadline, live::check, bytes -> captured[0] = bytes.clone())) {
+                boolean key = purpose == SshPasswordMailbox.Purpose.KEY_PASSPHRASE;
+                throw new VaultException(key ? "SSH_KEY_PASSPHRASE_MISSING" : "SSH_PASSWORD_MISSING",
+                        "No saved credential matches this authentication attempt");
+            }
+            delivered = true;
+            return captured[0];
+        } finally { if (!delivered) VaultCodec.wipe(captured[0]); }
+    }
+
+    private void rememberAutomaticSave(SshPasswordMailbox.Purpose purpose, byte[] bytes) throws VaultException {
+        check();
+        synchronized (this) {
+            if (cancelled.get()) throw new VaultException("SSH_CANCELLED", "The SSH connection was cancelled");
+            if (purpose == SshPasswordMailbox.Purpose.PASSWORD) {
+                if (automaticPasswordSave != null) throw changed();
+                automaticPasswordSave = bytes.clone();
+            } else {
+                if (automaticPhraseSave != null) throw changed();
+                automaticPhraseSave = bytes.clone();
+            }
+        }
+    }
+
+    private void prepareAutomaticSave() throws VaultException {
+        check(); callback.requireAuthenticationSelectionLive();
+        SshPasswordProfile target = profile;
+        SshConnectionMaterial.Key key = selectedKey;
+        AppSecrets.EffectGuard request = sensitive;
+        AppSecrets.BundleContext context = vault.newBundleContext(deadline, request);
+        automaticSaveOrigin = context;
+        automaticSaveScheduled = true;
+        long revision = vault.contentRevision;
+        check(); callback.requireAuthenticationSelectionLive();
+        vault.checkBundleContext(context);
+        session.confirmShellWith(() -> saveAutomaticCredentials(context, revision, request, target, key));
+    }
+
+    private void saveAutomaticCredentials(AppSecrets.BundleContext context, long revision,
+            AppSecrets.EffectGuard request, SshPasswordProfile target, SshConnectionMaterial.Key key)
+            throws VaultException {
+        byte[] passwordToSave, phraseToSave;
+        synchronized (this) {
+            passwordToSave = automaticPasswordSave; automaticPasswordSave = null;
+            phraseToSave = automaticPhraseSave; automaticPhraseSave = null;
+        }
+        AppSecrets.EffectGuard live = AppSecrets.boundGuard(request, () -> {
+            if (cancelled.get() || hostCancelled.getAsBoolean())
+                throw new VaultException("SSH_CANCELLED", "The SSH connection was cancelled");
+            requireTransportDeadline(clock.now(), deadline);
+            vault.requirePasswordValidationOrigin(context);
+            session.requireShellConfirmationLive();
+        });
+        try {
+            SshPasswordManifestValidator.within(deadline, () -> {
+                long epoch = context.epoch;
+                long currentRevision = revision;
+                if (passwordToSave != null) {
+                    saveAutomaticCredential(live, epoch, currentRevision, target, null, passwordToSave);
+                    epoch++;
+                    currentRevision++;
+                }
+                if (phraseToSave != null)
+                    saveAutomaticCredential(live, epoch, currentRevision, target, key, phraseToSave);
+                return null;
+            });
+        } catch (VaultException failure) {
+            throw failure;
+        } catch (Exception failure) {
+            throw new VaultException("SSH_CREDENTIAL_SAVE", "Unable to save the SSH credential");
+        } finally {
+            VaultCodec.wipe(passwordToSave); VaultCodec.wipe(phraseToSave);
+            vault.cancelBundleContext(context);
+            automaticSaveOrigin = null;
+        }
+    }
+
+    private void saveAutomaticCredential(AppSecrets.EffectGuard live, long epoch, long revision,
+            SshPasswordProfile target, SshConnectionMaterial.Key key, byte[] secret) throws VaultException {
+        AppSecrets.EffectGuard mutation = AppSecrets.boundGuard(live, () -> {
+            vault.session.assertEpoch(epoch);
+            if (vault.contentRevision != revision) throw changed();
+        });
+        mutation.check();
+        AppSecrets.SshEntryMutationContext context = key == null
+                ? vault.newPasswordMutationContext(epoch, deadline, mutation, target, false)
+                : vault.newKeyPassphraseMutationContext(epoch, deadline, mutation, key, false);
+        VaultOperation operation = null;
+        try {
+            if (key == null) {
+                operation = vault.beginPasswordMutation(context, connectionId, true);
+                vault.savePassword(operation, secret, mutation);
+            } else {
+                operation = vault.beginKeyPassphraseMutation(context, connectionId, true);
+                vault.saveKeyPassphrase(operation, secret, mutation);
+            }
+            durableWrite = true;
+            automaticCredentialWritten = true;
+            live.check();
+            vault.session.assertEpoch(epoch + 1);
+            if (vault.contentRevision != revision + 1) throw changed();
+        } finally { vault.cancelOperation(operation); context.cancel(); }
+    }
+
+    static void submitDiscoveredPassword(SshNativeSession session, Object stage, byte[] response,
+            AppSecrets.EffectGuard guard) throws VaultException {
+        guard.check(); session.pollPasswordPrompt(stage); guard.check(); session.beginDiscoveredPassword(stage, response);
+    }
+
+    private void completeDeferredKeyPhrase(SshAuthenticationSelection selection) throws VaultException {
+        if (transientKey == null || !transientKey.needsPhrase()) return;
+        SshHostKeyAuthority.Proof actualHost = callback.hostProof();
+        SshKexProof actualKex = callback.kexProof();
+        Object stage = session.privateKeyPromptStage();
+        if (actualHost == null || actualKex == null) throw denied();
+        actualKex.requireMatches(issued.role, actualHost);
+        SshPasswordMailbox.LiveCheck live = () -> {
+            check(); callback.requireAuthenticationSelectionLive(); session.requirePrivateKeyPromptStageLive(stage);
+            if (callback.hostProof() != actualHost || callback.kexProof() != actualKex) throw denied();
+            actualKex.requireMatches(issued.role, actualHost);
+        };
+        SshPasswordMailbox.Purpose purpose = SshPasswordMailbox.Purpose.KEY_PASSPHRASE;
+        boolean savedAvailable = vault.automaticPromptCredential(selection, purpose, actualHost, actualKex,
+                deadline, live::check, null);
+        passwordMailbox = new SshPasswordMailbox(issued.role, clock, live, new SshPasswordMailbox.Sink() {
+            @Override public void present(SshPasswordMailbox.Ticket pending) throws VaultException { events.present(pending); }
+            @Override public void dismiss(SshPasswordMailbox.Ticket pending) { events.dismiss(pending); }
+        }, purpose);
+        try (SshPasswordMailbox.Response response = passwordMailbox.await(() -> {
+            session.pollPrivateKeyPrompt(stage);
+            if ((session.privateKeyPromptMethods(stage) & SshNativeSession.AuthDiscoveryStatus.PUBLIC_KEY) == 0)
+                throw new VaultException("SSH_AUTHENTICATION", "SSH public-key authentication is no longer available");
+        }, savedAvailable)) {
+            live.check(); session.pollPrivateKeyPrompt(stage); live.check();
+            byte[] secret = promptSecret(response, selection, purpose, actualHost, actualKex, live);
+            try {
+                live.check();
+                session.pollPrivateKeyPrompt(stage);
+                live.check();
+                transientKey.supplyPhrase(issued.role, actualHost, actualKex, live::check, secret);
+                session.finishPrivateKeyPrompt(stage);
+                if (response.choice == SshPasswordMailbox.Choice.SAVE)
+                    rememberAutomaticSave(purpose, response.bytes);
+            } finally { if (secret != response.bytes) VaultCodec.wipe(secret); }
+        } finally {
+            passwordMailbox.close(); passwordMailbox = null;
+        }
     }
 
     private void requireChainPolicy(SshConfigEvaluator.DirectPlan plan, boolean key) throws VaultException {
@@ -553,6 +1023,8 @@ final class SshPasswordConnector implements MainActivity.AuthenticatedSshFactory
                 throw new VaultException("SSH_PASSWORD_POLICY", "This configuration disables password authentication");
             requireChainPolicy(plan, false);
             serverAlivePolicy.accept(plan);
+            ttyPolicy.accept(plan);
+            authenticationOrderPolicy.accept(plan);
             SshPasswordProfile actual = new SshPasswordProfile(plan.hostname, plan.port, plan.user);
             String trustPath = SshConnectionMaterial.singleTrustPath(snapshot.manifest, plan);
             if (profile != null && (!profile.same(actual) || !hostsPath.equals(trustPath))) throw changed();
@@ -601,10 +1073,12 @@ final class SshPasswordConnector implements MainActivity.AuthenticatedSshFactory
                 SshConfigEvaluator.DirectPlan plan = SshConnectionMaterial.profilePlan(snapshot.manifest, rootPath,
                         configAlias, usernameOverride, deadline, this::check);
                 if (plan.userRequired) throw new VaultException("SSH_USER_REQUIRED", "Enter an SSH username");
-                if (!plan.pubkeyAuthentication)
+                if (!plan.pubkeyAuthentication && !serverDrivenAuthentication)
                     throw new VaultException("SSH_KEY_SELECTION", "This SSH configuration disables public-key authentication");
                 requireChainPolicy(plan, true);
                 serverAlivePolicy.accept(plan);
+                ttyPolicy.accept(plan);
+                authenticationOrderPolicy.accept(plan);
                 profile = new SshPasswordProfile(plan.hostname, plan.port, plan.user);
                 strictHostKeyChecking = plan.strictHostKeyChecking;
                 transportDeadline = Math.min(deadline, requestStarted + plan.connectTimeoutMillis);
@@ -648,9 +1122,11 @@ final class SshPasswordConnector implements MainActivity.AuthenticatedSshFactory
                 SshConfigEvaluator.DirectPlan plan = SshConnectionMaterial.profilePlan(snapshot.manifest, SshConnectionMaterial.ROOT,
                         configAlias, usernameOverride, deadline, this::check);
                 if (plan.userRequired) throw new VaultException("SSH_USER_REQUIRED", "Enter an SSH username");
-                if (!plan.keyboardInteractiveAuthentication)
+                if (!plan.keyboardInteractiveAuthentication && !serverDrivenAuthentication)
                     throw new VaultException("SSH_KEYBOARD_POLICY", "This SSH configuration does not allow keyboard-interactive authentication");
                 serverAlivePolicy.accept(plan);
+                ttyPolicy.accept(plan);
+                authenticationOrderPolicy.accept(plan);
                 SshPasswordProfile actual = new SshPasswordProfile(plan.hostname, plan.port, plan.user);
                 String trustPath = SshConnectionMaterial.singleTrustPath(snapshot.manifest, plan);
                 if (pass == 0) { selected = actual; selectedTrust = trustPath; }
@@ -678,10 +1154,12 @@ final class SshPasswordConnector implements MainActivity.AuthenticatedSshFactory
                 SshConfigEvaluator.DirectPlan plan = SshConnectionMaterial.profilePlan(snapshot.manifest, SshConnectionMaterial.ROOT,
                         configAlias, usernameOverride, deadline, this::check);
                 if (plan.userRequired) throw new VaultException("SSH_USER_REQUIRED", "Enter an SSH username");
-                if (!plan.pubkeyAuthentication)
+                if (!plan.pubkeyAuthentication && !serverDrivenAuthentication)
                     throw new VaultException("SSH_KEY_SELECTION", "This SSH configuration disables public-key authentication");
                 requireChainPolicy(plan, true);
                 serverAlivePolicy.accept(plan);
+                ttyPolicy.accept(plan);
+                authenticationOrderPolicy.accept(plan);
                 SshConnectionMaterial.singleTrustPath(snapshot.manifest, plan);
                 actualProfile = new SshPasswordProfile(plan.hostname, plan.port, plan.user);
             }
@@ -692,6 +1170,11 @@ final class SshPasswordConnector implements MainActivity.AuthenticatedSshFactory
             }
             if (!key.encrypted) {
                 if (phrase.length != 0 || useSavedKeyPassphrase || saveKeyPassphrase) throw SshPasswordProfile.parameters();
+                return;
+            }
+            if (serverDrivenAuthentication && phrase.length == 0 && !useSavedKeyPassphrase && !saveKeyPassphrase) {
+                transientKey = SshTransientKey.deferred(vault, actualProfile, key, privateFile.content,
+                        deadline, this::check, clock);
                 return;
             }
             if (useSavedKeyPassphrase) {
@@ -784,6 +1267,7 @@ final class SshPasswordConnector implements MainActivity.AuthenticatedSshFactory
         vault.cancelBundleContext(origin);
         if (password != null) password.close();
         if (keyboardMailbox != null) { keyboardMailbox.close(); keyboardMailbox = null; }
+        if (passwordMailbox != null) { passwordMailbox.close(); passwordMailbox = null; }
         if (transientKey != null) { transientKey.close(); transientKey = null; }
         if (keyPassphraseMutation != null) keyPassphraseMutation.cancel();
         if (saveContext != null) saveContext.cancel();

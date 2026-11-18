@@ -1,5 +1,122 @@
 # Managed SSH host-trust inspection and forgetting
 
+## Scenario: report a rejected host proof during key exchange
+
+### 1. Scope / Trigger
+
+An internal host-proof binding failure cancels the native callback and makes the session terminal.
+Report that fixed diagnostic without mistaking real cancellation, a changed server key, or an
+uncertain persistent write for the proof failure.
+
+### 2. Signatures
+
+`SshNativeCallbackAdapter.reportableHostProofFailure() -> boolean` is a read-only snapshot.
+`SshNativeSession.ownsCallback(candidate) -> boolean` checks exact adapter identity.
+`SshPasswordConnector.keyExchangeStep(session, callback, transportGuard, trackedWrite)` wraps the actual
+KEX step. The existing connection error is `SSH_HOST_PROOF_INVALID`; it carries no remote text.
+
+### 3. Contracts
+
+Only a terminal `SSH_SESSION_CANCELLED` from the current KEX step plus that same callback's
+fixed `SSH_HOST_PROOF_INVALID` can be translated. Any tracked credential or changed-trust write
+keeps the original cancellation code: completion delivery may still be cancelled after the owner
+publishes its future, and the bridge needs that code to preserve its uncertain-write rule.
+Recheck the original product guard, including
+actual transport deadline, before reporting; the callback must still own an active role/view,
+have no external cancellation, and be outside an active invocation. Recheck both after the first
+snapshot. First require `session.ownsCallback(callback)`; a different session's callback must never
+supply diagnostic evidence. The native session remains terminal, and no retry, proof, credential, trust approval,
+or host-key replacement follows from this diagnostic. Owner publication orders Stop and screen
+lock against the connection future: a cancellation already recorded wins; a completed future is
+not rewritten by a later stop. `completionFailure` retains final authority for uncertain writes.
+
+### 4. Validation & Error Matrix
+
+| Condition | Required behavior |
+| --- | --- |
+| Exact internal proof failure, active original attempt | `SSH_HOST_PROOF_INVALID`; no native replay |
+| A credential or changed trust was already written in this attempt | Keep original session failure; preserve the bridge's uncertain-write handling |
+| A callback belongs to another session | Keep original session failure without consulting it as proof evidence |
+| Explicit session/callback cancellation races a timeout or view failure | Existing session cancellation wins; no proof diagnosis |
+| Product cancellation, screen lock, expired transport or revoked view observed first | Existing cancellation, lock, timeout or view error; no proof diagnosis |
+| Changed trust was written without confirmed native completion | `VAULT_COMMIT_UNCERTAIN` and locked vault, regardless of the tentative diagnostic |
+| Native exception text merely contains a code or another callback fails | Original fixed failure; never infer a proof error from text |
+
+### 5. Good / Base / Bad Cases
+
+Good: actual bound callback failure reaches the existing verification-failed message after both
+guards. Base: a cancelled callback or true changed host retains its original behavior. Bad:
+turn every callback cancellation into proof failure or present proof failure as a server key change.
+
+### 6. Tests Required
+
+Exercise the real Java callback and session with a synthetic native failure, original and shorter
+deadlines, revocation, product/session/callback cancellation on both sides of the guard, no replay,
+arbitrary exception text, and tracked writes before and between guard checks. Exercise owner
+publication ordering with real threads, simultaneous callback cancellation/timeout, uncertain
+write versus cancellation, cross-session callbacks during both KEX and first-factor startup, and actual
+encrypted-vault changed-key CAS with the uncertain completion rule. JNI, Android and real-server
+results are separate from these JVM fixtures.
+
+### 7. Wrong vs Correct
+
+Wrong: inspect native exception text and immediately publish a host-key conflict.
+Correct: validate same-owner callback state and the original live attempt, keep the session
+terminal, and let a possibly committed trust write override the diagnostic with uncertainty.
+
+## Scenario: report a rejected host proof while starting first-factor authentication
+
+### 1. Scope / Trigger
+
+Password and private-key startup synchronously request their selected credential from the Java
+callback. A proof binding failure there cancels the callback before any credential is handed off.
+
+### 2. Signatures
+
+`SshPasswordConnector.beginFirstFactor(session, callback, privateKey, authenticationGuard,
+trackedWrite)` invokes exactly one of `beginPasswordAuth()` or `beginPrivateKeyAuth()`.
+The KEX wrapper and first-factor wrapper use the same fixed proof-failure classifier.
+
+### 3. Contracts
+
+Translate only the same live callback's `SSH_HOST_PROOF_INVALID`, under the cancellation,
+revocation and tracked-write rules in the KEX scenario above. First-factor startup uses the
+original authentication guard `check()` and request deadline; the earlier transport deadline
+has already served its purpose and must not cut short authentication. The diagnostic grants no
+retry, additional secret read, later factor or shell; any already-created sensitive buffer still
+follows the existing guarded-copy and wipe contract. Standalone keyboard-interactive and continuation retain their
+existing separate entry points. Successful starts and unrelated errors retain their normal behavior.
+
+### 4. Validation & Error Matrix
+
+| Condition | Required behavior |
+| --- | --- |
+| Mismatched selected host proof with live original authentication | `SSH_HOST_PROOF_INVALID`; no credential or shell |
+| Original authentication deadline expired or view revoked | Existing timeout or vault error; no proof diagnosis |
+| Earlier transport deadline elapsed but authentication remains live | Proof diagnosis is still possible; do not apply the transport guard |
+| External cancellation, tracked write or uncertain commit | Preserve the cancellation/uncertainty rules from the KEX scenario |
+| Ordinary native start error, rejection or other callback failure | Preserve its original error; do not try another authentication method |
+
+### 5. Good / Base / Bad Cases
+
+Good: a selected password or key callback rejects a foreign role proof before reading a secret,
+and the connection reports a fixed proof error. Base: normal first-factor startup is unchanged.
+Bad: reuse the shorter KEX deadline or retry a different credential after callback rejection.
+
+### 6. Tests Required
+
+Invoke the real Java selected-credential callback for both methods with a deliberately mismatched
+proof; verify zero secret reads, one native start, terminal session, no shell and no replay.
+Exercise original-deadline versus simulated shorter-transport timing, cancellation, view
+revocation, tracked writes, uncertain results and unrelated native errors. Keep Java fixtures,
+JNI/Android execution and real-server evidence separate.
+
+### 7. Wrong vs Correct
+
+Wrong: `beginPasswordAuth` fails -> retry another method or use the old transport deadline.
+Correct: preserve the original authentication context and error ordering, then terminate the
+same attempt without reading or resending the selected credential.
+
 ## 1. Scope / Trigger
 
 Apply to `SshHostTrustMaterial`, `SshHostTrustManagement`, `SshProfilesBridge`, native

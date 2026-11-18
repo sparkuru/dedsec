@@ -1223,6 +1223,17 @@ final class SshNativeCallbackAdapter implements AutoCloseable {
     }
 
     String lastFailureCode() { synchronized (stateLock) { return failureCode; } }
+    boolean externallyCancelled() { synchronized (stateLock) { return externallyCancelled; } }
+
+    /** Exposes only an internal proof failure still bound to this live, uncancelled role. */
+    boolean reportableHostProofFailure() {
+        synchronized (stateLock) {
+            if (externallyCancelled || !cancelled || closing || closed || inCallback
+                    || !SshHostKeyAuthority.PROOF_INVALID.equals(failureCode)) return false;
+            try { role.requireActive(clock); return true; }
+            catch (VaultException | RuntimeException | LinkageError unavailable) { return false; }
+        }
+    }
 
     /** Only this fixed policy denial is exposed; cancellation and invalid role/view still win. */
     boolean changedPolicyRejected() {
@@ -1241,11 +1252,70 @@ final class SshNativeCallbackAdapter implements AutoCloseable {
     long roleToken() { return issued.token; }
 
     void requireKeyboardContinuation() throws VaultException {
+        keyboardContinuationProof();
+    }
+
+    /** Low byte is original CSAS kind; bit 8 selects the v4 automatic receipt. */
+    int keyboardContinuationProof() throws VaultException {
         synchronized (stateLock) {
             requireAuthenticationSelectionLive();
-            if (authenticationSelection == null || !authenticationSelection.continueKeyboardInteractive
-                    || authenticationSelection.kind != SshCredentialBridge.Kind.PASSWORD
-                        && authenticationSelection.kind != SshCredentialBridge.Kind.PRIVATE_KEY)
+            if (authenticationSelection == null) throw SshAuthenticationSelection.invalid();
+            int original = authenticationSelection.kind == SshCredentialBridge.Kind.PASSWORD ? 1
+                    : authenticationSelection.kind == SshCredentialBridge.Kind.PRIVATE_KEY ? 4
+                    : authenticationSelection.kind == SshCredentialBridge.Kind.KEYBOARD_INTERACTIVE ? 3 : 0;
+            if (authenticationSelection.automaticDiscovery && (original == 3 || original == 4)
+                    && (authenticationSelection.automaticMethods & 2) != 0) return 0x100 | original;
+            if (authenticationSelection.continueKeyboardInteractive && (original == 1 || original == 4)) return original;
+            throw SshAuthenticationSelection.invalid();
+        }
+    }
+
+    boolean authenticationSelectionAllows(int method, boolean discovered) throws VaultException {
+        synchronized (stateLock) {
+            requireAuthenticationSelectionLive();
+            if (authenticationSelection == null || method <= 0 || (method & (method - 1)) != 0 || method > 4)
+                throw SshAuthenticationSelection.invalid();
+            return !authenticationSelection.automaticDiscovery
+                    || discovered && (authenticationSelection.automaticMethods & method) != 0;
+        }
+    }
+
+    void requireDiscoveredKeyboardSelection() throws VaultException {
+        synchronized (stateLock) {
+            requireAuthenticationSelectionLive();
+            if (authenticationSelection == null || !authenticationSelection.automaticDiscovery
+                    || authenticationSelection.kind != SshCredentialBridge.Kind.PRIVATE_KEY
+                    || (authenticationSelection.automaticMethods & 2) == 0)
+                throw SshAuthenticationSelection.invalid();
+        }
+    }
+
+    int requireDiscoveredPasswordSelection() throws VaultException {
+        synchronized (stateLock) {
+            requireAuthenticationSelectionLive();
+            if (authenticationSelection == null || !authenticationSelection.automaticDiscovery
+                    || (authenticationSelection.automaticMethods & 4) == 0)
+                throw SshAuthenticationSelection.invalid();
+            if (authenticationSelection.kind == SshCredentialBridge.Kind.PRIVATE_KEY) return 4;
+            if (authenticationSelection.kind == SshCredentialBridge.Kind.KEYBOARD_INTERACTIVE) return 3;
+            throw SshAuthenticationSelection.invalid();
+        }
+    }
+
+    void requireAutomaticSelection() throws VaultException {
+        synchronized (stateLock) {
+            requireAuthenticationSelectionLive();
+            if (authenticationSelection == null || !authenticationSelection.automaticDiscovery)
+                throw SshAuthenticationSelection.invalid();
+        }
+    }
+
+    void requireAutomaticKeySelection() throws VaultException {
+        synchronized (stateLock) {
+            requireAuthenticationSelectionLive();
+            if (authenticationSelection == null || !authenticationSelection.automaticDiscovery
+                    || authenticationSelection.kind != SshCredentialBridge.Kind.PRIVATE_KEY
+                    || (authenticationSelection.automaticMethods & 1) == 0)
                 throw SshAuthenticationSelection.invalid();
         }
     }

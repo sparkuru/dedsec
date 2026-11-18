@@ -15,10 +15,17 @@ final class SshTerminalSession {
             "SSH_SESSION_STEP", "SSH_SESSION_SHELL_STATUS", "SSH_SESSION_SHELL_READ", "SSH_SESSION_SHELL_WRITE",
             "SSH_SESSION_SHELL_RESIZE", "SSH_SESSION_SHELL_EOF", "SSH_SESSION_REQUIRED",
             "SSH_CALLBACK_CLOSED", "SSH_CALLBACK_CLOSING", "SSH_CALLBACK_CANCELLED", "SSH_CALLBACK_SESSION");
+    private static final java.util.Set<String> CREDENTIAL_SAVE_FAILURE_CODES = java.util.Set.of(
+            "SSH_CREDENTIAL_SAVE", "SSH_CANCELLED", "SSH_TIMED_OUT", "VAULT_CHANGED", "VAULT_EXPIRED",
+            "VAULT_CANCELLED", "VAULT_LOCKED", "VAULT_FOREGROUND_REQUIRED", "VAULT_IO", "VAULT_COMMIT_UNCERTAIN");
 
     /** Fixed public codes only; exception messages and unrecognized codes never become terminal reasons. */
     static boolean isEstablishedFailureCode(String code) {
         return code != null && ESTABLISHED_FAILURE_CODES.contains(code);
+    }
+
+    static boolean isCredentialSaveFailureCode(String code) {
+        return code != null && CREDENTIAL_SAVE_FAILURE_CODES.contains(code);
     }
 
     interface Sink {
@@ -246,7 +253,8 @@ final class SshTerminalSession {
             } else schedule(10);
         } catch (Exception error) {
             String code = error instanceof VaultException ? ((VaultException)error).code : null;
-            fail(isEstablishedFailureCode(code) ? code : "SSH_TERMINAL_IO");
+            fail(isEstablishedFailureCode(code) || !running && isCredentialSaveFailureCode(code)
+                    ? code : "SSH_TERMINAL_IO");
         }
         catch (Error error) { fail("SSH_TERMINAL_IO"); throw error; }
     }

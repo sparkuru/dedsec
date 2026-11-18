@@ -15,6 +15,7 @@ final class SshSessionOwner {
         SshNativeSession create(BooleanSupplier cancelled) throws Exception;
         default void cancellationAction(Runnable action) { }
         default SshReconnectTarget reconnectTarget() { return null; }
+        default boolean tracksCredentialSave() { return false; }
         @Override void close() throws Exception;
     }
     interface Dispatcher { void post(Runnable action); }
@@ -94,8 +95,10 @@ final class SshSessionOwner {
                                 lifecycle.state(state);
                             });
                             if ("running".equals(state)) connected.complete(mode);
-                            else connected.completeExceptionally(new VaultException("SSH_TERMINAL_START",
-                                    "SSH terminal closed before running"));
+                            else if (!"SSH_TERMINAL_CLEANUP_PENDING".equals(reason) || !factory.tracksCredentialSave()) {
+                                String code = terminalStartFailure(reason, factory.tracksCredentialSave());
+                                connected.completeExceptionally(new VaultException(code, "SSH terminal closed before running"));
+                            }
                         }
                     }, this::release);
             synchronized (this) {
@@ -105,8 +108,18 @@ final class SshSessionOwner {
             transferred = true;
             if (cancelled.get()) controller.stop(); else controller.start(columns, rows);
         } catch (Exception failure) {
-            connected.completeExceptionally(failure instanceof VaultException ? failure
-                    : new VaultException("SSH_FAILED", "SSH terminal could not start"));
+            // Order proof diagnostics against Stop and screen-lock cancellation.
+            synchronized (this) {
+                Exception reported = failure instanceof VaultException ? failure
+                        : new VaultException("SSH_FAILED", "SSH terminal could not start");
+                if (reported instanceof VaultException
+                        && SshHostKeyAuthority.PROOF_INVALID.equals(((VaultException) reported).code)
+                        && cancelled.get()) {
+                    reported = new VaultException(screenLocked.get() ? "SSH_SCREEN_LOCKED" : "SSH_CANCELLED",
+                            "SSH connection was cancelled");
+                }
+                connected.completeExceptionally(reported);
+            }
             publishFailure("SSH_TERMINAL_START");
             if (!transferred) closeUnattached(session);
         } catch (Error failure) {
@@ -128,7 +141,8 @@ final class SshSessionOwner {
             screenLocked.set(true);
             cancelled.set(true);
         }
-        connected.completeExceptionally(new VaultException("SSH_SCREEN_LOCKED", "SSH ended when the screen locked"));
+        if (!factory.tracksCredentialSave())
+            connected.completeExceptionally(new VaultException("SSH_SCREEN_LOCKED", "SSH ended when the screen locked"));
         dispatcher.post(() -> {
             if (released) return;
             SshTerminalSession current = terminal;
@@ -138,6 +152,14 @@ final class SshSessionOwner {
         });
         requestStop();
         return true;
+    }
+
+    private static String terminalStartFailure(String reason, boolean tracksSave) {
+        if (SshTerminalSession.isCredentialSaveFailureCode(reason) || "SSH_SCREEN_LOCKED".equals(reason))
+            return reason;
+        if (tracksSave && ("SSH_SESSION_CANCELLED".equals(reason) || "SSH_CALLBACK_CANCELLED".equals(reason)))
+            return reason;
+        return "SSH_TERMINAL_START";
     }
 
     CompletableFuture<Void> write(int expected, byte[] bytes) {
@@ -190,8 +212,10 @@ final class SshSessionOwner {
     }
 
     void requestStop() {
-        if (released) return;
-        cancelled.set(true);
+        synchronized (this) {
+            if (released) return;
+            cancelled.set(true);
+        }
         dispatcher.post(() -> { if (!released) lifecycle.state("stopping"); });
         SshTerminalSession current = terminal;
         if (current != null) current.requestCancel();

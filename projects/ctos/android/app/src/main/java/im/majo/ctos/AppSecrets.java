@@ -2702,6 +2702,58 @@ final class AppSecrets {
         finally { synchronized (this) { if (sshSecretReadWork == work) sshSecretReadWork = null; } }
     }
 
+    /** Inspect or copy only the saved entry for an admitted automatic prompt. */
+    boolean automaticPromptCredential(SshAuthenticationSelection selection, SshPasswordMailbox.Purpose purpose,
+            SshHostKeyAuthority.Proof host, SshKexProof kex, long deadline, EffectGuard prompt,
+            SshVaultAdapter.CredentialReceiver receiver) throws VaultException {
+        if (selection == null || purpose == null || host == null || kex == null || prompt == null
+                || !selection.automaticDiscovery || deadline != selection.role.deadline)
+            throw SshAuthenticationSelection.invalid();
+        boolean key = purpose == SshPasswordMailbox.Purpose.KEY_PASSPHRASE;
+        int method = key ? SshNativeSession.AuthDiscoveryStatus.PUBLIC_KEY : SshNativeSession.AuthDiscoveryStatus.PASSWORD;
+        if ((selection.automaticMethods & method) == 0 || key && selection.kind != SshCredentialBridge.Kind.PRIVATE_KEY)
+            throw SshAuthenticationSelection.invalid();
+        SshRoleContext role = selection.role;
+        EffectGuard guard = boundGuard(prompt, () -> {
+            selection.requireMatches(role, selection.kind, clock::now);
+            kex.requireMatches(role, host);
+        });
+        guard.check();
+        SshSecretReadContext context = newSshSecretReadContext(deadline, guard);
+        SshSecretReadWork work = captureSshSecretRead(context, null, null, null, null, null, null);
+        try (Verified verified = openSshSecretRead(work)) {
+            VaultManifest.Entry entry = automaticPromptEntry(verified.manifest, selection, key);
+            unchangedSshSecretRead(work);
+            guard.publish(() -> {
+                synchronized (publicationLock) { synchronized (session) {
+                    checkSshSecretMetadata(work);
+                    role.publishBound(clock::now, () -> {
+                        if (entry != null && receiver != null) receiver.receive(entry.secret);
+                    });
+                } }
+            });
+            checkSshSecretRead(work);
+            return entry != null;
+        } finally { finishSshSecretRead(work); context.cancel(); }
+    }
+
+    private static VaultManifest.Entry automaticPromptEntry(VaultManifest manifest,
+            SshAuthenticationSelection selection, boolean key) throws VaultException {
+        if (key) {
+            SshConnectionMaterial.requireSelection(manifest, selection);
+            SshConnectionMaterial.Key selected = SshConnectionMaterial.selectedKey(manifest, selection);
+            if (!selected.encrypted) throw SshAuthenticationSelection.invalid();
+            return SshKeyPassphrase.entry(manifest, selected.binding);
+        }
+        SshSavedPassword saved = new SshSavedPassword(new SshPasswordProfile(
+                selection.role.host, selection.role.port, selection.username));
+        if (!saved.present(manifest.accounts)) return null;
+        VaultManifest.Entry entry = findEntry(manifest, saved.entryId, VaultManifest.EntryType.SSH_PASSWORD);
+        if (!entry.identity.equals(saved.target)) throw SshAuthenticationSelection.invalid();
+        SshSavedPassword.validateSecret(entry.secret);
+        return entry;
+    }
+
     private VaultOperation beginSshSecret(VaultOperation.Purpose purpose, String resource, String target,
             String connectionId, VaultManifest.EntryType expectedType, SshSecretReadContext context) throws VaultException {
         if (target.isEmpty() || connectionId.isEmpty()) throw denied();

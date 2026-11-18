@@ -1,5 +1,247 @@
 # Verification
 
+<a id="20261118-ssh-automatic-credentials-device"></a>
+## 2026-11-18 SSH 自动凭据：开发板安装和实测
+
+按用户“自行安装；自行测试”的指示，在 `192.168.9.14:5555`（AIO-3568J，Android 11／API 30，arm64-v8a）备份原公开 APK `42b15865…`，验签后执行 `adb install -r`。开发板读回 SHA-256 为 `8b7cf8da61439866674a42c79e45e5b8c1561d3548dcf571452b38f0b6a4bce2`，与[候选 APK](../build/ssh-auto-credential-20261118-candidate/app-release.apk)一致。安装前后 UID `10131`、数据目录和首次安装时间一致，设备报告更新时间为 10:24:16。正式应用冷启动返回 `Status: ok`，测试清理后确认 MainActivity 仍在前台。
+
+- 在同一份源码构建的独立测试包 `im.majo.ctos.secretsfixture`（UID 10226）创建临时库，通过专用 ADB 反向端口连接本机回环合成 SSH 服务。两个监听分别只提供 password 或 publickey，终端返回固定文本。服务端先通过两条本机预检，每个监听的第 1 次连接为预检，独立于下列板端结果。
+- **登录密码实际 Flutter 界面通过**。核对完整主机指纹后才出现密码提示，当次输入后下一次仍无保存项，显式保存后可以选择复用。输入错误密码并勾选保存，服务端拒绝该次登录，随后旧密码仍可复用。取消未提交的新密码，再次使用旧密码成功。四次成功连接均实际建立 PTY 和远端模拟 shell，并从界面输出快照核对服务标识。最终方法状态 0、`OK (1 test)`、31.198 秒，服务端对应 password 连接 8–13。
+- 首轮密码 UI 在最后一次复用的测试驱动阶段失败，服务端第 7 次连接没有认证成功或打开终端。调整临时驱动，等待勾选后无障碍控件更新，再从空测试库完整重跑。产品 APK 与隔离主包均沿用原产物。
+- **加密私钥口令 Android 桥接／JNI 通过**。导入合成加密 Ed25519 私钥后，分别执行一次性使用、显式保存、已存口令复用，三次均建立 PTY 和模拟 shell 并收到标识。输错口令并尝试保存、取消后尝试迟到提交均未打开 shell，隔离库密文保持原样。方法状态 0、`OK (1 test)`、23.800 秒，服务端对应 publickey 连接 2–6。
+- 两个仪器方法均在独立包及合成库执行。独立包与正式包的 Flutter AOT 库 `libapp.so` 字节一致，另行构建的 SSH JNI 库摘要不同。密码用例通过实际 Flutter 控件，私钥口令用例通过实际桥接、JNI 与隔离库。正式包验证涵盖更新、包身份和启动，真实账户及真实服务器行为仍待验证。
+- 卸载本轮拥有的隔离主包和驱动，确认两个设备请求文件和两条 reverse 已移除。中断输出会话后发现合成服务仍在监听，核对脚本路径和 PID 后精确停止。最终确认专用 ADB 15079 和两个合成端口均无监听，正式包哈希仍为 `8b7cf8da…`。
+
+独立复核核对了 APK 身份、仪器状态、主机预检与设备连接编号以及验证范围。原 APK 备份、安装信息、两轮密码和私钥仪器结果、服务端报文阶段及清理记录位于 [本轮证据](../build/ssh-auto-credential-20261118-device.3lCYdxCk/)。1008 父任务保持进行中。
+
+<a id="20261118-ssh-automatic-credentials-local"></a>
+## 2026-11-18 SSH 自动提示保存和复用：本地检查
+
+沿 1008／R10，服务器驱动的密码和私钥口令提示可使用本次输入、显式保存或使用精确匹配的已存项。新输入在对应因素、最终认证和远端 shell 均成功后写入共享加密库。上一候选的[用户逻辑验收](#20261118-ssh-server-driven-acceptance)单独记录。
+
+- `dart format` 检查 5 个改动文件，`flutter analyze --no-pub` 无问题，`flutter test --no-pub --reporter expanded` **498 项通过**，均通过 `./hako` 执行。覆盖默认当次、已存项无明文上行、切换清除草稿、保存请求取消后等待固定回执，以及 320×680、640×360、两倍字号和模拟键盘下的操作。
+- `./hako bash -lc 'cd android && ./gradlew :app:testReleaseUnitTest :app:lintRelease --offline --console=plain'` **938 项／61 套通过**，失败、错误、跳过均为 0。正常 release lint 任务通过，报告生成命中缓存，报告为 0 错误／3 警告。测试覆盖加密清单下精确密码元组、所选密钥、方法及不同 KEX 绑定，票据拒绝，shell 确认前阻止发布，以及 Stop／锁屏中首次资源清理失败后的原始回执。这些 JVM 测试使用内存 Store 和注入式 native 边界。
+- 独立复核定位了保存后取消与资源清理重试可能覆盖写入回执的路径。修正后，清理待确认事件仍可报告，连接回执等待最终原因。实际凭据写入后若连接结果无法发布，沿共享库合同报告写入结果不确定。复核确认常规 shell 拒绝继续使用原结果。
+- 对照构建输入重跑前序 ARM64 客户端二进制，`prlimit --memlock=65536:65536 --core=0:0 -- qemu-aarch64` **3,218,415 项合成检查通过**；同架构配置夹具 **11,587 项通过**。客户端首次在默认沙箱中于 open 断言失败，获准在原测试环境中重跑后通过。原生测试覆盖原协议行为，本次凭据保存与复用由上列 Java 和 Flutter 检查覆盖。
+- `./hako flutter build apk --release --target-platform android-arm64 --no-pub` 构建了[候选 APK](../build/ssh-auto-credential-20261118-candidate/app-release.apk)。SHA-256 为 `8b7cf8da61439866674a42c79e45e5b8c1561d3548dcf571452b38f0b6a4bce2`，包名 `im.majo.ctos`，versionCode 1，minSdk 28／targetSdk 36，仅 arm64-v8a。APK v2 验签通过，单一开发证书 `8d36c8be…` 与已安装前序包相同。归档路径检查未发现 secretsfixture 或 AndroidTest 条目。
+
+首轮 JVM 的合成 shell 阶段测试使用了错误数字，改用实际枚举后通过。Flutter 首轮的三个旧文案断言已更新为覆盖密码和口令的“SSH 凭据”，行为断言保留。上节记录了本地构建后的正式安装与指定板合成测试。
+
+<a id="20261118-ssh-server-driven-install"></a>
+## 2026-11-18 SSH 服务器驱动认证：开发板安装
+
+按用户指示，将[最终 ARM64 候选](../build/ssh-server-driven-20261116-final-apk/app-release.apk)保留数据覆盖安装到 `192.168.9.14:5555`（AIO-3568J，Android 11／API 30）。本地 APK v2 验签通过，`adb install -r` 返回 `Success`，设备 `base.apk` SHA-256 为 `42b15865ce39ab6360cb68dec1e3eb6b068b8ba03a36dabafc48a169976fe0ef`，与候选一致。
+
+包名 `im.majo.ctos`，版本 `0.1.0`（versionCode 1）。安装前后 UID `10131`、数据目录 `/data/user/0/im.majo.ctos` 和首次安装时间一致。设备报告更新时间为 `2026-11-18 09:36:42`。本轮仅安装并核对包元数据，应用启动、新版 SSH 流程及真实服务器连接仍待验证。
+
+<a id="20261118-ssh-server-driven-acceptance"></a>
+## 2026-11-18 SSH 服务器驱动认证：用户逻辑验收
+
+按用户要求恢复 `192.168.9.5:22222` 原合成 SSH 测试服务，实际监听已核对。服务只接受开发板 `192.168.9.14`，最多运行 30 分钟或接收 32 次连接，终端仅返回模拟输出。此次生成的公开指纹为 `SHA256:XDgYS9D32g1GpBtYXbmjzqKQG9y4l/NwXeUOiNGg3tg`。
+
+用户随后确认“通过逻辑验收”并要求继续。此反馈覆盖已安装 `42b15865…` 候选的服务器驱动连接逻辑。用户未列出逐条测试步骤或真实服务器结果。按原计划继续接入自动提示中的保存与复用，1008 父任务保持进行中。
+
+<a id="20261116-ssh-server-driven-auth"></a>
+## 2026-11-16 SSH 服务器驱动认证：本地分层检查
+
+按用户新的连接心智模型，在主机指纹核验后，使用同一加密会话的实际 `none` 答复、
+配置允许的方法及选择的私钥，逐步完成密码、服务器真实问题或公钥认证；真实 PARTIAL
+才进入服务器随后列出的下一因素；普通拒绝后可询问最新列表中未尝试的其他方式，
+不将拒绝算作因素通过，也不重放凭据。`none` 本身成功不冒充密码／密钥成功。实现合同、
+可选私钥、认证拒绝和旧入口的范围见[设计](ssh-server-driven-authentication.md)。
+
+- `./hako flutter analyze --no-pub` 无问题；`./hako flutter test --no-pub --reporter
+  expanded` 最终全量 **495 项通过**。包含未知主机确认先于密码／加密私钥口令、
+  同时到达的确认与输入请求、仅公钥时无密钥提示、配置禁用公钥、旧 KBI 入口、
+  所选密钥被拒绝时状态事件／方法结果两种先后顺序的准确提示、认证问题与密码切换、
+  重连时配置／私钥不可用、精确回执、后台与迟到结果，以及
+  小屏键盘／横屏／大字号布局。Flutter 使用界面 mock，不证明 JNI 或远端连接。
+- `./hako bash -lc 'cd android && ./gradlew :app:testReleaseUnitTest :app:lintRelease
+  :app:testSshNativeClientHost :app:testSshConfigManagedDetachedStaticHost --offline
+  --console=plain'` 在认证方式切换修正后最终 **932 项／61 套 JVM 测试通过**，
+  失败、错误、跳过均为 0；
+  release lint 任务通过，报告显示 0 错误／3 警告，报告生成命中缓存。host native
+  和 config 测试任务本身只构建并报告 `runtime=not-run`；以下 QEMU 是单独的运行证据。
+- 在主机运行 `prlimit --core=0:0 -- qemu-aarch64
+  build/app/verification/sshConfigManagedDetachedStaticHost/ctos_ssh_config_managed_detached_test`，
+  实际合成配置 **11,587 项检查通过**，含 1,262 项基线、64 KiB memlock 子进程及
+  默认／自定义 `PreferredAuthentications`、禁用认证方法、非法值和 Host／Include
+  首值优先；effects／capabilities 为 0。不能从配置夹具推定 Android 端到端连接。
+- 在认证方式切换修正前使用 `./hako bash android/ssh/android-password-client-build.sh --output
+  /app/build/ssh-server-driven-prompt-20261116-final --client` 从当时输入构建静态
+  ARM64 程序；构建脚本要求全新目录，重跑须换目录。其输入清单在运行前核对通过，
+  程序 SHA-256 为 `c382562020b9910907f2bae02c16a682abadf74d3a442dfa21553a8889332b34`。
+  使用 `prlimit --memlock=65536:65536 --core=0:0 -- qemu-aarch64` 运行该程序的
+  `--auth-discovery-only`，加密合成 peer **200,005 项检查通过**，包括 `none`、
+  逐步公布的方法、真实 PARTIAL、密码／KBI／私钥顺序、失败与重放、实际 banner、
+  等待时断线及未请求的认证成功。此结果是 QEMU 与合成服务器，不是设备或真实服务。
+  同一程序去掉 `--auth-discovery-only` 完整运行 **3,174,614 项检查通过**，包含
+  既有终端、主机信任、保活、shell 和认证回归；运行后再次核对输入清单。
+- 跨层复核发现，用户尚未提交输入时普通 native `step()` 对空闲认证阶段返回
+  `EALREADY`，会导致自动提示提前中止；改用绑定会话、原计划和 KEX 的有界
+  `pollAuthPrompt`，交付秘密前再次检查。合成连接覆盖等待、真实 EOF／断开、非预期
+  成功与不读取凭据；JVM 使用真实 mailbox owner 线程和延迟响应检查不会调用空闲
+  `step()`，以及轮询失败后不能发送密码。生产 ARM64 JNI 库已编译且符号表包含
+  `pollAuthPrompt`，这不是实际 Android JNI 调用。
+- `./hako flutter build apk --release --target-platform android-arm64 --no-pub` 构建过
+  中间候选 [app-release.apk](../build/ssh-server-driven-20261116-candidate/app-release.apk)，
+  SHA-256 `535e875d39992c8ba3f5facf5e2a6b7a3d97ab1790fbbb070fe05fa296eb5e92`；
+  实际包名 `im.majo.ctos`、versionCode 1、minSdk 28／targetSdk 36，仅 arm64-v8a，
+  v2 验签通过、单一开发证书 `8d36c8be…`，文件名无 fixture／androidTest 条目。
+  APK 内经 strip 的 SSH 库与 release strip 产物摘要一致，包含 `pollAuthPrompt`
+  动态符号；未实际安装或运行，也不含后续认证方式切换修正。最初直接比对 APK 内库与未 strip 的生成库摘要不同，
+  定位为 release strip 阶段，改与实际打包输入比较后相符。
+- 中间 APK 构建重新生成了生产静态归档，导致先前合成程序的输入清单在打包后不再匹配该
+  归档。故用新归档再次构建 `build/ssh-server-driven-20261116-apklinked/ctos_ssh_native_client_test`，
+  程序 SHA-256 `b0d63da504677c644cd2721737ea94e76ae286990b47ce9533b82a6f5493448f`，
+  构建后输入清单通过；同一 QEMU 限额下认证发现专项再次 **200,005 项通过**，
+  完整客户端 **3,174,149 项通过**，运行后输入清单再次核对通过。这些均是方式切换
+  修正前的结果，不作为最终源码的回归证据。
+- 补齐普通拒绝后的备选方式后，最终 ARM64 候选为
+  [app-release.apk](../build/ssh-server-driven-20261116-final-apk/app-release.apk)，
+  SHA-256 `42b15865ce39ab6360cb68dec1e3eb6b068b8ba03a36dabafc48a169976fe0ef`。
+  `im.majo.ctos`、versionCode 1、minSdk 28／targetSdk 36，仅 arm64-v8a；v2 单一开发
+  签名 `8d36c8be…` 验证通过，文件名无 fixture／androidTest 条目。APK 内 SSH 库与
+  release strip 产物摘要相同，并包含 `pollAuthPrompt` 动态符号；未安装或运行。
+- 基于最终 APK 构建后生成的静态归档，再以 `./hako bash
+  android/ssh/android-password-client-build.sh --output
+  /app/build/ssh-server-driven-20261116-final-linked --client` 构建 QEMU 程序，
+  SHA-256 `bc7710fbad18c789145938cfd11524a916c463e2a18560765112ae5a6dc8ce94`；
+  输入清单核对通过。相同 QEMU 限额下认证发现专项 **240,730 项通过**，实际加密
+  合成 peer 覆盖所选公钥被拒后转密码或 KBI、服务器只保留公钥时不得尝试其他方式、
+  密码或 KBI 拒绝后仅能选择服务器仍允许且未尝试的其他方法，以及真实 PARTIAL。
+  普通拒绝不被视为因素通过，失败的方法不会自动重放。同一程序无参数完整运行
+  **3,213,979 项检查通过**，运行后再次核对输入清单。
+  随后仅修正 native 头文件中关于普通拒绝的合同注释，并重建到
+  `build/ssh-server-driven-20261116-final-linked-doc/`；测试程序摘要与刚运行的程序
+  **逐字节相同**，更新后的输入清单也通过。最终 APK 在该注释修正前打包，产品代码
+  行为未随注释改变。
+- 初轮 Flutter 回归有 3 项旧断言仍期待默认出现密码框；更新为新默认入口后通过。
+  重连用例初次因错误文案在滚动后尚未完成帧渲染而未找到，补一次渲染后通过；
+  同时增加主机确认尚未完成时密码提示不得越过的用例。初轮配置夹具误把 64 KiB
+  memlock 限制施加到整个程序，产生资源不足；按夹具设计改为只在其内部子进程限额
+  后通过。最初新增 JVM 断言漏导入 `assertNull`，补齐后重跑。方式切换专项首轮失败于
+  旧夹具假设自动密码前没有读取过私钥；改为精确核对已发私钥请求的读取次数后，
+  专项 **240,730 项通过**。这些失败均非最终通过结果。
+
+自动提示目前只支持本次输入；保存与复用仍可通过“其他认证方式”使用，尚需接入自动
+模式并按原受保护库合同验证。独立 KBI 首方法继续保留。本轮未操作设备、安装新 APK、
+读取真实凭据或连接真实服务器；实际 JNI／指定板／用户体验及真实账号兼容均需单独
+验证，不能从本地分层测试推定。完整 1008 父任务仍为进行中。
+
+<a id="20261116-ssh-request-tty"></a>
+## 2026-11-16 SSH RequestTTY no：本地检查
+
+沿 1008／R6 接入实际配置的 `RequestTTY no`／`false`，使用原计划字段与同一
+认证会话，不改变手动连接的默认 PTY；合同见[设计](ssh-request-tty.md)。
+
+- 首轮 `./hako bash -lc 'cd android && ./gradlew :app:testReleaseUnitTest --tests
+  im.majo.ctos.SshDirectConfigPlanTest --tests im.majo.ctos.SshNativeSessionTest
+  :app:testSshConfigManagedDetachedStaticHost :app:testSshNativeClientHost --offline
+  --console=plain'` 中配置夹具构建成功，整条命令因下述旧 JVM 断言失败；随后在主机
+  `qemu-aarch64
+  build/app/verification/sshConfigManagedDetachedStaticHost/ctos_ssh_config_managed_detached_test`
+  实际执行 **10,369 项检查通过**，含基线 1,262 项、独立 64 KiB memlock 子进程，
+  effects／capabilities 均为 0。覆盖 `no`／`false`、其他合法值、非法值、Host／
+  Include 首值优先、direct／profile 编码及既有不支持选项拒绝。
+- Android release JVM 全量 **906 项／59 套通过**、release lint 任务通过；lint 文本
+  显示 0 错误／3 警告，但报告生成任务命中缓存。随后在既有独立 KBI、MFA 测试中
+  加入相同会话的 no-PTY 配置断言，重跑 `SshNativeSessionTest` 和
+  `SshDirectConfigPlanTest` 共 **100 项通过**。首次定向运行有 1 项失败：旧的非法
+  wire 测试仍把值 1 当作拒绝值，改为越界值 4 后通过；没有用产品回退掩盖失败。
+- `:app:testSshNativeClientHost` 与固定归档静态矩阵均只编译，分别报告
+  `runtime=not-run`。最终静态程序在本机以 64 KiB memlock、禁用 core dump 运行
+  `--shell-only`，实际加密合成 peer **581,716 项检查通过**：密码／私钥、先 shell
+  后答复、无 PTY／window-change、早期输出门禁、拒绝／提前关闭／取消、错误线程、
+  视图失效及输入输出／EOF，并保留原 PTY 回归。相同程序无参数完整执行 **2,975,513
+  项检查通过**，含独立 KBI、密码／私钥后续接 KBI 和服务器保活回归。
+- 最终矩阵先用 `./hako bash android/ssh/android-password-client-build.sh --output
+  /app/build/ssh-request-tty-20261116-final --client` 构建，再分别执行
+  `prlimit --memlock=65536:65536 --core=0:0 -- qemu-aarch64
+  build/ssh-request-tty-20261116-final/ctos_ssh_native_client_test --shell-only` 和同一命令
+  去掉 `--shell-only`。构建脚本要求全新输出目录，重跑需换目录名。
+- 最初在默认沙箱内执行 QEMU 失败，追踪发现合成 socket 的 `getsockopt` 返回 EPERM；
+  放开本地执行限制后专项通过。失败进程产生的三个本次 core 及临时追踪文件已删除。
+  最终测试程序 SHA-256 为 `8d9a276a335de6970e9b7b2327446ee2999a34e9aab8c67eaf28aa1ba25799a1`；
+  其源码和固定归档摘要及构建前后输入一致性已核对。
+- 生产 ARM64 JNI 库已编译，静态符号表可见 `configureNoPty` 入口；这不是 Android
+  JNI 实际调用。Java 计划、native 配置和协议测试是分层证据，未将它们声称为从配置
+  导入到设备连接的端到端实测。
+
+本轮没有操作开发板、安装 APK、使用真实账号或连接真实服务器；无 PTY 的回显、提示符
+和控制字符行为仍需实际环境验证。完整 1008 父验收开放，首方法自动发现前保留独立 KBI。
+
+<a id="20261116-ssh-auth-proof-diagnostic"></a>
+## 2026-11-16 SSH 认证启动时的证明失败诊断：本地检查
+
+接续上一个 KEX 切片，将同一回调的固定主机证明失败诊断扩展到密码／私钥的
+首次认证启动。连接器在原认证请求有效且本次无受跟踪的凭据／换键信任写入时，
+返回既有 `SSH_HOST_PROOF_INVALID`；短连接期限不替代原认证期限。session 仍
+保持终态，取消、锁库、失效及不确定写入继续走原保护。
+
+- `./hako bash -lc 'cd android && ./gradlew :app:testReleaseUnitTest --tests
+  im.majo.ctos.SshNativeSessionTest --offline --console=plain'` 最终 **82 项通过**。
+  针对密码与私钥，夹具使用测试专用反射将另一角色的证明放入真实 Java 回调，
+  在注入的 native 启动调用中执行实际选中凭据回调；确认证明拒绝发生在夹具
+  秘密提供者之前、返回值为空、没有第二次 native 认证或 shell。另覆盖正常启动、
+  无关 native 错误、取消、视图失效、写入和不确定结果；额外覆盖 KEX 与认证启动
+  时不能将另一 session 的回调当作本次证明。两个期限使用合成时钟；
+  生产连接器选择原认证 `check()` 由源码调用关系核对，不把这称为配置端到端验证。
+- 首次定向运行 **80 项中 1 项失败**：测试误要求再次调用连接器时必须返回底层
+  `SSH_SESSION_CANCELLED`，而连接器可再次映射同一个诊断。修正为直接检查 session
+  终态、native 调用次数及回调无输出后通过；未以此修改产品逻辑掩盖失败。
+- `./hako bash -lc 'cd android && ./gradlew :app:testReleaseUnitTest :app:lintRelease
+  --offline --console=plain'` 初次完整 JVM **901 项／59 套通过**；随后将测试 guard
+  改为更准确表达认证期限，并增加 session 与回调的精确身份检查及跨连接回归。
+  最终重跑完整 JVM **902 项／59 套通过**，失败／错误／跳过均为 0；release lint
+  **0 错误、3 警告**，报告生成任务命中缓存。
+- `./hako flutter test --no-pub test/ssh_password_connect_test.dart --plain-name
+  'host proof and callback cancellation never offer changed-key recovery'` **1 项通过**；
+  原有证明错误和回调中止文案均不提供换键恢复入口。
+
+本轮没有读取真实凭据、操作开发板或真实服务器，也没有安装／发布新 APK。上述 JVM 回调
+夹具不等于 Android JNI、设备界面或真实服务器实测；其他认证阶段及完整父任务验收
+不由本增量推定，KBI 首方法自动发现前继续保留独立入口。
+
+<a id="20261116-ssh-host-proof-diagnostic"></a>
+## 2026-11-16 SSH KEX 主机证明失败诊断：本地检查
+
+接续 `b9782f9` 上的 1008 父任务。Java 回调如果在本次 KEX 中因主机证明绑定
+不一致失败，原 session 仍进入 `SSH_SESSION_CANCELLED` 终态；连接器仅在识别到
+同一个回调的固定 `SSH_HOST_PROOF_INVALID`、重验原连接及有效传输期限且本次尚未发生
+受跟踪的凭据／换键信任写入时，向现有界面返回证明失败码。已有受跟踪写入则保留
+原中止码，避免后续取消时绕过桥接的不确定写入保护。取消、锁屏和未确认写入的结果
+不能由此被误报为普通证明错误。
+
+本轮期间 HEAD 从 `b9782f9` 变为 `74cbf3e trellis upgrade`；只读核对该提交仅涉及
+Trellis 运行时，与本轮 SSH 源码、测试及记录无路径交集。本轮 SSH 修改仍留在工作区。
+
+- 初轮定向 Android JVM：`./hako bash -lc 'cd android && ./gradlew :app:testReleaseUnitTest
+  --tests im.majo.ctos.SshNativeSessionTest --tests im.majo.ctos.SshSessionOwnerTest
+  --tests im.majo.ctos.SshChangedHostFlowTest --offline --console=plain'` **113 项／3 套
+  通过**。复核发现 future 完成后仍可能取消，随后收紧已发生受跟踪写入时的诊断并
+  增加对应回归；定向结果是此前源码的阶段性结果，不作为最终源码的完整验证。
+- 收紧后重新运行 `./hako bash -lc 'cd android && ./gradlew :app:testReleaseUnitTest
+  :app:lintRelease --offline --console=plain'`，完整 JVM **899 项／59 套通过**，失败／
+  错误／跳过均为 0；release lint 分析任务通过，报告为 **0 错误、3 警告**，报告
+  生成任务命中缓存。JVM 覆盖真实 Java 回调与注入 native 失败、伪造异常文字、短
+  传输期限、视图失效、回调／session／产品取消、Stop／锁屏先后、失败终态不重放、
+  写入发生在重验前或重验期间，以及实际加密库中换键写入后未确认结果的独立断言。
+  注入 native 失败不是 JNI 或真实服务器实测。
+- 随后增加显式 session／回调取消与超时、视图失效和不确定写入同时发生的优先级
+  检查；同一组三套定向 JVM 回归 **114 项通过**。再次运行上述完整 JVM／lint 命令，
+  最终仍为 **899 项／59 套通过**、lint **0 错误／3 警告**，报告生成任务命中缓存。
+- `./hako flutter test --no-pub test/ssh_password_connect_test.dart --plain-name
+  'host proof and callback cancellation never offer changed-key recovery'` **1 项通过**，
+  覆盖两种错误及事件／回执路径，均不提供误导性的换键恢复操作。
+- 首次普通沙箱运行 `./hako flutter --version` 因 Docker socket 权限被拒；在获准的
+  执行环境再次运行成功，以上容器检查随后执行。未读取凭据、连接开发板或真实服务器，
+  未安装或发布新 APK，也未执行本次变更的 Android JNI 或人工验收。
+
+本节范围仅为 KEX 步骤的回调诊断。密码／私钥认证开始时的回调与原认证期限在后续
+[独立增量](#20261116-ssh-auth-proof-diagnostic)处理；不能据本节称所有认证阶段的
+回调错误均已精确透出。KBI 首方法自动发现、ProxyJump／转发及完整父 AC 均保持开放。
+
 <a id="20261116-ssh-early-output-device"></a>
 ## 2026-11-16 SSH 提前输出修正：指定板更新及复测
 

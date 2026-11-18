@@ -1,5 +1,8 @@
 # SSH 终端规划入口
 
+2026-11-16：配置 `RequestTTY no`／`false` 走无 PTY shell，手动和其他配置保留原行为；
+无 PTY 可能没有回显或终端控制语义。[设计与验证范围](ssh-request-tty.md)。
+
 2026-11-16：服务器保活设备测试发现部分服务器会在 shell 成功答复前发送通道输出；
 本地修复将其有界暂存，仍只在实际 shell 成功后发布。修正版已在指定板通过同顺序
 合成服务复测，详见[早期通道输出](ssh-shell-early-output.md)及[验证](verification.md#20261116-ssh-early-output-device)。

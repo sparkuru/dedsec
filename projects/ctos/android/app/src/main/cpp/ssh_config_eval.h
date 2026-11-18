@@ -52,6 +52,11 @@ struct ctos_ssh_config_summary {
     unsigned int has_raw_fields;
 };
 #define CTOS_SSH_CONFIG_HOSTFILES 32U
+enum ctos_ssh_config_auth_method {
+    CTOS_CONFIG_AUTH_PUBLICKEY = 1,
+    CTOS_CONFIG_AUTH_KEYBOARD_INTERACTIVE = 2,
+    CTOS_CONFIG_AUTH_PASSWORD = 3
+};
 struct ctos_ssh_config_direct_plan {
     struct ctos_ssh_config_summary summary;
     unsigned int identities_only, pubkey_authentication, password_authentication;
@@ -60,6 +65,7 @@ struct ctos_ssh_config_direct_plan {
     unsigned int publickey_then_keyboard_allowed;
     unsigned int connect_timeout_millis, strict_host_key_checking;
     unsigned int server_alive_interval, server_alive_count_max;
+    unsigned int preferred_authentication_order;
     unsigned int identity_count, hostfile_count;
     char identity_files[CTOS_SSH_CONFIG_LIST][513];
     char user_hostfiles[CTOS_SSH_CONFIG_HOSTFILES][513];

@@ -8,6 +8,7 @@ import '../secrets/api.dart';
 part 'library_api.dart';
 part 'host_trust_api.dart';
 part 'keyboard_api.dart';
+part 'password_prompt_api.dart';
 
 enum SshAttemptState { connecting, reviewing, connected, failed, cancelled }
 
@@ -90,6 +91,15 @@ sealed class SshEvent {
       case 'keyboardChallengeDismissed':
         _keys(value, {'type', 'requestId', 'ticketId'});
         return SshKeyboardChallengeDismissed(
+          requestId,
+          _identifier(value['ticketId']),
+        );
+      case 'passwordRequest':
+      case 'keyPassphraseRequest':
+        return SshPasswordRequest.parse(value);
+      case 'passwordRequestDismissed':
+        _keys(value, {'type', 'requestId', 'ticketId'});
+        return SshPasswordRequestDismissed(
           requestId,
           _identifier(value['ticketId']),
         );
@@ -225,6 +235,8 @@ final class SshHostKeyChangedDismissed extends SshEvent {
 }
 
 enum SshReconnectMode {
+  auto,
+  configAuto,
   password,
   key,
   config,
@@ -249,6 +261,8 @@ final class SshReconnectTarget {
   factory SshReconnectTarget.parse(Object? raw) {
     final value = _map(raw);
     final mode = switch (value['mode']) {
+      'auto' => SshReconnectMode.auto,
+      'configAuto' => SshReconnectMode.configAuto,
       'password' => SshReconnectMode.password,
       'key' => SshReconnectMode.key,
       'config' => SshReconnectMode.config,
@@ -268,10 +282,17 @@ final class SshReconnectTarget {
           'keyId',
         if (mode == SshReconnectMode.config ||
             mode == SshReconnectMode.configPassword ||
-            mode == SshReconnectMode.configKeyboard)
+            mode == SshReconnectMode.configKeyboard ||
+            mode == SshReconnectMode.configAuto)
           'configAlias',
       },
-      {'continueKeyboardInteractive', 'autoKeyboardInteractive'},
+      {
+        'continueKeyboardInteractive',
+        'autoKeyboardInteractive',
+        if (mode == SshReconnectMode.auto ||
+            mode == SshReconnectMode.configAuto)
+          'keyId',
+      },
     );
     final continuation = _sshOptionalBoolean(
       value,
@@ -281,7 +302,9 @@ final class SshReconnectTarget {
     if ((value.containsKey('continueKeyboardInteractive') &&
             value.containsKey('autoKeyboardInteractive')) ||
         ((mode == SshReconnectMode.keyboard ||
-                mode == SshReconnectMode.configKeyboard) &&
+                mode == SshReconnectMode.configKeyboard ||
+                mode == SshReconnectMode.auto ||
+                mode == SshReconnectMode.configAuto) &&
             (value.containsKey('continueKeyboardInteractive') ||
                 value.containsKey('autoKeyboardInteractive')))) {
       throw _invalid();
@@ -294,13 +317,19 @@ final class SshReconnectTarget {
       host: _host(value['host']),
       port: _port(value['port']),
       username: username,
-      keyId: mode == SshReconnectMode.key || mode == SshReconnectMode.config
+      keyId:
+          mode == SshReconnectMode.key ||
+              mode == SshReconnectMode.config ||
+              (mode == SshReconnectMode.auto ||
+                      mode == SshReconnectMode.configAuto) &&
+                  value.containsKey('keyId')
           ? _identifier(value['keyId'])
           : null,
       configAlias:
           mode == SshReconnectMode.config ||
               mode == SshReconnectMode.configPassword ||
-              mode == SshReconnectMode.configKeyboard
+              mode == SshReconnectMode.configKeyboard ||
+              mode == SshReconnectMode.configAuto
           ? _sshAlias(value['configAlias'])
           : null,
       continueKeyboardInteractive: continuation,
@@ -548,8 +577,12 @@ String sshConnectionError(Object error) {
     'VAULT_CHANGED' || 'VAULT_EXPIRED' => '秘密库或连接请求已变化，请重新打开连接页面。',
     'VAULT_FOREGROUND_REQUIRED' => '请回到前台后重新打开 SSH 连接。',
     'VAULT_PROTECTION_REQUIRED' => '未取得敏感页面保护，请重新打开 SSH 连接。',
-    'VAULT_COMMIT_UNCERTAIN' => '保存结果未能确认，请重新解锁并核验连接信息、已保存密码或主机密钥。',
+    'VAULT_COMMIT_UNCERTAIN' => '保存结果未能确认，请重新解锁并核验连接信息、SSH 凭据或主机密钥。',
+    'SSH_CREDENTIAL_SAVE' => '无法保存 SSH 凭据。请检查秘密库后重新连接。',
+    'VAULT_IO' => '无法完成秘密库操作。请检查秘密库后重新连接。',
     'SSH_PASSWORD_MISSING' => '此连接没有已保存密码，请输入密码后重试。',
+    'SSH_PUBLICKEY_REQUIRED' => '服务器要求公钥登录，请选择对应私钥后重试。',
+    'SSH_AUTH_UNSUPPORTED' => '服务器没有提供此配置允许的认证方式，请检查服务器和配置。',
     'SSH_HOSTKEY_CHANGED' ||
     'SSH_HOST_KEY_CHANGED' => '主机密钥与已保存记录不同，连接已拒绝。可在“私钥与配置 → 主机信任”核对并管理旧记录。',
     'SSH_HOST_PROOF_INVALID' => '主机身份验证未能完成，连接已停止。请重新连接并核对服务器信息。',
@@ -573,6 +606,7 @@ String sshConnectionError(Object error) {
     'SSH_KEYBOARD_AUTH' => '服务器交互式认证未完成或被拒绝，请重新连接后回答服务器问题。',
     'SSH_KEYBOARD_POLICY' => '此配置未允许服务器交互式认证，请检查配置中的认证方式。',
     'SSH_PASSWORD_POLICY' => '此配置未允许密码认证，请检查配置中的认证方式。',
+    'SSH_PASSWORD_CHANGE_REQUIRED' => '服务器要求修改密码；请先通过其他方式修改后重试。',
     'SSH_MFA_POLICY' => '此配置未允许所选的认证顺序，请检查认证方式和配置。',
     'SSH_MFA_AUTH' => '无法完成服务器要求的后续验证，请检查服务器及配置。',
     'SSH_KEYBOARD_CHALLENGE' => '服务器问题或回答已失效，请重新连接。',

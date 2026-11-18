@@ -1771,6 +1771,7 @@ class _Ui {
                 api: api,
                 columns: 80,
                 rows: 24,
+                initialAuthentication: SshInitialAuthentication.password,
                 reconnect: reconnect,
                 connectOnOpen: connectOnOpen,
               ),

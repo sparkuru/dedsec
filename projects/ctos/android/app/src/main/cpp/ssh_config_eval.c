@@ -195,6 +195,33 @@ static int direct_authentication_before(const char *list, const char *first, con
     return 0;
 }
 
+static int direct_authentication_order(const char *list, struct ctos_ssh_config_direct_plan *plan) {
+    unsigned int order[3] = {0}, count = 0, seen = 0;
+    if (list == NULL) list = "publickey,keyboard-interactive,password";
+    if (!direct_authentication_list(list, NULL))
+        return ctos_config_reject(CTOS_CONFIG_UNSUPPORTED, ENOTSUP);
+    while (*list != '\0') {
+        const char *end = strchr(list, ',');
+        if (end == NULL) end = list + strlen(list);
+        size_t length = (size_t)(end - list);
+        unsigned int method, enabled;
+        if (length == 9U && memcmp(list, "publickey", length) == 0) {
+            method = CTOS_CONFIG_AUTH_PUBLICKEY; enabled = plan->pubkey_authentication;
+        } else if (length == 20U && memcmp(list, "keyboard-interactive", length) == 0) {
+            method = CTOS_CONFIG_AUTH_KEYBOARD_INTERACTIVE; enabled = plan->keyboard_interactive_authentication;
+        } else if (length == 8U && memcmp(list, "password", length) == 0) {
+            method = CTOS_CONFIG_AUTH_PASSWORD; enabled = plan->password_authentication;
+        } else return ctos_config_reject(CTOS_CONFIG_UNSUPPORTED, ENOTSUP);
+        if (enabled && (seen & (1U << method)) == 0) {
+            if (count >= 3U) return ctos_config_reject(CTOS_CONFIG_UNSUPPORTED, ENOTSUP);
+            order[count++] = method; seen |= 1U << method;
+        }
+        list = *end == '\0' ? end : end + 1;
+    }
+    plan->preferred_authentication_order = order[0] << 16 | order[1] << 8 | order[2];
+    return 0;
+}
+
 int ctos_config_direct_keyword(const char *keyword, int active, int count, char **args) {
     if (current == NULL || current->direct_plan == NULL || !active) return 0;
     static const char *const accepted[] = {"host", "match", "include", "hostname", "user", "port",
@@ -202,9 +229,7 @@ int ctos_config_direct_keyword(const char *keyword, int active, int count, char 
         "requesttty", "pubkeyauthentication", "passwordauthentication", "kbdinteractiveauthentication",
         "challengeresponseauthentication", "serveraliveinterval", "serveralivecountmax"};
     for (size_t i = 0; i < sizeof(accepted) / sizeof(accepted[0]); i++) if (strcmp(keyword, accepted[i]) == 0) {
-        if (count == 1 && ((strcmp(keyword, "requesttty") == 0 &&
-                (strcasecmp(args[0], "no") == 0 || strcasecmp(args[0], "false") == 0)) ||
-                (strcmp(keyword, "pubkeyauthentication") == 0 && strcasecmp(args[0], "host-bound") == 0) ||
+        if (count == 1 && ((strcmp(keyword, "pubkeyauthentication") == 0 && strcasecmp(args[0], "host-bound") == 0) ||
                 (strcmp(keyword, "userknownhostsfile") == 0 && strcasecmp(args[0], "none") == 0)))
             return ctos_config_reject(CTOS_CONFIG_UNSUPPORTED, ENOTSUP);
         return 0;
@@ -966,7 +991,8 @@ static int finish_direct_plan(struct ctos_ssh_config_eval *e) {
     if (plan == NULL) return 0;
     const Options *o = &e->options;
     if (o->num_identity_files < 0 || o->num_identity_files > (int)CTOS_SSH_CONFIG_LIST ||
-        o->num_user_hostfiles > CTOS_SSH_CONFIG_HOSTFILES || o->request_tty == REQUEST_TTY_NO ||
+        o->num_user_hostfiles > CTOS_SSH_CONFIG_HOSTFILES ||
+        o->request_tty < REQUEST_TTY_AUTO || o->request_tty > REQUEST_TTY_FORCE ||
         o->session_type != SESSION_TYPE_DEFAULT || !clear_or_none(o->jump_host) ||
         !clear_or_none(o->remote_command) || o->num_local_forwards != 0 || o->num_remote_forwards != 0 ||
         o->num_certificate_files != 0 || o->host_key_alias != NULL ||
@@ -981,6 +1007,7 @@ static int finish_direct_plan(struct ctos_ssh_config_eval *e) {
         && direct_authentication_list(o->preferred_authentications, "password");
     plan->keyboard_interactive_authentication = o->kbd_interactive_authentication != 0
         && direct_authentication_list(o->preferred_authentications, "keyboard-interactive");
+    if (direct_authentication_order(o->preferred_authentications, plan) != 0) return -1;
     plan->password_then_keyboard_allowed = plan->password_authentication
         && plan->keyboard_interactive_authentication
         && direct_authentication_before(o->preferred_authentications, "password", "keyboard-interactive");

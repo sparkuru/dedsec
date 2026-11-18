@@ -140,6 +140,24 @@ public final class SshDirectConfigPlanTest {
             }
         }
     }
+
+    @Test public void hostProjectionDoesNotRequirePublickeyForPasswordKbiOrNone() throws Exception {
+        for (int enabled = 0; enabled < 4; enabled++) {
+            Binding binding = new Binding(); byte[] old = frame("remote");
+            binding.response = ByteBuffer.allocate(old.length + 4).put(old, 0, 24).putInt(enabled & 1)
+                    .put(old, 24, old.length - 24).array();
+            ByteBuffer.wrap(binding.response).putInt(0, 0x43535050).putInt(4, 2)
+                    .putInt(16, 0).putInt(20, enabled >> 1);
+            try (SshConfigEvaluator evaluator = SshConfigEvaluator.prepareProfileDirectDetached(() -> {}, binding)) {
+                evaluator.loadDetached(source(), 0, 31000, request()); evaluator.run();
+                SshConfigEvaluator.ProfilePlan plan = evaluator.profileDirectPlan();
+                java.util.Map<String,Object> row = SshProfilesBridge.profileHostRow("alias", "a".repeat(64), plan, List.of("key_1"));
+                assertEquals(List.of(), row.get("keyIds"));
+                assertFalse(row.containsKey("error"));
+                assertEquals("actual.example", row.get("host"));
+            }
+        }
+    }
     @Test public void versionThreeCarriesStrictConsumedChainPolicyAndLegacyNeverAuthorizesIt() throws Exception {
         for (boolean profile : List.of(false,true)) for (int flags = 0; flags < 8; flags++) {
             Binding binding = new Binding(); byte[] old = frame("remote");
@@ -199,6 +217,142 @@ public final class SshDirectConfigPlanTest {
                     }
                     binding.clean();
                 }
+            }
+        }
+    }
+
+    @Test public void requestTtyIsDecodedStrictlyAcrossPlanVersionsAndModes() throws Exception {
+        for (boolean profile : List.of(false, true)) for (int version = 1; version <= 4; version++) {
+            for (int tty : new int[] {-1, 0, 1, 2, 3, 4}) {
+                Binding binding = new Binding(); byte[] old = frame("remote");
+                int extra = version == 1 ? 0 : version == 2 ? 4 : version == 3 ? 12 : 20;
+                ByteBuffer wire = ByteBuffer.allocate(old.length + extra).put(old, 0, 24);
+                for (int i = 0; i < extra / 4; i++) wire.putInt(0);
+                wire.put(old, 24, old.length - 24).putInt(4, version).putInt(28 + extra, tty);
+                if (profile) wire.putInt(0, 0x43535050);
+                binding.response = wire.array();
+                try (SshConfigEvaluator evaluator = profile
+                        ? SshConfigEvaluator.prepareProfileDirectDetached(() -> { }, binding) : prepare(binding)) {
+                    evaluator.loadDetached(source(), 0, 31000, request()); evaluator.run();
+                    if (tty < 0 || tty > 3) {
+                        if (profile) rejected(evaluator::profileDirectPlan); else rejected(evaluator::directPlan);
+                    } else {
+                        SshConfigEvaluator.DirectPlan plan = profile ? evaluator.profileDirectPlan() : evaluator.directPlan();
+                        assertEquals(tty, plan.requestTty);
+                    }
+                    binding.clean();
+                }
+            }
+        }
+    }
+
+    private static byte[] authenticationOrderFrame(boolean profile, int mask, int order) throws Exception {
+        byte[] old = frame("remote");
+        ByteBuffer wire = ByteBuffer.allocate(old.length + 24).put(old, 0, 24)
+                .putInt((mask & 2) == 0 ? 0 : 1).putInt(0).putInt(0)
+                .putInt(0).putInt(3).putInt(order).put(old, 24, old.length - 24);
+        wire.putInt(4, 5).putInt(16, (mask & 1) == 0 ? 0 : 1)
+                .putInt(20, (mask & 4) == 0 ? 0 : 1);
+        if (profile) wire.putInt(0, 0x43535050);
+        return wire.array();
+    }
+
+    private static SshConfigEvaluator.DirectPlan authenticationOrderPlan(int mask, int order) throws Exception {
+        Binding binding = new Binding(); binding.response = authenticationOrderFrame(false, mask, order);
+        try (SshConfigEvaluator evaluator = prepare(binding)) {
+            evaluator.loadDetached(source(), 0, 31000, request()); evaluator.run();
+            SshConfigEvaluator.DirectPlan result = evaluator.directPlan(); binding.clean(); return result;
+        }
+    }
+
+    @Test public void versionFiveCarriesStrictOrderedEnabledMethods() throws Exception {
+        int[][] cases = {{0, 0}, {1, 0x010000}, {2, 0x020000}, {4, 0x030000},
+                {3, 0x010200}, {3, 0x020100}, {5, 0x010300}, {5, 0x030100},
+                {6, 0x020300}, {6, 0x030200}, {7, 0x010203}, {7, 0x010302},
+                {7, 0x020103}, {7, 0x020301}, {7, 0x030102}, {7, 0x030201}};
+        for (boolean profile : List.of(false, true)) for (int[] row : cases) {
+            Binding binding = new Binding(); binding.response = authenticationOrderFrame(profile, row[0], row[1]);
+            ByteBuffer.wrap(binding.response).putInt(52, 1);
+            try (SshConfigEvaluator evaluator = profile
+                    ? SshConfigEvaluator.prepareProfileDirectDetached(() -> { }, binding) : prepare(binding)) {
+                evaluator.loadDetached(source(), 0, 31000, request()); evaluator.run();
+                SshConfigEvaluator.DirectPlan plan = profile ? evaluator.profileDirectPlan() : evaluator.directPlan();
+                assertTrue(plan.authenticationOrderKnown); assertEquals(1, plan.requestTty);
+                List<SshConfigEvaluator.AuthenticationMethod> expected = new ArrayList<>();
+                for (int shift : new int[] {16, 8, 0}) switch (row[1] >>> shift & 0xff) {
+                    case 1: expected.add(SshConfigEvaluator.AuthenticationMethod.PUBLIC_KEY); break;
+                    case 2: expected.add(SshConfigEvaluator.AuthenticationMethod.KEYBOARD_INTERACTIVE); break;
+                    case 3: expected.add(SshConfigEvaluator.AuthenticationMethod.PASSWORD); break;
+                    default: break;
+                }
+                assertEquals(expected, plan.preferredAuthenticationOrder);
+                try { plan.preferredAuthenticationOrder.add(SshConfigEvaluator.AuthenticationMethod.PUBLIC_KEY); fail(); }
+                catch (UnsupportedOperationException expectedFailure) { }
+                binding.clean();
+            }
+        }
+        for (boolean profile : List.of(false, true)) for (int[] row : new int[][] {
+                {7, 0}, {7, 0x01020304}, {7, 0x010103}, {7, 0x010002},
+                {7, 0x010403}, {7, 0x010200}, {1, 0x010200}, {0, 0x030000}}) {
+            Binding binding = new Binding(); binding.response = authenticationOrderFrame(profile, row[0], row[1]);
+            try (SshConfigEvaluator evaluator = profile
+                    ? SshConfigEvaluator.prepareProfileDirectDetached(() -> { }, binding) : prepare(binding)) {
+                evaluator.loadDetached(source(), 0, 31000, request()); evaluator.run();
+                if (profile) rejected(evaluator::profileDirectPlan); else rejected(evaluator::directPlan);
+                binding.clean();
+            }
+        }
+        Binding legacy = new Binding(); legacy.response = frame("remote");
+        try (SshConfigEvaluator evaluator = prepare(legacy)) {
+            evaluator.loadDetached(source(), 0, 31000, request()); evaluator.run();
+            SshConfigEvaluator.DirectPlan plan = evaluator.directPlan();
+            assertFalse(plan.authenticationOrderKnown); assertTrue(plan.preferredAuthenticationOrder.isEmpty());
+            legacy.clean();
+        }
+    }
+
+    @Test public void authenticationOrderPolicyFreezesExactOrderAndLegacyUnknown() throws Exception {
+        SshPasswordConnector.AuthenticationOrderPolicy policy = new SshPasswordConnector.AuthenticationOrderPolicy();
+        assertFalse(policy.configured()); assertFalse(policy.known()); assertTrue(policy.order().isEmpty());
+        SshConfigEvaluator.DirectPlan first = authenticationOrderPlan(7, 0x010203);
+        policy.accept(first); policy.accept(authenticationOrderPlan(7, 0x010203));
+        assertTrue(policy.configured()); assertTrue(policy.known());
+        assertEquals(first.preferredAuthenticationOrder, policy.order());
+        policyCode("VAULT_CHANGED", () -> policy.accept(authenticationOrderPlan(7, 0x020103)));
+        policyCode("VAULT_CHANGED", () -> policy.accept(authenticationOrderPlan(3, 0x010200)));
+        assertEquals(first.preferredAuthenticationOrder, policy.order());
+        Binding legacy = new Binding(); legacy.response = frame("remote");
+        try (SshConfigEvaluator evaluator = prepare(legacy)) {
+            evaluator.loadDetached(source(), 0, 31000, request()); evaluator.run();
+            SshConfigEvaluator.DirectPlan old = evaluator.directPlan();
+            policyCode("VAULT_CHANGED", () -> policy.accept(old));
+            SshPasswordConnector.AuthenticationOrderPolicy legacyPolicy = new SshPasswordConnector.AuthenticationOrderPolicy();
+            legacyPolicy.accept(old); legacyPolicy.accept(old);
+            assertTrue(legacyPolicy.configured()); assertFalse(legacyPolicy.known());
+            policyCode("VAULT_CHANGED", () -> legacyPolicy.accept(first));
+        }
+    }
+
+    private static SshConfigEvaluator.DirectPlan ttyPlan(int tty) throws Exception {
+        Binding binding = new Binding(); binding.response = frame("remote");
+        ByteBuffer.wrap(binding.response).putInt(28, tty);
+        try (SshConfigEvaluator evaluator = prepare(binding)) {
+            evaluator.loadDetached(source(), 0, 31000, request()); evaluator.run();
+            SshConfigEvaluator.DirectPlan result = evaluator.directPlan(); binding.clean(); return result;
+        }
+    }
+
+    @Test public void ttyPolicyFreezesEveryEffectiveValueAcrossSnapshots() throws Exception {
+        SshPasswordConnector.TtyPolicy manual = new SshPasswordConnector.TtyPolicy();
+        assertFalse(manual.configured()); assertFalse(manual.noPty());
+        for (int tty = 0; tty <= 3; tty++) {
+            SshPasswordConnector.TtyPolicy policy = new SshPasswordConnector.TtyPolicy();
+            policy.accept(ttyPlan(tty)); policy.accept(ttyPlan(tty));
+            assertTrue(policy.configured()); assertEquals(tty == 1, policy.noPty());
+            for (int other = 0; other <= 3; other++) if (tty != other) {
+                SshConfigEvaluator.DirectPlan changed = ttyPlan(other);
+                policyCode("VAULT_CHANGED", () -> policy.accept(changed));
+                assertEquals(tty == 1, policy.noPty());
             }
         }
     }
@@ -316,7 +470,7 @@ public final class SshDirectConfigPlanTest {
         byte[] good = frame("remote", ".ssh/id");
         List<byte[]> invalid = new ArrayList<>();
         int[][] changes = {{0, 0}, {4, 2}, {8, 0}, {8, 65536}, {12, 2}, {16, 2}, {20, -1},
-                {24, 0}, {24, 3001}, {24, 61000}, {28, 1}, {32, 0}, {36, 1}, {40, -1}, {40, 257}, {44, 0}, {44, 33}};
+                {24, 0}, {24, 3001}, {24, 61000}, {28, 4}, {32, 0}, {36, 1}, {40, -1}, {40, 257}, {44, 0}, {44, 33}};
         for (int[] change : changes) {
             byte[] value = good.clone(); ByteBuffer.wrap(value).putInt(change[0], change[1]); invalid.add(value);
         }

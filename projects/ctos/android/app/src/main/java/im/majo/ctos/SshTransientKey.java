@@ -17,18 +17,56 @@ final class SshTransientKey implements AutoCloseable {
     private SshRoleContext role;
     private SshAuthenticationSelection selection;
     private Thread owner;
+    private final boolean deferred;
     private boolean attempted, closed;
 
     SshTransientKey(AppSecrets vault, SshPasswordProfile profile, SshConnectionMaterial.Key key,
             byte[] privateBody, byte[] phrase, long deadline, AppSecrets.EffectGuard origin,
             SshRoleContext.Clock clock) throws VaultException {
-        SshSavedPassword.validateSecret(phrase);
+        this(vault, profile, key, privateBody, phrase, deadline, origin, clock, false);
+    }
+
+    static SshTransientKey deferred(AppSecrets vault, SshPasswordProfile profile, SshConnectionMaterial.Key key,
+            byte[] privateBody, long deadline, AppSecrets.EffectGuard origin, SshRoleContext.Clock clock)
+            throws VaultException {
+        return new SshTransientKey(vault, profile, key, privateBody, null, deadline, origin, clock, true);
+    }
+
+    private SshTransientKey(AppSecrets vault, SshPasswordProfile profile, SshConnectionMaterial.Key key,
+            byte[] privateBody, byte[] phrase, long deadline, AppSecrets.EffectGuard origin,
+            SshRoleContext.Clock clock, boolean deferred) throws VaultException {
+        if (!deferred) SshSavedPassword.validateSecret(phrase);
+        else if (phrase != null) throw invalid();
         if (vault == null || profile == null || key == null || !key.encrypted || privateBody == null
                 || origin == null || clock == null || deadline <= clock.now()
                 || deadline - clock.now() > SshRoleContext.MAX_LIFETIME_MILLIS) throw invalid();
         this.vault = vault; this.key = key; account = new SshConnectionMaterial.KeyAccount(profile, key);
         this.deadline = deadline; this.origin = origin; this.clock = clock;
-        this.phrase = phrase.clone(); bodyDigest = VaultCodec.digest(privateBody);
+        this.deferred = deferred;
+        this.phrase = phrase == null ? null : phrase.clone(); bodyDigest = VaultCodec.digest(privateBody);
+    }
+
+    synchronized boolean needsPhrase() { return deferred && !closed && !attempted && phrase == null; }
+
+    void supplyPhrase(SshRoleContext candidate, SshHostKeyAuthority.Proof hostKey, SshKexProof kex,
+            AppSecrets.EffectGuard guard, byte[] value) throws VaultException {
+        try {
+            SshSavedPassword.validateSecret(value);
+            SshAuthenticationSelection chosen;
+            synchronized (this) {
+                if (!deferred || closed || attempted || phrase != null || candidate != role
+                        || guard == null || hostKey == null || kex == null)
+                    throw invalid();
+                chosen = selection;
+            }
+            requireSelection(chosen); guard.check();
+            hostKey.requireMatches(candidate); kex.requireMatches(candidate, hostKey);
+            synchronized (this) {
+                if (closed || attempted || phrase != null || selection != chosen) throw invalid();
+                phrase = value.clone();
+            }
+            guard.check(); requireSelection(chosen); hostKey.requireMatches(candidate); kex.requireMatches(candidate, hostKey);
+        } catch (VaultException | RuntimeException | Error failure) { close(); throw failure; }
     }
 
     void bind(SshRoleContext candidate, SshAuthenticationSelection chosen) throws VaultException {

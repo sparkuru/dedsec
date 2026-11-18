@@ -1,5 +1,24 @@
 # ctOS 产品与实施规划
 
+2026-11-18：用户确认已安装的服务器驱动 SSH 连接通过[逻辑验收](verification.md#20261118-ssh-server-driven-acceptance)。1008 沿 R10 接入自动提示的凭据保存与复用，通过本地回归和[指定板合成账户验收](verification.md#20261118-ssh-automatic-credentials-device)。真实服务器与完整父任务验收仍开放。
+
+2026-11-16：SSH 默认连接按用户新要求先选目标和可选私钥，再由实际服务器逐步驱动
+认证；本地分层回归通过。自动提示的保存／复用及实际 Android JNI、设备、真实服务器
+验收仍开放，独立 KBI 暂保留。[设计](ssh-server-driven-authentication.md)／
+[验证](verification.md#20261116-ssh-server-driven-auth)。
+
+2026-11-16：SSH 父任务继续 R6／AC3，`RequestTTY no` 源码已接入并完成本地分层
+验证；Android 设备、真实服务器和完整父验收仍开放。[检查](verification.md#20261116-ssh-request-tty)。
+
+2026-11-16：SSH 父任务继续完成密码／私钥认证启动时的证明失败诊断及本地回归；
+JNI、设备和真实服务器证据另列，完整父验收仍开放。
+[验证](verification.md#20261116-ssh-auth-proof-diagnostic)。
+
+2026-11-16：SSH 父任务新增无受跟踪写入时 KEX 内部主机证明失败的精确诊断，并完成本地回调、
+生命周期及写入优先级回归；认证启动阶段当时未覆盖，后续见上条；Android JNI 仍
+未在本增量验证，父任务仍在进行。
+[验证](verification.md#20261116-ssh-host-proof-diagnostic)。
+
 2026-11-16：SSH 父任务的服务器保活切片已完成本地实现及指定板受限合成服务的应答、
 无应答、后台和锁屏验证；后续发现的提前输出兼容修正已获授权更新指定板并通过同一
 时序复测。[实际证据](verification.md#20261116-ssh-early-output-device)；用户本人体验、
