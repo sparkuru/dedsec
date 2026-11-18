@@ -1,6 +1,6 @@
 # SSH 连接：按服务器要求认证
 
-状态：服务器驱动连接已通过 2026-11-16 本地分层检查，用户于 2026-11-18 确认已安装候选通过逻辑验收。凭据保存与复用随后接入自动提示并通过本地测试。1008 父任务保持进行中。[逻辑验收](verification.md#20261118-ssh-server-driven-acceptance)／[保存与复用本地验证](verification.md#20261118-ssh-automatic-credentials-local)。
+状态：服务器驱动连接已通过 2026-11-16 本地分层检查，用户于 2026-11-18 确认已安装候选通过逻辑验收。凭据保存与复用随后接入自动提示并通过本地测试。指定板隔离应用的 Android 默认界面已与 OpenSSH 完成 KBI 首方法及密码后 KBI 端到端测试；独立 KBI 的配置优先顺序仍有不同作用，暂予保留。1008 父任务保持进行中。[逻辑验收](verification.md#20261118-ssh-server-driven-acceptance)／[保存与复用本地验证](verification.md#20261118-ssh-automatic-credentials-local)／[OpenSSH 设备验证](verification.md#20261118-ssh-openssh-android-ui)。
 
 ## 用户期望
 
@@ -55,7 +55,11 @@
    私钥列表为空。自动重连仅携带公开目标和可选 key id，不携带旧输入或授权。
 5. 自动提示的已存项由公共加密库按实际主机、端口和用户名或所选加密私钥的确切身份匹配。界面接收可用性，用户勾选后只提交复用意图。连接 owner 在同一请求和主机证明下读取凭据。新输入只有在用户显式勾选、对应因素被服务器接受、最终认证和 shell 均成功后才在发布终端前保存。两个因素都符合时逐条执行已有的受保护写入并核对回执。所有输入和待保存副本在消费或结束时清理。
 
-验证记录分别报告配置和加密合成 peer、Java 会话与票据、Flutter 界面，以及用户在指定板上的逻辑验收。自动保存和复用已完成指定板的[隔离密码界面和私钥桥接验证](verification.md#20261118-ssh-automatic-credentials-device)，真实服务器仍待验收。
+验证记录分别报告配置和加密合成 peer、Java 会话与票据、Flutter 界面，以及用户在指定板上的逻辑验收。自动保存和复用已完成指定板的[隔离密码界面和私钥桥接验证](verification.md#20261118-ssh-automatic-credentials-device)。[隔离 OpenSSH](verification.md#20261118-ssh-openssh-interop) 已验证 ARM64 原生 KBI 首方法及密码后 KBI，[指定板端到端](verification.md#20261118-ssh-openssh-android-ui)随后验证了同两条手动目标路径；其他服务器和公钥后 KBI 不由此推定。
+
+## 独立交互认证入口
+
+2026-11-18 决定暂时保留“其他认证方式”中的独立 KBI。默认手动目标无私钥时会优先使用服务器提供的 KBI，本轮设备验证了 KBI-only 和密码后 KBI；但 config 自动入口按配置的 `PreferredAuthentications` 顺序选择。例如配置为 `password,keyboard-interactive`，且服务器同时提供两种可选方法时，自动入口先提示密码，该提示目前没有跳过方法的动作。独立 config KBI 在配置允许 KBI 时可直接选择服务器问题，而不必先输入或拒绝密码。这是当前源码中的实际行为差异，不由本轮测试推定所有服务器都需要该入口。若未来要移除入口，需先明确接受这一行为变化或提供受配置和服务器答复约束的替代选择，并分别验证 config 路径。
 
 ## 验证要求
 

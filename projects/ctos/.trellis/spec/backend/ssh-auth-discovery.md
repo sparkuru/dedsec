@@ -124,6 +124,34 @@ factors that actually passed.
 
 ## Required verification
 
+### 1. Scope / Trigger
+
+Use the isolated OpenSSH/PAM interoperability fixture for actual server-method discovery, KBI-first or password PARTIAL → KBI. Explicit config KBI can select KBI ahead of a configured password preference; do not remove that entry as redundant without a deliberate product decision or an equivalent bounded method-selection flow.
+
+### 2. Signatures
+
+`android-password-client-build.sh --output <new-build-dir> --auto-interop` builds the ARM64/Bionic driver. In a disposable container, `openssh-auto-interop-fixture.sh [test|serve]` runs the native cases or starts the two loopback listeners. `openssh-auto-loopback-relay.py <22222|22223>` forwards one stdio stream to the corresponding listener.
+
+### 3. Contracts
+
+Require a Docker container with only loopback, a fresh test account and temporary keys. The native test mode requires read-only QEMU and driver mounts; serve mode stops after 900 seconds. Transfer generated credentials through protected stdin/files, never logs or process arguments. Each live-device request uses the explicitly authorized target, exact package ownership checks and task-owned ADB reverse mappings.
+
+### 4. Validation & Error Matrix
+
+Non-container execution, a non-loopback interface, invalid mode, missing driver or preexisting fixture account must abort. A rejected KBI answer must not open a shell. A password PARTIAL must not open a shell until actual KBI success; cleanup acts only on resources proven to belong to the test.
+
+### 5. Good / Base / Bad Cases
+
+Good: KBI-first and password→KBI each finish through one real session and PTY. Base: a real PAM exchange can include a zero-prompt round requiring explicit UI continuation. Bad: interpreting a compiled driver, a mock UI or a native-only pass as an Android end-to-end result.
+
+### 6. Tests Required
+
+Assert the actual advertised method, prompt text/echo, successive rounds, PARTIAL and final result, server-side connection identity, shell output, rejection and cleanup. Report native/QEMU separately from the [Android UI/JNI result](../../../design/verification.md#20261118-ssh-openssh-android-ui).
+
+### 7. Wrong vs Correct
+
+Wrong: expose sshd on a LAN address or assume an empty denied socket listing proves cleanup. Correct: use loopback-only isolation, verify owned resources and distinguish no listener from transient TCP state.
+
 Use an encrypted synthetic peer for empty, exact and unknown methods, malformed
 lists/trailing bytes, partial and actual none SUCCESS, selected-password/key/KBI
 continuation, rejected key followed by password/KBI or key-only rejection,

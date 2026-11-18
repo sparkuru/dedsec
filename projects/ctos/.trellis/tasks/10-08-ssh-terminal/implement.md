@@ -1,5 +1,13 @@
 # SSH 终端实施计划
 
+## 2026-11-18 隔离 OpenSSH 互通（指定板端到端通过）
+
+1. [x] 在无网络的临时 OpenSSH／PAM 服务器上验证 ARM64 原生 KBI 首方法、密码 PARTIAL 后同连接 KBI、拒绝与 PTY shell。
+2. [x] 验证默认 Flutter 表单的主机指纹、服务器问题、隐藏回答及零问题轮次；该测试使用模拟桥接。
+3. [x] 用户授权后执行指定板隔离 UI 仪器测试，串起默认表单、Android JNI 和标准 OpenSSH；两条路径通过，测试资源已清理。[设备验证](../../../design/verification.md#20261118-ssh-openssh-android-ui)。
+4. [x] 核对旧入口与 config 自动顺序的差异，决定暂时保留独立 KBI；它仍可直接选择配置允许的 KBI，避免先询问排序更前的密码。[决定](../../../design/ssh-server-driven-authentication.md#独立交互认证入口)。
+5. [x] 记录具体结果、失败重试和未测范围；父 1008 保持进行中。[本地验证](../../../design/verification.md#20261118-ssh-openssh-interop)。
+
 ## 2026-11-18 自动凭据保存和复用（已安装并通过合成账户实测）
 
 1. [x] 记录用户对已安装自动认证候选的逻辑验收，沿现有 1008／R10 处理保存与复用。

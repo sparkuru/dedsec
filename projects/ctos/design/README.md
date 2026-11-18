@@ -1,5 +1,7 @@
 # ctOS 信息入口
 
+2026-11-18：指定板的 Flutter 默认入口经 Android JNI 与隔离 OpenSSH 9.2p1／PAM 完成 [KBI 首方法和密码后同连接 KBI 的端到端测试](verification.md#20261118-ssh-openssh-android-ui)。[独立 KBI 入口暂保留](ssh-server-driven-authentication.md#独立交互认证入口)：配置的方法顺序可能使它仍具有明确选择 KBI 的作用。
+
 2026-11-18：用户确认上一版服务器驱动 SSH 认证[逻辑验收通过](verification.md#20261118-ssh-server-driven-acceptance)。自动密码与私钥口令的保存和复用通过本地回归，候选 `8b7cf8da…` 已保留数据安装并启动。开发板用隔离应用与合成账户完成[密码界面、私钥口令桥接及回归测试](verification.md#20261118-ssh-automatic-credentials-device)。
 
 2026-11-16：用户明确新的[服务器驱动 SSH 认证流程](ssh-server-driven-authentication.md)：

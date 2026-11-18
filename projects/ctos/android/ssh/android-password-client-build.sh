@@ -27,7 +27,7 @@ style_text() {
 }
 usage() {
 	style_text "$STYLE_TITLE" 'Pinned static AArch64/Bionic SSH client test build'
-	printf '\nUsage: %s --output <new-/app/build/directory> [--client | --interop | --key-interop | --issuer]\n' "${0##*/}" >&2
+	printf '\nUsage: %s --output <new-/app/build/directory> [--client | --interop | --key-interop | --auto-interop | --issuer]\n' "${0##*/}" >&2
 	printf 'Build only; no target execution. Default: complete native client matrix.\n' >&2
 }
 die() {
@@ -62,7 +62,7 @@ parse_args() {
 			output_dir=$2
 			shift 2
 			;;
-		--client | --interop | --key-interop | --issuer)
+		--client | --interop | --key-interop | --auto-interop | --issuer)
 			mode=${1#--}
 			shift
 			;;
@@ -101,10 +101,11 @@ main() {
 	"$NDK_BIN/llvm-ar" d "$scratch_dir/compat-static.a" reallocarray.o
 	printf '_Thread_local _Alignas(64) unsigned char ctos_static_test_tls_alignment;\n' >"$scratch_dir/tls.c"
 	local binary=ctos_ssh_native_client_test test_source="$TEST_CPP/ssh_native_client_test.c"
-	if [[ "$mode" == interop || "$mode" == key-interop ]]; then
+	if [[ "$mode" == interop || "$mode" == key-interop || "$mode" == auto-interop ]]; then
 		binary=ctos_ssh_password_interop_test
 		test_source="$TEST_CPP/ssh_password_interop_test.c"
 		if [[ "$mode" == key-interop ]]; then binary=ctos_ssh_key_interop_test; fi
+		if [[ "$mode" == auto-interop ]]; then binary=ctos_ssh_auto_interop_test; fi
 	elif [[ "$mode" == issuer ]]; then
 		binary=ctos_ssh_hostfile_issuer_test
 		test_source="$TEST_CPP/ssh_hostfile_issuer_test.c"
@@ -124,6 +125,7 @@ main() {
 		-static -fno-pie -fno-emulated-tls '-Wl,--no-undefined' '-Wl,-z,max-page-size=16384'
 	)
 	if [[ "$mode" == key-interop ]]; then flags+=(-DCTOS_INTEROP_PRIVATE_KEY=1); fi
+	if [[ "$mode" == auto-interop ]]; then flags+=(-DCTOS_INTEROP_AUTOMATIC=1); fi
 	mkdir -p -- "${output_dir%/*}"
 	mkdir -- "$output_dir"
 	cp -- "$scratch_dir/baseline-before.sha256" "$output_dir/baseline-before.sha256"

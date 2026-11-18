@@ -12,7 +12,11 @@
 #define INTEROP_LABEL "SSH_KEY_INTEROP"
 #define INTEROP_INPUT_BYTES (CTOS_SSH_MATERIAL_BYTES + CTOS_SSH_MATERIAL_PASSPHRASE_BYTES + 16U)
 #else
+#ifdef CTOS_INTEROP_AUTOMATIC
+#define INTEROP_LABEL "SSH_AUTO_INTEROP"
+#else
 #define INTEROP_LABEL "SSH_PASSWORD_INTEROP"
+#endif
 #define INTEROP_INPUT_BYTES CTOS_SSH_NATIVE_CLIENT_MAX_PASSWORD_BYTES
 #endif
 
@@ -235,6 +239,106 @@ static int interop_number(const char *text, unsigned long maximum, unsigned long
     return errno == 0 && *end == 0 && *value <= maximum ? 0 : -1;
 }
 
+#ifdef CTOS_INTEROP_AUTOMATIC
+static int interop_auto_auth(struct fixture *fixture, const unsigned char *password,
+    size_t password_length, int password_first, int reject_answer) {
+    unsigned char plan[32], stage[92], challenge[CTOS_SSH_NATIVE_CLIENT_KBI_WIRE_BYTES];
+    size_t challenge_length = 0;
+    enum ctos_ssh_native_client_discovery_result discovery = CTOS_SSH_DISCOVERY_PENDING;
+    enum ctos_ssh_native_client_password_auth_result first = CTOS_SSH_PASSWORD_AUTH_PENDING;
+    enum ctos_ssh_native_client_keyboard_interactive_auth_result keyboard = CTOS_SSH_KEYBOARD_AUTH_PENDING;
+    unsigned int methods = 0, questions = 0, failure_line = 0;
+    const char *phase = "discovery";
+    struct wire response = {0};
+#define AUTO_REQUIRE(condition) do { if (!(condition)) { failure_line = __LINE__; goto fail; } } while (0)
+    AUTO_REQUIRE(password_length > 0U && password_length <= CTOS_SSH_NATIVE_CLIENT_KBI_TEXT_BYTES);
+    memcpy(plan, fixture->callback.expected_selection_receipt, sizeof(plan));
+    AUTO_REQUIRE(ctos_ssh_native_client_begin_auth_discovery(fixture->client) == 0);
+    while (discovery == CTOS_SSH_DISCOVERY_PENDING) {
+        AUTO_REQUIRE(interop_turn(fixture->client, fixture->deadline) == 0);
+        AUTO_REQUIRE(ctos_ssh_native_client_auth_discovery_result(fixture->client, &discovery, &methods) == 0);
+    }
+    AUTO_REQUIRE(discovery == CTOS_SSH_DISCOVERY_METHODS
+        && methods == (password_first ? CTOS_SSH_DISCOVERY_PASSWORD : CTOS_SSH_DISCOVERY_KEYBOARD_INTERACTIVE)
+        && fixture->callback.selected_calls == 0U);
+    printf(INTEROP_LABEL " phase=discovery status=pass method=%s\n", password_first ? "password" : "keyboard-interactive");
+    if (password_first) {
+        phase = "password-partial";
+        AUTO_REQUIRE(ctos_ssh_native_client_begin_discovered_password(fixture->client, plan,
+            password, password_length, stage) == 0);
+        while (first == CTOS_SSH_PASSWORD_AUTH_PENDING) {
+            AUTO_REQUIRE(interop_turn(fixture->client, fixture->deadline) == 0);
+            AUTO_REQUIRE(ctos_ssh_native_client_password_auth_result(fixture->client, &first) == 0);
+        }
+        AUTO_REQUIRE(first == CTOS_SSH_PASSWORD_AUTH_PARTIAL);
+        AUTO_REQUIRE(ctos_ssh_native_client_begin_shell(fixture->client, 80U, 24U) != 0 && errno == EACCES);
+        AUTO_REQUIRE(ctos_ssh_native_client_auth_continuation_methods(fixture->client, &methods) == 0
+            && methods == CTOS_SSH_DISCOVERY_KEYBOARD_INTERACTIVE);
+        AUTO_REQUIRE(ctos_ssh_native_client_continue_keyboard_interactive_auth(fixture->client, plan, stage) == 0);
+        AUTO_REQUIRE(read_u32(stage) == 0x43534150U && read_u32(stage + 4U) == 0x00020000U
+            && read_u32(stage + 8U) == 3U && read_u32(stage + 12U) == 3U
+            && read_u32(stage + 16U) == 3U && memcmp(stage + 20U, plan, sizeof(plan)) == 0);
+        printf(INTEROP_LABEL " phase=password status=partial next=keyboard-interactive shell=blocked\n");
+    } else {
+        phase = "keyboard-start";
+        AUTO_REQUIRE(ctos_ssh_native_client_begin_keyboard_interactive_auth(fixture->client) == 0);
+    }
+    phase = "keyboard-challenge";
+    while (keyboard == CTOS_SSH_KEYBOARD_AUTH_PENDING || keyboard == CTOS_SSH_KEYBOARD_AUTH_CHALLENGE) {
+        if (keyboard == CTOS_SSH_KEYBOARD_AUTH_CHALLENGE) {
+            static const char expected[] = "Password: ";
+            static const unsigned char wrong[] = "invalid-test-answer";
+            AUTO_REQUIRE(++questions <= CTOS_SSH_NATIVE_CLIENT_KBI_ROUNDS);
+            AUTO_REQUIRE(ctos_ssh_native_client_keyboard_interactive_challenge(fixture->client,
+                challenge, sizeof(challenge), &challenge_length) == 0);
+            AUTO_REQUIRE(challenge_length >= 24U && read_u32(challenge) == 0x43534b49U
+                && read_u32(challenge + 4U) == 0x00010000U && read_u32(challenge + 8U) == questions);
+            size_t name_length = read_u32(challenge + 12U), instruction_length = read_u32(challenge + 16U);
+            AUTO_REQUIRE(name_length <= challenge_length - 24U
+                && instruction_length <= challenge_length - 24U - name_length);
+            size_t offset = 24U + name_length + instruction_length;
+            unsigned int count = read_u32(challenge + 20U);
+            if (questions == 1U) {
+                AUTO_REQUIRE(count == 1U && challenge_length - offset >= 8U && read_u32(challenge + offset) == 0U
+                    && read_u32(challenge + offset + 4U) == sizeof(expected) - 1U
+                    && challenge_length - offset - 8U == sizeof(expected) - 1U
+                    && memcmp(challenge + offset + 8U, expected, sizeof(expected) - 1U) == 0);
+                printf(INTEROP_LABEL " phase=keyboard status=challenge prompt=Password: echo=false round=1\n");
+            } else {
+                AUTO_REQUIRE(count == 0U && challenge_length == offset);
+                printf(INTEROP_LABEL " phase=keyboard status=challenge prompts=0 round=%u\n", questions);
+            }
+            wire_u32(&response, 0x43534b52U); wire_u32(&response, 0x00010000U);
+            wire_u32(&response, questions); wire_u32(&response, count);
+            if (count != 0U) {
+                wire_u32(&response, (uint32_t)(reject_answer ? sizeof(wrong) - 1U : password_length));
+                wire_put(&response, reject_answer ? wrong : password, reject_answer ? sizeof(wrong) - 1U : password_length);
+            }
+            AUTO_REQUIRE(ctos_ssh_native_client_respond_keyboard_interactive(fixture->client,
+                response.bytes, response.length) == 0);
+            interop_wipe(&response, sizeof(response));
+        }
+        AUTO_REQUIRE(interop_turn(fixture->client, fixture->deadline) == 0);
+        AUTO_REQUIRE(ctos_ssh_native_client_keyboard_interactive_auth_result(fixture->client, &keyboard) == 0);
+    }
+    phase = "keyboard-result";
+    AUTO_REQUIRE(questions >= 1U && fixture->callback.selected_calls == 0U
+        && keyboard == (reject_answer ? CTOS_SSH_KEYBOARD_AUTH_REJECTED : CTOS_SSH_KEYBOARD_AUTH_SUCCESS));
+    if (reject_answer) {
+        AUTO_REQUIRE(ctos_ssh_native_client_begin_shell(fixture->client, 80U, 24U) != 0 && errno == EACCES);
+        printf(INTEROP_LABEL " phase=keyboard status=rejected shell=blocked\n");
+    } else printf(INTEROP_LABEL " phase=keyboard status=success\n");
+    interop_wipe(challenge, sizeof(challenge));
+    return 0;
+fail:
+    fprintf(stderr, INTEROP_LABEL " phase=%s status=fail line=%u errno=%d\n", phase, failure_line, errno);
+    interop_wipe(&response, sizeof(response));
+    interop_wipe(challenge, sizeof(challenge));
+    return -1;
+#undef AUTO_REQUIRE
+}
+#endif
+
 int main(int argc, char **argv) {
     struct fixture fixture = {0};
     unsigned char password[INTEROP_INPUT_BYTES] = {0}, known_hosts[8192];
@@ -249,6 +353,9 @@ int main(int argc, char **argv) {
     struct sockaddr_in address = {.sin_family = AF_INET};
     const char *phase = "arguments";
     int descriptor = -1, opened = 0, result = 1, saved_error = 0, binary_bundle = 0;
+#ifdef CTOS_INTEROP_AUTOMATIC
+    int auto_password_first = 0, auto_reject = 0;
+#endif
     FILE *known_stream = NULL;
     fixture.callback.release_fd = -1;
     setvbuf(stdout, NULL, _IOLBF, 0);
@@ -258,6 +365,17 @@ int main(int argc, char **argv) {
     /* Isolated test driver only: diagnose negotiation without packet payload dumps. */
     log_init(INTEROP_LABEL, SYSLOG_LEVEL_DEBUG3, SYSLOG_FACILITY_AUTH, 1);
 #define INTEROP_REQUIRE(condition) do { if (!(condition)) goto done; } while (0)
+#ifdef CTOS_INTEROP_AUTOMATIC
+    if (argc == 6 && (strcmp(argv[5], "--keyboard") == 0
+        || strcmp(argv[5], "--password-keyboard") == 0 || strcmp(argv[5], "--keyboard-reject") == 0)) {
+        auto_password_first = strcmp(argv[5], "--password-keyboard") == 0;
+        auto_reject = strcmp(argv[5], "--keyboard-reject") == 0;
+        argc--;
+    } else {
+        fprintf(stderr, "Automatic interop requires --keyboard, --password-keyboard or --keyboard-reject.\n");
+        goto done;
+    }
+#endif
 #ifdef CTOS_INTEROP_PRIVATE_KEY
     if ((argc == 6 || argc == 8) && strcmp(argv[5], "--key-bundle") == 0) {
         binary_bundle = 1;
@@ -362,7 +480,11 @@ int main(int argc, char **argv) {
         {(const unsigned char *)"interop-unencrypted", sizeof("interop-unencrypted") - 1U},
         {public_wire + CTOS_SSH_KEY_EXPORT_HEADER_BYTES, public_wire_length - CTOS_SSH_KEY_EXPORT_HEADER_BYTES}
 #else
+#ifdef CTOS_INTEROP_AUTOMATIC
+        {NULL, 0}, {NULL, 0}, {NULL, 0}, {NULL, 0}
+#else
         {(const unsigned char *)"interop-once", 12U}, {NULL, 0}, {NULL, 0}, {NULL, 0}
+#endif
 #endif
     };
 #ifdef CTOS_INTEROP_PRIVATE_KEY
@@ -373,7 +495,13 @@ int main(int argc, char **argv) {
         fixture.selection_wire.bytes[5] = 2U;
     }
 #else
+#ifdef CTOS_INTEROP_AUTOMATIC
+    make_selection_wire(&fixture.selection_wire, &snapshot, 3U, fields);
+    fixture.selection_wire.bytes[5] = 4U;
+    wire_u32(&fixture.selection_wire, CTOS_SSH_DISCOVERY_KEYBOARD_INTERACTIVE | CTOS_SSH_DISCOVERY_PASSWORD);
+#else
     make_selection_wire(&fixture.selection_wire, &snapshot, 1U, fields);
+#endif
 #endif
     INTEROP_REQUIRE(ssh_digest_memory(SSH_DIGEST_SHA256, fixture.selection_wire.bytes,
         fixture.selection_wire.length, fixture.callback.expected_selection_receipt, 32U) == 0);
@@ -407,6 +535,12 @@ int main(int argc, char **argv) {
     phase = "userauth-service";
     INTEROP_REQUIRE(ctos_ssh_native_client_begin_userauth_service(fixture.client) == 0);
     INTEROP_REQUIRE(interop_wait_for(fixture.client, INTEROP_SERVICE, fixture.deadline) == 0);
+#ifdef CTOS_INTEROP_AUTOMATIC
+    phase = "automatic-auth";
+    INTEROP_REQUIRE(interop_auto_auth(&fixture, password, password_length, auto_password_first, auto_reject) == 0);
+    interop_wipe(password, sizeof(password));
+    if (auto_reject) { result = 0; goto done; }
+#else
     phase = "selected-auth";
 #ifdef CTOS_INTEROP_PRIVATE_KEY
     INTEROP_REQUIRE(ctos_ssh_native_client_begin_private_key_auth(fixture.client) == 0);
@@ -421,6 +555,7 @@ int main(int argc, char **argv) {
     printf(INTEROP_LABEL " phase=publickey-auth status=success selected_calls=1\n");
 #else
     printf(INTEROP_LABEL " phase=password-auth status=success selected_calls=1\n");
+#endif
 #endif
     phase = "pty-shell";
     INTEROP_REQUIRE(ctos_ssh_native_client_begin_shell(fixture.client, 80U, 24U) == 0);

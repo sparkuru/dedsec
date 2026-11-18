@@ -1,5 +1,57 @@
 # Verification
 
+<a id="20261118-ssh-openssh-android-ui"></a>
+## 2026-11-18 SSH 自动认证：指定板与隔离 OpenSSH 端到端
+
+用户在审阅[准备方案](#20261118-ssh-openssh-interop)后回复“授权”。仅对 `192.168.9.14:5555` 执行：设备核对为 AIO-3568J、Android 11／API 30、arm64-v8a；两份隔离包安装前均不存在。使用专用 ADB server 15081、两条仅供本轮使用的 reverse 和主机回环中继，连接无网络的 OpenSSH 9.2p1／PAM 容器。测试账号和主机键临时生成，请求仅经 stdin 写入 shell-owned 0600 文件。
+
+- 隔离主包 `im.majo.ctos.secretsfixture` 的设备读回 SHA-256 为 `b8cb322443b73f249d7cb6fb3307d3b0ae5d3181180909d572b590be51ceea81`，初装 UID 10228；仪器包 `im.majo.ctos.secretsfixture.test` 初装 UID 10229，重试更新后的设备读回 SHA-256 为 `1d00709e5343c16a9ac30ec6fc80f8f00f38238c479c850605f10cf8f4b632ad`。两包签名核对通过，初装 UID 与正式应用 UID 10131 区分；仪器包更新后未单独重查 UID。
+- 实际 Flutter 默认入口在确认该测试服务的完整主机指纹后，面对仅允许 KBI 的 sshd，直接显示真实 `Password: ` 问题；回答字段被 Android 无障碍接口确认为隐藏输入，零问题的后续轮次由测试显式点击继续。完成后进入真实 PTY shell，执行拆分标识的命令并从终端输出快照核对结果。服务器连接、KBI 接受和 shell 使用源端口 37352。
+- 第二次从默认入口连接密码后 KBI 服务，先展示登录密码提示，再展示服务器真实问题并处理零问题轮次，最终执行不同的拆分标识并核对 shell 输出。服务器的密码 PARTIAL、KBI 接受和 shell 均使用同一源端口 38084。两因素由临时 PAM 测试账号使用相同密码，验证方法串联而非两个独立秘密。
+- 最终仪器方法 `defaultKeyboardAndPasswordContinuationThroughFlutter` 的结果为 `OK (1 test)`、28.595 秒。它使用实际 Flutter、Java 桥接、Android JNI 和 OpenSSH；不代表公钥后 KBI、其他设备或其他服务器配置已通过。
+- 复核后执行 `:app:lintSecretsFixtureRelease -PctosSecretsUiFixture=true --offline`，构建成功，报告为 0 错误、5 个既有文件警告；本次新增仪器代码未报告 lint 问题。
+- 首次仪器运行在首个真实问题的“提交回答”自动点击处失败，服务端记录连接关闭，未接受认证；原始结果保留。测试驱动随后增加仅在检测到输入法窗口时收起输入法的动作，清空本轮拥有的隔离测试库并用同签名测试包重跑通过；未单独记录该条件分支是否执行，不能将首轮原因确定为输入法遮挡。首轮前已给第二个 shell 使用独立标识，避免旧输出满足断言。
+- 清理前重新核对两包安装摘要，随后移除本轮请求文件、两条 reverse、两份隔离包、两个中继、容器及专用 ADB。最终两包 `pm path` 均为空且退出码为 1，请求不存在，reverse 为空，容器和监听均不存在；ADB 端口初查仅见短暂 TIME_WAIT，随后 TCP 状态为空。正式应用的公开 APK 摘要仍为 `8b7cf8da61439866674a42c79e45e5b8c1561d3548dcf571452b38f0b6a4bce2`，UID、数据目录、版本和首次／最后安装时间与测试前一致；未读取正式秘密库。
+
+安装前后公开身份、两轮仪器结果、服务端阶段日志及清理回执保存在[本轮证据](../build/ssh-openssh-auto-interop-20261118-packaged/device-run.coklVnGj/)。1008 父任务保持进行中。
+
+<a id="20261118-ssh-openssh-interop"></a>
+## 2026-11-18 SSH 自动认证：隔离 OpenSSH 互通
+
+在 `0795bf7` 上新增测试驱动，不改产品认证代码。使用本地镜像 `sshx-phase0-fixture:local`（镜像 ID `sha256:cb3eb061776d0835b474754593e692492c473a811607dbab68a815b02cedc70c`）中的 Debian OpenSSH 9.2p1 和 PAM；容器设 `--network none`，sshd 只监听容器的 `127.0.0.1`，主机无监听或可写挂载。账号、密码及主机键均在容器内临时生成，密码经 stdin 传入驱动。ctOS 驱动使用 ARM64／Bionic 的生产原生源码及 OpenSSH 10.6p1，运行于 QEMU；不是 Android JNI 或 Flutter 界面。
+
+- 仅 `keyboard-interactive:pam`：发现的唯一方法为 KBI，真实服务器发出 `Password: `、echo=false 的问题，随后发出零问题的第二轮。回答后认证成功，实际 PTY shell 的输出、37×91 resize 和退出状态 7 均通过。服务器日志的连接、认证和 shell 使用同一源端口 48226。
+- `password,keyboard-interactive:pam`：服务器先只公布 password；密码返回实际 PARTIAL，驱动确认此时不能启动 shell，再读取真实后续 KBI 方法并在原会话回答相同的两轮。服务器日志的 PARTIAL、KBI 成功和 shell 均使用同一源端口 43480；PTY、输出、resize 和退出状态通过。两因素均由测试 PAM 的 `pam_unix` 使用同一个临时密码，验证方法串联，不声称是两个独立秘密。
+- KBI 错误回答被服务器拒绝，驱动确认 shell 不可启动。三次连接的受管已知主机证明均先于认证。测试进程和容器已退出，最终容器查询为空。
+- Flutter 定向测试用模拟桥接重现主机指纹确认、真实同文案的 `Password: `、隐藏输入及零问题轮次的明确继续；SSH 自动连接和交互表单两组共 **138 项通过**，`flutter analyze --no-pub` 无问题。该测试没有连接真实 sshd，不能与上列原生结果合并冒充端到端。
+- 此阶段的 Android 仪器测试及隔离主包只完成构建，后续授权及 Flutter → Java → JNI → 标准 sshd 的实际结果见[设备验证](#20261118-ssh-openssh-android-ui)。公钥→KBI、生产服务器及其他 OpenSSH／PAM 配置未由本轮证明。
+
+构建模式为 `./hako bash android/ssh/android-password-client-build.sh --output /app/build/ssh-openssh-auto-interop-20261118-packaged --auto-interop`；该命令只编译。随后使用 [隔离夹具](../android/ssh/openssh-auto-interop-fixture.sh)、现存镜像和只读挂载的 QEMU／驱动执行，认证及服务日志在[本地构建证据](../build/ssh-openssh-auto-interop-20261118-packaged/openssh-interop-verified.log)，属于忽略的可清理产物。重建隔离 APK 后，原生归档摘要发生变化；最终驱动使用重新生成的归档 `cd361b31…` 编译并复验，不能声称驱动与 APK 是同一个二进制。旧 password／key 互通模式分别编译通过，未在本轮重跑其运行行为；两份 shell 脚本通过 ShellCheck，夹具通过 shfmt，回环 relay 通过 Ruff。
+
+隔离 UI 仪器测试使用 [SshOpenSshAutomaticUiPlatformTest](../android/app/src/androidTestSecretsFixture/java/im/majo/ctos/SshOpenSshAutomaticUiPlatformTest.java)，由 `:app:assembleSecretsFixtureRelease :app:assembleSecretsFixtureReleaseAndroidTest -PctosSecretsUiFixture=true --offline` 编译。准备阶段冻结[主包](../build/ssh-openssh-auto-interop-20261118-packaged/device-prepared/fixture.apk) SHA-256 `b8cb322443b73f249d7cb6fb3307d3b0ae5d3181180909d572b590be51ceea81` 与[当时的仪器包](../build/ssh-openssh-auto-interop-20261118-packaged/device-prepared/instrumentation.apk) `fb9c1ce07ec248aff845d756df07488d71c846696d0b01234cd5f2504afd65ca`，包名分别为 `im.majo.ctos.secretsfixture` 及其 `.test`，两者 v2 验签通过且签名摘要为 `8d36c8be…`。主包的 ARM64 Flutter `libapp.so` 与上一正式候选一致；SSH JNI 库摘要不同。实际运行使用的仪器包及其结果见上节。
+
+下列命令重放本地原生互通；要求项目固定构建输入、已有的上述镜像及宿主 `qemu-aarch64`。输出目录必须是未存在的新目录；镜像不属于本项目，缺失时须另行准备等价 OpenSSH/PAM 环境，不能把镜像名当作可下载的公开依赖。
+
+```sh
+PROJECT_ROOT="$(pwd -P)"
+./hako bash android/ssh/android-password-client-build.sh --output /app/build/ssh-openssh-interop-replay --auto-interop
+docker run --rm --network none --cap-drop ALL \
+  --cap-add SETUID --cap-add SETGID --cap-add CHOWN --cap-add DAC_OVERRIDE \
+  --cap-add FOWNER --cap-add SYS_CHROOT --cap-add KILL --cap-add AUDIT_WRITE \
+  --security-opt no-new-privileges --pids-limit 96 --memory 512m \
+  --tmpfs /tmp:rw,nosuid,nodev,mode=1777 --tmpfs /run:rw,nosuid,nodev,mode=755 \
+  --mount type=bind,src=/usr/bin/qemu-aarch64,dst=/test/qemu,readonly \
+  --mount "type=bind,src=$PROJECT_ROOT/build/ssh-openssh-interop-replay/ctos_ssh_auto_interop_test,dst=/test/driver,readonly" \
+  --mount "type=bind,src=$PROJECT_ROOT/android/ssh/openssh-auto-interop-fixture.sh,dst=/test/run.sh,readonly" \
+  --entrypoint /bin/sh sshx-phase0-fixture:local /test/run.sh
+```
+
+设备测试方案已用容器 `serve` 模式同时开启两个只监听容器回环的 sshd，再通过主机 `127.0.0.1` 上的 socat 和 [stdio relay](../android/ssh/openssh-auto-loopback-relay.py) 转入容器进行本机预检。两条路径均经该中继完成原生认证及 shell，服务端记录各自的源端口和 MFA 阶段，日志在同一证据目录的 `relay-*.log`。服务限定 900 秒并已停止；本机两个预检端口在清理后可重新绑定，临时密码目录和标记容器已删除。默认沙箱的 `ss` 因 netlink 权限失败，没有把其空输出作为清理证据。
+
+此前准备的设备方案限定 `192.168.9.14:5555`、独立测试包、专用 ADB 和两条 reverse，要求先证明包不存在及清理归属。用户随后授权，实际执行和清理结果见[上节](#20261118-ssh-openssh-android-ui)。
+
+首轮驱动误用选中私钥时才适用的 KBI 启动 API；第二轮临时密码含换行而被拒绝；第三轮驱动未处理 PAM 的零问题后续轮次；第四轮缺少容器 `AUDIT_WRITE` 导致认证后 shell 启动失败。分别修正测试驱动、临时密码、轮次处理和容器所需能力后重跑通过；这些不是产品代码修复。各轮临时日志保存在 `/tmp/ctos-openssh-auto-*.log`，可能随系统清理消失。
+
 <a id="20261118-ssh-automatic-credentials-device"></a>
 ## 2026-11-18 SSH 自动凭据：开发板安装和实测
 

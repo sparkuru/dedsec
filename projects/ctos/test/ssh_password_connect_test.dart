@@ -82,6 +82,99 @@ void main() {
     await host.remove();
   });
 
+  testWidgets('automatic connection shows PAM questions after host review', (
+    tester,
+  ) async {
+    final host = _SshHost(tester);
+    await host.mount(automatic: true);
+    await tester.tap(find.text('Open SSH'));
+    await host.advance();
+    for (final field in {
+      'ssh-host': 'server.invalid',
+      'ssh-port': '2222',
+      'ssh-username': 'alice',
+    }.entries) {
+      await tester.enterText(find.byKey(Key(field.key)), field.value);
+    }
+    await host.tapConnect();
+    final id = host._arguments('ssh.autoConnect').single['requestId'] as String;
+    expect(host._arguments('ssh.keyboardConnect'), isEmpty);
+    await host.emit(_ticket(id));
+    expect(find.text('信任并保存'), findsOneWidget);
+    expect(find.byKey(const Key('ssh-keyboard-dialog')), findsNothing);
+    await tester.tap(find.text('信任并保存'));
+    await host.advance();
+    await host.emit({
+      'type': 'keyboardChallenge',
+      'requestId': id,
+      'ticketId': 'pam_round_1',
+      'binding': 'e' * 64,
+      'round': 1,
+      'name': '',
+      'instruction': '',
+      'prompts': [
+        {'text': 'Password: ', 'echo': false},
+      ],
+      'remainingMillis': 25000,
+    });
+    await host.advance();
+    expect(find.text('Password: '), findsOneWidget);
+    final input = tester.widget<TextField>(
+      find.descendant(
+        of: find.byKey(const Key('ssh-keyboard-answer-0')),
+        matching: find.byType(TextField),
+      ),
+    );
+    expect(input.obscureText, isTrue);
+    expect(host._arguments('ssh.keyboardResponse'), isEmpty);
+    await tester.enterText(
+      find.byKey(const Key('ssh-keyboard-answer-0')),
+      'synthetic',
+    );
+    await tester.tap(find.byKey(const Key('ssh-keyboard-submit')));
+    await host.advance();
+    final first = host._arguments('ssh.keyboardResponse').single;
+    expect(first['ticketId'], 'pam_round_1');
+    expect(first['answers'], ['synthetic']);
+    await host.emit({
+      'type': 'keyboardChallengeDismissed',
+      'requestId': id,
+      'ticketId': 'pam_round_1',
+    });
+    await host.emit({
+      'type': 'keyboardChallenge',
+      'requestId': id,
+      'ticketId': 'pam_round_2',
+      'binding': 'f' * 64,
+      'round': 2,
+      'name': '',
+      'instruction': '',
+      'prompts': <Object>[],
+      'remainingMillis': 25000,
+    });
+    await host.advance();
+    expect(find.text('继续'), findsOneWidget);
+    expect(host._arguments('ssh.keyboardResponse'), hasLength(1));
+    await tester.tap(find.byKey(const Key('ssh-keyboard-submit')));
+    await host.advance();
+    final second = host._arguments('ssh.keyboardResponse').last;
+    expect(second['ticketId'], 'pam_round_2');
+    expect(second['answers'], isEmpty);
+    await host.emit({
+      'type': 'keyboardChallengeDismissed',
+      'requestId': id,
+      'ticketId': 'pam_round_2',
+    });
+    host.connectResults.single.complete({
+      'requestId': id,
+      'status': 'connected',
+    });
+    await host.advance();
+    await host.advance();
+    expect(find.byType(SshPasswordConnectPage), findsNothing);
+    await host.remove();
+  });
+
   testWidgets(
     'automatic selected key asks for its passphrase only after connecting',
     (tester) async {
