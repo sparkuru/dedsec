@@ -1,0 +1,5 @@
+
+/archive/
+
+# Retain completed Trellis task records despite the parent repository's archive rule.
+!/.trellis/tasks/archive/

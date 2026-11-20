@@ -1,0 +1,7 @@
+{"file": ".trellis/mainline.md", "reason": "Current requirements and verified boundaries"}
+{"file": ".trellis/spec/trellis-plus/index.md", "reason": "Project policy index and loading rules"}
+{"file": ".trellis/spec/trellis-plus/development-principles.md", "reason": "Project scope and evidence discipline"}
+{"file": ".trellis/spec/trellis-plus/android-capabilities.md", "reason": "Android capability and identity contracts"}
+{"file": ".trellis/spec/trellis-plus/development.md", "reason": "Device selection and development checkpoints"}
+{"file": ".trellis/spec/trellis-plus/validation.md", "reason": "Device validation and review rules"}
+{"file": ".trellis/tasks/11-20-verify-thanox-pro-api/research/device-proof.md", "reason": "Observed Thanox Pro device evidence"}

@@ -1,0 +1,9 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="dev.thanoxbridge.target.verify20261120"
+    android:versionCode="1"
+    android:versionName="1">
+    <uses-sdk android:minSdkVersion="28" android:targetSdkVersion="35" />
+    <application android:allowBackup="false" android:hasCode="false" android:label="Thanox Test Target">
+        <receiver android:name=".TargetReceiver" android:exported="false" />
+    </application>
+</manifest>

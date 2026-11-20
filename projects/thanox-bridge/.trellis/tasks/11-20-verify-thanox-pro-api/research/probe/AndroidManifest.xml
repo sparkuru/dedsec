@@ -1,0 +1,13 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="dev.thanoxbridge.probe.verify20261120"
+    android:versionCode="3"
+    android:versionName="3">
+    <uses-sdk android:minSdkVersion="28" android:targetSdkVersion="35" />
+    <queries>
+        <package android:name="dev.thanoxbridge.target.verify20261120" />
+    </queries>
+    <application android:allowBackup="false" android:label="Thanox API Probe">
+        <activity android:name=".ProbeActivity" android:exported="true" />
+        <receiver android:name=".ProbeReceiver" android:exported="true" />
+    </application>
+</manifest>
