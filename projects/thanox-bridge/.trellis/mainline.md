@@ -5,7 +5,7 @@
 - Title: Thanox Bridge.
 - Objective: an on-demand Flutter Android application with a Kotlin integration layer that wraps Thanox and uses explicitly granted Root access for auxiliary operations.
 - Requirement authority: the user's 2026-11-20 requirements, preserved in `.trellis/tasks/archive/2026-11/00-bootstrap-guidelines/product-requirements.md`; those requirements are current, but do not themselves start product implementation.
-- Parent task: none. Bootstrap was moved to `.trellis/tasks/archive/2026-11/00-bootstrap-guidelines/` with its archive commit and snapshot verification pending; the existing device-verification task remains separate.
+- Parent task: none. Bootstrap is archived at `.trellis/tasks/archive/2026-11/00-bootstrap-guidelines/`; its archive commit is `dab839ffd4f2cb322330efe69759237cb99e6d0f`. That commit was independently exported and its task contexts, policy links and required files were verified without local platform state. The existing device-verification task remains separate.
 
 ## Current scope and acceptance
 

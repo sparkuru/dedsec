@@ -35,15 +35,15 @@ Scope: authorized initialization for the user's Flutter + Kotlin Thanox Bridge r
 | 26 | N/A | No product UI exists to exercise on a device or viewport. |
 | 27 | PASS | Review policy limits manual feedback to actual residual risk and does not substitute it for runnable automation. |
 | 28.1 | PASS | The exact Codex archive trailer and once-per-task scope are documented. |
-| 28.2 | GAP | The initialization archive commit has not yet been authorized or created. |
+| 28.2 | PASS | The user authorized the project-scoped commit. Archive commit `dab839ffd4f2cb322330efe69759237cb99e6d0f` contains exactly one `Co-authored-by: OpenAI Codex <codex@openai.com>` trailer. |
 | 29 | PASS | Installed archive supports `--no-commit`; its default may auto-stage/commit, so the project policy requires the explicit no-auto-commit route. |
 | 30 | PASS | Current user requirements and their approval status are preserved in the bootstrap product requirements and mainline; product implementation is not authorized by import. |
 | 31.1 | PASS | Mainline lifecycle and evidence rules are installed. |
 | 31.2 | N/A | Later implementation, interruption and post-archive lifecycle runs have not occurred. |
 | 32 | PASS | Mainline uses guided continuation with no serial implementation authorization. |
 | 33 | PASS | The current skill-local checklist and all default enhancement references were read; this table preserves every current ID without copying the checklist as project policy. |
-| 34 | GAP | `00-bootstrap-guidelines` was moved with `--no-commit` and reports completed, but its required archive commit and delivery-snapshot verification are still pending. |
-| 35 | GAP | Initialization is not yet complete: actual tracked delivery and independent snapshot validation are pending. |
-| 36 | PASS | The authorized 80-path Git index was exported independently to a temporary checkout without local state, platform files or the ignored Thanox archive. Task listing, both context validations, spec discovery and required source/notice checks passed; final changed files must be restaged and the resulting snapshot rechecked before delivery. |
+| 34 | PASS | `00-bootstrap-guidelines` was moved with `--no-commit`; its committed archive has `status=completed`, `completedAt=2026-11-20` and is absent from the active task list. The archive commit and its single required trailer were verified. |
+| 35 | PASS | The actual 80-path archive commit matched the authorized path manifest exactly and was independently exported. Required runtime, source requirements, shared policy, provenance, task status and both task contexts were checked in that export. |
+| 36 | PASS | Commit `dab839ffd4f2cb322330efe69759237cb99e6d0f` was exported independently without local state, platform files or the ignored Thanox archive. Task listing, both context validations, spec discovery, context references, policy links and required source/notice checks passed. |
 
 The existing device-verification task remains `planning`; it was not archived or repurposed by this bootstrap. Local UUPM initialization created seven related ignored Codex skill directories, and its installer says a Codex restart may be needed for automatic discovery. The current session verified the script directly, not future automatic skill or worker-hook loading.
