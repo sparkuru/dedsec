@@ -175,6 +175,8 @@ main() {
         docker run --rm "${tty_flags[@]}" "${network_flags[@]}"
         --user "$uid_gid"
         -e HOME=/app/.devhome
+        -e GRADLE_USER_HOME=/app/.devhome/.gradle
+        -e JAVA_TOOL_OPTIONS=-Duser.home=/app/.devhome
         -e "FLUTTER_ROOT=${container_sdk}"
         -e "FLUTTER_HOME=${container_sdk}"
         -e "ANDROID_HOME=${container_android_sdk}"
