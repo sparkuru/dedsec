@@ -30,6 +30,15 @@ Validate the previously identified Thanox Pro service and determine whether an i
 
 The observations, limitations, cleanup checks, and probe source are retained in `research/`.
 
+## Development-container initialization
+
+The user requested reusing this task to initialize `dev-it-in-docker`. The product stack is Flutter and Kotlin for Android, but this repository does not yet contain a product manifest, build command, or development service. The locally available `ghcr.io/cirruslabs/flutter:3.35.7` image supplies a concrete initial Flutter and Android toolchain; it is a development baseline, not a product compatibility decision.
+
+- [x] Provide an executable, ephemeral `hako` wrapper that runs commands as the host UID/GID with a project-local, ignored HOME and writable Flutter and Android SDK copies.
+- [x] Verify the actual container toolchain and UID behavior, including repeated execution, and record any Android SDK or device-access limitations.
+- [x] Do not invent a product command, server, port, or `dev.sh` before such a service exists.
+- [x] Preserve the existing Codex sandbox and approval policy, and document the established toolchain in the development-environment specification.
+
 ## Out of scope
 
 - Building the product wrapper or changing Thanox configuration and managed applications.

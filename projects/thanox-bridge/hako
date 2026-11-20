@@ -1,0 +1,196 @@
+#!/usr/bin/env bash
+# hako - Run development commands in ghcr.io/cirruslabs/flutter:3.35.7.
+# The host needs Docker and standard shell tools, but not Flutter or Android SDK.
+# The repository is mounted at /app with the host UID/GID and HOME in .devhome.
+#
+# Usage:
+#   ./hako flutter --version
+#   ./hako dart --version
+#   ./hako java -version
+#   ./hako sdkmanager --list_installed
+#   ./hako bash
+#
+# The first run copies Flutter and Android SDKs into .devhome so the host user
+# can update caches and install Android SDK packages. The copies occupy about
+# 2.2 GiB. HAKO_IMAGE can select an image with SDKs at /sdks/flutter and
+# /opt/android-sdk-linux; each image reference receives separate SDK copies.
+# HAKO_NETWORK=none runs a command without container network access.
+#
+# No product service or port is defined yet, so no host ports are published.
+# Add explicit host/container port settings if a real development service is
+# introduced; a published server must listen on 0.0.0.0 inside the container.
+set -Eeuo pipefail
+
+readonly IMAGE="${HAKO_IMAGE:-ghcr.io/cirruslabs/flutter:3.35.7}"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+readonly REPO_ROOT
+readonly DEVHOME="${REPO_ROOT}/.devhome"
+STEP_INDEX=0
+bootstrap_tmp=''
+bootstrap_pid=''
+sdk_dir=''
+container_sdk=''
+android_sdk_dir=''
+container_android_sdk=''
+
+usage() {
+    printf 'Usage: ./hako [command [args...]]\n' >&2
+    printf 'Run an interactive shell when no command is given.\n' >&2
+}
+
+require_command() {
+    command -v "$1" >/dev/null 2>&1 || {
+        printf '[hako] required command not found: %s\n' "$1" >&2
+        exit 127
+    }
+}
+
+log_step() {
+    local label=$1
+    local arg
+    shift
+
+    STEP_INDEX=$((STEP_INDEX + 1))
+    printf '#%s [hako %s]' "$STEP_INDEX" "$label" >&2
+    for arg in "$@"; do
+        printf ' %q' "$arg" >&2
+    done
+    printf '\n' >&2
+}
+
+run_step() {
+    local label=$1
+    shift
+
+    log_step "$label" "$@"
+    "$@"
+}
+
+cleanup_bootstrap() {
+    if [[ -n "$bootstrap_pid" ]]; then
+        kill -TERM "$bootstrap_pid" 2>/dev/null || :
+        wait "$bootstrap_pid" 2>/dev/null || :
+        bootstrap_pid=''
+    fi
+
+    case "$bootstrap_tmp" in
+        "$DEVHOME"/.flutter-bootstrap.*)
+            run_step internal rm -rf -- "$bootstrap_tmp"
+            ;;
+    esac
+}
+
+copy_sdk() {
+    local uid_gid=$1
+    local target_dir=$2
+    local sdk_source=$3
+    local status=0
+    local -a bootstrap_cmd
+
+    [[ -f "${target_dir}/.hako-ready" ]] && return 0
+    if [[ -e "$target_dir" ]]; then
+        printf '[hako] incomplete SDK directory: %s\n' "$target_dir" >&2
+        printf '[hako] inspect it before removing or renaming it and retrying\n' >&2
+        return 1
+    fi
+
+    log_step internal mktemp -d "${DEVHOME}/.flutter-bootstrap.XXXXXXXXXX"
+    bootstrap_tmp=$(mktemp -d "${DEVHOME}/.flutter-bootstrap.XXXXXXXXXX")
+    bootstrap_cmd=(
+        docker run --rm --network none --read-only
+        --user "$uid_gid" --group-add 0
+        -v "${bootstrap_tmp}:/target"
+        --label "hako.repo=${REPO_ROOT}"
+        --label 'hako.scope=bootstrap'
+        --label 'hako.service='
+        "$IMAGE" cp -R "${sdk_source}/." /target/
+    )
+    log_step bootstrap "${bootstrap_cmd[@]}"
+    "${bootstrap_cmd[@]}" &
+    bootstrap_pid=$!
+    wait "$bootstrap_pid" || status=$?
+    bootstrap_pid=''
+    [[ "$status" -eq 0 ]] || return "$status"
+    run_step internal touch "${bootstrap_tmp}/.hako-ready"
+    run_step internal mv -- "$bootstrap_tmp" "$target_dir"
+    bootstrap_tmp=''
+}
+
+prepare_sdk() {
+    local uid_gid=$1
+    local lock_fd
+
+    exec {lock_fd}>"${DEVHOME}/.flutter-bootstrap.lock"
+    run_step internal flock -x "$lock_fd"
+    copy_sdk "$uid_gid" "$sdk_dir" /sdks/flutter
+    copy_sdk "$uid_gid" "$android_sdk_dir" /opt/android-sdk-linux
+    run_step internal flock -u "$lock_fd"
+    exec {lock_fd}>&-
+}
+
+main() {
+    local uid_gid image_hash
+    local -a tty_flags=(-i) network_flags=() port_flags=() docker_cmd
+
+    if [[ ${1:-} == --help || ${1:-} == -h ]]; then
+        usage
+        return 0
+    fi
+    if [[ -n ${HAKO_SERVICE:-} ]]; then
+        printf '[hako] no development service or port is configured\n' >&2
+        return 2
+    fi
+
+    require_command docker
+    require_command flock
+    require_command id
+    require_command mkdir
+    require_command mktemp
+    require_command mv
+    require_command rm
+    require_command sha256sum
+    require_command touch
+
+    log_step internal sha256sum
+    image_hash=$(printf '%s' "$IMAGE" | sha256sum)
+    image_hash=${image_hash%% *}
+    sdk_dir="${DEVHOME}/flutter-sdk-${image_hash}"
+    container_sdk="/app/.devhome/flutter-sdk-${image_hash}"
+    android_sdk_dir="${DEVHOME}/android-sdk-${image_hash}"
+    container_android_sdk="/app/.devhome/android-sdk-${image_hash}"
+    run_step internal mkdir -p -- "$DEVHOME"
+    trap cleanup_bootstrap EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    uid_gid="$(id -u):$(id -g)"
+    prepare_sdk "$uid_gid"
+    trap - EXIT INT TERM
+
+    [[ -t 0 && -t 1 ]] && tty_flags+=(-t)
+    [[ -n ${HAKO_NETWORK:-} ]] && network_flags+=(--network "$HAKO_NETWORK")
+    [[ $# -gt 0 ]] || set -- bash
+
+    # shellcheck disable=SC2016 # The command expands variables inside the container.
+    docker_cmd=(
+        docker run --rm "${tty_flags[@]}" "${network_flags[@]}"
+        --user "$uid_gid"
+        -e HOME=/app/.devhome
+        -e "FLUTTER_ROOT=${container_sdk}"
+        -e "FLUTTER_HOME=${container_sdk}"
+        -e "ANDROID_HOME=${container_android_sdk}"
+        -e "ANDROID_SDK_ROOT=${container_android_sdk}"
+        -v "${REPO_ROOT}:/app"
+        -w /app
+        --label "hako.repo=${REPO_ROOT}"
+        --label "hako.scope=${HAKO_SCOPE:-manual}"
+        --label 'hako.service='
+        "${port_flags[@]}"
+        "$IMAGE" sh -c
+        'PATH="$FLUTTER_ROOT/bin:$FLUTTER_ROOT/bin/cache/dart-sdk/bin:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$PATH"; export PATH; exec "$@"'
+        hako "$@"
+    )
+    log_step run "${docker_cmd[@]}"
+    exec "${docker_cmd[@]}"
+}
+
+main "$@"
