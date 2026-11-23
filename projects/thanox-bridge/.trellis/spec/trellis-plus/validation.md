@@ -1,8 +1,8 @@
 # Validation and review
 
-## Available checks at bootstrap
+## Available local checks
 
-Trellis context and task records can be inspected with `python3 .trellis/scripts/get_context.py` and validated with `python3 .trellis/scripts/task.py validate <task-directory>`. Codex-local UUPM can be checked with `python3 .codex/skills/ui-ux-pro-max/scripts/search.py --help`. These do not validate an application. There is no product test/build command yet; the first implementation task must establish focused Dart/Kotlin checks, a real Android build and the exact runnable commands before its submit-ready gate.
+Trellis context and task records can be inspected with `python3 .trellis/scripts/get_context.py` and validated with `python3 .trellis/scripts/task.py validate <task-directory>`. Codex-local UUPM can be checked with `python3 .codex/skills/ui-ux-pro-max/scripts/search.py --help`; these commands do not validate the application. The Flutter analysis, widget tests, Android policy tests and debug build commands are recorded in [development.md](development.md). They are local checks and do not establish device-side Binder or permission behavior.
 
 ## Product verification
 

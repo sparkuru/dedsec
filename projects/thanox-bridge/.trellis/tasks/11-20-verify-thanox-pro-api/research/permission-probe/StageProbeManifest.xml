@@ -1,0 +1,8 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="dev.thanoxbridge.probe.perm20261120">
+    <uses-sdk android:minSdkVersion="28" android:targetSdkVersion="35" />
+    <queries><package android:name="dev.thanoxbridge.target.perm20261120" /></queries>
+    <application android:allowBackup="false" android:label="Thanox Permission Probe">
+        <activity android:name=".StageProbeActivity" android:exported="true" />
+    </application>
+</manifest>

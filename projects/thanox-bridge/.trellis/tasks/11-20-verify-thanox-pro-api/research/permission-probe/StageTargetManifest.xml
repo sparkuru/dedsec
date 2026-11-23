@@ -1,0 +1,8 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="dev.thanoxbridge.target.perm20261120">
+    <uses-sdk android:minSdkVersion="28" android:targetSdkVersion="35" />
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <application android:allowBackup="false" android:hasCode="false"
+        android:label="Thanox Permission Target" />
+</manifest>

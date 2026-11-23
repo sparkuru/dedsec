@@ -5,3 +5,27 @@
 {"file": ".trellis/spec/trellis-plus/development.md", "reason": "Device selection and development checkpoints"}
 {"file": ".trellis/spec/trellis-plus/validation.md", "reason": "Device validation and review rules"}
 {"file": ".trellis/tasks/11-20-verify-thanox-pro-api/research/device-proof.md", "reason": "Observed Thanox Pro device evidence"}
+{"file": ".trellis/tasks/11-20-verify-thanox-pro-api/design.md", "reason": "First permission-feature design and native security boundary"}
+{"file": ".trellis/tasks/11-20-verify-thanox-pro-api/research/flutter-ui.md", "reason": "Flutter UI research and accessibility expectations"}
+{"file": ".trellis/spec/trellis-plus/ui-workflow.md", "reason": "Flutter interface planning and validation requirements"}
+{"file": ".trellis/tasks/11-20-verify-thanox-pro-api/research/permission-device.md", "reason": "Device permission API evidence and pending cleanup"}
+{"file": ".trellis/tasks/11-20-verify-thanox-pro-api/research/catalog-probe/CatalogProbe.java", "reason": "Read-only Thanox catalog wire and device probe"}
+{"file": ".trellis/tasks/11-20-verify-thanox-pro-api/research/catalog-probe/AndroidManifest.xml", "reason": "Catalog probe caller and package visibility"}
+{"file": ".trellis/tasks/11-20-verify-thanox-pro-api/research/microphone-probe/AudioProbeActivity.java", "reason": "Bounded ordinary-app microphone operation probe"}
+{"file": ".trellis/tasks/11-20-verify-thanox-pro-api/research/microphone-probe/TargetManifest.xml", "reason": "Disposable microphone target identity and permission"}
+{"file": ".trellis/tasks/11-20-verify-thanox-pro-api/research/microphone-probe/ProbeManifest.xml", "reason": "Microphone probe caller and package visibility"}
+{"file": ".trellis/tasks/11-20-verify-thanox-pro-api/research/visibility-probe/VisibilityProbeActivity.java", "reason": "Read-only package visibility comparison against a dedicated target"}
+{"file": ".trellis/tasks/11-20-verify-thanox-pro-api/research/visibility-probe/TargetManifest.xml", "reason": "Disposable target for package visibility comparisons"}
+{"file": ".trellis/tasks/11-20-verify-thanox-pro-api/research/visibility-probe/BroadManifest.xml", "reason": "Probe with broad visibility request and no target-specific query"}
+{"file": ".trellis/tasks/11-20-verify-thanox-pro-api/research/visibility-probe/ExplicitManifest.xml", "reason": "Probe with an explicit query for the dedicated target"}
+{"file": ".trellis/tasks/11-20-verify-thanox-pro-api/research/visibility-probe/NonDebugManifest.xml", "reason": "Non-debuggable variant of the same explicit-query probe"}
+{"file": ".trellis/tasks/11-20-verify-thanox-pro-api/research/visibility-probe/TargetVibrateManifest.xml", "reason": "Disposable target update for UI readback validation"}
+{"file": ".trellis/tasks/11-20-verify-thanox-pro-api/research/uid-consistency.md", "reason": "Cross-authority UID consistency gap and candidate exact lookup"}
+{"file": ".trellis/tasks/11-20-verify-thanox-pro-api/research/visibility-probe/UidProbeActivity.java", "reason": "Read-only per-package Thanox UID wire verification"}
+{"file": ".trellis/tasks/11-20-verify-thanox-pro-api/research/visibility-probe/UidProbeManifest.xml", "reason": "Read-only per-package Thanox UID wire verification"}
+{"file": ".trellis/tasks/11-20-verify-thanox-pro-api/research/visibility-probe/RuntimeTargetManifest.xml", "reason": "Disposable runtime permissions target for strict decoder verification"}
+{"file": ".trellis/tasks/11-20-verify-thanox-pro-api/research/app-list-access-controls.md", "reason": "User-reported app-list prompt and bounded device comparison"}
+{"file": ".trellis/tasks/11-20-verify-thanox-pro-api/research/app-list-access-probe/TargetManifest.xml", "reason": "Bounded Android app-list access diagnostic"}
+{"file": ".trellis/tasks/11-20-verify-thanox-pro-api/research/app-list-access-probe/ProbeManifest.xml", "reason": "Bounded Android app-list access diagnostic"}
+{"file": ".trellis/tasks/11-20-verify-thanox-pro-api/research/app-list-access-probe/AppListAccessActivity.java", "reason": "Bounded Android app-list access diagnostic"}
+{"file": ".trellis/tasks/11-20-verify-thanox-pro-api/research/observed-app-list-prompt.md", "reason": "Device app-list prompt and comparison limits"}

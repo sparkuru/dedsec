@@ -1,0 +1,10 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="im.majo.thanoxbridge.test.audioprobe20261120">
+    <uses-sdk android:minSdkVersion="28" android:targetSdkVersion="35" />
+    <queries>
+        <package android:name="im.majo.thanoxbridge.test.microphone20261120" />
+    </queries>
+    <application android:allowBackup="false" android:label="Thanox Audio Probe">
+        <activity android:name=".AudioProbeActivity" android:exported="true" />
+    </application>
+</manifest>

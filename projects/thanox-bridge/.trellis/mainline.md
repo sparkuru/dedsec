@@ -4,6 +4,7 @@
 
 - Title: Thanox Bridge.
 - Objective: an on-demand Flutter Android application with a Kotlin integration layer that wraps Thanox and uses explicitly granted Root access for auxiliary operations.
+- Android application ID: `im.majo.thanox_bridge` (the user-selected valid spelling of `im.majo.thanox-bridge`).
 - Requirement authority: the user's 2026-11-20 requirements, preserved in `.trellis/tasks/archive/2026-11/00-bootstrap-guidelines/product-requirements.md`; those requirements are current, but do not themselves start product implementation.
 - Parent task: none. Bootstrap is archived at `.trellis/tasks/archive/2026-11/00-bootstrap-guidelines/`; its archive commit is `dab839ffd4f2cb322330efe69759237cb99e6d0f`. That commit was independently exported and its task contexts, policy links and required files were verified without local platform state. The existing device-verification task remains separate.
 
@@ -21,7 +22,8 @@
 
 - `.trellis/tasks/11-20-verify-thanox-pro-api/research/device-proof.md` records an ordinary Android app reading Thanox interfaces and changing/restoring a separate test app's component on Android 16 + Thanox Pro 9.1-row via Xposed.
 - That experiment does not establish complete API coverage, stable third-party support, Root impersonation, template reuse, other versions, or native plugin loading. Thanox's internal Binder and Android hidden-API behavior require compatibility checks.
-- This is a new, unreleased project with no product code, build manifest, UI, preview service, or established user-data migration contract. The designated phone is a real device, not disposable test data.
+- The first Flutter/Kotlin permission view has local analysis, tests and a debug APK build. On Android 16 + Thanox 9.1, separately signed ordinary-app probes verified selected CAMERA, RECORD_AUDIO and VIBRATE `IOps` modes, and the product UI changed each against disposable targets with independent Android readback and verified cleanup. CAMERA and RECORD_AUDIO `ALLOW_ALWAYS` were observed as foreground-only. The app list uses Android enumeration and exact-package lookup rather than an automatic Thanox catalog fallback, and its first read is user-initiated. On the designated device the user chose Allow in a separate app-list prompt and the product listed a dedicated target; the prompt owner and full catalog coverage remain unproven. The user-0 Thanox exact UID call was verified on a disposable target and an absent package. Details and limits are in `.trellis/tasks/11-20-verify-thanox-pro-api/research/permission-device.md` and `research/app-list-access-controls.md`.
+- This is a new, unreleased project with an initial Flutter/Kotlin implementation but no web preview or established user-data migration contract. The designated phone is a real device, not disposable test data. Only a narrow device/version/target combination has been tested. Package fingerprints detected a same-UID update in a dedicated test; Android/Thanox exact UID checks add a further guard but neither check is atomic with a permission write. The service's exact UID and IOps resolvers have not been proven equivalent.
 
 ## Open decisions
 
@@ -32,7 +34,7 @@
 
 ## Continuation
 
-- Mode: `guided`; serial implementation authorization: none.
-- The user authorized Trellis Plus bootstrap, local UUPM setup and a project-scoped delivery commit. Product implementation and push remain outside that authorization.
-- The next product task is chosen by the user after initialization and normal planning; no order among permission, profile, template and extension work is invented here.
+- Mode: `guided`. The user authorized Docker initialization and its commit, then selected application permission viewing and individual operations as the first product feature. The existing verification task is being reused for this work.
+- On 2026-11-23, after the residual permission and identity risks were described, the user authorized committing the current work and recording its status. Targeted human review remains outstanding; keep the verification task in progress until that review is completed.
+- The remaining profile, template, Root identity-test and extension work has no user-selected delivery order. Push remains outside the current authorization.
 - Update this record when user-approved scope changes, after real validation, and when tasks are archived; do not equate source declarations or mocks with verified device behavior.

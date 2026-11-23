@@ -1,0 +1,13 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="im.majo.thanoxbridge.test.visibilityprobe20261120"
+    android:versionCode="3">
+    <uses-sdk android:minSdkVersion="28" android:targetSdkVersion="35" />
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
+    <queries>
+        <package android:name="im.majo.thanoxbridge.test.visibletarget20261120" />
+    </queries>
+    <application android:allowBackup="false" android:debuggable="false"
+        android:label="Thanox Visibility Probe">
+        <activity android:name=".VisibilityProbeActivity" android:exported="true" />
+    </application>
+</manifest>

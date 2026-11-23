@@ -1,0 +1,5 @@
+# Flutter permission UI research
+
+The project-local UI Pro Max search was run for an Android privacy/permission utility, Flutter permission and error states, and accessibility/loading guidance on 2026-11-20. The results support a touch-first, low-decoration interface with standard platform controls, explicit asynchronous states, screen-reader semantics, adequate touch targets, and text that remains understandable without color. Marketing-page layout, web-specific guidance, external fonts, and a new design system are not relevant to this first functional slice.
+
+For this feature, use a searchable app list and an app detail view with distinct Android-permission and AppOps sections. Show loading, empty, unavailable, unsupported and operation-failure states; disable controls while a request is pending. Keep package/user identity and observed state legible. Validate the actual Flutter flow on Android where possible, including text scaling and accessible control semantics; do not claim web preview as native validation.
