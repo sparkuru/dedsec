@@ -22,7 +22,7 @@ Managed by Trellis. Edits outside this block are preserved; edits inside may be 
 
 ## 测试设备说明
 
-1. 使用 `adb devices -l` 中的 `product:PLR110` 项测试, 上面安装了 thanox pro
+1. 使用 `adb devices -l` 中的 `product:rk3568_firefly_aioj` 项测试, 上面安装了 thanox (pro 激活)
 2. `archive/thanox-repo` 是 `https://github.com/Tornaco/Thanox.git` 的官方源码, 供查阅
 3. thanox 文档可见 `https://tornaco.github.io/Thanox-Docs/en/`
 4. 优先使用 `$browseros-neo` skill + 对应 mcp 展开网络检索, 若不可用再退选 agent 自身的 search 工具
