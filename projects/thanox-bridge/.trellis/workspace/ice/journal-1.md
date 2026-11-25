@@ -44,3 +44,39 @@ Implemented the first permission view and recorded device access evidence; the t
 
 - Complete targeted human review of non-atomic package and UID checks, server-side resolver assumptions and the limited device/version support before closing the task.
 - Ask the user to select the next product slice when continuing; no push or task archive was requested.
+
+
+## Session 2: Board compatibility and delegated security review
+<!-- trellis-session: v=2 fp=2ca4753a3bd7fea0 -->
+
+**Date**: 2026-11-25
+**Task**: Board compatibility and delegated security review
+**Branch**: `antitrust`
+
+### Summary
+
+Validated the board profile, completed the user-directed agent security review, and restricted unverified phone combinations.
+
+### Main Changes
+
+- Guard shared-UID writes and bind UID queries and operations to one checked root connection.
+- Restrict phone and board profiles to the recorded device and Thanox package versions; retain non-atomicity and provenance limits.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `f994607` | feat(thanox-bridge): verify board permission bridge |
+
+### Testing
+
+- [OK] Android unit tests 33/33; lint 0 errors and 4 warnings; Flutter analysis and 35 tests passed.
+- [OK] Built APK and completed read-only Thanox 9.6 smoke test on the designated board; uninstalled the temporary app.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- Phone-specific tightened guard remains untested on the historical phone; the task remains unarchived.

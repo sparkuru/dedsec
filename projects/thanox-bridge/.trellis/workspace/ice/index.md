@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 1
-- **Last Active**: 2026-11-23
+- **Total Sessions**: 2
+- **Last Active**: 2026-11-25
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~46 | Active |
+| `journal-1.md` | ~82 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 2 | 2026-11-25 | Board compatibility and delegated security review | `f994607` | `antitrust` |
 | 1 | 2026-11-23 | Permission bridge and app-list access | `1971820f9e828e24eb31aed4985fa1ef4883ba87` | `antitrust` |
 <!-- @@@/auto:session-history -->
 
