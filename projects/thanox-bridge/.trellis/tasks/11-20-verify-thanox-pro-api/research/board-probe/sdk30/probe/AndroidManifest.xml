@@ -1,0 +1,10 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="im.majo.thanoxbridge.test.board20261123.probe30">
+    <uses-sdk android:minSdkVersion="30" android:targetSdkVersion="35" />
+    <queries>
+        <package android:name="im.majo.thanoxbridge.test.board20261123.target30" />
+    </queries>
+    <application android:allowBackup="false" android:label="Thanox Board Probe 30">
+        <activity android:name=".BoardProbeActivity" android:exported="true" />
+    </application>
+</manifest>

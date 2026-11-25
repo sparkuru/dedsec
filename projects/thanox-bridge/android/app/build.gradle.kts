@@ -24,6 +24,9 @@ android {
         targetSdk = 35
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        if (providers.gradleProperty("sharedUidSafetyTest").orNull == "true") {
+            testInstrumentationRunner = "im.majo.thanox_bridge.SharedUidSafetyInstrumentation"
+        }
     }
 
 }

@@ -1,0 +1,9 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="im.majo.thanoxbridge.test.board20261123.target">
+    <uses-sdk android:minSdkVersion="30" android:targetSdkVersion="35" />
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <application android:allowBackup="false" android:hasCode="false"
+        android:label="Thanox Board Target" />
+</manifest>

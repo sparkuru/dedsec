@@ -29,3 +29,25 @@
 {"file": ".trellis/tasks/11-20-verify-thanox-pro-api/research/app-list-access-probe/ProbeManifest.xml", "reason": "Bounded Android app-list access diagnostic"}
 {"file": ".trellis/tasks/11-20-verify-thanox-pro-api/research/app-list-access-probe/AppListAccessActivity.java", "reason": "Bounded Android app-list access diagnostic"}
 {"file": ".trellis/tasks/11-20-verify-thanox-pro-api/research/observed-app-list-prompt.md", "reason": "Device app-list prompt and comparison limits"}
+{"file": ".trellis/tasks/11-20-verify-thanox-pro-api/research/shared-uid-proof.md", "reason": "Shared UID review context"}
+{"file": ".trellis/tasks/11-20-verify-thanox-pro-api/research/board-compatibility.md", "reason": "Development board compatibility"}
+{"file": ".trellis/tasks/11-20-verify-thanox-pro-api/research/board-probe/probe/BoardProbeActivity.java", "reason": "Board profile evidence and policy"}
+{"file": ".trellis/tasks/11-20-verify-thanox-pro-api/research/board-probe/probe/AndroidManifest.xml", "reason": "Board profile evidence and policy"}
+{"file": ".trellis/tasks/11-20-verify-thanox-pro-api/research/board-probe/target/AndroidManifest.xml", "reason": "Board profile evidence and policy"}
+{"file": ".trellis/tasks/11-20-verify-thanox-pro-api/research/board-probe/sdk30/BoardProbeActivity.patch", "reason": "Board target SDK 30 proof"}
+{"file": ".trellis/tasks/11-20-verify-thanox-pro-api/research/board-probe/sdk30/probe/AndroidManifest.xml", "reason": "Board target SDK 30 proof"}
+{"file": ".trellis/tasks/11-20-verify-thanox-pro-api/research/board-probe/sdk30/target/AndroidManifest.xml", "reason": "Board target SDK 30 proof"}
+{"file": ".trellis/tasks/11-20-verify-thanox-pro-api/research/board-probe/shared/TargetAManifest.xml", "reason": "Shared-UID board fixture used for read-only validation"}
+{"file": ".trellis/tasks/11-20-verify-thanox-pro-api/research/board-probe/shared/TargetBManifest.xml", "reason": "Shared-UID board fixture used for read-only validation"}
+{"file": ".trellis/tasks/11-20-verify-thanox-pro-api/research/permission-review-packet.md", "reason": "Permission and identity security review scope and outcome"}
+{"file": "android/app/src/androidTest/kotlin/im/majo/thanox_bridge/SharedUidSafetyInstrumentation.kt", "reason": "Opt-in shared-UID instrumentation and disposable fixture contract"}
+{"file": ".trellis/tasks/11-20-verify-thanox-pro-api/research/shared-uid-probe/TargetAManifest.xml", "reason": "Opt-in shared-UID instrumentation and disposable fixture contract"}
+{"file": ".trellis/tasks/11-20-verify-thanox-pro-api/research/shared-uid-probe/TargetBManifest.xml", "reason": "Opt-in shared-UID instrumentation and disposable fixture contract"}
+{"file": ".trellis/tasks/11-20-verify-thanox-pro-api/research/uid-resolver-source-20261125.md", "reason": "Resolver source limits and same-root connection boundary"}
+{"file": "android/app/src/androidTest/kotlin/im/majo/thanox_bridge/SameRootConnectionChecks.kt", "reason": "Controlled Binder routing and failure-sequencing checks"}
+{"file": ".trellis/tasks/11-20-verify-thanox-pro-api/research/same-root-device-20261125.md", "reason": "Same-root and shared-UID device verification evidence"}
+{"file": ".trellis/tasks/11-20-verify-thanox-pro-api/research/uid-resolver-bytecode-20261125.md", "reason": "Installed board APK UID, AppOps and scheduling bytecode evidence"}
+{"file": ".trellis/tasks/11-20-verify-thanox-pro-api/research/uid-dex-independent-review-20261125.md", "reason": "Independent review of resolver wiring and static evidence limits"}
+{"file": ".trellis/tasks/11-20-verify-thanox-pro-api/research/android-static-route-20261125.md", "reason": "Offline Android DEX analysis route and tool limits"}
+{"file": ".trellis/tasks/11-20-verify-thanox-pro-api/research/security-review-agent-20261125.md", "reason": "User-directed independent agent security review and resolved finding"}
+{"file": ".trellis/tasks/11-20-verify-thanox-pro-api/research/security-review-board-20261125.md", "reason": "Board smoke test after security review and cleanup evidence"}

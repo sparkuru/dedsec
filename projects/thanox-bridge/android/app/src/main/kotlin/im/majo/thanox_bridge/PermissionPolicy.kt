@@ -10,25 +10,37 @@ internal data class OperationInfo(
 )
 
 internal object PermissionPolicy {
+    const val SHARED_UID_READ_ONLY = "此应用声明了共享 UID，修改可能影响其他应用，当前只可查看。"
+
     private val knownStates = setOf(
         "DEFAULT", "NOT_SET", "DENY", "IGNORE", "ASK", "ALLOW_ALWAYS",
         "ALLOW_FOREGROUND_ONLY", "UNKNOWN",
     )
 
     fun verifiedStates(
+        profile: ThanoxProfile,
         code: Int,
+        name: String?,
         permission: String?,
         info: OperationInfo,
         targetSdk: Int,
         isSystemApp: Boolean,
     ): Set<String> {
-        if (targetSdk != 35 || isSystemApp) return emptySet()
+        if (targetSdk !in profile.targetSdks || isSystemApp) return emptySet()
+        val verifiedRuntimeOperation =
+            ((code == 26 && name == "CAMERA" && permission == "android.permission.CAMERA") ||
+                (code == 27 && name == "RECORD_AUDIO" && permission == "android.permission.RECORD_AUDIO")) &&
+                info.isRuntimePermission && info.supportsOneTime
         return when {
-            ((code == 26 && permission == "android.permission.CAMERA") ||
-                (code == 27 && permission == "android.permission.RECORD_AUDIO")) &&
-                info.isRuntimePermission && info.hasBackgroundPermission && info.supportsOneTime ->
+            verifiedRuntimeOperation &&
+                profile == ThanoxProfile.ANDROID_16_THANOX_9_1 &&
+                info.hasBackgroundPermission ->
                 setOf("ALLOW_FOREGROUND_ONLY", "ASK", "IGNORE", "DENY")
-            code == 3 && permission == "android.permission.VIBRATE" &&
+            verifiedRuntimeOperation &&
+                profile == ThanoxProfile.BOARD_ANDROID_11_THANOX_9_6 &&
+                !info.hasBackgroundPermission ->
+                setOf("ALLOW_ALWAYS", "ASK", "IGNORE", "DENY")
+            code == 3 && name == "VIBRATE" && permission == "android.permission.VIBRATE" &&
                 !info.isRuntimePermission && !info.hasBackgroundPermission && !info.supportsOneTime ->
                 setOf("ALLOW_ALWAYS", "IGNORE")
             else -> emptySet()
@@ -45,6 +57,21 @@ internal object PermissionPolicy {
             add("DENY")
         }
         return supported.filter { it in verifiedStates }
+    }
+
+    fun allowedStatesForTarget(
+        info: OperationInfo,
+        verifiedStates: Set<String>,
+        identityAvailable: Boolean,
+        sharedUserId: String?,
+    ): List<String> = if (identityAvailable && sharedUserId == null) {
+        allowedStates(info, verifiedStates)
+    } else {
+        emptyList()
+    }
+
+    fun validateUnsharedUserId(sharedUserId: String?) {
+        require(sharedUserId == null) { SHARED_UID_READ_ONLY }
     }
 
     fun validateTarget(currentUser: Int, userId: Int, requestedUid: Int, actualUid: Int) {

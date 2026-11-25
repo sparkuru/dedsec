@@ -1,0 +1,13 @@
+--- probe/BoardProbeActivity.java
++++ sdk30/probe/BoardProbeActivity.java
+@@ -1 +1 @@
+-package im.majo.thanoxbridge.test.board20261123.probe;
++package im.majo.thanoxbridge.test.board20261123.probe30;
+@@ -24,2 +24,2 @@
+-    private static final String TARGET = "im.majo.thanoxbridge.test.board20261123.target";
+-    private static final String CALLER = "im.majo.thanoxbridge.test.board20261123.probe";
++    private static final String TARGET = "im.majo.thanoxbridge.test.board20261123.target30";
++    private static final String CALLER = "im.majo.thanoxbridge.test.board20261123.probe30";
+@@ -179 +179 @@
+-                app.uid != expectedUid || app.uid / USER_ID_RANGE != 0 || app.targetSdkVersion != 35 ||
++                app.uid != expectedUid || app.uid / USER_ID_RANGE != 0 || app.targetSdkVersion != 30 ||

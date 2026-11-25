@@ -10,6 +10,7 @@ import java.util.Locale
 
 @Suppress("DEPRECATION")
 internal class PermissionRepository(context: Context) {
+    private val appContext = context.applicationContext
     private val packages = context.packageManager
     private val currentUserId = Process.myUid() / USER_ID_RANGE
 
@@ -43,6 +44,7 @@ internal class PermissionRepository(context: Context) {
         val packageInfo = checkedPackage(packageName, userId, uid)
         val app = packageInfo.applicationInfo!!
         val identityToken = fingerprintFor(packageInfo, userId)
+        val sharedUserId = packageInfo.sharedUserId
         val permissionNames = packageInfo.requestedPermissions ?: emptyArray()
         val permissionFlags = packageInfo.requestedPermissionsFlags
         if (permissionNames.isNotEmpty() &&
@@ -61,23 +63,28 @@ internal class PermissionRepository(context: Context) {
         }
 
         var serviceError: String? = null
-        var coverageNote: String? = null
+        var coverageNote: String? = if (sharedUserId != null) PermissionPolicy.SHARED_UID_READ_ONLY else null
         val operations = try {
-            requireThanoxUid(packageName, userId, app.uid)
+            val ops = ThanoxOps.connect(appContext)
+            requireThanoxUid(packageName, userId, app.uid, ops)
             val result = readOps(
-                ThanoxOps.connect(), app, userId, permissionNames.toSet(), identityToken != null,
+                ops, app, userId, permissionNames.toSet(), identityToken != null,
+                sharedUserId,
             )
-            requireThanoxUid(packageName, userId, app.uid)
+            requireThanoxUid(packageName, userId, app.uid, ops)
             coverageNote = result.second
             result.first
         } catch (error: Exception) {
             serviceError = error.message ?: "无法读取 Thanox 权限操作"
             emptyList()
         }
-        if (identityToken != null &&
-            !TargetIdentity.matches(identityToken, fingerprintFor(checkedPackage(packageName, userId, uid), userId))
-        ) {
-            throw IllegalStateException("应用已更新或重装，请重新加载")
+        if (identityToken != null) {
+            val current = checkedPackage(packageName, userId, uid)
+            if (!TargetIdentity.matches(identityToken, fingerprintFor(current, userId)) ||
+                current.sharedUserId != sharedUserId
+            ) {
+                throw IllegalStateException("应用已更新、重装或共享 UID 状态已变化，请重新加载")
+            }
         }
         return mapOf(
             "label" to label(app),
@@ -102,27 +109,32 @@ internal class PermissionRepository(context: Context) {
     ): Map<String, Any> {
         val packageInfo = checkedPackage(packageName, userId, uid)
         requireIdentity(identityToken, packageInfo, userId)
+        PermissionPolicy.validateUnsharedUserId(packageInfo.sharedUserId)
         val app = packageInfo.applicationInfo!!
         require(code in 0 until ThanoxOps.OP_COUNT) { "不支持的权限操作" }
         val declared = packageInfo.requestedPermissions?.toSet() ?: emptySet()
-        requireThanoxUid(packageName, userId, app.uid)
-        val ops = ThanoxOps.connect()
+        val ops = ThanoxOps.connect(appContext)
+        requireThanoxUid(packageName, userId, app.uid, ops)
+        val name = ops.opName(code)
         val permission = ops.opPermission(code)
         val before = ops.info(code, packageName, userId)
             ?: throw IllegalStateException("Thanox 未返回此操作的状态")
-        val verifiedStates = verifiedStates(app, code, permission, before)
+        val verifiedStates = verifiedStates(ops.profile, app, code, name, permission, before)
         PermissionPolicy.validateOperation(permission, declared, before, mode, verifiedStates)
         val after = PermissionPolicy.guardedWrite(
             verify = {
                 val current = checkedPackage(packageName, userId, uid)
                 requireIdentity(identityToken, current, userId)
+                PermissionPolicy.validateUnsharedUserId(current.sharedUserId)
                 val currentApp = current.applicationInfo!!
                 val currentDeclared = current.requestedPermissions?.toSet() ?: emptySet()
+                val currentName = ops.opName(code)
+                val currentPermission = ops.opPermission(code)
                 PermissionPolicy.validateOperation(
-                    permission, currentDeclared, before, mode,
-                    verifiedStates(currentApp, code, permission, before),
+                    currentPermission, currentDeclared, before, mode,
+                    verifiedStates(ops.profile, currentApp, code, currentName, currentPermission, before),
                 )
-                requireThanoxUid(packageName, userId, currentApp.uid)
+                requireThanoxUid(packageName, userId, currentApp.uid, ops)
             },
             write = { ops.setMode(code, packageName, userId, mode) },
             read = {
@@ -143,6 +155,7 @@ internal class PermissionRepository(context: Context) {
         userId: Int,
         declared: Set<String>,
         identityAvailable: Boolean,
+        sharedUserId: String?,
     ): Pair<List<Map<String, Any?>>, String> {
         val result = mutableListOf<Map<String, Any?>>()
         var failures = 0
@@ -154,16 +167,24 @@ internal class PermissionRepository(context: Context) {
                 val info = ops.info(code, app.packageName, userId)
                 successfulReads++
                 if (info != null) {
+                    val name = try {
+                        ops.opName(code)
+                    } catch (_: Exception) {
+                        failures++
+                        null
+                    }
                     result += mapOf(
                         "code" to code,
-                        "name" to (ops.opName(code) ?: "操作 $code"),
+                        "name" to (name?.takeIf { it.isNotBlank() } ?: "操作 $code"),
                         "permission" to permission,
                         "state" to info.state,
                         "runtime" to info.isRuntimePermission,
-                        "allowedStates" to if (identityAvailable) PermissionPolicy.allowedStates(
+                        "allowedStates" to PermissionPolicy.allowedStatesForTarget(
                             info,
-                            verifiedStates(app, code, permission, info),
-                        ) else emptyList<String>(),
+                            verifiedStates(ops.profile, app, code, name, permission, info),
+                            identityAvailable,
+                            sharedUserId,
+                        ),
                     )
                 }
             } catch (_: Exception) {
@@ -174,10 +195,11 @@ internal class PermissionRepository(context: Context) {
             throw IllegalStateException("Thanox 无法读取应用权限操作")
         }
         val note = buildString {
-            append("Thanox 9.1 的查询范围为操作 0–120；其他操作可能未列出。")
+            append("Thanox ${ops.profile.serviceVersion} 的查询范围为操作 0–120；其他操作可能未列出。")
             if (failures > 0) append(" 有 $failures 项操作无法读取。")
-            append(" 仅已验证的相机、麦克风和振动操作可修改，限目标 SDK 35 的非系统应用。")
+            append(" 仅已验证的相机、麦克风和振动操作可修改，限目标 SDK ${ops.profile.targetSdkDescription} 的非系统应用。")
             if (!identityAvailable) append(" 无法核验应用安装及签名信息，当前只可查看。")
+            if (sharedUserId != null) append(" ${PermissionPolicy.SHARED_UID_READ_ONLY}")
         }
         val sorted = result.sortedWith(
             compareBy<Map<String, Any?>> { (it["allowedStates"] as List<*>).isEmpty() }
@@ -214,10 +236,10 @@ internal class PermissionRepository(context: Context) {
         }
     }
 
-    private fun requireThanoxUid(packageName: String, userId: Int, androidUid: Int) {
+    private fun requireThanoxUid(packageName: String, userId: Int, androidUid: Int, ops: ThanoxOps) {
         require(userId == 0) { "Thanox 应用身份核验暂仅支持 Android 用户 0" }
         val thanoxUid = try {
-            ThanoxPackageIdentity.exactUid(packageName, userId)
+            ops.exactUid(packageName, userId)
         } catch (error: Exception) {
             throw IllegalStateException("无法从 Thanox 核验应用 UID", error)
         }
@@ -256,12 +278,16 @@ internal class PermissionRepository(context: Context) {
     }
 
     private fun verifiedStates(
+        profile: ThanoxProfile,
         app: ApplicationInfo,
         code: Int,
+        name: String?,
         permission: String?,
         info: OperationInfo,
     ): Set<String> = PermissionPolicy.verifiedStates(
+        profile,
         code,
+        name,
         permission,
         info,
         app.targetSdkVersion,

@@ -1,0 +1,7 @@
+# Board smoke test after agent security review
+
+On 2026-11-25 the main agent tested the security-review compatibility fix on the designated `product:rk3568_firefly_aioj` development board. The board reported Android API 30, current user 0, installed `github.tornaco.android.thanos` version `9.6-prc` (`versionCode=3404474`), and an available `tv_input` service. The product package was absent even when querying retained uninstalled packages.
+
+The locally built debug APK had SHA-256 `815a64fc08ea3de58306edae98506cdbbbd40e4e10cdfb8a132356ab41b78f49`; the installed APK reported the same SHA-256. After installation, the product was opened and its exact-package search located its own task-installed package without loading the full app list. Opening that result showed user 0 / UID 10235, Android permission details and the `Thanox 9.6` coverage message, including 18 unreadable operations. This exercises the actual board package metadata, service connection, exact-UID and operation-read path after the fix; it does not validate every operation or a permission write.
+
+The test did not alter another application's permissions. The product was uninstalled afterwards, and a package query including retained uninstalled entries found no matching product package. The temporary screenshot was removed. The phone's newly tightened package/version check was not tested on the earlier phone. Device behavior and cleanup do not authenticate the currently registered Binder's code or eliminate the write and identity races described in `security-review-agent-20261125.md`.

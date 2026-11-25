@@ -24,7 +24,7 @@ One-click new-app templates are explicitly invoked; investigate Thanox's existin
 
 `.trellis/tasks/11-20-verify-thanox-pro-api/research/device-proof.md` demonstrates read and reversible cross-app component changes from a separate ordinary UID on Android 16 with Thanox Pro 9.1-row and Xposed. This observation does not guarantee a stable SDK, full permissions coverage, other devices, Root identity simulation or native plugin loading. The local `archive/thanox-repo` is a reference checkout, not a tracked product dependency.
 
-On the designated device, an additional user-facing app-list prompt appeared even though Android's `QUERY_ALL_PACKAGES` check reported granted. One disposable caller without a recorded choice saw one entry; after reinstall under a different UID and a user-selected Allow, it saw 567 and the dedicated test target. The comparison did not isolate the control as the sole cause or prove complete coverage. The prompt's owner is unknown. See `.trellis/tasks/11-20-verify-thanox-pro-api/research/app-list-access-controls.md`.
+On the previously designated phone, an additional user-facing app-list prompt appeared even though Android's `QUERY_ALL_PACKAGES` check reported granted. One disposable caller without a recorded choice saw one entry; after reinstall under a different UID and a user-selected Allow, it saw 567 and the dedicated test target. The comparison did not isolate the control as the sole cause or prove complete coverage. The prompt's owner is unknown. See `.trellis/tasks/11-20-verify-thanox-pro-api/research/app-list-access-controls.md`.
 
 ## Scenario: first permission bridge
 
@@ -35,6 +35,8 @@ This cross-layer contract applies to the Flutter permission view and Kotlin chan
 ### 2. Signatures
 
 The `im.majo.thanox_bridge/permissions` method channel accepts `listApps()`, `findApp(packageName)`, `getAppDetails(packageName, userId, uid)` and `setOpMode(packageName, userId, uid, identityToken, code, mode)`.
+
+The service connection resolves a verified compatibility profile. The phone profile requires Android API 36, product `PLR110`, service `9.1`, and installed `github.tornaco.android.thanos.pro` version name `9.1-row` and version code `3380725`. The development-board profile requires Android API 30, product `rk3568_firefly_aioj`, service `9.6`, and installed `github.tornaco.android.thanos` version name `9.6-prc` and version code `3404474`. Missing or mismatched package metadata fails closed. Explicitly declare both known Thanox packages in Android `<queries>` so checking their versions does not depend on reading the installed-app list. The tightened phone profile is supported by earlier device observations but has not itself been retested on that phone.
 
 ### 3. Contracts
 
@@ -48,7 +50,11 @@ The Android manifest declares `QUERY_ALL_PACKAGES` because the feature lets the 
 
 The identity token fingerprints package/user/UID, first-install and last-update times, version, source path and the set of current APK signing certificates. The fields are obtained with Android `PackageManager.GET_SIGNING_CERTIFICATES`; see the official [`PackageInfo`](https://developer.android.com/reference/android/content/pm/PackageInfo#signingInfo) and [`SigningInfo`](https://developer.android.com/reference/android/content/pm/SigningInfo#getApkContentsSigners()) contracts. Missing required metadata disables writes. The token is a stale-selection guard, not an independent authority or proof of atomicity.
 
+A package declaring a shared user ID via `PackageInfo.sharedUserId` remains readable but has no writable Thanox modes. Native writes must reject that declaration before the Binder transaction and during identity rechecks; detail coverage text must identify the shared-UID restriction rather than mislabel it as missing signing metadata. Do not infer sole UID ownership from a potentially filtered package list. On the previously designated phone, changing CAMERA for one disposable package also changed another sharing its UID; see `.trellis/tasks/11-20-verify-thanox-pro-api/research/shared-uid-proof.md`.
+
 For verified user 0, the native bridge also reads Thanox `IPkgManager.getUidForPkgName(Pkg)` using the checked descriptor and transaction 2; its reply after `readException` must contain exactly one integer. Compare this UID with Android before and after reading Thanox operations, and immediately before, after and following the readback of a write. Reject negative, wrong-user, mismatched, unavailable or malformed results. A failure after a write is attempted is uncertain. For other users, retain Android details but do not expose Thanox operations or writes.
+
+Each logical details read or write uses one freshly verified Thanox root connection for both the IOps child and all its exact-UID queries. Do not substitute a separately connected root based only on a matching version/profile or cache a connection across independent requests. Check child descriptors as before. A child-interface or identity failure before a write prevents the mutation; after a write has been attempted, report uncertainty. The common root does not establish equivalent server-side resolvers, cryptographic service provenance or atomicity with Android package checks.
 
 On the verified API 36 device, `PermInfo` is decoded as a 0/1 presence integer followed, when present, by a non-null state string, three 0/1 integer slots for capability flags, and a non-null access-summary string. Reject invalid markers, truncated or trailing data rather than enabling a mode from an incompatible reply. Individual unreadable operations remain unavailable; if all reads fail, report the service error.
 
@@ -57,30 +63,46 @@ On the verified API 36 device, `PermInfo` is decoded as a 0/1 presence integer f
 | Condition | Result |
 | --- | --- |
 | Other user, invalid UID, changed identity token, undeclared permission or unsupported state | Omit an invalid list entry or reject the write |
-| Android version other than API 36, incompatible service/descriptor/version, or failed Binder call | Report an error; retain separately readable Android permissions |
+| Android/device/service/package combination outside a verified profile, incompatible descriptor, or failed Binder call | Report an error; retain separately readable Android permissions |
 | Android list retrieval fails | Report the error; do not substitute another authority's list |
 | Android returns an empty or filtered list | Show its result and coverage guidance; do not infer whether access was denied or silently fetch a privileged catalog |
 | App-list screen has just opened | Show the read-list action; do not enumerate apps until the user starts it or refreshes |
 | Thanox exact UID is missing, invalid, disagrees with Android, or applies to an unverified user | Keep Android details readable where possible; do not expose or write Thanox operations |
 | Signing/install identity is missing | Keep details readable but expose no write modes |
+| Package declares a shared user ID | Keep Android and Thanox details readable, identify the restriction, expose no write modes and reject a direct write |
 | Identity changes after a Binder write is sent | Report an uncertain outcome and require a fresh state check |
+| A required child interface or UID query fails before / after a write | Reject before mutation / report an uncertain outcome after an attempted mutation |
 | Missing post-write state or mismatch | Report failure or the actual mismatch, not success |
 | A later detail refresh changes the target identity, omits the operation, or disagrees with immediate write readback | Report the discrepancy or uncertain result, not stale success |
 | List retrieval fails or only another package partially matches | Keep the error or partial matches visible and offer an independent exact lookup |
 | Unverified operation, state, target SDK or system target | Show read-only; do not fall back to Root |
 
-The bridge checks package/user/UID and the identity token before the write and again around readback. An update or replacement that reproduces every captured field may still evade the check; no check is atomic with the Binder transaction. The service's exact UID lookup and `IOps` resolver have not been shown to share an implementation.
+The bridge checks package/user/UID and the identity token before the write and again around readback. An update or replacement that reproduces every captured field may still evade the check; no check is atomic with the Binder transaction. Static inspection of the board's specific 9.6-prc APK found that its exact-UID interface and reached `IOps` AppOps paths call the same named cached resolver, with related initial service wiring. This does not prove the same object or cached value persists, that all permission helpers use it, or that the active Binder loaded this APK; it does not extend to other versions. Some runtime-permission actions precede the AppOps lookup. See `.trellis/tasks/11-20-verify-thanox-pro-api/research/uid-resolver-bytecode-20261125.md`.
 
 ### 5. Good / Base / Bad Cases
 
 On the verified device for user 0, a non-system target-SDK-35 app declaring CAMERA or RECORD_AUDIO may request the proven foreground, ask, ignore and deny states when operation, permission and capability fields match. VIBRATE may request allow or ignore. Other operations remain visible where returned but read-only. CAMERA and RECORD_AUDIO `ALLOW_ALWAYS` requests are rejected: on the tested device Thanox returned foreground-only for those requests.
 
+The preceding writable cases apply only when the package does not declare a shared user ID. A shared-UID package is read-only even if Android currently reports only one visible member; a direct channel request must not bypass this restriction.
+
+For the verified API 30 board profile, only target SDK 30 and 35 have been tested. CAMERA and RECORD_AUDIO with flags background=false, runtime=true and oneTime=true may request `ALLOW_ALWAYS`, `ASK`, `IGNORE` and `DENY`; `ALLOW_FOREGROUND_ONLY` remains unavailable. VIBRATE with all three flags false may request `ALLOW_ALWAYS` and `IGNORE`. For both profiles, the operation code, reported operation name (`CAMERA`, `RECORD_AUDIO` or `VIBRATE`), permission and capability flags must all match the verified combination before exposing or accepting writes; a missing or mismatched name remains read-only. These are state/readback observations on the stated development board, not proof of physical camera, microphone or vibrator use. Other target SDK values, profiles or capability combinations remain read-only or unsupported.
+
 ### 6. Tests Required
 
-Test that opening the screen does not enumerate, that starting or refreshing it does, and that exact lookup remains usable beforehand. Test Android enumeration, empty results, invalid/other-user entries and failures without a Thanox list fallback; exact-lookup races and partial-match collisions; independent lookup when the list fails; channel errors; post-write identity or state discrepancies; loading/disabled states; strict `PermInfo` decoding; UID mismatch and failed-write sequencing. Test native allowlist and metadata guards. For newly enabled operation/state pairs, use a disposable target on the designated phone, independently read Android permission and AppOps effects, restore where possible, and verify cleanup. Mocks alone do not establish device behavior.
+Test that opening the screen does not enumerate, that starting or refreshing it does, and that exact lookup remains usable beforehand. Test Android enumeration, empty results, invalid/other-user entries and failures without a Thanox list fallback; exact-lookup races and partial-match collisions; independent lookup when the list fails; channel errors; post-write identity or state discrepancies; loading/disabled states; strict `PermInfo` decoding; UID mismatch and failed-write sequencing. Test native allowlist and metadata guards. For newly enabled operation/state pairs, use a disposable target on a designated device compatible with the affected profile, independently read Android permission and AppOps effects, restore where possible, and verify cleanup. The currently designated board verifies its own profile; earlier phone results do not establish board behavior or vice versa. Mocks alone do not establish device behavior.
+
+Test that a shared-user declaration removes write modes while preserving readable details, that a direct write is rejected before mutation, and that a changed declaration during a guard recheck cannot be reported as confirmed success. On the designated device, verify the read-only presentation with the task's disposable shared-UID targets and independently verify their cleanup.
+
+Test profile selection for both accepted combinations and rejection of wrong product, service version, missing or mismatched Thanox package/version name or version code, including the phone profile. Assert the two profiles' different CAMERA/RECORD_AUDIO mode sets, permit only target SDK 30 and 35 for the board, and reject missing or mismatched operation names, mismatched capability flags and unverified SDK values. On the board, verify product UI reads and individual writes against disposable targets with independent Android permission and AppOps readback; clean up the targets and probes. Unit selection tests do not establish that the tightened phone path can retrieve its package metadata on the physical phone.
+
+Test that one logical request derives IOps and UID checks from the same root connection and handles child/UID failures on both sides of a write without reporting stale success. Exercise the resulting product and shared-UID write rejection on the designated board with independently verified disposable targets; these tests cannot prove server resolver equivalence or atomicity.
 
 ### 7. Wrong vs Correct
 
 Wrong: treat a successful Binder transaction as proof that Android granted the requested capability. Correct: read and display the actual Thanox state, keep Android's grant state separate, and report differences.
 
 Wrong: when Android returns a small list, assume permission was denied and silently use Thanox to fill it. Correct: retain Android's visible result, give neutral coverage guidance, and leave any separate device access choice to the user.
+
+Wrong: assume a package-specific request affects only the selected app because its UID was verified. Correct: reject writes for a declared shared UID until shared effects and a user-facing group operation are explicitly supported.
+
+Wrong: acquire the IOps and UID-query interfaces from independently connected root services and treat matching version strings as proof of a common instance. Correct: derive both from the verified root held for the current logical request, without claiming that this verifies the child implementations.

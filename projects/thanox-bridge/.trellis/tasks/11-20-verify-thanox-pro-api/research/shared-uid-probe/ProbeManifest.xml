@@ -1,0 +1,7 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="im.majo.thanoxbridge.test.shareduidprobe20261123">
+    <uses-sdk android:minSdkVersion="28" android:targetSdkVersion="35" />
+    <queries><package android:name="im.majo.thanoxbridge.test.shareduida20261123" /></queries>
+    <application android:allowBackup="false" android:label="Shared UID Review Probe">
+        <activity android:name=".SharedUidProbeActivity" android:exported="true" />
+    </application>
+</manifest>

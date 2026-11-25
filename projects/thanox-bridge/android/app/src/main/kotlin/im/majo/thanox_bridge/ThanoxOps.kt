@@ -1,11 +1,20 @@
 package im.majo.thanox_bridge
 
+import android.content.Context
 import android.os.IBinder
 import android.os.Parcel
 import im.majo.thanox_bridge.ThanoxService.transact
 
-/** Wire contract checked against Thanox 9.1's IThanos, IOps, Pkg and PermInfo. */
-internal class ThanoxOps private constructor(private val binder: IBinder) {
+/** Wire contracts checked against the supported Thanox service profiles. */
+internal class ThanoxOps private constructor(
+    private val binder: IBinder,
+    private val service: ThanoxService.Connection,
+) {
+    val profile: ThanoxProfile get() = service.profile
+
+    fun exactUid(packageName: String, userId: Int): Int =
+        ThanoxPackageIdentity.exactUid(service, packageName, userId)
+
     fun opName(code: Int): String? = transact(binder, OPS, 3, { it.writeInt(code) }) {
         it.readString()
     }
@@ -34,14 +43,15 @@ internal class ThanoxOps private constructor(private val binder: IBinder) {
         const val OP_COUNT = 121
         private const val OPS = "github.tornaco.android.thanos.core.ops.IOps"
 
-        fun connect(): ThanoxOps {
-            val service = ThanoxService.connect()
-            val ops = transact(service, ThanoxService.ROOT, 31, {}) { it.readStrongBinder() }
+        fun connect(context: Context): ThanoxOps = connect(ThanoxService.connect(context))
+
+        internal fun connect(service: ThanoxService.Connection): ThanoxOps {
+            val ops = transact(service.binder, ThanoxService.ROOT, 31, {}) { it.readStrongBinder() }
                 ?: throw IllegalStateException("Thanox 未提供权限操作接口")
             if (ops.interfaceDescriptor != OPS) {
                 throw IllegalStateException("Thanox 权限操作接口不兼容")
             }
-            return ThanoxOps(ops)
+            return ThanoxOps(ops, service)
         }
 
         private fun Parcel.writePkg(packageName: String, userId: Int) {

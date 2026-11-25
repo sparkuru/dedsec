@@ -6,7 +6,7 @@ Trellis context and task records can be inspected with `python3 .trellis/scripts
 
 ## Product verification
 
-Exercise the actual requested operation and final state. Use unit or controlled-fixture tests for profile resolution, app/user targeting, error and partial-result handling, and backend contracts. A mocked Binder or Root path does not prove device behavior. For affected Android operations, use the selected PLR110 or a documented emulator/device, record Android/Thanox versions and activation, and distinguish simulation from physical-device evidence.
+Exercise the actual requested operation and final state. Use unit or controlled-fixture tests for profile resolution, app/user targeting, error and partial-result handling, and backend contracts. A mocked Binder or Root path does not prove device behavior. For affected Android operations, use the currently designated `product:rk3568_firefly_aioj` development board or a documented emulator/device, record Android/Thanox versions and activation, and distinguish simulation from physical-device evidence. The user permits independent testing on the development board; earlier PLR110 phone results apply only to that observed phone and version.
 
 Use dedicated disposable test apps for cross-app changes. Record initial state, the effective caller and target user, perform only the authorized operation, independently read the result, restore initial state even on failure, and verify cleanup. Never bulk-change the user's existing apps or permissions merely to test. Test denied Root, unavailable Thanox, unsupported permission and partial batch results where they are relevant. Permission-use tests must record whether the target identity/context was actually achieved.
 
