@@ -107,6 +107,8 @@ Test that one logical request derives IOps and UID checks from the same root con
 
 Test normal queue ordering and capacity, an active timeout with queued writes, delayed or racing start/completion notifications, a late result, Activity destruction before and after execution begins, failures delivering replies, ordinary execution failures, and an `Error` both before and after a timeout. Check that each live caller receives at most one result, that rejected writes never start, that a late fatal error keeps the gate closed, and that the Flutter interface retains uncertainty without exposing stale write controls while the coordinator is busy. A controlled test of an unresponsive call does not prove that a live Thanox service can be canceled.
 
+For Android runtime coverage, the opt-in `-PrequestCoordinatorTest=true` instrumentation runner exercises the coordinator with a real main-looper `Handler`, worker thread and uptime clock, using in-process blocked actions and a short test-only deadline. The default runner and `-PsharedUidSafetyTest=true` runner must remain selectable, and enabling both opt-in runners must fail configuration. Verify both PASS markers and the instrumentation result code; a successful ADB process exit alone is insufficient. Do not treat this fixture as proof of a real Binder hang, full Flutter channel behavior, actual Activity destruction or cross-process cancellation.
+
 ### 7. Wrong vs Correct
 
 Wrong: treat a successful Binder transaction as proof that Android granted the requested capability. Correct: read and display the actual Thanox state, keep Android's grant state separate, and report differences.

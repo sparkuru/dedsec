@@ -75,6 +75,12 @@ The security review identified an untimed wait in an inspected Thanox write path
 - [x] Verify normal execution, timeout/completion races, queued-write rejection, late completion, lifecycle handling, and recovery with controlled tests. Validate the ordinary product flow on the designated board without inducing a real Thanox hang.
 - [x] Record the limits of cross-process recovery and service-side effects; no timeout or local readback proves that a previously sent Binder mutation has been canceled.
 
+## Android runtime validation of prolonged requests
+
+- [x] Exercise the request coordinator on the designated board with an Android main looper, real worker thread and deliberately blocked in-process test action. Verify the timeout, at-most-once reply, rejection and non-execution of queued writes, late completion and subsequent recovery.
+- [x] Check that closing a request owner prevents its queued write from starting while an already running action remains tracked. The fixture must not call Thanox, alter another app, or change Android permissions.
+- [x] Keep this instrumentation explicitly opt-in and preserve both the default Android test runner and the existing opt-in shared-UID runner. Record the device evidence and verify cleanup of task-installed packages.
+
 ## Out of scope for the original device investigation
 
 - Building the product wrapper or changing Thanox configuration and managed applications.

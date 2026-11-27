@@ -24,8 +24,16 @@ android {
         targetSdk = 35
         versionCode = flutter.versionCode
         versionName = flutter.versionName
-        if (providers.gradleProperty("sharedUidSafetyTest").orNull == "true") {
-            testInstrumentationRunner = "im.majo.thanox_bridge.SharedUidSafetyInstrumentation"
+        val sharedUidSafetyTest = providers.gradleProperty("sharedUidSafetyTest").orNull == "true"
+        val requestCoordinatorTest = providers.gradleProperty("requestCoordinatorTest").orNull == "true"
+        require(!(sharedUidSafetyTest && requestCoordinatorTest)) {
+            "Select only one opt-in instrumentation runner"
+        }
+        when {
+            sharedUidSafetyTest ->
+                testInstrumentationRunner = "im.majo.thanox_bridge.SharedUidSafetyInstrumentation"
+            requestCoordinatorTest ->
+                testInstrumentationRunner = "im.majo.thanox_bridge.RequestCoordinatorInstrumentation"
         }
     }
 

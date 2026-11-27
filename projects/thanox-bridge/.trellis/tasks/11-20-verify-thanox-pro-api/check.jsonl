@@ -54,3 +54,6 @@
 {"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Resumed permission request handling and validation context"}
 {"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "Resumed permission request handling and validation context"}
 {"file": ".trellis/tasks/11-20-verify-thanox-pro-api/research/prolonged-request-20261127.md", "reason": "Prolonged request handling, review, and board evidence"}
+{"file": "android/app/build.gradle.kts", "reason": "Android runtime coordinator verification context"}
+{"file": "android/app/src/main/kotlin/im/majo/thanox_bridge/RequestCoordinator.kt", "reason": "Android runtime coordinator verification context"}
+{"file": "android/app/src/androidTest/kotlin/im/majo/thanox_bridge/RequestCoordinatorInstrumentation.kt", "reason": "Opt-in Android runtime coordinator checks"}
