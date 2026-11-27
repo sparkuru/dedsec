@@ -116,3 +116,38 @@ Reported prolonged requests without claiming cancellation and preserved request 
 ### Next Steps
 
 - The task remains in progress and unarchived; the tightened historical phone profile has not been physically retested, and the next product slice remains unselected.
+
+
+## Session 4: Android runtime coordinator verification
+<!-- trellis-session: v=2 fp=d39e8736592d413b -->
+
+**Date**: 2026-11-27
+**Task**: Android runtime coordinator verification
+**Branch**: `antitrust`
+
+### Summary
+
+Verified the permission request coordinator with real Android scheduling and controlled in-process blocked actions.
+
+### Main Changes
+
+- Added an explicit instrumentation runner while preserving the default and shared UID runner selections.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `aeffc5b` | test(thanox-bridge): verify request scheduling on Android |
+
+### Testing
+
+- [OK] On the Android 11 development board, coordinator timeout and owner cancellation checks passed; both temporary packages and the instrumentation entry were removed.
+- [OK] Android unit tests 48/48 passed; lint reported 0 errors and 4 existing warnings; conflicting runner flags were rejected as expected.
+
+### Status
+
+[OK] **Session completed; task remains in progress.**
+
+### Next Steps
+
+- The task remains in progress and unarchived; actual stalled Binder behavior, cross-process cancellation and the historical phone compatibility path remain unverified.
