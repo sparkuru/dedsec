@@ -80,3 +80,39 @@ Validated the board profile, completed the user-directed agent security review, 
 ### Next Steps
 
 - Phone-specific tightened guard remains untested on the historical phone; the task remains unarchived.
+
+
+## Session 3: Bounded permission request handling
+<!-- trellis-session: v=2 fp=02057e376d86ac63 -->
+
+**Date**: 2026-11-27
+**Task**: Bounded permission request handling
+**Branch**: `antitrust`
+
+### Summary
+
+Reported prolonged requests without claiming cancellation and preserved request ordering within the running process.
+
+### Main Changes
+
+- Added process-scoped request coordination, bounded waiting, lifecycle cleanup and fail-closed fatal-error handling.
+- Completed independent agent review and recorded board evidence and cross-process limitations.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `221d743` | fix(thanox-bridge): handle stalled permission requests |
+
+### Testing
+
+- [OK] Android unit tests 48/48, Flutter tests 36/36 and Flutter analysis passed; lint reported 0 errors and 4 existing warnings.
+- [OK] On the designated Android 11 board, a disposable target CAMERA permission was denied and restored with independent Android and AppOps readback; task packages were removed.
+
+### Status
+
+[OK] **Session completed; task remains in progress.**
+
+### Next Steps
+
+- The task remains in progress and unarchived; the tightened historical phone profile has not been physically retested, and the next product slice remains unselected.
