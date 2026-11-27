@@ -888,6 +888,62 @@ void main() {
     expect(find.text('写入被拒绝'), findsOneWidget);
   });
 
+  testWidgets('a timed-out write stays uncertain while the worker is busy', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(375, 812);
+    tester.view.devicePixelRatio = 1;
+    tester.platformDispatcher.textScaleFactorTestValue = 2;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+      tester.platformDispatcher.clearTextScaleFactorTestValue();
+    });
+    var detailReads = 0;
+    var workerBusy = true;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+          if (call.method == 'listApps') return catalog([app()]);
+          if (call.method == 'getAppDetails') {
+            detailReads++;
+            if (detailReads == 1) return details();
+            if (workerBusy) {
+              throw PlatformException(
+                code: 'operation_busy',
+                message: '上一次操作尚未结束，该请求未执行；请稍后重试。',
+              );
+            }
+            return details(state: 'ALLOW_ALWAYS');
+          }
+          expect(call.method, 'setOpMode');
+          throw PlatformException(
+            code: 'operation_timeout',
+            message: '操作超时，结果不确定，可能仍会在后台执行；重启不能保证取消已提交的操作。请稍后刷新检查当前状态。',
+          );
+        });
+
+    await openDetails(tester);
+    await revealDetail(tester, find.byKey(const ValueKey('op-26-change')));
+    await tester.pumpAndSettle();
+    await chooseAllow(tester);
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('结果不确定'), findsOneWidget);
+    expect(find.textContaining('可能仍会'), findsOneWidget);
+    expect(find.textContaining('上一次操作尚未结束'), findsOneWidget);
+    expect(find.byKey(const ValueKey('op-26-change')), findsNothing);
+    expect(find.textContaining('已读取实际状态'), findsNothing);
+    expect(tester.takeException(), isNull);
+
+    workerBusy = false;
+    await tester.tap(find.text('重试'));
+    await tester.pumpAndSettle();
+    expect(detailReads, 3);
+    expect(find.textContaining('结果不确定'), findsOneWidget);
+    await revealDetail(tester, find.textContaining('Thanox 状态：始终允许'));
+    expect(find.textContaining('Thanox 状态：始终允许'), findsOneWidget);
+  });
+
   testWidgets('manual refresh clears an earlier successful readback', (
     tester,
   ) async {

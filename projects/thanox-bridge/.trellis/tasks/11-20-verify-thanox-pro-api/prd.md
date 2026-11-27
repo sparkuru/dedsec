@@ -65,6 +65,16 @@ Batch changes, profiles, templates, Root impersonation, and polished visual desi
 
 The user subsequently designated the non-production `product:rk3568_firefly_aioj` development board and authorized independent testing. The board reports Android 11 / API 30 and Thanox `9.6-prc` (`versionCode=3404474`); the earlier Android 16 / Thanox 9.1 bridge initially rejected this combination. Separately signed ordinary-app probes verified specific CAMERA, RECORD_AUDIO and VIBRATE states for target SDK 30 and 35. A narrowly matched board profile now enables only those modes, preserves the previously demonstrated phone modes and shared-UID restriction, and has been exercised through the product on the board with independent readback and verified cleanup. The evidence and limits are in `research/board-compatibility.md`.
 
+## Unresponsive service continuation
+
+The security review identified an untimed wait in an inspected Thanox write path and an application worker that can consequently remain occupied. A live hang has not been observed. Continuing this task should make a prolonged request visible and keep later requests from silently accumulating or running after the first request has timed out.
+
+- [x] Report a timed-out write as uncertain and explain that it may still complete; never claim that a client timeout canceled the service operation.
+- [x] Preserve serialized execution while requests respond normally. If a running request times out, fail requests still waiting to start and reject new ones until the original request actually returns; do not allow an activity recreation to bypass that restriction within the same process.
+- [x] If an unrecoverable execution error occurs, preserve uncertainty for a write, reject unstarted work, and keep the process from accepting new requests rather than treating the error as a normal failure.
+- [x] Verify normal execution, timeout/completion races, queued-write rejection, late completion, lifecycle handling, and recovery with controlled tests. Validate the ordinary product flow on the designated board without inducing a real Thanox hang.
+- [x] Record the limits of cross-process recovery and service-side effects; no timeout or local readback proves that a previously sent Binder mutation has been canceled.
+
 ## Out of scope for the original device investigation
 
 - Building the product wrapper or changing Thanox configuration and managed applications.

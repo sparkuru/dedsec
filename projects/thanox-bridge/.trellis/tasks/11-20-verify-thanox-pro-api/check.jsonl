@@ -51,3 +51,6 @@
 {"file": ".trellis/tasks/11-20-verify-thanox-pro-api/research/android-static-route-20261125.md", "reason": "Offline Android DEX analysis route and tool limits"}
 {"file": ".trellis/tasks/11-20-verify-thanox-pro-api/research/security-review-agent-20261125.md", "reason": "User-directed independent agent security review and resolved finding"}
 {"file": ".trellis/tasks/11-20-verify-thanox-pro-api/research/security-review-board-20261125.md", "reason": "Board smoke test after security review and cleanup evidence"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Resumed permission request handling and validation context"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "Resumed permission request handling and validation context"}
+{"file": ".trellis/tasks/11-20-verify-thanox-pro-api/research/prolonged-request-20261127.md", "reason": "Prolonged request handling, review, and board evidence"}

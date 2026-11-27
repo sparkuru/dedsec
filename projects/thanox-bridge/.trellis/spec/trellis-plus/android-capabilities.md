@@ -56,6 +56,10 @@ For verified user 0, the native bridge also reads Thanox `IPkgManager.getUidForP
 
 Each logical details read or write uses one freshly verified Thanox root connection for both the IOps child and all its exact-UID queries. Do not substitute a separately connected root based only on a matching version/profile or cache a connection across independent requests. Check child descriptors as before. A child-interface or identity failure before a write prevents the mutation; after a write has been attempted, report uncertainty. The common root does not establish equivalent server-side resolvers, cryptographic service provenance or atomicity with Android package checks.
 
+All four channel methods share a process-scoped serial coordinator. Normal overlapping requests wait in order, with at most 32 requests waiting behind the active one. The active request has a 60-second uptime deadline measured from worker execution, including any delay before the main thread handles its start notification. Main-thread blockage can delay delivery and device deep sleep pauses the uptime clock. On timeout, reply once with `operation_timeout`, reject waiting and new requests with `operation_busy`, and keep the active operation's gate closed until it actually returns. Waiting requests rejected this way must not run later. Discard late results. A write timeout must state that the outcome is uncertain, that the operation may still complete, and that restarting the client cannot prove cancellation; do not treat a subsequent read as proof that a delayed service-side mutation is impossible.
+
+Destroying an Activity removes its unstarted work and its response references without claiming cancellation of a running call; recreating it in the same process must not bypass an active gate. An execution `Error` closes the coordinator for the remainder of the process, rejects unstarted and later requests, and reports a write as uncertain even if the `Error` arrives after the timeout. The recovery message must explain how to stop the application in system settings and must not imply that stopping it cancels a remote write. These are same-process protections; process termination does not establish the state of a service-side Binder call.
+
 On the verified API 36 device, `PermInfo` is decoded as a 0/1 presence integer followed, when present, by a non-null state string, three 0/1 integer slots for capability flags, and a non-null access-summary string. Reject invalid markers, truncated or trailing data rather than enabling a mode from an incompatible reply. Individual unreadable operations remain unavailable; if all reads fail, report the service error.
 
 ### 4. Validation & Error Matrix
@@ -72,6 +76,10 @@ On the verified API 36 device, `PermInfo` is decoded as a 0/1 presence integer f
 | Package declares a shared user ID | Keep Android and Thanox details readable, identify the restriction, expose no write modes and reject a direct write |
 | Identity changes after a Binder write is sent | Report an uncertain outcome and require a fresh state check |
 | A required child interface or UID query fails before / after a write | Reject before mutation / report an uncertain outcome after an attempted mutation |
+| Active read / write exceeds the response deadline | Return `operation_timeout`; for a write explicitly report an uncertain, potentially delayed result |
+| Request waits behind a timed-out operation or the bounded queue is full | Return `operation_busy` and do not execute the rejected request |
+| Activity is destroyed before its queued request starts | Return `operation_detached` where a reply remains available and do not execute it; a running request may continue |
+| Active operation throws an execution `Error`, including after timeout | Return `operation_fatal` if a reply is still available; reject queued and later work for the rest of the process |
 | Missing post-write state or mismatch | Report failure or the actual mismatch, not success |
 | A later detail refresh changes the target identity, omits the operation, or disagrees with immediate write readback | Report the discrepancy or uncertain result, not stale success |
 | List retrieval fails or only another package partially matches | Keep the error or partial matches visible and offer an independent exact lookup |
@@ -97,6 +105,8 @@ Test profile selection for both accepted combinations and rejection of wrong pro
 
 Test that one logical request derives IOps and UID checks from the same root connection and handles child/UID failures on both sides of a write without reporting stale success. Exercise the resulting product and shared-UID write rejection on the designated board with independently verified disposable targets; these tests cannot prove server resolver equivalence or atomicity.
 
+Test normal queue ordering and capacity, an active timeout with queued writes, delayed or racing start/completion notifications, a late result, Activity destruction before and after execution begins, failures delivering replies, ordinary execution failures, and an `Error` both before and after a timeout. Check that each live caller receives at most one result, that rejected writes never start, that a late fatal error keeps the gate closed, and that the Flutter interface retains uncertainty without exposing stale write controls while the coordinator is busy. A controlled test of an unresponsive call does not prove that a live Thanox service can be canceled.
+
 ### 7. Wrong vs Correct
 
 Wrong: treat a successful Binder transaction as proof that Android granted the requested capability. Correct: read and display the actual Thanox state, keep Android's grant state separate, and report differences.
@@ -106,3 +116,5 @@ Wrong: when Android returns a small list, assume permission was denied and silen
 Wrong: assume a package-specific request affects only the selected app because its UID was verified. Correct: reject writes for a declared shared UID until shared effects and a user-facing group operation are explicitly supported.
 
 Wrong: acquire the IOps and UID-query interfaces from independently connected root services and treat matching version strings as proof of a common instance. Correct: derive both from the verified root held for the current logical request, without claiming that this verifies the child implementations.
+
+Wrong: interpret a client timeout as cancellation and immediately run a queued permission write. Correct: report uncertainty, reject unstarted writes until the outstanding call returns, and preserve the service-side and cross-process limitations.
