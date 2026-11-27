@@ -45,6 +45,13 @@ final class SshVaultAdapter {
         this.changedTrustGate = java.util.Objects.requireNonNull(changedTrustGate);
     }
 
+    /** Identity only: trust receipts must originate from the same live vault owner. */
+    boolean sharesVault(SshVaultAdapter other) {
+        return other != null && vault != null && vault == other.vault;
+    }
+
+    boolean sharesVault(AppSecrets other) { return vault != null && vault == other; }
+
     void cancel(VaultOperation request) { vault.cancelOperation(request); }
 
     VaultOperation bundleRequest(SshBundleProposal proposal) throws VaultException {
@@ -103,6 +110,16 @@ final class SshVaultAdapter {
     void useFileSnapshot(VaultOperation request, String rootPath, String connectionId, FileSnapshotReceiver receiver)
             throws VaultException {
         vault.sshFileSnapshot(request, rootPath, connectionId, receiver);
+    }
+
+    long bindChildTrustSnapshot(VaultOperation request, SshFileSnapshot snapshot,
+            SshRoleContext role, SshRoleContext.PublicView view) throws VaultException {
+        return vault.bindSshChildTrustSnapshot(request, snapshot, role, view);
+    }
+
+    void checkChildTrustSnapshot(long epoch, long revision, SshRoleContext role,
+            SshRoleContext.PublicView view) throws VaultException {
+        vault.checkSshChildTrustSnapshot(epoch, revision, role, view);
     }
 
     SshPublicFileLease openPublicFiles(VaultOperation request, String rootPath, String connectionId)

@@ -15,6 +15,59 @@ import java.security.NoSuchAlgorithmException;
  * the concrete managed config/known-hosts file and trust-CAS provider.
  */
 final class SshNativeCallbackAdapter implements AutoCloseable {
+    /* A point-in-time native check for a future chain guard, not an effect permit. */
+    private native boolean nativeCallbackAncestorProofsLive(long callback);
+    /* Implemented only by the native test build, never by a release library. */
+    private native boolean nativeProvisionalNewFixtureScope(long callback, int stage);
+    private native boolean nativeSelectedEffectCopyBegin();
+    private native void nativeSelectedEffectCopyEnd();
+    private static volatile boolean jumpEffectFenceEnabled;
+    private static int jumpEffectOwners;
+
+    static synchronized void enableJumpEffectFence() throws VaultException {
+        try {
+            if (jumpEffectOwners == Integer.MAX_VALUE || !Native.effectAvailable()) throw new IllegalStateException();
+            jumpEffectOwners++;
+            jumpEffectFenceEnabled = true;
+        } catch (LinkageError | RuntimeException unavailable) {
+            throw new VaultException("SSH_JUMP_EFFECT_GUARD", "The jump effect guard is unavailable");
+        }
+    }
+
+    static synchronized void disableJumpEffectFence() {
+        if (jumpEffectOwners <= 0) throw new IllegalStateException("Unbalanced SSH jump effect owner");
+        if (--jumpEffectOwners == 0) jumpEffectFenceEnabled = false;
+    }
+
+    static long captureJumpEffectGeneration() throws VaultException {
+        if (!jumpEffectFenceEnabled) throw new VaultException("SSH_JUMP_EFFECT_GUARD", "The jump effect guard is unavailable");
+        try {
+            long generation = Native.effectSnapshot();
+            if (generation > 0 && generation < 0xffffffffL) return generation;
+        } catch (LinkageError | RuntimeException unavailable) {
+            throw new VaultException("SSH_JUMP_EFFECT_GUARD", "The jump effect guard is unavailable");
+        }
+        throw new VaultException("SSH_JUMP_EFFECT_GUARD", "The jump effect guard is unavailable");
+    }
+
+    /** The caller holds the monitor protecting the state it is about to revoke. */
+    static boolean beginJumpEffectInvalidation() {
+        if (!jumpEffectFenceEnabled) return false;
+        Native.effectInvalidateBegin();
+        return true;
+    }
+
+    static void endJumpEffectInvalidation(boolean begun) {
+        if (begun) Native.effectInvalidateEnd();
+    }
+
+    /* -1: confirmed pre-mutation failure; 0: no fence; 1: begun. An
+     * exception cannot establish whether native changed the generation. */
+    static int beginJumpCleanupInvalidation() {
+        if (!jumpEffectFenceEnabled) return 0;
+        return Native.effectInvalidateBeginCleanup();
+    }
+
     /* These values mirror ssh_callback_adapter.h explicitly, not enum ordinals. */
     static final int HOST_KNOWN = 1;
     static final int HOST_NEW = 2;
@@ -58,6 +111,11 @@ final class SshNativeCallbackAdapter implements AutoCloseable {
                 long deadline) throws IOException;
         static native void cancel(long callback) throws IOException;
         static native void close(long callback) throws IOException;
+        static native boolean effectAvailable();
+        static native long effectSnapshot();
+        static native void effectInvalidateBegin();
+        static native void effectInvalidateEnd();
+        static native int effectInvalidateBeginCleanup();
     }
 
     private static final class Rejected extends Exception {
@@ -101,6 +159,169 @@ final class SshNativeCallbackAdapter implements AutoCloseable {
         @Override public void close() {
             if (authorization != null) authorization.close();
             if (proposal != null) proposal.close();
+        }
+    }
+
+    /* Test-only signed milestone. This object is not a host proof or a write permit. */
+    private static final class PendingProvisionalFixture implements AutoCloseable {
+        final SshHostKeyAuthority.Evidence evidence;
+        final SshManagedKnownHostsProvider.ChildTrustSnapshot source;
+        final SshKnownHostsCandidateHandoff handoff;
+        final String candidateId;
+        final Object candidateIdentity;
+        final long candidateSerial;
+        long reviewSerial;
+        long cycle;
+        byte[] sessionDigest;
+        boolean signedReviewIssued;
+        SignedNewFixtureReview signedReview;
+        SshManagedKnownHostsProvider.FixtureCandidateReservation reservation;
+
+        PendingProvisionalFixture(SshHostKeyAuthority.Evidence evidence,
+                SshManagedKnownHostsProvider.ChildTrustSnapshot source,
+                SshKnownHostsCandidateHandoff handoff, String candidateId,
+                Object candidateIdentity, long candidateSerial) {
+            this.evidence = evidence;
+            this.source = source;
+            this.handoff = handoff;
+            this.candidateId = candidateId;
+            this.candidateIdentity = candidateIdentity;
+            this.candidateSerial = candidateSerial;
+        }
+
+        boolean matches(SshHostKeyAuthority.Evidence actual) {
+            return actual != null && actual.role == evidence.role
+                    && actual.classification == SshHostKeyAuthority.Classification.NEW
+                    && actual.keyType.equals(evidence.keyType)
+                    && actual.fingerprint.equals(evidence.fingerprint)
+                    && MessageDigest.isEqual(actual.baseDigest, evidence.baseDigest)
+                    && MessageDigest.isEqual(actual.replacementDigest, evidence.replacementDigest);
+        }
+
+        @Override public void close() {
+            if (reservation != null) reservation.revoke();
+            if (signedReview != null) signedReview.close();
+            VaultCodec.wipe(sessionDigest);
+            VaultCodec.wipe(evidence.baseDigest);
+            VaultCodec.wipe(evidence.replacementDigest);
+        }
+    }
+
+    /** Only the real test JNI child may issue this non-authorizing review. */
+    static final class SignedNewFixtureReview implements AutoCloseable {
+        private final SshNativeCallbackAdapter owner;
+        private final PendingProvisionalFixture pending;
+        private final SshNativeSession.SignedNewFixtureReady observation;
+        private final byte[] baseDigest, replacementDigest, sessionDigest;
+        private boolean claimed, closed;
+        final String binding, connectionId, targetIdentity, host, keyType, fingerprint;
+        final int hop, port;
+        final long deadline, cycle;
+
+        private SignedNewFixtureReview(SshNativeCallbackAdapter owner, PendingProvisionalFixture pending,
+                SshNativeSession.SignedNewFixtureReady observation, long cycle, byte[] baseDigest,
+                byte[] replacementDigest, byte[] sessionDigest,
+                SshManagedKnownHostsProvider.SnapshotReceipt receipt) {
+            this.owner = owner;
+            this.pending = pending;
+            this.observation = observation;
+            SshRoleContext role = pending.evidence.role;
+            connectionId = role.connectionId; targetIdentity = role.targetIdentity;
+            host = role.host; port = role.port; hop = role.hop;
+            keyType = pending.evidence.keyType; fingerprint = pending.evidence.fingerprint;
+            deadline = observation.deadline();
+            this.cycle = cycle;
+            this.baseDigest = baseDigest;
+            this.replacementDigest = replacementDigest;
+            this.sessionDigest = sessionDigest;
+            byte[] unique = (java.util.UUID.randomUUID() + "\0" + role.binding() + "\0"
+                    + connectionId + "\0" + targetIdentity + "\0" + host + "\0" + port + "\0"
+                    + hop + "\0" + keyType + "\0" + fingerprint + "\0" + pending.candidateId + "\0"
+                    + cycle + "\0" + receipt.vaultId + "\0" + receipt.generation + "\0"
+                    + receipt.epoch + "\0" + receipt.path + "\0" + receipt.objectId + "\0"
+                    + receipt.objectIdentity + "\0" + receipt.requestId + "\0"
+                    + SshConnectionMaterial.hex(baseDigest.clone()) + "\0"
+                    + SshConnectionMaterial.hex(replacementDigest.clone()) + "\0"
+                    + SshConnectionMaterial.hex(sessionDigest.clone())).getBytes(StandardCharsets.UTF_8);
+            byte[] digest = null;
+            try { digest = VaultCodec.digest(unique); binding = SshConnectionMaterial.hex(digest); }
+            finally { VaultCodec.wipe(unique); VaultCodec.wipe(digest); }
+        }
+
+        void requireClaimant(SshRoleContext role) throws VaultException {
+            if (Thread.currentThread() != owner.eventLoopThread || role != pending.evidence.role)
+                throw new VaultException("SSH_HOST_KEY_REVIEW", "The fixture review owner changed");
+            synchronized (owner.stateLock) {
+                if (closed || claimed || pending.signedReview != this)
+                    throw new VaultException("SSH_HOST_KEY_REVIEW", "The fixture review was consumed");
+            }
+        }
+
+        void claim(SshRoleContext role) throws VaultException {
+            requireClaimant(role);
+            try { requireLive(); }
+            catch (VaultException | RuntimeException | Error failure) { close(); throw failure; }
+            synchronized (owner.stateLock) {
+                if (closed || claimed || pending.signedReview != this)
+                    throw new VaultException("SSH_HOST_KEY_REVIEW", "The fixture review was consumed");
+                claimed = true;
+            }
+            try { requireLive(); }
+            catch (VaultException | RuntimeException | Error failure) { close(); throw failure; }
+        }
+
+        void requireLive() throws VaultException { owner.requireSignedNewFixtureLive(pending, observation, this); }
+
+        void requireSession(SshNativeSession session) throws VaultException {
+            if (!observation.belongsTo(session))
+                throw new VaultException("SSH_HOST_KEY_REVIEW", "The fixture review session changed");
+        }
+
+        void requireLiveFor(SshNativeSession session) throws VaultException {
+            requireSession(session);
+            requireLive();
+        }
+
+        boolean matchesFixtureCandidate(SshNativeSession session,
+                SshManagedKnownHostsProvider.ChildTrustSnapshot source, SshHostKeyAuthority.Evidence evidence,
+                String candidateId, Object candidateIdentity) {
+            return observation.belongsTo(session) && pending.source == source && pending.evidence == evidence
+                    && pending.candidateId.equals(candidateId) && pending.candidateIdentity == candidateIdentity;
+        }
+
+        SshManagedKnownHostsProvider.FixtureCandidateReservation reserveFixtureCandidate(
+                SshHostKeyReviewMailbox.SignedFixtureApproval approval, SshNativeSession child)
+                throws VaultException {
+            requireSession(child);
+            if (approval == null) throw new VaultException("SSH_HOST_KEY_REVIEW", "Fixture approval is unavailable");
+            SshHostKeyReviewMailbox.SignedFixtureApproval.Claim claim = approval.claim(this, child);
+            requireLiveFor(child);
+            SshManagedKnownHostsProvider.FixtureCandidateReservation reserved =
+                    pending.handoff.provider().reserveProvisionalFixture(pending.source,
+                            pending.evidence, pending.candidateId, pending.candidateIdentity, this, child, claim);
+            try {
+                synchronized (owner.stateLock) {
+                    owner.requireSignedNewFixtureState(pending, this);
+                    if (pending.reservation != null)
+                        throw new VaultException("SSH_HOST_KEY_REVIEW", "The fixture candidate was reserved");
+                    pending.reservation = reserved;
+                }
+                approval.requireActive();
+                reserved.requireHeldFor(child);
+                return reserved;
+            } catch (VaultException | RuntimeException | Error failure) {
+                reserved.revoke();
+                throw failure;
+            }
+        }
+
+        @Override public void close() {
+            synchronized (owner.stateLock) {
+                if (closed) return;
+                closed = true;
+                if (pending.reservation != null) pending.reservation.revoke();
+                VaultCodec.wipe(baseDigest); VaultCodec.wipe(replacementDigest); VaultCodec.wipe(sessionDigest);
+            }
         }
     }
 
@@ -249,13 +470,19 @@ final class SshNativeCallbackAdapter implements AutoCloseable {
     private final NativeBinding nativeBinding;
     private final SshNativeRoleBootstrap.NativeRelease roleRelease;
     private final Thread eventLoopThread;
+    private final SshSessionOwner.Cancellation effectCancellation;
     private long nativeCallback;
     private long invocationSerial;
     private boolean inCallback;
     private boolean cancelled;
+    private Throwable cancellationInvalidationUnconfirmed;
     private boolean externallyCancelled;
     private boolean closing;
     private boolean closed;
+    /* 0: not attempted, 1: outcome unconfirmed, 2: confirmed. */
+    private int nativeCloseNewInvalidation;
+    private Throwable nativeCloseNewFailure;
+    private boolean nativeCloseCleanupComplete;
     private boolean roleReleased;
     private boolean nativeSessionOpening;
     private boolean nativeSessionOwned;
@@ -268,13 +495,20 @@ final class SshNativeCallbackAdapter implements AutoCloseable {
     private SshHostKeyAuthority.Proof hostProof;
     private SshKexProof kexProof;
     private PendingChanged pendingChanged;
+    private PendingProvisionalFixture pendingProvisionalFixture;
     private boolean changedAwaitingNativeAcknowledgement;
+    private boolean newAwaitingNativeAcknowledgement;
+    private SshManagedKnownHostsProvider.ChildTrustSnapshot childTrustSource;
+    private SshHostKeyAuthority.Evidence childTrustEvidence;
+    private SshNativeSession.JumpChildOwner childEffectOwner;
+    private boolean childTrustOpened;
 
     private SshNativeCallbackAdapter(SshNativeRoleBootstrap.Issued issued,
             SshRoleRegistry registry, SshHostKeyAuthority hostAuthority,
             SshManagedProvider managedProvider, SshRoleContext.Clock clock, NativeBinding nativeBinding,
             SshKnownHostsCandidateHandoff candidateHandoff,
-            SshNativeRoleBootstrap.NativeRelease roleRelease, long nativeCallback) {
+            SshNativeRoleBootstrap.NativeRelease roleRelease, long nativeCallback,
+            SshSessionOwner.Cancellation effectCancellation) {
         this.issued = issued;
         this.registry = registry;
         this.role = issued.role;
@@ -284,6 +518,7 @@ final class SshNativeCallbackAdapter implements AutoCloseable {
         this.clock = clock;
         this.nativeBinding = nativeBinding;
         this.roleRelease = roleRelease;
+        this.effectCancellation = effectCancellation;
         eventLoopThread = Thread.currentThread();
         this.nativeCallback = nativeCallback;
     }
@@ -313,6 +548,15 @@ final class SshNativeCallbackAdapter implements AutoCloseable {
                 SshNativeRoleBootstrap.productionRelease(), managedProvider, candidateHandoff);
     }
 
+    static SshNativeCallbackAdapter bind(SshNativeRoleBootstrap.Issued issued,
+            SshRoleRegistry registry, SshHostKeyAuthority hostAuthority,
+            SshRoleContext.Clock clock, SshManagedProvider managedProvider,
+            SshKnownHostsCandidateHandoff candidateHandoff,
+            SshSessionOwner.Cancellation effectCancellation) throws VaultException {
+        return bind(issued, registry, hostAuthority, clock, new ProductionNativeBinding(),
+                SshNativeRoleBootstrap.productionRelease(), managedProvider, candidateHandoff, effectCancellation);
+    }
+
     /** Host/JVM contract seam; it does not weaken the callback state machine. */
     static SshNativeCallbackAdapter bind(SshNativeRoleBootstrap.Issued issued,
             SshRoleRegistry registry, SshHostKeyAuthority hostAuthority,
@@ -337,9 +581,19 @@ final class SshNativeCallbackAdapter implements AutoCloseable {
             SshRoleContext.Clock clock, NativeBinding nativeBinding,
             SshNativeRoleBootstrap.NativeRelease roleRelease, SshManagedProvider managedProvider,
             SshKnownHostsCandidateHandoff candidateHandoff) throws VaultException {
+        return bind(issued, registry, hostAuthority, clock, nativeBinding, roleRelease,
+                managedProvider, candidateHandoff, new SshSessionOwner.Cancellation());
+    }
+
+    private static SshNativeCallbackAdapter bind(SshNativeRoleBootstrap.Issued issued,
+            SshRoleRegistry registry, SshHostKeyAuthority hostAuthority,
+            SshRoleContext.Clock clock, NativeBinding nativeBinding,
+            SshNativeRoleBootstrap.NativeRelease roleRelease, SshManagedProvider managedProvider,
+            SshKnownHostsCandidateHandoff candidateHandoff,
+            SshSessionOwner.Cancellation effectCancellation) throws VaultException {
         if (issued == null || registry == null || issued.registry != registry || issued.role == null
                 || hostAuthority == null || clock == null || nativeBinding == null
-                || roleRelease == null || !issued.role.active()
+                || roleRelease == null || effectCancellation == null || !issued.role.active()
                 || candidateHandoff != null && (managedProvider == null
                 || !managedProvider.ownsNativeCandidateProvider(candidateHandoff.provider()))) throw invalid();
         registry.requireOwned(issued.role);
@@ -347,7 +601,7 @@ final class SshNativeCallbackAdapter implements AutoCloseable {
             issued.role.requireActive(clock);
             SshNativeCallbackAdapter adapter = new SshNativeCallbackAdapter(issued, registry,
                     hostAuthority, managedProvider, clock, nativeBinding, candidateHandoff,
-                    roleRelease, 0);
+                    roleRelease, 0, effectCancellation);
             long callback = nativeBinding.open(adapter, issued.token, issued.ownerUid,
                     issued.role.deadline);
             if (callback <= 0) throw nativeUnavailable();
@@ -360,34 +614,51 @@ final class SshNativeCallbackAdapter implements AutoCloseable {
         }
     }
 
+    /** JNI calls only this lock-free admission while a native effect permit is held. */
+    private boolean onNativeEffectAdmission() { return effectCancellation.admitTerminalIo(); }
+
+    void requireLocalEffectAdmission() throws VaultException {
+        if (!effectCancellation.admitTerminalIo())
+            throw new VaultException("SSH_SESSION_CANCELLED", "The SSH connection was cancelled");
+    }
+
     private Invocation begin() throws Rejected {
+        return begin(false);
+    }
+
+    private Invocation begin(boolean provisionalFixture) throws Rejected {
         synchronized (stateLock) {
             if (Thread.currentThread() != eventLoopThread) {
-                failureCode = "SSH_CALLBACK_THREAD";
+                preserveUncertainFailure("SSH_CALLBACK_THREAD");
                 throw new Rejected(failureCode);
             }
             if (inCallback) {
-                failureCode = "SSH_CALLBACK_REENTRANT";
-                cancelled = true;
+                preserveUncertainFailure("SSH_CALLBACK_REENTRANT");
+                markCancelled();
                 throw new Rejected(failureCode);
             }
             if (closed) {
-                failureCode = "SSH_CALLBACK_CLOSED";
+                preserveUncertainFailure("SSH_CALLBACK_CLOSED");
                 throw new Rejected(failureCode);
             }
             if (closing) throw new Rejected("SSH_CALLBACK_CLOSING");
             if (cancelled) throw new Rejected(failureCode == null
                     ? "SSH_CALLBACK_CANCELLED" : failureCode);
             if (establishedClaim != null) throw new Rejected("SSH_CALLBACK_TRANSPORT_ONLY");
+            if (!provisionalFixture && pendingProvisionalFixture != null) {
+                preserveUncertainFailure("SSH_JUMP_EFFECT_GUARD");
+                markCancelled();
+                throw new Rejected(failureCode);
+            }
             try {
                 role.requireActive(clock);
             } catch (VaultException failure) {
-                failureCode = failure.code;
-                cancelled = true;
+                preserveUncertainFailure(failure.code);
+                markCancelled();
                 throw new Rejected(failure.code);
             } catch (RuntimeException | LinkageError failure) {
-                failureCode = "SSH_CALLBACK_JAVA_EXCEPTION";
-                cancelled = true;
+                preserveUncertainFailure("SSH_CALLBACK_JAVA_EXCEPTION");
+                markCancelled();
                 throw new Rejected(failureCode);
             }
             authenticationSetupLocked = true;
@@ -399,15 +670,21 @@ final class SshNativeCallbackAdapter implements AutoCloseable {
     private boolean finish(Invocation invocation, String failure, Object value) {
         synchronized (stateLock) {
             if (!inCallback || invocation == null || invocation.serial != invocationSerial) {
-                failureCode = "SSH_CALLBACK_REENTRANT";
-                cancelled = true;
+                if (!"VAULT_COMMIT_UNCERTAIN".equals(failureCode)) failureCode = "SSH_CALLBACK_REENTRANT";
+                markCancelled();
                 inCallback = false;
                 return false;
             }
             try {
                 if (failure != null) {
-                    failureCode = failure;
-                    cancelled = true;
+                    failureCode = completedFailure(failure);
+                    markCancelled();
+                    hostProof = null;
+                    kexProof = null;
+                    return false;
+                }
+                if ("VAULT_COMMIT_UNCERTAIN".equals(failureCode)) {
+                    markCancelled();
                     hostProof = null;
                     kexProof = null;
                     return false;
@@ -422,13 +699,13 @@ final class SshNativeCallbackAdapter implements AutoCloseable {
                     role.requireActive(clock);
                 } catch (VaultException expired) {
                     failureCode = expired.code;
-                    cancelled = true;
+                    markCancelled();
                     hostProof = null;
                     kexProof = null;
                     return false;
                 } catch (RuntimeException | LinkageError exception) {
                     failureCode = "SSH_CALLBACK_JAVA_EXCEPTION";
-                    cancelled = true;
+                    markCancelled();
                     hostProof = null;
                     kexProof = null;
                     return false;
@@ -460,15 +737,56 @@ final class SshNativeCallbackAdapter implements AutoCloseable {
         }
     }
 
+    /** Called under stateLock: an unconfirmed durable write outranks lifecycle and ordinary failures. */
+    private String completedFailure(String failure) {
+        if ("VAULT_COMMIT_UNCERTAIN".equals(failureCode)
+                || "VAULT_COMMIT_UNCERTAIN".equals(failure)) return "VAULT_COMMIT_UNCERTAIN";
+        if (childTrustSource == null) return failure;
+        if (externallyCancelled) return "SSH_CALLBACK_CANCELLED";
+        if (cancelled && failureCode != null) return failureCode;
+        try { role.requireActive(clock); }
+        catch (VaultException lifecycle) { return lifecycle.code; }
+        catch (RuntimeException | LinkageError unavailable) { return "SSH_CALLBACK_JAVA_EXCEPTION"; }
+        return failure;
+    }
+
+    private void preserveUncertainFailure(String failure) {
+        if (!"VAULT_COMMIT_UNCERTAIN".equals(failureCode)) failureCode = failure;
+    }
+
+    /** stateLock is held; an admitted effect never acquires it after its permit. */
+    private void markCancelled() {
+        if (cancellationInvalidationUnconfirmed != null)
+            throw new IllegalStateException("SSH callback cancellation is unconfirmed",
+                    cancellationInvalidationUnconfirmed);
+        if (cancelled) return;
+        try {
+            boolean begun = beginJumpEffectInvalidation();
+            try { cancelled = true; }
+            finally { endJumpEffectInvalidation(begun); }
+        } catch (RuntimeException | Error failure) {
+            // A void JNI failure cannot tell us whether its effect fence changed.
+            // Keep the exact owner and do not try a second begin or end.
+            cancellationInvalidationUnconfirmed = failure;
+            closing = true;
+            // These Java-only digests have no bearing on handoff ownership or
+            // the unconfirmed native fence and can be erased independently.
+            discardProvisionalFixture(false);
+            throw failure;
+        }
+    }
+
     /** An escaping Error must not strand callback ownership and block cleanup. */
     private void abortInvocation(Invocation invocation) {
         synchronized (stateLock) {
             if (invocation == null || !inCallback || invocation.serial != invocationSerial) return;
             if (!cancelled || failureCode == null) failureCode = "SSH_CALLBACK_JAVA_EXCEPTION";
-            cancelled = true;
-            hostProof = null;
-            kexProof = null;
-            inCallback = false;
+            try { markCancelled(); }
+            finally {
+                hostProof = null;
+                kexProof = null;
+                inCallback = false;
+            }
         }
     }
 
@@ -484,13 +802,19 @@ final class SshNativeCallbackAdapter implements AutoCloseable {
             byte[] replacementDigest) {
         Invocation invocation = null;
         SshTrustProposal managedProposal = null;
+        boolean attemptedNew = false;
+        boolean finished = false;
+        byte[] result = null;
         try {
             invocation = begin();
             requireNativeBinding(nativeRoleToken, nativeHop, nativePort, nativeConnectionId,
                     nativeTargetIdentity, nativeHost);
             SshHostKeyAuthority.Classification nativeClassification = classification(classification);
+            attemptedNew = nativeClassification == SshHostKeyAuthority.Classification.NEW;
             SshHostKeyAuthority.Evidence evidence = SshHostKeyAuthority.Evidence.fromNative(role,
                     nativeClassification, keyType, fingerprint, baseDigest, replacementDigest);
+            requireChildTrustEvidence(evidence);
+            requireChildHostClassification(evidence);
             if (nativeClassification == SshHostKeyAuthority.Classification.NEW) {
                 if (managedProvider == null) {
                     throw new VaultException("SSH_HOST_KEY_REVIEW",
@@ -499,22 +823,53 @@ final class SshNativeCallbackAdapter implements AutoCloseable {
                 managedProposal = managedProvider.proposalFor(evidence);
             }
             HostVerification verification = verifyHost(evidence, managedProposal, true);
-            byte[] result = verification.encode(issued.token);
+            result = verification.encode(issued.token);
             if (!finish(invocation, null, verification.proof)) {
+                if (attemptedNew) invalidateUnacknowledgedNew();
                 VaultCodec.wipe(result);
                 return null;
+            }
+            finished = true;
+            if (attemptedNew && candidateHandoff != null) {
+                synchronized (stateLock) {
+                    if (cancelled || closing || closed || hostProof != verification.proof)
+                        throw new VaultException("SSH_CALLBACK_CANCELLED", "The new-host result was cancelled");
+                    newAwaitingNativeAcknowledgement = true;
+                }
             }
             return result;
         } catch (Rejected rejected) {
             return null;
         } catch (VaultException failure) {
-            finish(invocation, failure.code, null);
+            VaultCodec.wipe(result);
+            failHostEvidence(invocation, finished, attemptedNew, failure.code);
             return null;
         } catch (RuntimeException | LinkageError failure) {
-            finish(invocation, "SSH_CALLBACK_JAVA_EXCEPTION", null);
+            VaultCodec.wipe(result);
+            failHostEvidence(invocation, finished, attemptedNew, "SSH_CALLBACK_JAVA_EXCEPTION");
             return null;
+        } catch (Error failure) {
+            VaultCodec.wipe(result);
+            if (attemptedNew) invalidateUnacknowledgedNew();
+            abortInvocation(invocation);
+            throw failure;
         } finally {
             if (managedProposal != null) managedProposal.close();
+        }
+    }
+
+    private void failHostEvidence(Invocation invocation, boolean finished, boolean attemptedNew, String code) {
+        VaultException uncertain = attemptedNew ? invalidateUnacknowledgedNew() : null;
+        if (uncertain != null) code = uncertain.code;
+        if (!finished) {
+            finish(invocation, code, null);
+            return;
+        }
+        synchronized (stateLock) {
+            markCancelled();
+            if (!"VAULT_COMMIT_UNCERTAIN".equals(failureCode)) failureCode = code;
+            hostProof = null;
+            kexProof = null;
         }
     }
 
@@ -545,6 +900,8 @@ final class SshNativeCallbackAdapter implements AutoCloseable {
             }
             SshHostKeyAuthority.Evidence evidence = SshHostKeyAuthority.Evidence.fromNative(role,
                     nativeClassification, keyType, fingerprint, baseDigest, replacementDigest);
+            requireChildTrustEvidence(evidence);
+            requireChildHostClassification(evidence);
             candidateHandoff.accept(evidence, candidateId, replacementBody);
             if (!finish(invocation, null, null)) {
                 candidateHandoff.abort();
@@ -562,11 +919,333 @@ final class SshNativeCallbackAdapter implements AutoCloseable {
             if (candidateHandoff != null) candidateHandoff.abort();
             finish(invocation, "SSH_CALLBACK_JAVA_EXCEPTION", null);
             return false;
+        } catch (Error failure) {
+            abortCandidateAfterError(invocation, failure, false);
+            throw failure;
         } finally {
             /* JNI also clears its array; this covers direct test calls and the
              * begin/rejection paths before the receiver is reached. */
             VaultCodec.wipe(replacementBody);
         }
+    }
+
+    /* These three methods are reachable only through an explicitly armed test
+     * JNI target. The native scope check is absent from release libraries. */
+    private boolean onNativeProvisionalNewCandidateForFixture(long nativeRoleToken, int nativeHop,
+            int nativePort, String nativeConnectionId, String nativeTargetIdentity, String nativeHost,
+            int classification, String keyType, String fingerprint, byte[] baseDigest,
+            byte[] replacementDigest, String candidateId, byte[] replacementBody) {
+        Invocation invocation = null;
+        SshHostKeyAuthority.Evidence evidence = null;
+        SshKnownHostsCandidateHandoff handoff = null;
+        boolean attempted = false, installed = false;
+        try {
+            invocation = begin(true);
+            requireNativeBinding(nativeRoleToken, nativeHop, nativePort, nativeConnectionId,
+                    nativeTargetIdentity, nativeHost);
+            if (classification != HOST_NEW || !SshHostTrustMaterial.canonicalFingerprint(fingerprint))
+                throw new VaultException("SSH_HOST_KEY_REVIEW", "The fixture candidate is invalid");
+            evidence = SshHostKeyAuthority.Evidence.fromNative(role,
+                    SshHostKeyAuthority.Classification.NEW, keyType, fingerprint, baseDigest, replacementDigest);
+            SshManagedKnownHostsProvider.ChildTrustSnapshot source =
+                    requireProvisionalFixtureScope(invocation, null, 1, evidence);
+            synchronized (stateLock) { handoff = candidateHandoff; }
+            attempted = true;
+            handoff.accept(evidence, candidateId, replacementBody);
+            requireProvisionalFixtureScope(invocation, null, 1, evidence);
+            Object candidateIdentity = handoff.provider().requireProvisionalFixtureCandidate(
+                    source, evidence, candidateId, null);
+            PendingProvisionalFixture pending = new PendingProvisionalFixture(
+                    evidence, source, handoff, candidateId, candidateIdentity, invocation.serial);
+            synchronized (stateLock) {
+                if (cancelled || closing || closed || !inCallback || pendingProvisionalFixture != null
+                        || childTrustSource != source || candidateHandoff != handoff || childTrustEvidence != null)
+                    throw new VaultException("SSH_HOST_KEY_REVIEW", "The fixture candidate expired");
+                childTrustEvidence = evidence;
+                pendingProvisionalFixture = pending;
+                installed = true;
+            }
+            requireProvisionalFixtureScope(invocation, pending, 1, evidence);
+            if (!finish(invocation, null, null)) {
+                discardProvisionalFixture(true);
+                return false;
+            }
+            return true;
+        } catch (Rejected rejected) {
+            if (installed) discardProvisionalFixture(true);
+            else if (attempted && handoff != null) handoff.abort();
+            return false;
+        } catch (VaultException failure) {
+            if (installed) discardProvisionalFixture(true);
+            else if (attempted && handoff != null) handoff.abort();
+            return finishChangedFailure(invocation, failure.code);
+        } catch (RuntimeException | LinkageError failure) {
+            if (installed) discardProvisionalFixture(true);
+            else if (attempted && handoff != null) handoff.abort();
+            return finishChangedFailure(invocation, "SSH_CALLBACK_JAVA_EXCEPTION");
+        } catch (Error failure) {
+            try {
+                if (installed) discardProvisionalFixture(true);
+                else if (attempted && handoff != null) handoff.abort();
+            } catch (Throwable cleanup) { if (cleanup != failure) failure.addSuppressed(cleanup); }
+            throw failure;
+        } finally {
+            try { abortInvocation(invocation); }
+            finally {
+                if (!installed && evidence != null) {
+                    VaultCodec.wipe(evidence.baseDigest);
+                    VaultCodec.wipe(evidence.replacementDigest);
+                }
+                VaultCodec.wipe(replacementBody);
+            }
+        }
+    }
+
+    private boolean onNativeProvisionalNewReviewForFixture(long nativeRoleToken, int nativeHop,
+            int nativePort, String nativeConnectionId, String nativeTargetIdentity, String nativeHost,
+            int classification, String keyType, String fingerprint, byte[] baseDigest,
+            byte[] replacementDigest) {
+        Invocation invocation = null;
+        SshHostKeyAuthority.Evidence actual = null;
+        try {
+            invocation = begin(true);
+            requireNativeBinding(nativeRoleToken, nativeHop, nativePort, nativeConnectionId,
+                    nativeTargetIdentity, nativeHost);
+            if (classification != HOST_NEW || !SshHostTrustMaterial.canonicalFingerprint(fingerprint))
+                throw new VaultException("SSH_HOST_KEY_REVIEW", "The fixture review is invalid");
+            actual = SshHostKeyAuthority.Evidence.fromNative(role,
+                    SshHostKeyAuthority.Classification.NEW, keyType, fingerprint, baseDigest, replacementDigest);
+            PendingProvisionalFixture pending;
+            synchronized (stateLock) { pending = pendingProvisionalFixture; }
+            if (pending == null || !pending.matches(actual))
+                throw new VaultException("SSH_HOST_KEY_REVIEW", "The fixture review changed");
+            requireProvisionalFixtureScope(invocation, pending, 2, actual);
+            synchronized (stateLock) {
+                if (pendingProvisionalFixture != pending || pending.reviewSerial != 0
+                        || pending.candidateSerial >= invocation.serial || cancelled || closing || closed)
+                    throw new VaultException("SSH_HOST_KEY_REVIEW", "The fixture review expired");
+                pending.reviewSerial = invocation.serial;
+            }
+            if (!finish(invocation, null, null)) { discardProvisionalFixture(true); return false; }
+            return true;
+        } catch (Rejected rejected) {
+            discardProvisionalFixture(true); return false;
+        } catch (VaultException failure) {
+            discardProvisionalFixture(true); return finishChangedFailure(invocation, failure.code);
+        } catch (RuntimeException | LinkageError failure) {
+            discardProvisionalFixture(true); return finishChangedFailure(invocation, "SSH_CALLBACK_JAVA_EXCEPTION");
+        } catch (Error failure) {
+            try { discardProvisionalFixture(true); }
+            catch (Throwable cleanup) { if (cleanup != failure) failure.addSuppressed(cleanup); }
+            throw failure;
+        } finally {
+            try { abortInvocation(invocation); }
+            finally {
+                if (actual != null) { VaultCodec.wipe(actual.baseDigest); VaultCodec.wipe(actual.replacementDigest); }
+            }
+        }
+    }
+
+    private boolean onNativeProvisionalNewKexForFixture(long cycle, byte[] sessionDigest) {
+        Invocation invocation = null;
+        try {
+            invocation = begin(true);
+            PendingProvisionalFixture pending;
+            synchronized (stateLock) { pending = pendingProvisionalFixture; }
+            int nonzero = 0;
+            if (sessionDigest != null) for (byte value : sessionDigest) nonzero |= value;
+            if (pending == null || cycle <= 0 || sessionDigest == null || sessionDigest.length != 32 || nonzero == 0)
+                throw new VaultException("SSH_KEX_REQUIRED", "The fixture KEX binding is unavailable");
+            requireProvisionalFixtureScope(invocation, pending, 3, pending.evidence);
+            synchronized (stateLock) {
+                if (pendingProvisionalFixture != pending || pending.reviewSerial <= pending.candidateSerial
+                        || pending.reviewSerial >= invocation.serial || pending.cycle != 0
+                        || cancelled || closing || closed)
+                    throw new VaultException("SSH_KEX_REQUIRED", "The fixture KEX binding expired");
+                pending.sessionDigest = sessionDigest.clone();
+                pending.cycle = cycle;
+            }
+            if (!finish(invocation, null, null)) { discardProvisionalFixture(true); return false; }
+            return true;
+        } catch (Rejected rejected) {
+            discardProvisionalFixture(true); return false;
+        } catch (VaultException failure) {
+            discardProvisionalFixture(true); return finishChangedFailure(invocation, failure.code);
+        } catch (RuntimeException | LinkageError failure) {
+            discardProvisionalFixture(true); return finishChangedFailure(invocation, "SSH_CALLBACK_JAVA_EXCEPTION");
+        } catch (Error failure) {
+            try { discardProvisionalFixture(true); }
+            catch (Throwable cleanup) { if (cleanup != failure) failure.addSuppressed(cleanup); }
+            throw failure;
+        } finally {
+            try { abortInvocation(invocation); }
+            finally { VaultCodec.wipe(sessionDigest); }
+        }
+    }
+
+    private SshManagedKnownHostsProvider.ChildTrustSnapshot requireProvisionalFixtureScope(
+            Invocation invocation, PendingProvisionalFixture pending, int stage,
+            SshHostKeyAuthority.Evidence evidence) throws VaultException {
+        SshManagedKnownHostsProvider.ChildTrustSnapshot source;
+        SshKnownHostsCandidateHandoff handoff;
+        SshManagedProvider provider;
+        long callback;
+        synchronized (stateLock) {
+            source = childTrustSource; handoff = candidateHandoff; provider = managedProvider;
+            callback = nativeCallback;
+            if (role.hop != 1 || source == null || handoff == null || provider == null
+                    || childEffectOwner == null || !childEffectOwner.ownsCallback(this)
+                    || !childTrustOpened || !nativeSessionOwned || callback <= 0
+                    || invocation == null || !inCallback || invocation.serial != invocationSerial
+                    || cancelled || closing || closed || hostProof != null || kexProof != null
+                    || pendingChanged != null || newAwaitingNativeAcknowledgement
+                    || changedAwaitingNativeAcknowledgement || pendingProvisionalFixture != pending
+                    || (pending == null ? childTrustEvidence != null
+                            : pending.source != source || pending.handoff != handoff
+                            || childTrustEvidence != pending.evidence))
+                throw new VaultException("SSH_HOST_KEY_REVIEW", "The fixture scope is unavailable");
+        }
+        if (!provider.ownsNativeCandidateProvider(handoff.provider())
+                || !handoff.provider().ownsChildSnapshot(source)
+                || !nativeProvisionalNewFixtureScope(callback, stage))
+            throw new VaultException("SSH_HOST_KEY_REVIEW", "The fixture scope is not exact");
+        // These checks observe candidate identity at two instants; they do not
+        // order a trust admission atomically against consumption or revocation.
+        if (pending != null) handoff.provider().requireProvisionalFixtureCandidate(
+                source, pending.evidence, pending.candidateId, pending.candidateIdentity);
+        source.requireEvidence(role, evidence);
+        if (!nativeProvisionalNewFixtureScope(callback, stage))
+            throw new VaultException("SSH_HOST_KEY_REVIEW", "The fixture scope expired");
+        if (pending != null) handoff.provider().requireProvisionalFixtureCandidate(
+                source, pending.evidence, pending.candidateId, pending.candidateIdentity);
+        synchronized (stateLock) {
+            if (source != childTrustSource || handoff != candidateHandoff || provider != managedProvider
+                    || callback != nativeCallback || pendingProvisionalFixture != pending
+                    || !childTrustOpened || !nativeSessionOwned || !inCallback
+                    || invocation.serial != invocationSerial || cancelled || closing || closed
+                    || childEffectOwner == null || !childEffectOwner.ownsCallback(this))
+                throw new VaultException("SSH_HOST_KEY_REVIEW", "The fixture scope changed");
+        }
+        return source;
+    }
+
+    /** Test-only callbacks must have returned before a real session may query native readiness. */
+    void requireSignedNewFixturePending() throws VaultException {
+        if (Thread.currentThread() != eventLoopThread)
+            throw new VaultException("SSH_CALLBACK_THREAD", "The fixture review requires its owner thread");
+        synchronized (stateLock) {
+            requireSignedNewFixtureState(pendingProvisionalFixture, null);
+            if (pendingProvisionalFixture.signedReviewIssued)
+                throw new VaultException("SSH_HOST_KEY_REVIEW", "The fixture review was already issued");
+        }
+    }
+
+    SignedNewFixtureReview claimSignedNewFixtureReview(SshNativeSession.SignedNewFixtureReady observation)
+            throws VaultException {
+        if (Thread.currentThread() != eventLoopThread || observation == null)
+            throw new VaultException("SSH_HOST_KEY_REVIEW", "The fixture review is unavailable");
+        PendingProvisionalFixture pending;
+        synchronized (stateLock) { pending = pendingProvisionalFixture; }
+        requireSignedNewFixtureLive(pending, observation, null);
+        byte[] base = null, replacement = null, session = null;
+        SignedNewFixtureReview review = null;
+        try {
+            long cycle;
+            synchronized (stateLock) {
+                requireSignedNewFixtureState(pending, null);
+                if (pending.signedReviewIssued)
+                    throw new VaultException("SSH_HOST_KEY_REVIEW", "The fixture review was already issued");
+                cycle = pending.cycle;
+                base = pending.evidence.baseDigest();
+                replacement = pending.evidence.replacementDigest();
+                session = pending.sessionDigest.clone();
+            }
+            SshManagedKnownHostsProvider.SnapshotReceipt receipt = pending.source.receipt();
+            // Randomness, hashing and source access must not delay callback cancellation.
+            review = new SignedNewFixtureReview(this, pending, observation, cycle,
+                    base, replacement, session, receipt);
+            base = replacement = session = null;
+            synchronized (stateLock) {
+                requireSignedNewFixtureState(pending, null);
+                if (pending.signedReviewIssued || !observation.matches(
+                        childEffectOwner, pending.source, pending.candidateId))
+                    throw new VaultException("SSH_HOST_KEY_REVIEW", "The fixture review owner changed");
+                pending.signedReviewIssued = true;
+                pending.signedReview = review;
+            }
+            review.requireLive();
+            return review;
+        } catch (VaultException | RuntimeException | Error failure) {
+            if (review != null) review.close();
+            throw failure;
+        } finally {
+            VaultCodec.wipe(base); VaultCodec.wipe(replacement); VaultCodec.wipe(session);
+        }
+    }
+
+    private void requireSignedNewFixtureLive(PendingProvisionalFixture pending,
+            SshNativeSession.SignedNewFixtureReady observation, SignedNewFixtureReview review)
+            throws VaultException {
+        if (pending == null || observation == null)
+            throw new VaultException("SSH_HOST_KEY_REVIEW", "The fixture review is unavailable");
+        synchronized (stateLock) {
+            requireSignedNewFixtureState(pending, review);
+            if (!observation.matches(childEffectOwner, pending.source, pending.candidateId))
+                throw new VaultException("SSH_HOST_KEY_REVIEW", "The signed fixture owner changed");
+        }
+        // Never hold the callback or mailbox monitor while accessing the session or vault.
+        observation.requireLive(this);
+        pending.source.requireEvidence(role, pending.evidence);
+        pending.handoff.provider().requireProvisionalFixtureCandidate(
+                pending.source, pending.evidence, pending.candidateId, pending.candidateIdentity);
+        role.requireActive(clock);
+        long now = clock.now();
+        if (now <= 0 || now >= observation.deadline())
+            throw new VaultException("SSH_TIMED_OUT", "The fixture review deadline expired");
+        synchronized (stateLock) {
+            requireSignedNewFixtureState(pending, review);
+            if (!observation.matches(childEffectOwner, pending.source, pending.candidateId))
+                throw new VaultException("SSH_HOST_KEY_REVIEW", "The signed fixture owner changed");
+        }
+        observation.requireLive(this);
+    }
+
+    /** Caller holds stateLock; only metadata is inspected here. */
+    private void requireSignedNewFixtureState(PendingProvisionalFixture pending,
+            SignedNewFixtureReview review) throws VaultException {
+        if (pending == null || pendingProvisionalFixture != pending || inCallback || nativeSessionOpening
+                || !nativeSessionOwned || cancelled || closing || closed || childEffectOwner == null
+                || !childEffectOwner.ownsCallback(this) || childTrustSource != pending.source
+                || !childTrustOpened || candidateHandoff != pending.handoff
+                || managedProvider == null || !managedProvider.ownsNativeCandidateProvider(pending.handoff.provider())
+                || childTrustEvidence != pending.evidence
+                || pending.evidence.role != role || pending.evidence.classification != SshHostKeyAuthority.Classification.NEW
+                || pending.reviewSerial <= pending.candidateSerial || pending.cycle != 1
+                || pending.sessionDigest == null || pending.sessionDigest.length != 32
+                || hostProof != null || kexProof != null || pendingChanged != null
+                || newAwaitingNativeAcknowledgement || changedAwaitingNativeAcknowledgement)
+            throw new VaultException("SSH_HOST_KEY_REVIEW", "The signed fixture state is unavailable");
+        if (review != null && (pending.signedReview != review || review.closed
+                || review.pending != pending || review.owner != this || review.observation == null
+                || !review.observation.matches(childEffectOwner, pending.source, pending.candidateId)
+                || review.cycle != pending.cycle
+                || !MessageDigest.isEqual(review.sessionDigest, pending.sessionDigest)
+                || !MessageDigest.isEqual(review.baseDigest, pending.evidence.baseDigest)
+                || !MessageDigest.isEqual(review.replacementDigest, pending.evidence.replacementDigest)))
+            throw new VaultException("SSH_HOST_KEY_REVIEW", "The signed fixture review changed");
+    }
+
+    private void discardProvisionalFixture(boolean abortHandoff) {
+        PendingProvisionalFixture pending;
+        synchronized (stateLock) {
+            pending = pendingProvisionalFixture;
+            pendingProvisionalFixture = null;
+            if (pending != null) {
+                if (childTrustEvidence == pending.evidence) childTrustEvidence = null;
+                pending.close();
+            }
+        }
+        if (abortHandoff && pending != null) pending.handoff.abort();
     }
 
     /** A CHANGED candidate is held without host proof until the same key has completed signed KEX. */
@@ -589,6 +1268,8 @@ final class SshNativeCallbackAdapter implements AutoCloseable {
             }
             SshHostKeyAuthority.Evidence evidence = SshHostKeyAuthority.Evidence.fromNative(role,
                     SshHostKeyAuthority.Classification.CHANGED, keyType, fingerprint, baseDigest, replacementDigest);
+            requireChildTrustEvidence(evidence);
+            requireChildHostClassification(evidence);
             java.util.List<SshHostTrustMaterial.Record> rows = SshHostTrustMaterial.changedRecords(oldRecords, baseDigest);
             candidateHandoff.acceptChanged(evidence, candidateId, replacementBody);
             synchronized (stateLock) { pendingChanged = new PendingChanged(evidence, rows); }
@@ -626,6 +1307,8 @@ final class SshNativeCallbackAdapter implements AutoCloseable {
             synchronized (stateLock) { pending = pendingChanged; }
             SshHostKeyAuthority.Evidence actual = SshHostKeyAuthority.Evidence.fromNative(role,
                     SshHostKeyAuthority.Classification.CHANGED, keyType, fingerprint, baseDigest, replacementDigest);
+            requireChildTrustEvidence(actual);
+            requireChildHostClassification(actual);
             if (pending == null || pending.proposal != null || !pending.matches(actual))
                 throw new VaultException(SshHostKeyAuthority.PROOF_INVALID, "The changed-host review binding changed");
             pending.proposal = candidateHandoff.provider().changedProposalFor(pending.evidence);
@@ -651,10 +1334,21 @@ final class SshNativeCallbackAdapter implements AutoCloseable {
         if (candidateHandoff != null) candidateHandoff.abort();
     }
 
+    private void abortCandidateAfterError(Invocation invocation, Error failure, boolean invalidateNew) {
+        if (invalidateNew) {
+            try { invalidateUnacknowledgedNew(); }
+            catch (Throwable cleanup) { if (cleanup != failure) failure.addSuppressed(cleanup); }
+        }
+        try { if (candidateHandoff != null) candidateHandoff.abort(); }
+        catch (Throwable cleanup) { if (cleanup != failure) failure.addSuppressed(cleanup); }
+        finally { abortInvocation(invocation); }
+    }
+
     /** Cancellation or expired role wins over an ordinary changed-review failure, never over uncertainty. */
     private boolean finishChangedFailure(Invocation invocation, String code) {
         synchronized (stateLock) {
-            if (!"VAULT_COMMIT_UNCERTAIN".equals(code)) {
+            if (!"VAULT_COMMIT_UNCERTAIN".equals(code)
+                    && !"VAULT_COMMIT_UNCERTAIN".equals(failureCode)) {
                 if (externallyCancelled) code = "SSH_CALLBACK_CANCELLED";
                 else {
                     try { role.requireActive(clock); }
@@ -668,8 +1362,22 @@ final class SshNativeCallbackAdapter implements AutoCloseable {
 
     /** Native rollback hook for a candidate accepted before a late state check. */
     void abortNativeKnownHostsCandidate() {
+        synchronized (stateLock) {
+            if (cancellationInvalidationUnconfirmed != null)
+                throw new IllegalStateException("SSH callback cancellation is unconfirmed",
+                        cancellationInvalidationUnconfirmed);
+        }
+        invalidateUnacknowledgedNew();
         invalidateUnacknowledgedChanged();
+        discardProvisionalFixture(true);
         abortChangedCandidate();
+        synchronized (stateLock) {
+            // Cancellation may have become unconfirmed while the handoff's
+            // independent cleanup ran without the callback monitor.
+            if (cancellationInvalidationUnconfirmed != null)
+                throw new IllegalStateException("SSH callback cancellation is unconfirmed",
+                        cancellationInvalidationUnconfirmed);
+        }
     }
 
     /** Called only by the native callback glue; no proposal travels over JNI. */
@@ -689,11 +1397,15 @@ final class SshNativeCallbackAdapter implements AutoCloseable {
             byte[] baseDigest, byte[] replacementDigest, SshTrustProposal proposal) {
         Invocation invocation = null;
         SshTrustProposal managedProposal = proposal;
+        boolean attemptedNew = false;
         try {
             invocation = begin();
             SshHostKeyAuthority.Classification nativeClassification = classification(classification);
+            attemptedNew = nativeClassification == SshHostKeyAuthority.Classification.NEW;
             SshHostKeyAuthority.Evidence evidence = SshHostKeyAuthority.Evidence.fromNative(role,
                     nativeClassification, keyType, fingerprint, baseDigest, replacementDigest);
+            requireChildTrustEvidence(evidence);
+            requireChildHostClassification(evidence);
             if (managedProposal == null && nativeClassification == SshHostKeyAuthority.Classification.NEW
                     && managedProvider != null) {
                 managedProposal = managedProvider.proposalFor(evidence);
@@ -707,6 +1419,10 @@ final class SshNativeCallbackAdapter implements AutoCloseable {
             return finish(invocation, failure.code, null);
         } catch (RuntimeException | LinkageError failure) {
             return finish(invocation, "SSH_CALLBACK_JAVA_EXCEPTION", null);
+        } catch (Error failure) {
+            if (attemptedNew) abortCandidateAfterError(invocation, failure, true);
+            else abortInvocation(invocation);
+            throw failure;
         } finally {
             if (managedProposal != null && managedProposal != proposal) managedProposal.close();
         }
@@ -746,6 +1462,159 @@ final class SshNativeCallbackAdapter implements AutoCloseable {
         }
     }
 
+    /** A fresh native view must come from this provider's exact same-read receipt. */
+    void bindChildTrustSnapshot(SshManagedKnownHostsProvider.ChildTrustSnapshot source, String path)
+            throws VaultException {
+        if (source == null || candidateHandoff == null || managedProvider == null
+                || !managedProvider.ownsNativeCandidateProvider(candidateHandoff.provider())
+                || !candidateHandoff.provider().ownsChildSnapshot(source))
+            throw new VaultException("SSH_HOST_KEY_REVIEW", "The child trust provider is not exact");
+        source.requireFor(role, path);
+        synchronized (stateLock) {
+            if (Thread.currentThread() != eventLoopThread || closed || closing || cancelled || inCallback
+                    || nativeSessionOpening || nativeSessionOwned || hostProof != null || kexProof != null
+                    || pendingChanged != null
+                    || childTrustOpened || childTrustSource != null && childTrustSource != source)
+                throw new VaultException("SSH_CALLBACK_SESSION", "The child trust binding is unavailable");
+            childTrustSource = source;
+        }
+        source.requireCurrent();
+    }
+
+    void requireChildTrustSnapshot(SshManagedKnownHostsProvider.ChildTrustSnapshot source, String path)
+            throws VaultException {
+        if (source == null || candidateHandoff == null || managedProvider == null
+                || !managedProvider.ownsNativeCandidateProvider(candidateHandoff.provider())
+                || !candidateHandoff.provider().ownsChildSnapshot(source))
+            throw new VaultException("SSH_HOST_KEY_REVIEW", "The child trust provider is not exact");
+        source.requireFor(role, path);
+        synchronized (stateLock) {
+            if (Thread.currentThread() != eventLoopThread || closed || closing || cancelled
+                    || childTrustOpened || childTrustSource != source)
+                throw new VaultException("SSH_CALLBACK_SESSION", "The child trust binding is unavailable");
+        }
+    }
+
+    void activateChildTrustSnapshot(SshManagedKnownHostsProvider.ChildTrustSnapshot source, String path)
+            throws VaultException {
+        source.requireFor(role, path);
+        synchronized (stateLock) {
+            if (Thread.currentThread() != eventLoopThread || closed || closing || cancelled
+                    || inCallback || !nativeSessionOwned || childTrustOpened || childTrustSource != source)
+                throw new VaultException("SSH_CALLBACK_SESSION", "The child trust binding is unavailable");
+            childTrustOpened = true;
+        }
+        source.requireCurrent();
+    }
+
+    void requireNoChildTrustSnapshot() throws VaultException {
+        synchronized (stateLock) {
+            if (childTrustSource != null)
+                throw new VaultException("SSH_HOST_KEY_REVIEW", "The child trust source must be consumed");
+        }
+    }
+
+    private void requireChildTrustEvidence(SshHostKeyAuthority.Evidence evidence) throws VaultException {
+        SshManagedKnownHostsProvider.ChildTrustSnapshot source;
+        synchronized (stateLock) {
+            source = childTrustSource;
+            if (source == null) return;
+            if (!childTrustOpened || !inCallback || cancelled || closing || closed)
+                throw new VaultException("SSH_HOST_KEY_REVIEW", "The child trust source is unavailable");
+        }
+        source.requireEvidence(role, evidence);
+        synchronized (stateLock) {
+            if (source != childTrustSource || !childTrustOpened || !inCallback || cancelled || closing || closed)
+                throw new VaultException("SSH_HOST_KEY_REVIEW", "The child trust source changed");
+            childTrustEvidence = evidence;
+        }
+    }
+
+    /** Until a real ancestor-effect guard exists, child authentication and trust writes stay fenced. */
+    boolean hasChildTrustSource() {
+        synchronized (stateLock) { return childTrustSource != null; }
+    }
+
+    void bindChildEffectOwner(SshNativeSession.JumpChildOwner owner) throws VaultException {
+        synchronized (stateLock) {
+            if (owner == null || !owner.ownsCallback(this) || childTrustSource == null
+                    || childEffectOwner != null || inCallback || cancelled || closing || closed)
+                throw new VaultException("SSH_JUMP_EFFECT_GUARD", "The jump effect owner is unavailable");
+            childEffectOwner = owner;
+        }
+    }
+
+    void unbindChildEffectOwner(SshNativeSession.JumpChildOwner owner) {
+        synchronized (stateLock) { if (childEffectOwner == owner) childEffectOwner = null; }
+    }
+
+    /* An unadopted owner must settle its exact provider before dropping its
+     * source and the effect fence. Never hold stateLock across that cleanup. */
+    void closeUnadoptedChildTrust(SshManagedKnownHostsProvider.ChildTrustSnapshot source)
+            throws VaultException {
+        SshKnownHostsCandidateHandoff handoff;
+        synchronized (stateLock) {
+            if (source == null || childTrustSource != source || candidateHandoff == null
+                    || nativeSessionOpening || nativeSessionOwned || inCallback)
+                throw new VaultException("SSH_SESSION_CLEANUP", "The child trust cleanup is unconfirmed");
+            handoff = candidateHandoff;
+        }
+        handoff.close();
+    }
+
+    void requireSelectedSavedChild(SshNativeSession.JumpChildOwner owner) throws VaultException {
+        synchronized (stateLock) {
+            if ("VAULT_COMMIT_UNCERTAIN".equals(failureCode))
+                throw new VaultException(failureCode, "The trust commit result is uncertain");
+            if (owner == null || childEffectOwner != owner || childTrustSource == null || !childTrustOpened
+                    || childTrustEvidence == null
+                    || childTrustEvidence.classification != SshHostKeyAuthority.Classification.KNOWN
+                    || hostProof == null || kexProof == null || changedAwaitingNativeAcknowledgement
+                    || newAwaitingNativeAcknowledgement
+                    || cancelled || closing || closed || managedProvider == null || candidateHandoff == null
+                    || !managedProvider.usesSavedPassword(role, authenticationSelection, candidateHandoff.provider()))
+                throw new VaultException("SSH_JUMP_EFFECT_GUARD", "The selected saved password is unavailable");
+            role.requireActive(clock);
+            hostProof.requireMatches(role);
+            kexProof.requireMatches(role, hostProof);
+        }
+    }
+
+    void requirePlainSavedPasswordSelection() throws VaultException {
+        synchronized (stateLock) {
+            requireAuthenticationSelectionLive();
+            if (managedProvider == null || candidateHandoff == null || hostProof == null || kexProof == null
+                    || !managedProvider.usesSavedPassword(role, authenticationSelection, candidateHandoff.provider()))
+                throw SshAuthenticationSelection.invalid();
+            hostProof.requireMatches(role);
+            kexProof.requireMatches(role, hostProof);
+        }
+    }
+
+    void requireChildEffectGuard() throws VaultException {
+        synchronized (stateLock) {
+            if (childTrustSource == null) return;
+        }
+        // Do not hold the callback lock while checking the role the first time.
+        // Recheck both under the lock before choosing the denial code.
+        role.requireActive(clock);
+        synchronized (stateLock) {
+            if ("VAULT_COMMIT_UNCERTAIN".equals(failureCode))
+                throw new VaultException(failureCode, "The trust commit result is uncertain");
+            if (cancelled || closing || closed) throw new VaultException(
+                    externallyCancelled || failureCode == null ? "SSH_CALLBACK_CANCELLED" : failureCode,
+                    "The SSH callback binding is no longer active");
+            role.requireActive(clock);
+            throw new VaultException("SSH_JUMP_EFFECT_GUARD", "The jump effect guard is unavailable");
+        }
+    }
+
+    private void requireChildHostClassification(SshHostKeyAuthority.Evidence evidence) throws VaultException {
+        if (evidence != null && (evidence.classification == SshHostKeyAuthority.Classification.NEW
+                || evidence.classification == SshHostKeyAuthority.Classification.CHANGED))
+            requireChildEffectGuard();
+    }
+
     /** Called only after native observed the signed KEX and inbound NEWKEYS. */
     boolean onNativeKexComplete(long cycle, byte[] sessionDigest) {
         Invocation invocation = null;
@@ -756,7 +1625,17 @@ final class SshNativeCallbackAdapter implements AutoCloseable {
             invocation = begin();
             SshHostKeyAuthority.Proof proof;
             synchronized (stateLock) { proof = hostProof; changed = pendingChanged; }
+            SshHostKeyAuthority.Evidence sourceEvidence;
+            SshManagedKnownHostsProvider.ChildTrustSnapshot source;
+            synchronized (stateLock) { sourceEvidence = childTrustEvidence; source = childTrustSource; }
+            if (source != null && (sourceEvidence == null
+                    || sourceEvidence.classification != SshHostKeyAuthority.Classification.NEW)) {
+                if (sourceEvidence == null)
+                    throw new VaultException("SSH_HOST_KEY_REVIEW", "The child trust evidence is unavailable");
+                requireChildTrustEvidence(sourceEvidence);
+            }
             if (changed != null) {
+                requireChildEffectGuard();
                 if (proof != null || changed.review == null || changed.proposal == null
                         || changed.authorization != null || candidateHandoff == null || managedProvider == null
                         || !managedProvider.ownsNativeCandidateProvider(candidateHandoff.provider()))
@@ -796,9 +1675,12 @@ final class SshNativeCallbackAdapter implements AutoCloseable {
             if (proof == null) throw new VaultException("SSH_KEX_REQUIRED",
                     "Host-key proof is unavailable");
             SshKexProof result = SshKexProof.fromNative(role, proof, cycle, sessionDigest);
-            return finish(invocation, null, result);
+            boolean accepted = finish(invocation, null, result);
+            if (!accepted) invalidateUnacknowledgedNew();
+            return accepted;
         } catch (Rejected rejected) {
             if (changed != null) abortChangedCandidate();
+            else invalidateUnacknowledgedNew();
             return false;
         } catch (VaultException failure) {
             if (changed != null) {
@@ -806,19 +1688,24 @@ final class SshNativeCallbackAdapter implements AutoCloseable {
                 abortChangedCandidate();
                 return result;
             }
-            return finish(invocation, failure.code, null);
+            VaultException uncertain = invalidateUnacknowledgedNew();
+            return finish(invocation, uncertain == null ? failure.code : uncertain.code, null);
         } catch (RuntimeException | LinkageError failure) {
             if (changed != null) {
                 boolean result = failChangedCompletion(invocation, finished, "SSH_CALLBACK_JAVA_EXCEPTION", changedProvider);
                 abortChangedCandidate();
                 return result;
             }
-            return finish(invocation, "SSH_CALLBACK_JAVA_EXCEPTION", null);
+            VaultException uncertain = invalidateUnacknowledgedNew();
+            return finish(invocation, uncertain == null ? "SSH_CALLBACK_JAVA_EXCEPTION" : uncertain.code, null);
         } catch (Error failure) {
             if (changed != null) {
                 failChangedCompletion(invocation, finished, "SSH_CALLBACK_JAVA_EXCEPTION", changedProvider);
                 abortChangedCandidate();
-            } else abortInvocation(invocation);
+            } else {
+                invalidateUnacknowledgedNew();
+                abortInvocation(invocation);
+            }
             throw failure;
         }
     }
@@ -829,8 +1716,8 @@ final class SshNativeCallbackAdapter implements AutoCloseable {
         if (uncertain != null) code = uncertain.code;
         if (!finished) return finishChangedFailure(invocation, code);
         synchronized (stateLock) {
-            cancelled = true;
-            failureCode = code;
+            markCancelled();
+            if (!"VAULT_COMMIT_UNCERTAIN".equals(failureCode)) failureCode = code;
             hostProof = null;
             kexProof = null;
         }
@@ -839,27 +1726,72 @@ final class SshNativeCallbackAdapter implements AutoCloseable {
 
     /** Called by the owner only after the native step itself returned complete successfully. */
     void confirmChangedNativeCompletion() throws VaultException {
-        synchronized (stateLock) {
-            if (!changedAwaitingNativeAcknowledgement) return;
-            if (Thread.currentThread() != eventLoopThread || cancelled || closing || closed
-                    || hostProof == null || kexProof == null || candidateHandoff == null)
-                throw new VaultException("VAULT_COMMIT_UNCERTAIN", "The changed-host result was not confirmed");
-            role.requireActive(clock);
-            candidateHandoff.provider().changedProofPublished();
-            changedAwaitingNativeAcknowledgement = false;
+        try {
+            synchronized (stateLock) {
+                if (!changedAwaitingNativeAcknowledgement) return;
+                if (Thread.currentThread() != eventLoopThread || cancelled || closing || closed
+                        || hostProof == null || kexProof == null || candidateHandoff == null)
+                    throw new VaultException("VAULT_COMMIT_UNCERTAIN", "The changed-host result was not confirmed");
+                SshManagedKnownHostsProvider provider = candidateHandoff.provider();
+                role.publishBound(clock, provider::changedProofPublished);
+                changedAwaitingNativeAcknowledgement = false;
+            }
+        } catch (VaultException failure) {
+            VaultException uncertain = invalidateUnacknowledgedChanged();
+            throw uncertain == null ? failure : uncertain;
+        } catch (RuntimeException | LinkageError failure) {
+            VaultException uncertain = invalidateUnacknowledgedChanged();
+            if (uncertain != null) throw uncertain;
+            throw failure;
         }
     }
 
-    private void invalidateUnacknowledgedChanged() {
+    /** NEW remains pending until the owning native KEX step itself completed. */
+    void confirmNewNativeCompletion() throws VaultException {
+        try {
+            synchronized (stateLock) {
+                if (!newAwaitingNativeAcknowledgement) return;
+                if (Thread.currentThread() != eventLoopThread || cancelled || closing || closed
+                        || hostProof == null || kexProof == null || candidateHandoff == null)
+                    throw new VaultException("VAULT_COMMIT_UNCERTAIN", "The new-host result was not confirmed");
+                SshManagedKnownHostsProvider provider = candidateHandoff.provider();
+                role.publishBound(clock, provider::newProofPublished);
+                newAwaitingNativeAcknowledgement = false;
+            }
+        } catch (VaultException failure) {
+            VaultException uncertain = invalidateUnacknowledgedNew();
+            throw uncertain == null ? failure : uncertain;
+        } catch (RuntimeException | LinkageError failure) {
+            VaultException uncertain = invalidateUnacknowledgedNew();
+            if (uncertain != null) throw uncertain;
+            throw failure;
+        }
+    }
+
+    private VaultException invalidateUnacknowledgedNew() {
         SshKnownHostsCandidateHandoff handoff = candidateHandoff;
-        VaultException uncertain = handoff == null ? null : handoff.provider().invalidateUnacknowledgedChanged();
-        if (uncertain == null) return;
+        VaultException uncertain = handoff == null ? null : handoff.provider().invalidateUnacknowledgedNew();
+        if (uncertain == null) return null;
         synchronized (stateLock) {
-            cancelled = true;
+            markCancelled();
             failureCode = uncertain.code;
             hostProof = null;
             kexProof = null;
         }
+        return uncertain;
+    }
+
+    private VaultException invalidateUnacknowledgedChanged() {
+        SshKnownHostsCandidateHandoff handoff = candidateHandoff;
+        VaultException uncertain = handoff == null ? null : handoff.provider().invalidateUnacknowledgedChanged();
+        if (uncertain == null) return null;
+        synchronized (stateLock) {
+            markCancelled();
+            failureCode = uncertain.code;
+            hostProof = null;
+            kexProof = null;
+        }
+        return uncertain;
     }
 
     /** The legacy boolean callback remains a separate availability contract. */
@@ -867,11 +1799,12 @@ final class SshNativeCallbackAdapter implements AutoCloseable {
         Invocation invocation = null;
         try {
             invocation = begin();
+            requireChildEffectGuard();
             if (!validCredentialKind(kind)) {
                 throw new VaultException("PARAMETERS", "The SSH credential kind is invalid");
             }
             synchronized (stateLock) {
-                if (kexProof == null || changedAwaitingNativeAcknowledgement) throw new VaultException("SSH_KEX_REQUIRED",
+                if (kexProof == null || changedAwaitingNativeAcknowledgement || newAwaitingNativeAcknowledgement) throw new VaultException("SSH_KEX_REQUIRED",
                         "Signed KEX and NEWKEYS evidence is unavailable");
             }
             throw new VaultException("SSH_CREDENTIAL_PROVIDER",
@@ -882,6 +1815,9 @@ final class SshNativeCallbackAdapter implements AutoCloseable {
             return finish(invocation, failure.code, null);
         } catch (RuntimeException | LinkageError failure) {
             return finish(invocation, "SSH_CALLBACK_JAVA_EXCEPTION", null);
+        } catch (Error failure) {
+            abortInvocation(invocation);
+            throw failure;
         }
     }
 
@@ -894,7 +1830,8 @@ final class SshNativeCallbackAdapter implements AutoCloseable {
             }
             if (closed) throw new VaultException("SSH_CALLBACK_CLOSED", "The SSH callback binding is closed");
             if (closing) throw new VaultException("SSH_CALLBACK_CLOSING", "The SSH callback binding is closing");
-            if (cancelled) throw new VaultException("SSH_CALLBACK_CANCELLED", "The SSH callback binding is cancelled");
+            if (cancelled) throw new VaultException("VAULT_COMMIT_UNCERTAIN".equals(failureCode)
+                    ? failureCode : "SSH_CALLBACK_CANCELLED", "The SSH callback binding is cancelled");
             if (selection == null || authenticationSelection != null || authenticationSetupLocked
                     || inCallback || nativeSessionOpening || nativeSessionOwned || managedProvider == null) {
                 throw SshAuthenticationSelection.invalid();
@@ -934,6 +1871,17 @@ final class SshNativeCallbackAdapter implements AutoCloseable {
         boolean handedOff = false;
         try {
             invocation = begin();
+            SshNativeSession.JumpChildOwner protectedOwner = null;
+            synchronized (stateLock) {
+                if (childTrustSource != null) protectedOwner = childEffectOwner;
+            }
+            if (hasChildTrustSource()) {
+                if (protectedOwner == null || !nativeSelectedCall || kind != CREDENTIAL_PASSWORD)
+                    requireChildEffectGuard();
+                protectedOwner.requireProtectedEffect();
+                if (!nativeCallbackAncestorProofsLive(nativeCallbackToken()))
+                    throw new VaultException("SSH_JUMP_EFFECT_GUARD", "The jump callback proof is unavailable");
+            }
             SshAuthenticationSelection frozen;
             synchronized (stateLock) {
                 frozen = authenticationSelection;
@@ -968,7 +1916,7 @@ final class SshNativeCallbackAdapter implements AutoCloseable {
             SshHostKeyAuthority.Proof proof;
             SshKexProof signedKex;
             synchronized (stateLock) {
-                if (changedAwaitingNativeAcknowledgement) throw new VaultException("SSH_KEX_REQUIRED",
+                if (changedAwaitingNativeAcknowledgement || newAwaitingNativeAcknowledgement) throw new VaultException("SSH_KEX_REQUIRED",
                         "The changed-host KEX has not completed natively");
                 proof = hostProof;
                 signedKex = kexProof;
@@ -990,13 +1938,37 @@ final class SshNativeCallbackAdapter implements AutoCloseable {
                         "The managed SSH credential provider is unavailable");
             }
             final Invocation capturedInvocation = invocation;
-            final AppSecrets.EffectGuard effectGuard = frozen == null ? null
+            final boolean protectedChild = protectedOwner != null;
+            final AppSecrets.EffectGuard selectedGuard = frozen == null ? null
                     : new AppSecrets.EffectGuard() {
                         @Override public void check() throws VaultException {
                             requireSelectedInvocation(capturedInvocation, frozen, proof, signedKex, nativeSelectedCall);
                         }
                         @Override public void publish(AppSecrets.EffectGuard publication) throws VaultException {
                             synchronized (stateLock) { check(); publication.check(); }
+                        }
+                    };
+            final AppSecrets.EffectGuard effectGuard = selectedGuard == null ? null : protectedChild
+                    ? new AppSecrets.SshSecretCopyGuard() {
+                        @Override public void check() throws VaultException { selectedGuard.check(); }
+                        @Override public void publish(AppSecrets.EffectGuard publication) throws VaultException {
+                            selectedGuard.publish(publication);
+                        }
+                        @Override public void copySecret(AppSecrets.EffectGuard receiver) throws VaultException {
+                            if (!nativeSelectedEffectCopyBegin())
+                                throw new VaultException("SSH_JUMP_EFFECT_GUARD", "The jump credential effect was revoked");
+                            try { receiver.check(); }
+                            finally { nativeSelectedEffectCopyEnd(); }
+                        }
+                    } : new AppSecrets.SshStopCopyGuard() {
+                        @Override public void check() throws VaultException { selectedGuard.check(); }
+                        @Override public void publish(AppSecrets.EffectGuard publication) throws VaultException {
+                            selectedGuard.publish(publication);
+                        }
+                        @Override public void copySecret(AppSecrets.EffectGuard receiver) throws VaultException {
+                            if (!effectCancellation.admitTerminalIo())
+                                throw new VaultException("SSH_CALLBACK_CANCELLED", "The SSH callback was cancelled");
+                            receiver.check();
                         }
                     };
             if (effectGuard != null) {
@@ -1051,6 +2023,7 @@ final class SshNativeCallbackAdapter implements AutoCloseable {
             if (Thread.currentThread() != eventLoopThread || !inCallback || invocation == null
                     || invocation.serial != invocationSerial || authenticationSelection != selection
                     || hostProof != proof || kexProof != signedKex || changedAwaitingNativeAcknowledgement
+                    || newAwaitingNativeAcknowledgement
                     || nativeSelectedCall && (!nativeSessionOwned || !selectedNativeClaimIssued
                     || nativeCallback <= 0)
                     || !nativeSelectedCall && selectedNativeClaimIssued) {
@@ -1064,18 +2037,26 @@ final class SshNativeCallbackAdapter implements AutoCloseable {
 
     void cancel() throws VaultException {
         synchronized (stateLock) {
+            if (cancellationInvalidationUnconfirmed != null)
+                throw unconfirmedCallbackCleanup(cancellationInvalidationUnconfirmed);
             externallyCancelled = true;
             if (closed || closing) return;
-            cancelled = true;
+            markCancelled();
             if (failureCode == null) failureCode = "SSH_CALLBACK_CANCELLED";
         }
+        invalidateUnacknowledgedNew();
         invalidateUnacknowledgedChanged();
+        discardProvisionalFixture(true);
         abortChangedCandidate();
         try {
             nativeBinding.cancel(nativeCallback);
         } catch (IOException | LinkageError | RuntimeException failure) {
-            synchronized (stateLock) { failureCode = "SSH_CALLBACK_NATIVE"; }
-            throw new VaultException("SSH_CALLBACK_NATIVE", "The SSH callback cancellation failed");
+            String code;
+            synchronized (stateLock) {
+                if (!"VAULT_COMMIT_UNCERTAIN".equals(failureCode)) failureCode = "SSH_CALLBACK_NATIVE";
+                code = failureCode;
+            }
+            throw new VaultException(code, "The SSH callback cancellation failed");
         }
     }
 
@@ -1145,35 +2126,67 @@ final class SshNativeCallbackAdapter implements AutoCloseable {
     private void markNativeClientClosed() throws VaultException {
         synchronized (stateLock) {
             if (Thread.currentThread() != eventLoopThread) {
-                failureCode = "SSH_CALLBACK_THREAD";
+                preserveUncertainFailure("SSH_CALLBACK_THREAD");
                 throw new VaultException(failureCode,
                         "SSH callback cleanup must run on its event-loop thread");
             }
             if (inCallback) {
-                failureCode = "SSH_CALLBACK_REENTRANT";
+                preserveUncertainFailure("SSH_CALLBACK_REENTRANT");
                 throw new VaultException(failureCode,
                         "SSH callback cleanup cannot re-enter a callback");
             }
-            if (closed) return;
-            closing = false;
-            cancelled = true;
-            closed = true;
-            hostProof = null;
-            kexProof = null;
-            nativeCallback = 0;
-            if (failureCode == null) failureCode = "SSH_CALLBACK_CLOSING";
+            if (cancellationInvalidationUnconfirmed != null)
+                throw unconfirmedCallbackCleanup(cancellationInvalidationUnconfirmed);
+            if (!closed) {
+                closing = false;
+                markCancelled();
+                closed = true;
+                hostProof = null;
+                kexProof = null;
+                nativeCallback = 0;
+                if (failureCode == null) failureCode = "SSH_CALLBACK_CLOSING";
+            }
+            if (nativeCloseCleanupComplete) return;
         }
-        if (candidateHandoff != null) candidateHandoff.close();
+        try {
+            invalidateNewForNativeClose();
+            discardProvisionalFixture(true);
+            if (candidateHandoff != null) candidateHandoff.close();
+        } catch (RuntimeException | LinkageError failure) {
+            throw unconfirmedCallbackCleanup(failure);
+        }
+        synchronized (stateLock) { nativeCloseCleanupComplete = true; }
+    }
+
+    private static VaultException unconfirmedCallbackCleanup(Throwable cause) {
+        VaultException result = new VaultException("SSH_CALLBACK_CLEANUP", "The SSH callback cleanup is unconfirmed");
+        if (cause != null) result.initCause(cause);
+        return result;
+    }
+
+    private void invalidateNewForNativeClose() throws VaultException {
+        synchronized (stateLock) {
+            if (nativeCloseNewInvalidation == 2) return;
+            if (nativeCloseNewInvalidation != 0) throw unconfirmedCallbackCleanup(nativeCloseNewFailure);
+            nativeCloseNewInvalidation = 1;
+        }
+        try { invalidateUnacknowledgedNew(); }
+        catch (RuntimeException | Error failure) {
+            synchronized (stateLock) { nativeCloseNewFailure = failure; }
+            throw failure;
+        }
+        synchronized (stateLock) { nativeCloseNewInvalidation = 2; }
     }
 
     /** Native role release is retried independently after native client close. */
     void releaseRoleAfterNativeClient() throws VaultException {
         synchronized (stateLock) {
             if (roleReleased) return;
-            if (!closed || nativeSessionOpening || nativeSessionOwned) throw new VaultException("SSH_CALLBACK_CLEANUP",
+            if (!closed || !nativeCloseCleanupComplete || nativeSessionOpening || nativeSessionOwned)
+                throw new VaultException("SSH_CALLBACK_CLEANUP",
                     "The native SSH client has not closed its callback");
             if (Thread.currentThread() != eventLoopThread) {
-                failureCode = "SSH_CALLBACK_THREAD";
+                preserveUncertainFailure("SSH_CALLBACK_THREAD");
                 throw new VaultException(failureCode,
                         "SSH callback cleanup must run on its event-loop thread");
             }
@@ -1187,34 +2200,46 @@ final class SshNativeCallbackAdapter implements AutoCloseable {
     }
 
     private void closeNative() throws VaultException {
+        boolean alreadyClosed;
         synchronized (stateLock) {
-            if (closed) return;
+            alreadyClosed = closed;
             if (Thread.currentThread() != eventLoopThread) {
-                failureCode = "SSH_CALLBACK_THREAD";
+                preserveUncertainFailure("SSH_CALLBACK_THREAD");
                 throw new VaultException(failureCode, "SSH callback cleanup must run on its event-loop thread");
             }
             if (inCallback) {
-                failureCode = "SSH_CALLBACK_REENTRANT";
+                preserveUncertainFailure("SSH_CALLBACK_REENTRANT");
                 throw new VaultException(failureCode, "SSH callback cleanup cannot re-enter a callback");
             }
-            if (nativeSessionOpening || nativeSessionOwned) {
-                failureCode = "SSH_CALLBACK_SESSION";
+            if (cancellationInvalidationUnconfirmed != null)
+                throw unconfirmedCallbackCleanup(cancellationInvalidationUnconfirmed);
+            if (!alreadyClosed && (nativeSessionOpening || nativeSessionOwned)) {
+                preserveUncertainFailure("SSH_CALLBACK_SESSION");
                 throw new VaultException(failureCode,
                         "The native SSH session owns this callback binding");
             }
-            closing = true;
-            cancelled = true;
-            if (failureCode == null) failureCode = "SSH_CALLBACK_CLOSING";
+            if (!alreadyClosed) {
+                closing = true;
+                markCancelled();
+                if (failureCode == null) failureCode = "SSH_CALLBACK_CLOSING";
+            }
         }
+        if (alreadyClosed) { markNativeClientClosed(); return; }
         /* Closing is a cancellation boundary even when native cleanup needs a
          * retry; no later caller may install a managed candidate. */
-        if (candidateHandoff != null) candidateHandoff.abort();
+        try {
+            invalidateNewForNativeClose();
+            discardProvisionalFixture(true);
+            if (candidateHandoff != null) candidateHandoff.abort();
+        } catch (RuntimeException | LinkageError failure) {
+            throw unconfirmedCallbackCleanup(failure);
+        }
         try {
             nativeBinding.close(nativeCallback);
         } catch (IOException | LinkageError | RuntimeException failure) {
             synchronized (stateLock) {
                 closing = false;
-                failureCode = "SSH_CALLBACK_CLEANUP";
+                if (!"VAULT_COMMIT_UNCERTAIN".equals(failureCode)) failureCode = "SSH_CALLBACK_CLEANUP";
             }
             throw new VaultException("SSH_CALLBACK_CLEANUP",
                     "The SSH callback cleanup is unconfirmed");
@@ -1235,6 +2260,38 @@ final class SshNativeCallbackAdapter implements AutoCloseable {
         }
     }
 
+    /** Only the exact rejected child evidence is reportable; this grants no trust authority. */
+    boolean reportableJumpTrustRefusal() {
+        final SshManagedKnownHostsProvider.ChildTrustSnapshot source;
+        final SshHostKeyAuthority.Evidence evidence;
+        synchronized (stateLock) {
+            source = childTrustSource;
+            evidence = childTrustEvidence;
+            if (!jumpTrustRefusalState(source, evidence)) return false;
+        }
+        // The native rollback closes the candidate receipt; the source keeps
+        // its original role/view/epoch only for this metadata-only diagnosis.
+        // Never acquire the vault/session locks while holding stateLock.
+        try { source.requireRefusalContext(role); }
+        catch (VaultException | RuntimeException | LinkageError unavailable) { return false; }
+        synchronized (stateLock) {
+            if (!jumpTrustRefusalState(source, evidence) || !source.refusalContextAvailable()) return false;
+            try { role.requireActive(clock); return true; }
+            catch (VaultException | RuntimeException | LinkageError unavailable) { return false; }
+        }
+    }
+
+    /** Called only with stateLock; evidence was admitted through requireChildTrustEvidence. */
+    private boolean jumpTrustRefusalState(SshManagedKnownHostsProvider.ChildTrustSnapshot source,
+            SshHostKeyAuthority.Evidence evidence) {
+        return source != null && childTrustSource == source && childTrustOpened && nativeSessionOwned
+                && evidence != null && childTrustEvidence == evidence && evidence.matches(role)
+                && (evidence.classification == SshHostKeyAuthority.Classification.NEW
+                    || evidence.classification == SshHostKeyAuthority.Classification.CHANGED)
+                && cancelled && !externallyCancelled && !closing && !closed && !inCallback
+                && "SSH_JUMP_EFFECT_GUARD".equals(failureCode);
+    }
+
     /** Only this fixed policy denial is exposed; cancellation and invalid role/view still win. */
     boolean changedPolicyRejected() {
         synchronized (stateLock) {
@@ -1250,6 +2307,17 @@ final class SshNativeCallbackAdapter implements AutoCloseable {
         synchronized (stateLock) { return nativeCallback; }
     }
     long roleToken() { return issued.token; }
+    boolean ownsIssued(SshNativeRoleBootstrap.Issued candidate) { return issued == candidate; }
+    int roleHop() { return role.hop; }
+
+    /** The exact provider remains associated after its confirmed one-shot write closes it. */
+    boolean ownsTrustProvider(SshManagedKnownHostsProvider provider) {
+        synchronized (stateLock) {
+            return !closed && !closing && !cancelled && provider != null && candidateHandoff != null
+                    && candidateHandoff.provider() == provider && managedProvider != null
+                    && managedProvider.ownsNativeCandidateProvider(provider);
+        }
+    }
 
     void requireKeyboardContinuation() throws VaultException {
         keyboardContinuationProof();
@@ -1357,10 +2425,21 @@ final class SshNativeCallbackAdapter implements AutoCloseable {
         synchronized (stateLock) {
             if (closed) throw new VaultException("SSH_CALLBACK_CLOSED", "The SSH callback binding is closed");
             if (closing) throw new VaultException("SSH_CALLBACK_CLOSING", "The SSH callback binding is closing");
-            if (cancelled) throw new VaultException("SSH_CALLBACK_CANCELLED", "The SSH callback binding is cancelled");
+            if (cancelled) throw new VaultException("VAULT_COMMIT_UNCERTAIN".equals(failureCode)
+                    ? failureCode : "SSH_CALLBACK_CANCELLED", "The SSH callback binding is cancelled");
             if (establishedClaim != null)
                 throw new VaultException("SSH_CALLBACK_TRANSPORT_ONLY", "Authentication has finished");
             role.requireActive(clock);
+        }
+    }
+
+    /** The displayed prompt must describe this callback's actual frozen selection. */
+    void requireAuthenticationSelection(SshAuthenticationSelection selection) throws VaultException {
+        synchronized (stateLock) {
+            requireAuthenticationSelectionLive();
+            if (selection == null || authenticationSelection != selection)
+                throw SshAuthenticationSelection.invalid();
+            selection.requireMatches(role, selection.kind, clock);
         }
     }
 

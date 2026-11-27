@@ -16,6 +16,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.Before;
 import org.junit.Test;
 
@@ -1060,6 +1061,30 @@ public final class SshProductionBridgeTest {
                 fail("same digest different exact role");
             } catch (VaultException failure) { assertEquals("SSH_AUTH_SELECTION", failure.code); }
             setup.adapter.selectAuthentication(setup.selection);
+        }
+    }
+
+    @Test public void promptSelectionMustBeTheRegisteredObjectEvenWithTheSameRole() throws Exception {
+        try (SelectedSetup setup = new SelectedSetup(false)) {
+            SshAuthenticationSelection sameRoleOtherUser = SshAuthenticationSelection.password(
+                    setup.issued.role, "other-user", setup.selection.entryId, clock);
+            SshAuthenticationSelection sameValuesOtherObject = SshAuthenticationSelection.password(
+                    setup.issued.role, setup.selection.username, setup.selection.entryId, clock);
+            try { setup.adapter.requireAuthenticationSelection(setup.selection); fail("not registered"); }
+            catch (VaultException expected) { assertEquals("SSH_AUTH_SELECTION", expected.code); }
+            setup.adapter.selectAuthentication(setup.selection);
+            setup.adapter.requireAuthenticationSelection(setup.selection);
+            for (SshAuthenticationSelection wrong : new SshAuthenticationSelection[] {
+                    sameRoleOtherUser, sameValuesOtherObject }) {
+                AtomicBoolean shown = new AtomicBoolean();
+                try (SshPasswordMailbox mailbox = new SshPasswordMailbox(setup.issued.role, wrong, clock,
+                        () -> setup.adapter.requireAuthenticationSelection(wrong), ticket -> shown.set(true),
+                        SshPasswordMailbox.Purpose.PASSWORD)) {
+                    try { mailbox.await(null, false); fail("foreign selection"); }
+                    catch (VaultException expected) { assertEquals("SSH_AUTH_SELECTION", expected.code); }
+                }
+                assertFalse(shown.get());
+            }
         }
     }
 

@@ -11,6 +11,11 @@
 #include <time.h>
 #include <unistd.h>
 
+/* The standalone adapter has no native client and cannot issue provisional
+ * authority. A production native client supplies this hidden scope verifier. */
+extern int ctos_ssh_native_client_provisional_scope_check(ctos_ssh_callback_token,
+    void *, enum ctos_ssh_provisional_new_stage) __attribute__((weak, visibility("hidden")));
+
 struct callback_slot {
     int live;
     int in_callback;
@@ -22,12 +27,19 @@ struct callback_slot {
     int changed_candidate_pending;
     int changed_candidate_reviewed;
     int changed_candidate_committed;
+    int provisional_new_pending;
+    int provisional_new_reviewed;
+    int provisional_new_kex_reported;
+    int checking_client_scope;
     struct ctos_ssh_host_evidence changed_candidate_evidence;
+    struct ctos_ssh_host_evidence provisional_new_evidence;
     ctos_ssh_callback_token callback;
     ctos_ssh_role_token role;
     uid_t owner_uid;
     pthread_t event_thread;
     uint64_t deadline;
+    const void *client_owner;
+    ctos_ssh_callback_scope_checker client_scope_checker;
     const void *transport_owner;
     struct ctos_ssh_callback_target target;
 };
@@ -35,6 +47,36 @@ struct callback_slot {
 static pthread_mutex_t callbacks_lock = PTHREAD_MUTEX_INITIALIZER;
 static struct callback_slot callbacks[CTOS_SSH_CALLBACK_MAX];
 static uint64_t next_callback;
+
+/* Target calls can nest across slots. A metadata check is permitted only for
+ * the innermost actual target and never while another target is on the stack.
+ * This also keeps a cleanup callback from borrowing its caller's scope. */
+struct callback_target_scope {
+    struct callback_slot *slot;
+    struct callback_target_scope *previous;
+    int permits_client_check;
+};
+static _Thread_local struct callback_target_scope *current_target_scope;
+
+/* Callers hold callbacks_lock. No effect holder may acquire that lock. */
+static void invalidate_callback_slot(struct callback_slot *slot) {
+    ctos_ssh_effect_invalidate_begin();
+    slot->cancelled = 1;
+    slot->failed = 1;
+    ctos_ssh_effect_invalidate_end();
+}
+
+static void target_scope_enter(struct callback_target_scope *scope,
+    struct callback_slot *slot, int permits_client_check) {
+    scope->slot = slot;
+    scope->previous = current_target_scope;
+    scope->permits_client_check = permits_client_check;
+    current_target_scope = scope;
+}
+
+static void target_scope_leave(struct callback_target_scope *scope) {
+    current_target_scope = scope->previous;
+}
 
 static void wipe_bytes(unsigned char *bytes, size_t length) {
     if (bytes == NULL) return;
@@ -448,6 +490,10 @@ static int valid_target(const struct ctos_ssh_callback_target *target) {
         && ((target->changed_host_candidate == NULL && target->changed_host_review == NULL)
             || (target->changed_host_candidate != NULL && target->changed_host_review != NULL
                 && target->known_hosts_candidate_abort != NULL))
+        && ((target->provisional_new_candidate == NULL && target->provisional_new_review == NULL
+                && target->provisional_new_kex == NULL)
+            || (target->provisional_new_candidate != NULL && target->provisional_new_review != NULL
+                && target->provisional_new_kex != NULL && target->known_hosts_candidate_abort != NULL))
         && target->kex_complete != NULL && target->credential != NULL
         && target->release != NULL;
 }
@@ -468,8 +514,7 @@ static int begin_callback(ctos_ssh_callback_token callback, void *environment,
         pthread_mutex_unlock(&callbacks_lock); errno = EPERM; return -1;
     }
     if (slot->in_callback) {
-        slot->cancelled = 1;
-        slot->failed = 1;
+        invalidate_callback_slot(slot);
         pthread_mutex_unlock(&callbacks_lock); errno = EALREADY; return -1;
     }
     if (slot->cancelled || slot->closing || slot->failed) {
@@ -482,8 +527,7 @@ static int begin_callback(ctos_ssh_callback_token callback, void *environment,
     if (role_status(callback, slot) != 0) {
         int error = errno;
         if (error != ETIMEDOUT || slot->transport_owner == NULL) {
-            slot->cancelled = 1;
-            slot->failed = 1;
+            invalidate_callback_slot(slot);
         }
         pthread_mutex_unlock(&callbacks_lock);
         errno = error;
@@ -507,14 +551,12 @@ static int finish_callback(struct callback_slot *slot, int callback_result) {
     if (result == 0 && role_status(slot->callback, slot) != 0) {
         result = errno;
         if (result != ETIMEDOUT || slot->transport_owner == NULL) {
-            slot->cancelled = 1;
-            slot->failed = 1;
+            invalidate_callback_slot(slot);
         }
     }
     if (result != 0) {
         if (result != ETIMEDOUT || slot->transport_owner == NULL) {
-            slot->cancelled = 1;
-            slot->failed = 1;
+            invalidate_callback_slot(slot);
         }
         if (result < 1 || result > 4095) result = EIO;
         errno = result;
@@ -541,8 +583,7 @@ static int claim_known_hosts_candidate(struct callback_slot *slot) {
     }
     if (slot->known_hosts_candidate_used) {
         slot->in_callback = 0;
-        slot->cancelled = 1;
-        slot->failed = 1;
+        invalidate_callback_slot(slot);
         pthread_mutex_unlock(&callbacks_lock);
         errno = EALREADY;
         return -1;
@@ -592,10 +633,9 @@ static int abort_known_hosts_candidate(struct callback_slot *slot,
         errno = ENOSYS;
         return -1;
     }
-    if (slot->changed_candidate_pending) {
+    if (slot->changed_candidate_pending || slot->provisional_new_pending) {
         /* Even failed cleanup must never revive provisional authority. */
-        slot->cancelled = 1;
-        slot->failed = 1;
+        invalidate_callback_slot(slot);
     }
     slot->known_hosts_candidate_aborted = 1;
     /* Keep the slot alive while external cleanup runs; close/re-entry must
@@ -604,7 +644,10 @@ static int abort_known_hosts_candidate(struct callback_slot *slot,
     target = slot->target;
     pthread_mutex_unlock(&callbacks_lock);
 
+    struct callback_target_scope scope;
+    target_scope_enter(&scope, slot, 0);
     callback_result = target.known_hosts_candidate_abort(target.context, environment);
+    target_scope_leave(&scope);
     if (pthread_mutex_lock(&callbacks_lock) != 0) { errno = EBUSY; return -1; }
     slot->in_callback = 0;
     if (callback_result != 0) {
@@ -616,8 +659,11 @@ static int abort_known_hosts_candidate(struct callback_slot *slot,
     }
     slot->changed_candidate_pending = slot->changed_candidate_reviewed = 0;
     slot->changed_candidate_committed = 0;
+    slot->provisional_new_pending = slot->provisional_new_reviewed = slot->provisional_new_kex_reported = 0;
     wipe_bytes((unsigned char *)&slot->changed_candidate_evidence,
         sizeof(slot->changed_candidate_evidence));
+    wipe_bytes((unsigned char *)&slot->provisional_new_evidence,
+        sizeof(slot->provisional_new_evidence));
     pthread_mutex_unlock(&callbacks_lock);
     return 0;
 }
@@ -672,12 +718,163 @@ int ctos_ssh_callback_cancel(ctos_ssh_callback_token callback) {
     if (pthread_mutex_lock(&callbacks_lock) != 0) { errno = EBUSY; return -1; }
     struct callback_slot *slot = lookup_locked(callback);
     if (slot == NULL) { pthread_mutex_unlock(&callbacks_lock); errno = ENOENT; return -1; }
+    ctos_ssh_effect_invalidate_begin();
     slot->cancelled = 1;
+    ctos_ssh_effect_invalidate_end();
     pthread_mutex_unlock(&callbacks_lock);
     return 0;
 }
 
-int ctos_ssh_callback_close(ctos_ssh_callback_token callback, void *environment) {
+static int callback_client_claim(ctos_ssh_callback_token callback, void *environment,
+    ctos_ssh_role_token role, const void *owner, ctos_ssh_callback_scope_checker checker,
+    ctos_ssh_callback_effect_admission *effect_out, void **effect_context_out) {
+    struct callback_slot *slot;
+    int error;
+    if (owner == NULL || role == 0 || ((effect_out == NULL) != (effect_context_out == NULL))) {
+        errno = EINVAL; return -1;
+    }
+    if (effect_out != NULL) { *effect_out = NULL; *effect_context_out = NULL; }
+    if (pthread_mutex_lock(&callbacks_lock) != 0) { errno = EBUSY; return -1; }
+    slot = lookup_locked(callback);
+    if (slot == NULL) { error = ENOENT; goto failed; }
+    if (!pthread_equal(slot->event_thread, pthread_self())
+        || slot->target.validate_environment(slot->target.context, environment) != 0) {
+        error = EPERM; goto failed;
+    }
+    if (slot->role != role) { error = EACCES; goto failed; }
+    if (slot->client_owner != NULL || slot->in_callback || slot->transport_owner != NULL) {
+        error = EBUSY; goto failed;
+    }
+    if (slot->cancelled || slot->closing || slot->failed) { error = ECANCELED; goto failed; }
+    if (role_status(callback, slot) != 0) { error = errno; goto failed; }
+    slot->client_owner = owner;
+    slot->client_scope_checker = checker;
+    if (effect_out != NULL) {
+        *effect_out = slot->target.admit_effect;
+        *effect_context_out = slot->target.context;
+    }
+    pthread_mutex_unlock(&callbacks_lock);
+    return 0;
+failed:
+    pthread_mutex_unlock(&callbacks_lock);
+    errno = error;
+    return -1;
+}
+
+int ctos_ssh_callback_client_claim(ctos_ssh_callback_token callback, void *environment,
+    ctos_ssh_role_token role, const void *owner) {
+    return callback_client_claim(callback, environment, role, owner, NULL, NULL, NULL);
+}
+
+int ctos_ssh_callback_client_claim_scoped(ctos_ssh_callback_token callback, void *environment,
+    ctos_ssh_role_token role, const void *owner, ctos_ssh_callback_scope_checker checker) {
+    if (checker == NULL) { errno = EINVAL; return -1; }
+    return callback_client_claim(callback, environment, role, owner, checker, NULL, NULL);
+}
+
+int ctos_ssh_callback_client_claim_scoped_effect(ctos_ssh_callback_token callback,
+    void *environment, ctos_ssh_role_token role, const void *owner,
+    ctos_ssh_callback_scope_checker checker, ctos_ssh_callback_effect_admission *effect_out,
+    void **effect_context_out) {
+    if (checker == NULL || effect_out == NULL || effect_context_out == NULL) {
+        errno = EINVAL; return -1;
+    }
+    return callback_client_claim(callback, environment, role, owner, checker, effect_out, effect_context_out);
+}
+
+static int callback_client_scope_check(ctos_ssh_callback_token callback,
+    void *environment, const void *receiver, int require_receiver,
+    ctos_ssh_callback_receiver_validator validator, ctos_ssh_callback_scope_checker checker) {
+    struct callback_slot *slot;
+    const void *owner;
+    ctos_ssh_role_token role;
+    int error = 0;
+
+    if (callback == 0 || environment == NULL || checker == NULL
+        || (require_receiver && (receiver == NULL || validator == NULL))) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (pthread_mutex_lock(&callbacks_lock) != 0) { errno = EBUSY; return -1; }
+    slot = lookup_locked(callback);
+    if (slot == NULL) { error = ENOENT; goto rejected; }
+    if (!pthread_equal(slot->event_thread, pthread_self())) { error = EPERM; goto rejected; }
+    if (!slot->in_callback || current_target_scope == NULL
+        || current_target_scope->slot != slot || !current_target_scope->permits_client_check) {
+        error = EACCES; goto rejected;
+    }
+    if (current_target_scope->previous != NULL || slot->checking_client_scope) {
+        error = EALREADY; goto rejected;
+    }
+    if (slot->target.validate_environment(slot->target.context, environment) != 0) {
+        error = EPERM; goto rejected;
+    }
+    if (slot->client_owner == NULL || slot->client_scope_checker != checker) {
+        error = EACCES; goto rejected;
+    }
+    if (require_receiver && (slot->target.validate_receiver != validator
+        || validator(slot->target.context, environment, receiver) != 0)) {
+        error = EACCES; goto rejected;
+    }
+    if (slot->cancelled || slot->closing || slot->failed) { error = ECANCELED; goto rejected; }
+    if (role_status(callback, slot) != 0) { error = errno; goto rejected; }
+    owner = slot->client_owner;
+    role = slot->role;
+    slot->checking_client_scope = 1;
+    pthread_mutex_unlock(&callbacks_lock);
+
+    /* Never hold callbacks_lock while the checker traverses ancestor roles,
+     * views and callbacks: each ancestor has its own callback checks. */
+    if (checker(owner, callback, role, environment) != 0)
+        error = errno == 0 ? EACCES : errno;
+    if (pthread_mutex_lock(&callbacks_lock) != 0) { errno = EBUSY; return -1; }
+    if (slot != lookup_locked(callback) || !slot->in_callback
+        || slot->client_owner != owner || slot->role != role || slot->client_scope_checker != checker
+        || current_target_scope == NULL || current_target_scope->slot != slot
+        || current_target_scope->previous != NULL || !current_target_scope->permits_client_check) {
+        error = ECANCELED;
+    } else {
+        slot->checking_client_scope = 0;
+        if (slot->cancelled || slot->closing || slot->failed) error = ECANCELED;
+        else if (role_status(callback, slot) != 0) error = errno;
+    }
+    pthread_mutex_unlock(&callbacks_lock);
+    if (error != 0) { errno = error; return -1; }
+    return 0;
+
+rejected:
+    pthread_mutex_unlock(&callbacks_lock);
+    errno = error;
+    return -1;
+}
+
+int ctos_ssh_callback_client_scope_check(ctos_ssh_callback_token callback,
+    void *environment, ctos_ssh_callback_scope_checker checker) {
+    return callback_client_scope_check(callback, environment, NULL, 0, NULL, checker);
+}
+
+int ctos_ssh_callback_client_scope_check_receiver(ctos_ssh_callback_token callback,
+    void *environment, const void *receiver, ctos_ssh_callback_receiver_validator validator,
+    ctos_ssh_callback_scope_checker checker) {
+    return callback_client_scope_check(callback, environment, receiver, 1, validator, checker);
+}
+
+int ctos_ssh_callback_current_receiver(ctos_ssh_callback_token callback,
+    void *environment, const void *receiver, ctos_ssh_callback_receiver_validator validator) {
+    struct callback_target_scope *scope = current_target_scope;
+    struct callback_slot *slot;
+    if (scope == NULL || scope->previous != NULL || !scope->permits_client_check
+        || (slot = scope->slot) == NULL || slot->callback != callback
+        || slot->target.validate_receiver != validator || validator == NULL
+        || validator(slot->target.context, environment, receiver) != 0) {
+        errno = EACCES;
+        return -1;
+    }
+    return 0;
+}
+
+static int callback_close_owned(ctos_ssh_callback_token callback, void *environment,
+    const void *owner) {
     struct ctos_ssh_callback_target target;
     struct callback_slot *slot;
     if (pthread_mutex_lock(&callbacks_lock) != 0) { errno = EBUSY; return -1; }
@@ -687,11 +884,19 @@ int ctos_ssh_callback_close(ctos_ssh_callback_token callback, void *environment)
         || slot->target.validate_environment(slot->target.context, environment) != 0) {
         pthread_mutex_unlock(&callbacks_lock); errno = EPERM; return -1;
     }
+    if (slot->client_owner != owner) {
+        pthread_mutex_unlock(&callbacks_lock); errno = EBUSY; return -1;
+    }
     if (slot->in_callback || slot->closing) {
         pthread_mutex_unlock(&callbacks_lock); errno = EBUSY; return -1;
     }
+    if (slot->provisional_new_pending && !slot->known_hosts_candidate_aborted) {
+        pthread_mutex_unlock(&callbacks_lock); errno = EBUSY; return -1;
+    }
+    ctos_ssh_effect_invalidate_begin();
     slot->closing = 1;
     slot->cancelled = 1;
+    ctos_ssh_effect_invalidate_end();
     if (slot->transport_owner != NULL) {
         if (ctos_ssh_role_transport_release(slot->role) != 0 && errno != ENOENT) {
             slot->closing = 0;
@@ -704,7 +909,11 @@ int ctos_ssh_callback_close(ctos_ssh_callback_token callback, void *environment)
     target = slot->target;
     pthread_mutex_unlock(&callbacks_lock);
 
-    if (target.release(target.context, environment) != 0) {
+    struct callback_target_scope scope;
+    target_scope_enter(&scope, slot, 0);
+    int release_result = target.release(target.context, environment);
+    target_scope_leave(&scope);
+    if (release_result != 0) {
         if (pthread_mutex_lock(&callbacks_lock) == 0) {
             slot->closing = 0;
             slot->failed = 1;
@@ -720,8 +929,22 @@ int ctos_ssh_callback_close(ctos_ssh_callback_token callback, void *environment)
     target = slot->target;
     memset(slot, 0, sizeof(*slot));
     pthread_mutex_unlock(&callbacks_lock);
-    if (target.destroy != NULL) target.destroy(target.context);
+    if (target.destroy != NULL) {
+        target_scope_enter(&scope, NULL, 0);
+        target.destroy(target.context);
+        target_scope_leave(&scope);
+    }
     return 0;
+}
+
+int ctos_ssh_callback_close(ctos_ssh_callback_token callback, void *environment) {
+    return callback_close_owned(callback, environment, NULL);
+}
+
+int ctos_ssh_callback_client_close(ctos_ssh_callback_token callback, void *environment,
+    const void *owner) {
+    if (owner == NULL) { errno = EINVAL; return -1; }
+    return callback_close_owned(callback, environment, owner);
 }
 
 int ctos_ssh_callback_check_live(ctos_ssh_callback_token callback, void *environment) {
@@ -740,6 +963,15 @@ int ctos_ssh_callback_supports_changed(ctos_ssh_callback_token callback, void *e
     return finish_callback(slot, 0) == 0 ? supported : -1;
 }
 
+int ctos_ssh_callback_supports_provisional_new(ctos_ssh_callback_token callback, void *environment) {
+    struct callback_slot *slot;
+    struct ctos_ssh_callback_target target;
+    if (begin_callback(callback, environment, &slot, &target) != 0) return -1;
+    int supported = target.provisional_new_candidate != NULL
+        && target.provisional_new_review != NULL && target.provisional_new_kex != NULL;
+    return finish_callback(slot, 0) == 0 ? supported : -1;
+}
+
 int ctos_ssh_callback_promote_transport(ctos_ssh_callback_token callback,
     void *environment, const void *transport_owner) {
     struct callback_slot *slot;
@@ -752,7 +984,11 @@ int ctos_ssh_callback_promote_transport(ctos_ssh_callback_token callback,
         || slot->target.validate_environment(slot->target.context, environment) != 0) {
         error = EPERM; goto failed;
     }
+    if (slot->client_owner != NULL && slot->client_owner != transport_owner) {
+        error = EACCES; goto failed;
+    }
     if (slot->in_callback || slot->transport_owner != NULL) { error = EALREADY; goto failed; }
+    if (slot->provisional_new_pending) { error = EACCES; goto failed; }
     if (slot->cancelled || slot->closing || slot->failed) { error = ECANCELED; goto failed; }
     if (role_status(callback, slot) != 0 || ctos_ssh_role_transport_retain(slot->role) != 0) {
         error = errno; goto failed;
@@ -799,6 +1035,14 @@ failed:
     return -1;
 }
 
+static int ordinary_host_callback_allowed(const struct callback_slot *slot) {
+    int allowed;
+    if (pthread_mutex_lock(&callbacks_lock) != 0) return -1;
+    allowed = slot != NULL && slot->live && slot->in_callback && !slot->provisional_new_pending;
+    pthread_mutex_unlock(&callbacks_lock);
+    return allowed;
+}
+
 int ctos_ssh_callback_host_key(ctos_ssh_callback_token callback, void *environment,
     int classification, const char *key_type, const char *fingerprint,
     const unsigned char base_digest[32], const unsigned char replacement_digest[32]) {
@@ -809,9 +1053,14 @@ int ctos_ssh_callback_host_key(ctos_ssh_callback_token callback, void *environme
         || key_type == NULL || fingerprint == NULL || base_digest == NULL
         || replacement_digest == NULL) { errno = EINVAL; return -1; }
     if (begin_callback(callback, environment, &slot, &target) != 0) return -1;
+    int allowed = ordinary_host_callback_allowed(slot);
+    if (allowed <= 0) return finish_callback(slot, allowed < 0 ? EBUSY : EACCES);
     if (target.host_key == NULL) return finish_callback(slot, ENOSYS);
+    struct callback_target_scope scope;
+    target_scope_enter(&scope, slot, 1);
     int result = target.host_key(target.context, environment, classification,
         key_type, fingerprint, base_digest, replacement_digest);
+    target_scope_leave(&scope);
     return finish_callback(slot, result);
 }
 
@@ -836,6 +1085,8 @@ int ctos_ssh_callback_host_evidence(ctos_ssh_callback_token callback, void *envi
         return -1;
     }
     if (begin_callback(callback, environment, &slot, &target) != 0) return -1;
+    int allowed = ordinary_host_callback_allowed(slot);
+    if (allowed <= 0) return finish_callback(slot, allowed < 0 ? EBUSY : EACCES);
     if (target.host_evidence == NULL) {
         callback_result = finish_callback(slot, ENOSYS);
         wipe_bytes((unsigned char *)result, sizeof(*result));
@@ -849,7 +1100,10 @@ int ctos_ssh_callback_host_evidence(ctos_ssh_callback_token callback, void *envi
         wipe_bytes((unsigned char *)result, sizeof(*result));
         return callback_result;
     }
+    struct callback_target_scope scope;
+    target_scope_enter(&scope, slot, 1);
     callback_result = target.host_evidence(target.context, environment, &evidence, result);
+    target_scope_leave(&scope);
     if (callback_result == 0 && validate_host_result(&evidence, result) != 0) {
         callback_result = errno == 0 ? EINVAL : errno;
     }
@@ -912,7 +1166,10 @@ int ctos_ssh_callback_known_hosts_candidate(ctos_ssh_callback_token callback,
     memcpy(candidate.candidate_id, candidate_id, strlen(candidate_id) + 1U);
     candidate.replacement_body = replacement_body;
     candidate.replacement_body_length = replacement_body_length;
+    struct callback_target_scope scope;
+    target_scope_enter(&scope, slot, 1);
     callback_result = target.known_hosts_candidate(target.context, environment, &candidate);
+    target_scope_leave(&scope);
 finish:
     if (callback_started) {
         error = callback_result;
@@ -942,6 +1199,138 @@ done:
         return -1;
     }
     return 0;
+}
+
+int ctos_ssh_callback_provisional_new_candidate(ctos_ssh_callback_token callback,
+    void *environment, const char *candidate_id,
+    const char *key_type, const char *fingerprint, const unsigned char base_digest[32],
+    const unsigned char replacement_digest[32], unsigned char *replacement_body,
+    size_t replacement_body_length, int *handoff_started) {
+    struct callback_slot *slot = NULL;
+    struct ctos_ssh_callback_target target = {0};
+    struct ctos_ssh_known_hosts_candidate candidate = {0};
+    int result = EINVAL, started = 0, delivered = 0;
+
+    if (handoff_started != NULL) *handoff_started = 0;
+    if (handoff_started == NULL || replacement_body == NULL || replacement_body_length == 0
+        || replacement_body_length > CTOS_SSH_CALLBACK_MAX_FILE_BYTES
+        || valid_candidate_id(candidate_id) != 0 || valid_key_type(key_type) != 0
+        || valid_fingerprint(fingerprint) != 0 || !nonzero32(base_digest)
+        || !nonzero32(replacement_digest)) goto done;
+    if (begin_callback(callback, environment, &slot, &target) != 0) {
+        result = errno == 0 ? ECANCELED : errno;
+        goto done;
+    }
+    started = 1;
+    if (claim_known_hosts_candidate(slot) != 0) {
+        result = errno == 0 ? EALREADY : errno;
+        started = 0;
+        goto done;
+    }
+    if (target.provisional_new_candidate == NULL || target.provisional_new_review == NULL
+        || target.provisional_new_kex == NULL || target.known_hosts_candidate_abort == NULL
+        || fill_host_evidence(slot, CTOS_SSH_CALLBACK_HOST_NEW, key_type, fingerprint,
+            base_digest, replacement_digest, &candidate.evidence) != 0) goto finish;
+    memcpy(candidate.candidate_id, candidate_id, strlen(candidate_id) + 1U);
+    candidate.replacement_body = replacement_body;
+    candidate.replacement_body_length = replacement_body_length;
+    struct callback_target_scope scope;
+    target_scope_enter(&scope, slot, 1);
+    if (ctos_ssh_native_client_provisional_scope_check == NULL
+        || ctos_ssh_native_client_provisional_scope_check(callback, environment,
+            CTOS_SSH_PROVISIONAL_NEW_CANDIDATE) != 0)
+        result = errno == 0 ? EACCES : errno;
+    else if (pthread_mutex_lock(&callbacks_lock) != 0) result = EBUSY;
+    else {
+        if (!slot->live || !slot->in_callback || slot->cancelled || slot->closing || slot->failed
+            || slot->provisional_new_pending || slot->changed_candidate_pending) result = EACCES;
+        else {
+            slot->provisional_new_pending = 1;
+            slot->provisional_new_evidence = candidate.evidence;
+            delivered = 1;
+            *handoff_started = 1;
+            result = 0;
+        }
+        pthread_mutex_unlock(&callbacks_lock);
+        if (delivered) result = target.provisional_new_candidate(target.context, environment, &candidate);
+    }
+    target_scope_leave(&scope);
+finish:
+    if (started && finish_callback(slot, result) != 0) {
+        result = errno == 0 ? EIO : errno;
+        if (delivered) (void)abort_known_hosts_candidate(slot, environment);
+    } else if (started) result = 0;
+done:
+    wipe_known_hosts_candidate(&candidate);
+    if (result != 0) {
+        if (replacement_body != NULL) {
+            size_t length = replacement_body_length > CTOS_SSH_CALLBACK_MAX_FILE_BYTES
+                ? CTOS_SSH_CALLBACK_MAX_FILE_BYTES : replacement_body_length;
+            wipe_bytes(replacement_body, length);
+        }
+        errno = result >= 1 && result <= 4095 ? result : EIO;
+        return -1;
+    }
+    return 0;
+}
+
+int ctos_ssh_callback_provisional_new_review(ctos_ssh_callback_token callback,
+    void *environment, const char *key_type,
+    const char *fingerprint, const unsigned char base_digest[32],
+    const unsigned char replacement_digest[32]) {
+    struct callback_slot *slot;
+    struct ctos_ssh_callback_target target;
+    struct ctos_ssh_host_evidence evidence = {0};
+    int result = EINVAL;
+    if (begin_callback(callback, environment, &slot, &target) != 0) return -1;
+    if (fill_host_evidence(slot, CTOS_SSH_CALLBACK_HOST_NEW, key_type, fingerprint,
+            base_digest, replacement_digest, &evidence) != 0) goto finish;
+    if (pthread_mutex_lock(&callbacks_lock) != 0) { result = EBUSY; goto finish; }
+    if (!slot->provisional_new_pending || slot->provisional_new_reviewed
+        || !same_host_evidence(&slot->provisional_new_evidence, &evidence)) {
+        pthread_mutex_unlock(&callbacks_lock); result = EACCES; goto finish;
+    }
+    slot->provisional_new_reviewed = 1;
+    pthread_mutex_unlock(&callbacks_lock);
+    if (target.provisional_new_review == NULL) { result = ENOSYS; goto finish; }
+    struct callback_target_scope scope;
+    target_scope_enter(&scope, slot, 1);
+    result = ctos_ssh_native_client_provisional_scope_check != NULL
+        && ctos_ssh_native_client_provisional_scope_check(callback, environment,
+            CTOS_SSH_PROVISIONAL_NEW_REVIEW) == 0
+        ? target.provisional_new_review(target.context, environment, &evidence)
+        : (errno == 0 ? EACCES : errno);
+    target_scope_leave(&scope);
+finish:
+    wipe_bytes((unsigned char *)&evidence, sizeof(evidence));
+    return finish_callback(slot, result);
+}
+
+int ctos_ssh_callback_provisional_new_kex(ctos_ssh_callback_token callback,
+    void *environment, uint64_t cycle,
+    const unsigned char session_digest[32]) {
+    struct callback_slot *slot;
+    struct ctos_ssh_callback_target target;
+    int result = EINVAL;
+    if (cycle == 0 || !nonzero32(session_digest)) { errno = EINVAL; return -1; }
+    if (begin_callback(callback, environment, &slot, &target) != 0) return -1;
+    if (pthread_mutex_lock(&callbacks_lock) != 0) return finish_callback(slot, EBUSY);
+    if (!slot->provisional_new_pending || !slot->provisional_new_reviewed
+        || slot->provisional_new_kex_reported) {
+        pthread_mutex_unlock(&callbacks_lock); return finish_callback(slot, EACCES);
+    }
+    slot->provisional_new_kex_reported = 1;
+    pthread_mutex_unlock(&callbacks_lock);
+    if (target.provisional_new_kex == NULL) return finish_callback(slot, ENOSYS);
+    struct callback_target_scope scope;
+    target_scope_enter(&scope, slot, 1);
+    result = ctos_ssh_native_client_provisional_scope_check != NULL
+        && ctos_ssh_native_client_provisional_scope_check(callback, environment,
+            CTOS_SSH_PROVISIONAL_NEW_KEX) == 0
+        ? target.provisional_new_kex(target.context, environment, cycle, session_digest)
+        : (errno == 0 ? EACCES : errno);
+    target_scope_leave(&scope);
+    return finish_callback(slot, result);
 }
 
 int ctos_ssh_callback_changed_host_candidate(ctos_ssh_callback_token callback,
@@ -985,7 +1374,10 @@ int ctos_ssh_callback_changed_host_candidate(ctos_ssh_callback_token callback,
     candidate.candidate.replacement_body_length = replacement_body_length;
     candidate.old_records = old_records;
     candidate.old_records_length = old_records_length;
+    struct callback_target_scope scope;
+    target_scope_enter(&scope, slot, 1);
     callback_result = target.changed_host_candidate(target.context, environment, &candidate);
+    target_scope_leave(&scope);
     if (callback_result == 0) {
         if (pthread_mutex_lock(&callbacks_lock) != 0) callback_result = EBUSY;
         else {
@@ -1042,8 +1434,13 @@ int ctos_ssh_callback_changed_host_review(ctos_ssh_callback_token callback,
     }
     slot->changed_candidate_reviewed = 1;
     pthread_mutex_unlock(&callbacks_lock);
-    callback_result = target.changed_host_review == NULL ? ENOSYS
-        : target.changed_host_review(target.context, environment, &evidence);
+    if (target.changed_host_review == NULL) callback_result = ENOSYS;
+    else {
+        struct callback_target_scope scope;
+        target_scope_enter(&scope, slot, 1);
+        callback_result = target.changed_host_review(target.context, environment, &evidence);
+        target_scope_leave(&scope);
+    }
 finish:
     wipe_bytes((unsigned char *)&evidence, sizeof(evidence));
     return finish_callback(slot, callback_result);
@@ -1076,10 +1473,16 @@ int ctos_ssh_callback_kex_complete(ctos_ssh_callback_token callback, void *envir
     if (begin_callback(callback, environment, &slot, &target) != 0) return -1;
     if (pthread_mutex_lock(&callbacks_lock) != 0) return finish_callback(slot, EBUSY);
     int changed = slot->changed_candidate_pending;
-    int allowed = !changed || (slot->changed_candidate_reviewed && !slot->changed_candidate_committed);
+    int allowed = !slot->provisional_new_pending
+        && (!changed || (slot->changed_candidate_reviewed && !slot->changed_candidate_committed));
     pthread_mutex_unlock(&callbacks_lock);
-    int result = allowed ? target.kex_complete(target.context, environment, cycle, session_digest)
-        : EACCES;
+    int result = EACCES;
+    if (allowed) {
+        struct callback_target_scope scope;
+        target_scope_enter(&scope, slot, 1);
+        result = target.kex_complete(target.context, environment, cycle, session_digest);
+        target_scope_leave(&scope);
+    }
     if (result == 0 && changed) {
         if (pthread_mutex_lock(&callbacks_lock) != 0) result = EBUSY;
         else {
@@ -1097,7 +1500,7 @@ int ctos_ssh_callback_kex_complete(ctos_ssh_callback_token callback, void *envir
 static int credential_authorized(const struct callback_slot *slot) {
     int authorized;
     if (pthread_mutex_lock(&callbacks_lock) != 0) return -1;
-    authorized = slot != NULL && slot->live && slot->in_callback
+    authorized = slot != NULL && slot->live && slot->in_callback && !slot->provisional_new_pending
         && (!slot->changed_candidate_pending || slot->changed_candidate_committed);
     pthread_mutex_unlock(&callbacks_lock);
     return authorized;
@@ -1111,8 +1514,13 @@ int ctos_ssh_callback_credential(ctos_ssh_callback_token callback, void *environ
         || kind > CTOS_SSH_CALLBACK_CREDENTIAL_PRIVATE_KEY) { errno = EINVAL; return -1; }
     if (begin_callback(callback, environment, &slot, &target) != 0) return -1;
     int allowed = credential_authorized(slot);
-    int result = allowed < 0 ? EBUSY : allowed
-        ? target.credential(target.context, environment, kind) : EACCES;
+    int result = allowed < 0 ? EBUSY : EACCES;
+    if (allowed > 0) {
+        struct callback_target_scope scope;
+        target_scope_enter(&scope, slot, 1);
+        result = target.credential(target.context, environment, kind);
+        target_scope_leave(&scope);
+    }
     return finish_callback(slot, result);
 }
 
@@ -1157,16 +1565,16 @@ static int credential_bytes_common(ctos_ssh_callback_token callback,
     int allowed = credential_authorized(slot);
     if (allowed <= 0) {
         result = allowed < 0 ? EBUSY : EACCES;
-    } else if (selected) {
-        result = target.credential_bytes_selected == NULL ? ENOSYS
-            : target.credential_bytes_selected(target.context, environment, kind,
-                selection_receipt, cycle, session_digest, output, capacity, length);
-        if (result == 0 && (*length == 0 || *length > capacity)) result = EINVAL;
-    } else if (target.credential_bytes == NULL) {
-        result = ENOSYS;
     } else {
-        result = target.credential_bytes(target.context, environment, kind,
-            output, capacity, length);
+        struct callback_target_scope scope;
+        target_scope_enter(&scope, slot, 1);
+        if (selected)
+            result = target.credential_bytes_selected == NULL ? ENOSYS
+                : target.credential_bytes_selected(target.context, environment, kind,
+                    selection_receipt, cycle, session_digest, output, capacity, length);
+        else result = target.credential_bytes == NULL ? ENOSYS
+            : target.credential_bytes(target.context, environment, kind, output, capacity, length);
+        target_scope_leave(&scope);
         if (result == 0 && (*length == 0 || *length > capacity)) result = EINVAL;
     }
     if (finish_callback(slot, result) != 0) {

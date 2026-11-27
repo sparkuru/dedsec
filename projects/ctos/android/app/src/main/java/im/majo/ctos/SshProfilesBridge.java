@@ -282,37 +282,47 @@ final class SshProfilesBridge implements AutoCloseable {
         boolean configured = SshConnectionMaterial.file(source.manifest, SshConnectionMaterial.ROOT) != null;
         if (configured) {
             long deadline = Math.min(request.deadline, SystemClock.elapsedRealtime() + 60_000);
-            SshConnectionMaterial.CatalogScan scan = SshConnectionMaterial.catalog(source.manifest,
-                    SshConnectionMaterial.ROOT, deadline, request::check);
-            int count = Math.max(1, scan.catalog.entries.size());
-            SshConnectionMaterial.Limits share = new SshConnectionMaterial.Limits(
-                    (SshConfigEvaluator.MAX_OPENS - scan.usage.opens) / count,
-                    (SshConfigEvaluator.MAX_READ_BYTES - scan.usage.readBytes) / count,
-                    (SshConfigEvaluator.MAX_LINES - scan.usage.lines) / count);
-            int hintCount = 0, hintBytes = 0;
-            for (SshConfigEvaluator.Entry alias : scan.catalog.entries) {
-                request.check();
-                try {
-                    SshConfigEvaluator.ProfilePlan plan = SshConnectionMaterial.profilePlan(source.manifest,
-                            SshConnectionMaterial.ROOT, alias.alias, "", deadline, request::check, share);
-                    List<String> availableKeys = new ArrayList<>();
-                    hintCount += plan.identityHints.size();
-                    for (String hint : plan.identityHints) hintBytes += hint.getBytes(StandardCharsets.UTF_8).length;
-                    if (hintCount > 4096 || hintBytes > 1024 * 1024)
-                        throw failure("SSH_CONFIG_LIMIT");
-                    for (SshConnectionMaterial.Key key : material) availableKeys.add(key.id);
-                    hosts.add(profileHostRow(alias.alias, SshConnectionMaterial.configBinding(source, alias.alias),
-                            plan, availableKeys));
-                } catch (IOException | VaultException failure) {
-                    if (failure instanceof VaultException && ((VaultException)failure).code.equals("SSH_CONFIG_LIMIT"))
-                        throw failure;
-                    hosts.add(VaultCollections.map("alias", alias.alias, "host", "", "port", 22,
-                            "username", "", "keyIds", List.of(), "error", configCode(failure),
-                            "binding", SshConnectionMaterial.configBinding(source, alias.alias)));
-                }
-            }
+            hosts.addAll(profileHosts(source, material, deadline, request::check));
         }
         return VaultCollections.map("keys", keys, "hosts", hosts, "hasConfig", configured);
+    }
+
+    static List<Map<String, Object>> profileHosts(SshConnectionMaterial.Snapshot source,
+            List<SshConnectionMaterial.Key> material, long deadline, AppSecrets.EffectGuard guard)
+            throws IOException, VaultException {
+        List<Map<String, Object>> hosts = new ArrayList<>();
+        SshConnectionMaterial.CatalogScan scan = SshConnectionMaterial.catalog(source.manifest,
+                SshConnectionMaterial.ROOT, deadline, guard);
+        int count = Math.max(1, scan.catalog.entries.size());
+        SshConnectionMaterial.Limits share = new SshConnectionMaterial.Limits(
+                (SshConfigEvaluator.MAX_OPENS - scan.usage.opens) / count,
+                (SshConfigEvaluator.MAX_READ_BYTES - scan.usage.readBytes) / count,
+                (SshConfigEvaluator.MAX_LINES - scan.usage.lines) / count);
+        int hintCount = 0, hintBytes = 0;
+        for (SshConfigEvaluator.Entry alias : scan.catalog.entries) {
+            guard.check();
+            try {
+                SshConfigEvaluator.ProfileRoute route = SshConnectionMaterial.profileRoute(source.manifest,
+                        SshConnectionMaterial.ROOT, alias.alias, "", deadline, guard, share);
+                if (route.entries.size() > 2) throw failure("SSH_JUMP_CHAIN_UNSUPPORTED");
+                SshConfigEvaluator.ProfilePlan plan = route.target();
+                List<String> availableKeys = new ArrayList<>();
+                hintCount += plan.identityHints.size();
+                for (String hint : plan.identityHints) hintBytes += hint.getBytes(StandardCharsets.UTF_8).length;
+                if (hintCount > 4096 || hintBytes > 1024 * 1024)
+                    throw failure("SSH_CONFIG_LIMIT");
+                for (SshConnectionMaterial.Key key : material) availableKeys.add(key.id);
+                hosts.add(profileHostRow(alias.alias, SshConnectionMaterial.configBinding(source, alias.alias),
+                        plan, availableKeys));
+            } catch (IOException | VaultException failure) {
+                if (failure instanceof VaultException && ((VaultException)failure).code.equals("SSH_CONFIG_LIMIT"))
+                    throw failure;
+                hosts.add(VaultCollections.map("alias", alias.alias, "host", "", "port", 22,
+                        "username", "", "keyIds", List.of(), "error", configCode(failure),
+                        "binding", SshConnectionMaterial.configBinding(source, alias.alias)));
+            }
+        }
+        return hosts;
     }
 
     static Map<String, Object> profileHostRow(String alias, String binding,

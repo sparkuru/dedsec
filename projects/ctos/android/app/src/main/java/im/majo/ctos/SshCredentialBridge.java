@@ -22,6 +22,7 @@ final class SshCredentialBridge {
         final SshAuthenticationSelection selection;
         final AppSecrets.EffectGuard originalEffectGuard;
         private boolean closed;
+        private boolean completed;
 
         private Request(SshCredentialBridge owner, VaultOperation operation, SshRoleContext role,
                 SshHostKeyAuthority.Proof hostKey, Kind kind, String entryId,
@@ -43,12 +44,21 @@ final class SshCredentialBridge {
             if (closed) throw new VaultException("VAULT_CANCELLED", "The SSH secret request is closed");
         }
 
+        synchronized void complete() throws VaultException {
+            if (closed || operation.cancelled)
+                throw new VaultException("VAULT_CANCELLED", "The SSH secret request is closed");
+            completed = true;
+        }
+
         @Override public void close() {
+            boolean retire;
             synchronized (this) {
                 if (closed) return;
                 closed = true;
+                retire = completed;
             }
-            owner.vault.cancelOperation(operation);
+            if (retire) owner.vault.retireOperation(operation);
+            else owner.vault.cancelOperation(operation);
         }
     }
 
@@ -78,6 +88,9 @@ final class SshCredentialBridge {
 
     boolean hasTransientPassword() { return transientPassword != null; }
     boolean hasTransientKey() { return transientKey != null; }
+    boolean sharesVault(SshManagedKnownHostsProvider provider) {
+        return provider != null && provider.sharesVault(vault);
+    }
 
     byte[] transientKeyBytes(SshRoleContext role, SshHostKeyAuthority.Proof hostKey,
             SshKexProof kex, SshAuthenticationSelection selection, AppSecrets.EffectGuard guard)
@@ -210,10 +223,12 @@ final class SshCredentialBridge {
             if (kex != null) kex.requireMatches(role, hostKey);
         });
         origin.check();
-        if (role.targetIdentity.startsWith(SshSavedPassword.TARGET_PREFIX)
-                || role.targetIdentity.startsWith(SshConnectionMaterial.KEY_TARGET_PREFIX))
-            return vault.newSavedPasswordReadContext(role.deadline, origin, selection);
-        return vault.newSshSecretReadContext(role.deadline, origin);
+        AppSecrets.SshSecretReadContext context = role.targetIdentity.startsWith(SshSavedPassword.TARGET_PREFIX)
+                || role.targetIdentity.startsWith(SshConnectionMaterial.KEY_TARGET_PREFIX)
+                ? vault.newSavedPasswordReadContext(role.deadline, origin, selection)
+                : vault.newSshSecretReadContext(role.deadline, origin);
+        if (effectGuard instanceof AppSecrets.SshSecretCopyGuard) context.bindJumpEffect();
+        return context;
     }
 
     void release(Request request, SshKexProof kex, Receiver receiver) throws VaultException {
@@ -234,6 +249,7 @@ final class SshCredentialBridge {
             if (kex == null)
                 throw new VaultException("SSH_KEX_REQUIRED", "Signed SSH key exchange proof is required");
             final VaultOperation operation = request.operation;
+            if (effectGuard instanceof AppSecrets.SshSecretCopyGuard) operation.bindJumpEffect();
             final AppSecrets.SshRoleGuard finalGuard = new AppSecrets.SshRoleGuard() {
                 @Override public void check() throws VaultException {
                     request.requireOpen();
@@ -262,6 +278,11 @@ final class SshCredentialBridge {
                 @Override public void withRole(AppSecrets.EffectGuard publication) throws VaultException {
                     request.role.publishBound(clock, publication);
                 }
+                @Override public void copySecret(AppSecrets.EffectGuard receiver) throws VaultException {
+                    if (effectGuard instanceof AppSecrets.SshStopCopyGuard)
+                        ((AppSecrets.SshStopCopyGuard) effectGuard).copySecret(receiver);
+                    else receiver.check();
+                }
             };
             // This first check gives callers a stable fail-closed result. The same
             // checks run again inside AppSecrets immediately before receiver use.
@@ -278,6 +299,7 @@ final class SshCredentialBridge {
                 vault.sshCredential(operation, request.entryId, request.role.targetIdentity,
                         request.role.connectionId, expected, finalGuard, receiver);
             }
+            if (effectGuard instanceof AppSecrets.SshSecretCopyGuard) request.complete();
         } finally {
             request.close();
         }

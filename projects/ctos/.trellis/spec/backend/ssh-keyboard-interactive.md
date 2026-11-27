@@ -26,7 +26,9 @@ ssh.keyboardResponse(requestId,ticketId,binding,answers:[string]) -> {accepted:b
 ```
 
 Challenge event type is `keyboardChallenge`; fields are requestId, ticketId, binding, round,
-name, instruction, prompts[{text,echo}], remainingMillis. Dismissal is
+name, instruction, prompts[{text,echo}], remainingMillis, host, port, username and hop.
+The endpoint comes from the exact callback-registered selection and its role; hop is in 0–8.
+All endpoint fields and hop are required and validated by the Dart parser. Dismissal is
 `keyboardChallengeDismissed` with requestId/ticketId. Use the original connection result,
 one current attempt and the existing sensitive consumer, not another global listener.
 
@@ -63,6 +65,9 @@ snapshot and waits through a bounded mailbox. UI-thread responses only validate 
 owned bounded bytes for the original owner to consume; native session entry stays on owner.
 Bind opaque ticket/binding to attempt, method, role/KEX and round. Replays, cross-attempt
 answers and delayed delivery cannot release a secret or revive a retired round.
+Do not display the original connection form as the prompt's endpoint: preserve the bound
+endpoint through deferred and subsequent rounds. Track rounds per hop, reject events from
+an earlier hop, and never identify a hop only by endpoint, which can repeat in a route.
 
 Back/cancel/background/lock/stream loss/route destruction retire pending prompts, clear
 answers and await original terminal cleanup. Sensitive protection outlives an in-flight

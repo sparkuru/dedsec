@@ -28,12 +28,23 @@ final class SshTerminalState {
     private boolean truncated;
     private Listener listener;
     private SshReconnectTarget reconnectTarget;
+    private SshSessionOwner.Cancellation outputCancellation;
 
     synchronized void begin(int value, String selectedMode) {
+        beginLocked(value, selectedMode, null);
+    }
+
+    synchronized void begin(int value, String selectedMode, SshSessionOwner.Cancellation cancellation) {
+        if (cancellation == null) throw new IllegalArgumentException("Output cancellation is required");
+        beginLocked(value, selectedMode, cancellation);
+    }
+
+    private void beginLocked(int value, String selectedMode, SshSessionOwner.Cancellation cancellation) {
         if (value <= generation) throw new IllegalStateException("Terminal generation regressed");
         clearOutput();
         generation = value;
         mode = selectedMode;
+        outputCancellation = cancellation;
         state = null;
         exitStatus = null;
         reason = null;
@@ -66,6 +77,9 @@ final class SshTerminalState {
 
     synchronized void data(int expected, byte[] bytes) {
         if (expected != generation || !"running".equals(state) || bytes.length == 0) return;
+        // Admission and replay mutation share this monitor with subscribe/snapshot.
+        // An already admitted listener may finish after cancellation returns.
+        if (outputCancellation != null && !outputCancellation.admitOutput()) return;
         byte[] kept = bytes.length > OUTPUT_LIMIT
                 ? Arrays.copyOfRange(bytes, bytes.length - OUTPUT_LIMIT, bytes.length) : bytes.clone();
         if (bytes.length > kept.length) truncated = true;
@@ -98,11 +112,14 @@ final class SshTerminalState {
     synchronized Map<String, Object> snapshot() {
         if (state == null) return null;
         Map<String, Object> event = stateEvent("snapshot");
-        byte[] bytes = new byte[outputBytes];
+        boolean allowOutput = outputBytes == 0 || outputCancellation == null || outputCancellation.admitOutput();
+        byte[] bytes = new byte[allowOutput ? outputBytes : 0];
         int offset = 0;
-        for (byte[] chunk : output) {
-            System.arraycopy(chunk, 0, bytes, offset, chunk.length);
-            offset += chunk.length;
+        if (allowOutput) {
+            for (byte[] chunk : output) {
+                System.arraycopy(chunk, 0, bytes, offset, chunk.length);
+                offset += chunk.length;
+            }
         }
         event.put("bytes", bytes);
         event.put("truncated", truncated);

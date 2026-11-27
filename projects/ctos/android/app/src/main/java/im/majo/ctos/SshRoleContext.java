@@ -8,8 +8,10 @@ import java.util.Arrays;
  * not a launcher, an argv container, or a secret/file body transport.
  */
 final class SshRoleContext implements AutoCloseable {
-    static final int MAX_HOPS = 8;
+    // Eight jumps and the final destination each retain a separate role.
+    static final int MAX_HOPS = 9;
     static final long MAX_LIFETIME_MILLIS = 60_000L;
+    static final int IDENTITY_V1 = 1, IDENTITY_V2 = 2;
 
     enum Program { CLIENT, JUMP }
 
@@ -25,6 +27,8 @@ final class SshRoleContext implements AutoCloseable {
         final int hop;
         final String connectionId;
         final String targetIdentity;
+        final int identityVersion;
+        final String chainIdentity;
         final String host;
         final int port;
         final String publicViewId;
@@ -35,11 +39,29 @@ final class SshRoleContext implements AutoCloseable {
         Bootstrap(Program program, int ownerPid, int hop, String connectionId,
                 String targetIdentity, String host, int port, String publicViewId,
                 byte[] roleNonce, byte[] connectionBinding, long deadline) {
+            this(program, ownerPid, hop, connectionId, targetIdentity, host, port, publicViewId,
+                    roleNonce, connectionBinding, deadline, IDENTITY_V1, targetIdentity);
+        }
+
+        /** Explicit chained role: the endpoint's credential target is separate from the chain. */
+        Bootstrap(Program program, int ownerPid, int hop, String connectionId,
+                String targetIdentity, String host, int port, String publicViewId,
+                byte[] roleNonce, byte[] connectionBinding, long deadline, String chainIdentity) {
+            this(program, ownerPid, hop, connectionId, targetIdentity, host, port, publicViewId,
+                    roleNonce, connectionBinding, deadline, IDENTITY_V2, chainIdentity);
+        }
+
+        private Bootstrap(Program program, int ownerPid, int hop, String connectionId,
+                String targetIdentity, String host, int port, String publicViewId,
+                byte[] roleNonce, byte[] connectionBinding, long deadline, int identityVersion,
+                String chainIdentity) {
             this.program = program;
             this.ownerPid = ownerPid;
             this.hop = hop;
             this.connectionId = connectionId;
             this.targetIdentity = targetIdentity;
+            this.identityVersion = identityVersion;
+            this.chainIdentity = chainIdentity;
             this.host = host;
             this.port = port;
             this.publicViewId = publicViewId;
@@ -54,6 +76,8 @@ final class SshRoleContext implements AutoCloseable {
     final int hop;
     final String connectionId;
     final String targetIdentity;
+    final int identityVersion;
+    final String chainIdentity;
     final String host;
     final int port;
     final String publicViewId;
@@ -71,6 +95,8 @@ final class SshRoleContext implements AutoCloseable {
         hop = request.hop;
         connectionId = request.connectionId;
         targetIdentity = request.targetIdentity;
+        identityVersion = request.identityVersion;
+        chainIdentity = request.chainIdentity;
         host = request.host;
         port = request.port;
         publicViewId = request.publicViewId;
@@ -87,6 +113,11 @@ final class SshRoleContext implements AutoCloseable {
                 || request.ownerPid <= 0 || request.hop < 0 || request.hop >= MAX_HOPS
                 || !identifier(request.connectionId, 128)
                 || !text(request.targetIdentity, 512)
+                || !text(request.chainIdentity, 512)
+                || (request.identityVersion == IDENTITY_V1
+                    ? !request.targetIdentity.equals(request.chainIdentity)
+                    : request.identityVersion != IDENTITY_V2 || !nativeTarget(request.targetIdentity)
+                        || !nativeTarget(request.chainIdentity))
                 || !host(request.host) || request.port < 1 || request.port > 65535
                 || !identifier(request.publicViewId, 128)
                 || !nonce(request.roleNonce) || !nonce(request.connectionBinding)) {
@@ -157,20 +188,33 @@ final class SshRoleContext implements AutoCloseable {
     byte[] roleNonce() { return roleNonce.clone(); }
     byte[] connectionBinding() { return connectionBinding.clone(); }
 
-    @Override public synchronized void close() { active = false; establishedTransport = false; }
+    @Override public synchronized void close() {
+        if (!active) return;
+        boolean begun = SshNativeCallbackAdapter.beginJumpEffectInvalidation();
+        try { active = false; establishedTransport = false; }
+        finally { SshNativeCallbackAdapter.endJumpEffectInvalidation(begun); }
+    }
 
     private static String binding(Bootstrap request) throws VaultException {
         String text = request.program.name() + '\0' + request.ownerPid + '\0' + request.hop + '\0'
                 + request.connectionId + '\0' + request.targetIdentity + '\0' + request.host + '\0'
                 + request.port + '\0' + request.publicViewId + '\0' + request.deadline;
+        if (request.identityVersion == IDENTITY_V2) text += "\0role-chain-v2\0" + request.chainIdentity;
         byte[] fields = text.getBytes(StandardCharsets.UTF_8);
-        byte[] digest = VaultCodec.digest(fields);
+        byte[] material = null;
+        byte[] digest = null;
         try {
+            if (request.identityVersion == IDENTITY_V2) {
+                material = java.nio.ByteBuffer.allocate(fields.length + 64).put(fields)
+                        .put(request.roleNonce).put(request.connectionBinding).array();
+                digest = VaultCodec.digest(material);
+            } else digest = VaultCodec.digest(fields);
             StringBuilder result = new StringBuilder(64);
             for (byte value : digest) result.append(String.format(java.util.Locale.ROOT, "%02x", value));
             return result.toString();
         } finally {
             VaultCodec.wipe(fields);
+            VaultCodec.wipe(material);
             VaultCodec.wipe(digest);
         }
     }
@@ -194,6 +238,11 @@ final class SshRoleContext implements AutoCloseable {
 
     private static boolean host(String value) {
         return value != null && value.matches("[A-Za-z0-9.:%\\[\\]\\-]{1,253}");
+    }
+
+    private static boolean nativeTarget(String value) {
+        return value != null && value.length() > 0 && value.length() <= 512
+                && value.matches("[A-Za-z0-9_.:@+/\\-]{1,512}");
     }
 
     static boolean same(byte[] left, byte[] right) { return Arrays.equals(left, right); }

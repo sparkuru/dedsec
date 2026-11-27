@@ -44,6 +44,10 @@ void main() {
     await host.advance();
     await host.emit({
       'type': 'passwordRequest',
+      'hop': 0,
+      'host': 'jump.invalid',
+      'port': 2201,
+      'username': 'jump-user',
       'requestId': id,
       'ticketId': 'prompt_1',
       'binding': 'c' * 64,
@@ -51,6 +55,7 @@ void main() {
     });
     await host.advance();
     expect(find.text('输入登录密码'), findsOneWidget);
+    expect(find.text('jump-user@jump.invalid:2201'), findsOneWidget);
     final input = tester.widget<EditableText>(
       find.descendant(
         of: find.byKey(const Key('ssh-secret-input')),
@@ -104,8 +109,12 @@ void main() {
     expect(find.byKey(const Key('ssh-keyboard-dialog')), findsNothing);
     await tester.tap(find.text('信任并保存'));
     await host.advance();
-    await host.emit({
+    final firstChallenge = <String, Object>{
       'type': 'keyboardChallenge',
+      'hop': 0,
+      'host': 'jump.invalid',
+      'port': 2201,
+      'username': 'jump-user',
       'requestId': id,
       'ticketId': 'pam_round_1',
       'binding': 'e' * 64,
@@ -116,8 +125,12 @@ void main() {
         {'text': 'Password: ', 'echo': false},
       ],
       'remainingMillis': 25000,
-    });
+    };
+    await host.emit(firstChallenge);
     await host.advance();
+    expect(find.text('Password: '), findsOneWidget);
+    expect(find.text('jump-user@jump.invalid:2201'), findsOneWidget);
+    await host.emit(firstChallenge);
     expect(find.text('Password: '), findsOneWidget);
     final input = tester.widget<TextField>(
       find.descendant(
@@ -143,6 +156,10 @@ void main() {
     });
     await host.emit({
       'type': 'keyboardChallenge',
+      'hop': 0,
+      'host': 'jump.invalid',
+      'port': 2201,
+      'username': 'jump-user',
       'requestId': id,
       'ticketId': 'pam_round_2',
       'binding': 'f' * 64,
@@ -154,6 +171,7 @@ void main() {
     });
     await host.advance();
     expect(find.text('继续'), findsOneWidget);
+    expect(find.text('jump-user@jump.invalid:2201'), findsOneWidget);
     expect(host._arguments('ssh.keyboardResponse'), hasLength(1));
     await tester.tap(find.byKey(const Key('ssh-keyboard-submit')));
     await host.advance();
@@ -165,6 +183,35 @@ void main() {
       'requestId': id,
       'ticketId': 'pam_round_2',
     });
+    // A later hop may use the same endpoint and starts its own round counter.
+    await host.emit({
+      'type': 'keyboardChallenge',
+      'hop': 1,
+      'host': 'jump.invalid',
+      'port': 2201,
+      'username': 'jump-user',
+      'requestId': id,
+      'ticketId': 'next_hop_round_1',
+      'binding': 'a' * 64,
+      'round': 1,
+      'name': '',
+      'instruction': '',
+      'prompts': <Object>[],
+      'remainingMillis': 25000,
+    });
+    await host.advance();
+    expect(find.text('jump-user@jump.invalid:2201'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('ssh-keyboard-submit')));
+    await host.advance();
+    expect(
+      host._arguments('ssh.keyboardResponse').last['ticketId'],
+      'next_hop_round_1',
+    );
+    await host.emit({
+      'type': 'keyboardChallengeDismissed',
+      'requestId': id,
+      'ticketId': 'next_hop_round_1',
+    });
     host.connectResults.single.complete({
       'requestId': id,
       'status': 'connected',
@@ -173,6 +220,77 @@ void main() {
     await host.advance();
     expect(find.byType(SshPasswordConnectPage), findsNothing);
     await host.remove();
+  });
+
+  testWidgets('a later hop cannot be replaced by a delayed earlier prompt', (
+    tester,
+  ) async {
+    for (final staleKeyboard in [false, true]) {
+      final host = _SshHost(tester);
+      await host.mount(automatic: true);
+      await tester.tap(find.text('Open SSH'));
+      await host.advance();
+      for (final field in {
+        'ssh-host': 'server.invalid',
+        'ssh-port': '2222',
+        'ssh-username': 'alice',
+      }.entries) {
+        await tester.enterText(find.byKey(Key(field.key)), field.value);
+      }
+      await host.tapConnect();
+      final id =
+          host._arguments('ssh.autoConnect').single['requestId'] as String;
+      await host.emit({
+        'type': 'keyboardChallenge',
+        'hop': 1,
+        'host': 'jump.invalid',
+        'port': 2201,
+        'username': 'jump-user',
+        'requestId': id,
+        'ticketId': 'later_hop',
+        'binding': 'c' * 64,
+        'round': 1,
+        'name': '',
+        'instruction': '',
+        'prompts': <Object>[],
+        'remainingMillis': 25000,
+      });
+      await host.advance();
+      await tester.tap(find.byKey(const Key('ssh-keyboard-submit')));
+      await host.advance();
+      await host.emit({
+        'type': 'keyboardChallengeDismissed',
+        'requestId': id,
+        'ticketId': 'later_hop',
+      });
+      await host.emit({
+        'type': staleKeyboard ? 'keyboardChallenge' : 'passwordRequest',
+        'hop': 0,
+        'host': 'jump.invalid',
+        'port': 2201,
+        'username': 'jump-user',
+        'requestId': id,
+        'ticketId': 'old_hop',
+        'binding': 'd' * 64,
+        if (staleKeyboard) ...{
+          'round': 2,
+          'name': '',
+          'instruction': '',
+          'prompts': <Object>[],
+        },
+        'remainingMillis': 25000,
+      });
+      await host.advance();
+      expect(host.cancelled, contains(id));
+      expect(host._arguments('ssh.passwordResponse'), isEmpty);
+      expect(host._arguments('ssh.keyboardResponse'), hasLength(1));
+      expect(find.byKey(const Key('ssh-secret-dialog')), findsNothing);
+      host.connectResults.single.completeError(
+        PlatformException(code: 'SSH_CANCELLED'),
+      );
+      await host.advance();
+      await host.remove();
+    }
   });
 
   testWidgets(
@@ -203,6 +321,10 @@ void main() {
       final id = request['requestId'] as String;
       await host.emit({
         'type': 'keyPassphraseRequest',
+        'hop': 0,
+        'host': 'key-jump.invalid',
+        'port': 2203,
+        'username': 'key-user',
         'requestId': id,
         'ticketId': 'key_prompt',
         'binding': 'd' * 64,
@@ -210,6 +332,7 @@ void main() {
       });
       await host.advance();
       expect(find.text('输入私钥口令'), findsOneWidget);
+      expect(find.text('key-user@key-jump.invalid:2203'), findsOneWidget);
       expect(find.byKey(const Key('ssh-secret-input')), findsOneWidget);
       await tester.enterText(
         find.byKey(const Key('ssh-secret-input')),
@@ -261,6 +384,10 @@ void main() {
           host._arguments('ssh.autoConnect').single['requestId'] as String;
       await host.emit({
         'type': 'passwordRequest',
+        'hop': 0,
+        'host': 'server.invalid',
+        'port': 2222,
+        'username': 'alice',
         'requestId': id,
         'ticketId': 'prompt_saved',
         'binding': 'c' * 64,
@@ -309,6 +436,235 @@ void main() {
     },
   );
 
+  testWidgets('each saved-only hop requires a separate explicit confirmation', (
+    tester,
+  ) async {
+    final host = _SshHost(tester);
+    await host.mount(
+      automatic: true,
+      reconnect: const SshReconnectTarget(
+        mode: SshReconnectMode.auto,
+        host: 'server.invalid',
+        port: 2222,
+        username: 'alice',
+      ),
+    );
+    await tester.tap(find.text('Open SSH'));
+    await host.advance();
+    await host.tapConnect();
+    final id = host._arguments('ssh.autoConnect').single['requestId'] as String;
+    for (final (hop, endpoint, username, port) in [
+      (0, 'jump.invalid', 'jump-user', 2201),
+      (1, 'server.invalid', 'alice', 2222),
+    ]) {
+      final ticket = 'saved_prompt_$hop';
+      await host.emit({
+        'type': 'passwordRequest',
+        'hop': hop,
+        'host': endpoint,
+        'port': port,
+        'username': username,
+        'requestId': id,
+        'ticketId': ticket,
+        'binding': 'c' * 64,
+        'remainingMillis': 25000,
+        'savedAvailable': true,
+        'savedOnly': true,
+      });
+      await host.advance();
+      expect(find.text('$username@$endpoint:$port'), findsOneWidget);
+      expect(find.text('确认使用已保存的密码'), findsOneWidget);
+      expect(find.byKey(const Key('ssh-secret-input')), findsNothing);
+      expect(find.byKey(const Key('ssh-secret-save')), findsNothing);
+      expect(find.byKey(const Key('ssh-secret-use-saved')), findsNothing);
+      expect(host._arguments('ssh.passwordResponse'), hasLength(hop));
+      await tester.tap(find.byKey(const Key('ssh-secret-submit')));
+      await host.advance();
+      final response = host._arguments('ssh.passwordResponse').last;
+      expect(response['ticketId'], ticket);
+      expect(response['useSaved'], isTrue);
+      expect(response['save'], isFalse);
+      expect(response['password'], isEmpty);
+      await host.emit({
+        'type': 'passwordRequestDismissed',
+        'requestId': id,
+        'ticketId': ticket,
+      });
+      await host.advance();
+    }
+    host.connectResults.single.complete({
+      'requestId': id,
+      'status': 'connected',
+    });
+    await host.advance();
+    await host.advance();
+    expect(find.byType(SshPasswordConnectPage), findsNothing);
+    await host.remove();
+  });
+
+  testWidgets('hop reviews show each endpoint before its own saved password', (
+    tester,
+  ) async {
+    final host = _SshHost(tester);
+    await host.mount(
+      automatic: true,
+      reconnect: const SshReconnectTarget(
+        mode: SshReconnectMode.auto,
+        host: 'server.invalid',
+        port: 2222,
+        username: 'alice',
+      ),
+    );
+    await tester.tap(find.text('Open SSH'));
+    await host.advance();
+    await host.tapConnect();
+    final id = host._arguments('ssh.autoConnect').single['requestId'] as String;
+    final firstReview = {
+      ..._ticket(id),
+      'host': 'jump.invalid',
+      'port': 2201,
+      'ticketId': 'jump-review',
+    };
+    await host.emit(firstReview);
+    await host.advance();
+    expect(find.text('jump.invalid:2201'), findsOneWidget);
+    expect(host._arguments('ssh.passwordResponse'), isEmpty);
+    await tester.tap(find.text('信任并保存'));
+    await host.advance();
+    await host.emit({
+      'type': 'hostKeyDismissed',
+      'requestId': id,
+      'ticketId': 'jump-review',
+      'binding': 'a' * 64,
+      'hop': 0,
+    });
+    await host.emit({
+      'type': 'passwordRequest',
+      'hop': 0,
+      'host': 'jump.invalid',
+      'port': 2201,
+      'username': 'jump-user',
+      'requestId': id,
+      'ticketId': 'jump-password',
+      'binding': 'c' * 64,
+      'remainingMillis': 25000,
+      'savedAvailable': true,
+      'savedOnly': true,
+    });
+    await host.advance();
+    expect(find.text('jump-user@jump.invalid:2201'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('ssh-secret-submit')));
+    await host.advance();
+    await host.emit({
+      'type': 'passwordRequestDismissed',
+      'requestId': id,
+      'ticketId': 'jump-password',
+    });
+    await host.advance();
+    final targetReview = {
+      ..._ticket(id),
+      'ticketId': 'target-review',
+      'binding': 'b' * 64,
+      'hop': 1,
+      'fingerprint': 'SHA256:${'B' * 43}',
+    };
+    await host.emit(targetReview);
+    await host.advance();
+    expect(find.text('server.invalid:2222'), findsOneWidget);
+    expect(find.text(targetReview['fingerprint'] as String), findsOneWidget);
+    expect(host._arguments('ssh.passwordResponse'), hasLength(1));
+    await tester.tap(find.text('信任并保存'));
+    await host.advance();
+    expect(host.decisions.map((decision) => decision['ticketId']), [
+      'jump-review',
+      'target-review',
+    ]);
+    await host.emit({
+      'type': 'hostKeyDismissed',
+      'requestId': id,
+      'ticketId': 'target-review',
+      'binding': 'b' * 64,
+      'hop': 1,
+    });
+    await host.emit({
+      'type': 'passwordRequest',
+      'hop': 1,
+      'host': 'server.invalid',
+      'port': 2222,
+      'username': 'alice',
+      'requestId': id,
+      'ticketId': 'target-password',
+      'binding': 'd' * 64,
+      'remainingMillis': 25000,
+      'savedAvailable': true,
+      'savedOnly': true,
+    });
+    await host.advance();
+    expect(find.text('alice@server.invalid:2222'), findsOneWidget);
+    expect(host._arguments('ssh.passwordResponse'), hasLength(1));
+    await tester.tap(find.byKey(const Key('ssh-secret-submit')));
+    await host.advance();
+    expect(
+      host._arguments('ssh.passwordResponse').last['ticketId'],
+      'target-password',
+    );
+    expect(host._arguments('ssh.passwordResponse').last['useSaved'], isTrue);
+    await host.emit({
+      'type': 'passwordRequestDismissed',
+      'requestId': id,
+      'ticketId': 'target-password',
+    });
+    host.connectResults.single.complete({
+      'requestId': id,
+      'status': 'connected',
+    });
+    await host.advance();
+    await host.remove();
+  });
+
+  testWidgets('saved-only prompt rejects a changed duplicate ticket', (
+    tester,
+  ) async {
+    final host = _SshHost(tester);
+    await host.mount(
+      automatic: true,
+      reconnect: const SshReconnectTarget(
+        mode: SshReconnectMode.auto,
+        host: 'server.invalid',
+        port: 2222,
+        username: 'alice',
+      ),
+    );
+    await tester.tap(find.text('Open SSH'));
+    await host.advance();
+    await host.tapConnect();
+    final id = host._arguments('ssh.autoConnect').single['requestId'] as String;
+    final prompt = {
+      'type': 'passwordRequest',
+      'hop': 0,
+      'host': 'jump.invalid',
+      'port': 2201,
+      'username': 'jump-user',
+      'requestId': id,
+      'ticketId': 'prompt_1',
+      'binding': 'c' * 64,
+      'remainingMillis': 25000,
+      'savedAvailable': true,
+      'savedOnly': true,
+    };
+    await host.emit(prompt);
+    await host.advance();
+    await host.emit({...prompt, 'savedOnly': false});
+    await host.advance();
+    expect(host.cancelled, contains(id));
+    expect(host._arguments('ssh.passwordResponse'), isEmpty);
+    host.connectResults.single.completeError(
+      PlatformException(code: 'SSH_CANCELLED'),
+    );
+    await host.advance();
+    await host.remove();
+  });
+
   testWidgets(
     'automatic save cancellation waits for the guarded vault outcome',
     (tester) async {
@@ -329,6 +685,10 @@ void main() {
           host._arguments('ssh.autoConnect').single['requestId'] as String;
       await host.emit({
         'type': 'passwordRequest',
+        'hop': 0,
+        'host': 'server.invalid',
+        'port': 2222,
+        'username': 'alice',
         'requestId': id,
         'ticketId': 'pending_save',
         'binding': 'c' * 64,
@@ -381,6 +741,10 @@ void main() {
       expect(find.text('信任并保存'), findsOneWidget);
       await host.emit({
         'type': 'passwordRequest',
+        'hop': 0,
+        'host': 'server.invalid',
+        'port': 2222,
+        'username': 'alice',
         'requestId': id,
         'ticketId': 'prompt_1',
         'binding': 'c' * 64,
@@ -622,6 +986,10 @@ void main() {
             host._arguments('ssh.autoConnect').single['requestId'] as String;
         await host.emit({
           'type': 'passwordRequest',
+          'hop': 0,
+          'host': 'server.invalid',
+          'port': 2222,
+          'username': 'alice',
           'requestId': id,
           'ticketId': 'prompt_1',
           'binding': 'c' * 64,
@@ -678,6 +1046,10 @@ void main() {
           host._arguments('ssh.autoConnect').single['requestId'] as String;
       final event = <String, Object>{
         'type': 'passwordRequest',
+        'hop': 0,
+        'host': 'server.invalid',
+        'port': 2222,
+        'username': 'alice',
         'requestId': id,
         'ticketId': 'prompt_1',
         'binding': 'c' * 64,
@@ -725,6 +1097,10 @@ void main() {
         Future<void> password() async {
           await host.emit({
             'type': 'passwordRequest',
+            'hop': 0,
+            'host': 'server.invalid',
+            'port': 2222,
+            'username': 'alice',
             'requestId': id,
             'ticketId': 'password_ticket',
             'binding': 'c' * 64,
@@ -748,6 +1124,10 @@ void main() {
         Future<void> keyboard() async {
           await host.emit({
             'type': 'keyboardChallenge',
+            'hop': 0,
+            'host': 'server.invalid',
+            'port': 2222,
+            'username': 'alice',
             'requestId': id,
             'ticketId': 'question_ticket',
             'binding': 'e' * 64,
@@ -803,8 +1183,10 @@ void main() {
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetViewInsets);
       for (final scenario in [
-        (const Size(320, 680), 2.0, 230.0),
-        (const Size(640, 360), 2.0, 110.0),
+        (const Size(320, 680), 2.0, 230.0, false),
+        (const Size(640, 360), 2.0, 110.0, false),
+        (const Size(320, 680), 2.0, 230.0, true),
+        (const Size(640, 360), 2.0, 110.0, true),
       ]) {
         tester.view.physicalSize = scenario.$1;
         final host = _SshHost(tester);
@@ -828,19 +1210,26 @@ void main() {
             host._arguments('ssh.autoConnect').single['requestId'] as String;
         await host.emit({
           'type': 'passwordRequest',
+          'hop': 0,
+          'host': 'server.invalid',
+          'port': 2222,
+          'username': 'alice',
           'requestId': id,
           'ticketId': 'prompt_1',
           'binding': 'c' * 64,
           'remainingMillis': 25000,
           'savedAvailable': true,
+          'savedOnly': scenario.$4,
         });
         await host.advance();
         expect(tester.takeException(), isNull);
-        await tester.ensureVisible(find.byKey(const Key('ssh-secret-save')));
-        expect(
-          tester.getSize(find.byKey(const Key('ssh-secret-save'))).height,
-          greaterThanOrEqualTo(48),
-        );
+        if (!scenario.$4) {
+          await tester.ensureVisible(find.byKey(const Key('ssh-secret-save')));
+          expect(
+            tester.getSize(find.byKey(const Key('ssh-secret-save'))).height,
+            greaterThanOrEqualTo(48),
+          );
+        }
         await tester.ensureVisible(find.byKey(const Key('ssh-secret-submit')));
         expect(
           tester.getSize(find.byKey(const Key('ssh-secret-submit'))).height,
@@ -1338,34 +1727,47 @@ void main() {
     },
   );
 
-  test(
-    'SSH field validators preserve exact text and reject malformed input',
-    () {
-      expect(sshHostError('example.invalid'), isNull);
-      expect(sshHostError('https://example.invalid'), isNotNull);
-      expect(sshHostError(' example.invalid'), isNotNull);
-      expect(sshPortError('22'), isNull);
-      expect(sshPortError('0'), isNotNull);
-      expect(sshPortError('65536'), isNotNull);
-      expect(sshPortError(' 22'), isNotNull);
-      expect(sshUsernameError(' 用户😀 '), isNull);
-      expect(sshUsernameError('bad\u0085'), isNotNull);
-      expect(sshUsernameError('\ud800'), isNotNull);
-      expect(sshUsernameError(List.filled(128, 'é').join()), isNotNull);
-      expect(sshPasswordError(' secret\n '), isNull);
-      expect(sshPasswordError('bad\u0000'), isNotNull);
-      expect(sshPasswordError('\udc00'), isNotNull);
-      expect(sshPasswordError(List.filled(8193, 'x').join()), isNotNull);
-      expect(
-        sshConnectionError(const FormatException('untrusted response')),
-        'SSH 连接响应无效，请重新打开连接页面。',
-      );
-      expect(
-        sshConnectionError(PlatformException(code: 'SSH_HOST_KEY_CHANGED')),
-        '主机密钥与已保存记录不同，连接已拒绝。可在“私钥与配置 → 主机信任”核对并管理旧记录。',
-      );
-    },
-  );
+  test('SSH field validators preserve exact text and reject malformed input', () {
+    expect(sshHostError('example.invalid'), isNull);
+    expect(sshHostError('https://example.invalid'), isNotNull);
+    expect(sshHostError(' example.invalid'), isNotNull);
+    expect(sshPortError('22'), isNull);
+    expect(sshPortError('0'), isNotNull);
+    expect(sshPortError('65536'), isNotNull);
+    expect(sshPortError(' 22'), isNotNull);
+    expect(sshUsernameError(' 用户😀 '), isNull);
+    expect(sshUsernameError('bad\u0085'), isNotNull);
+    expect(sshUsernameError('\ud800'), isNotNull);
+    expect(sshUsernameError(List.filled(128, 'é').join()), isNotNull);
+    expect(sshPasswordError(' secret\n '), isNull);
+    expect(sshPasswordError('bad\u0000'), isNotNull);
+    expect(sshPasswordError('\udc00'), isNotNull);
+    expect(sshPasswordError(List.filled(8193, 'x').join()), isNotNull);
+    expect(
+      sshConnectionError(const FormatException('untrusted response')),
+      'SSH 连接响应无效，请重新打开连接页面。',
+    );
+    expect(
+      sshConnectionError(PlatformException(code: 'SSH_HOST_KEY_CHANGED')),
+      '主机密钥与已保存记录不同，连接已拒绝。可在“私钥与配置 → 主机信任”核对并管理旧记录。',
+    );
+    expect(
+      sshConnectionError(PlatformException(code: 'SSH_JUMP_AUTH_UNSUPPORTED')),
+      '跳板连接目前支持已保存密码或免认证。若服务器支持密码，请在对应主机的 SSH 配置中设置 PreferredAuthentications password，连接时选择“自动检测”并确保未选择私钥。',
+    );
+    expect(
+      sshConnectionError(PlatformException(code: 'SSH_JUMP_PASSWORD_MISSING')),
+      '跳板或目标尚未保存密码。当前跳板连接无法输入新密码。',
+    );
+    expect(
+      sshConnectionError(PlatformException(code: 'SSH_JUMP_EFFECT_GUARD')),
+      '此跳板连接暂不可用，连接已停止。',
+    );
+    expect(
+      sshConnectionError(PlatformException(code: 'SSH_JUMP_USER_REQUIRED')),
+      '跳板缺少用户名，请在 SSH 配置中为跳板指定用户名。',
+    );
+  });
 
   test('SSH events have a closed metadata-only protocol', () {
     final good = _ticket('attempt');
@@ -1373,12 +1775,18 @@ void main() {
     expect(event.requestId, 'attempt');
     expect(event.host, 'server.invalid');
     expect(event.port, 2222);
+    expect(event.hop, 0);
     expect(event.remainingMillis, 30000);
     for (final bad in [
       {...good, 'password': 'must-not-display'},
       {...good, 'remainingMillis': 30001},
+      {...good}..remove('hop'),
+      {...good, 'hop': -1},
+      {...good, 'hop': 9},
+      {...good, 'hop': '0'},
       {...good, 'port': 22.0},
       {...good, 'binding': 'not-a-binding'},
+      {...good, 'binding': 'A' * 64},
       {...good, 'fingerprint': 'arbitrary text'},
       {...good, 'host': 'host\ntext'},
       {
@@ -1401,6 +1809,8 @@ void main() {
         'type': 'hostKeyDismissed',
         'requestId': 'attempt',
         'ticketId': 'ticket-a',
+        'binding': 'a' * 64,
+        'hop': 0,
       }),
       isA<SshHostKeyDismissed>(),
     );
@@ -1421,6 +1831,7 @@ void main() {
       final good = _changedTicket('attempt');
       final parsed = SshEvent.parse(good) as SshHostKeyChangedEvent;
       expect(parsed.host, 'server.invalid');
+      expect(parsed.hop, 0);
       expect(parsed.source, 'ssh/known_hosts');
       expect(parsed.oldKeys.map((row) => row.fingerprint), [
         _changedOldFingerprint,
@@ -1435,6 +1846,8 @@ void main() {
       for (final bad in <Map<String, Object>>[
         {...good, 'unexpected': true},
         {...good}..remove('source'),
+        {...good}..remove('hop'),
+        {...good, 'hop': 9},
         {...good, 'source': '/etc/known_hosts'},
         {...good, 'source': 'ssh/../known_hosts'},
         {...good, 'source': 'ssh//known_hosts'},
@@ -1471,6 +1884,7 @@ void main() {
                 'requestId': 'attempt',
                 'ticketId': 'ticket-a',
                 'binding': 'a' * 64,
+                'hop': 0,
               })
               as SshHostKeyChangedDismissed;
       expect(dismissed.ticketId, 'ticket-a');
@@ -2160,6 +2574,279 @@ void main() {
     },
   );
 
+  testWidgets('host review rejects changed metadata on an existing ticket', (
+    tester,
+  ) async {
+    for (final mutation in [
+      {'hop': 1},
+      {'host': 'other.invalid'},
+      {'port': 2201},
+      {'keyType': 'ssh-rsa'},
+      {'fingerprint': 'SHA256:${'B' * 43}'},
+    ]) {
+      final host = _SshHost(tester);
+      await host.open();
+      await host.fill();
+      await host.tapConnect();
+      final id = host.connectCalls.single['requestId'] as String;
+      final ticket = _ticket(id);
+      await host.emit(ticket);
+      await host.advance();
+      expect(find.text('确认主机密钥'), findsOneWidget);
+      await host.emit({...ticket, ...mutation});
+      await host.advance();
+      expect(find.text('确认主机密钥'), findsNothing);
+      expect(host.decisions, isEmpty);
+      expect(host.cancelled, contains(id));
+      host.completeConnect(error: PlatformException(code: 'SSH_CANCELLED'));
+      await host.advance();
+      await host.remove();
+    }
+  });
+
+  testWidgets('host review rejects a late prior hop and mismatched dismissal', (
+    tester,
+  ) async {
+    for (final mismatch in ['old-hop', 'dismiss-hop', 'dismiss-binding']) {
+      final host = _SshHost(tester);
+      await host.open();
+      await host.fill();
+      await host.tapConnect();
+      final id = host.connectCalls.single['requestId'] as String;
+      final first = _ticket(id);
+      await host.emit(first);
+      await host.advance();
+      await tester.tap(find.text('信任并保存'));
+      await host.advance();
+      final next = {
+        ...first,
+        'ticketId': 'ticket-b',
+        'binding': 'b' * 64,
+        'hop': 1,
+      };
+      await host.emit(next);
+      await host.advance();
+      expect(find.text('确认主机密钥'), findsOneWidget);
+      if (mismatch == 'old-hop') {
+        await host.emit({...first, 'ticketId': 'old-ticket'});
+      } else {
+        await host.emit({
+          'type': 'hostKeyDismissed',
+          'requestId': id,
+          'ticketId': 'ticket-b',
+          'binding': mismatch == 'dismiss-binding' ? 'c' * 64 : 'b' * 64,
+          'hop': mismatch == 'dismiss-hop' ? 0 : 1,
+        });
+      }
+      await host.advance();
+      expect(find.text('确认主机密钥'), findsNothing);
+      expect(host.decisions, hasLength(1));
+      expect(host.cancelled, contains(id));
+      host.completeConnect(error: PlatformException(code: 'SSH_CANCELLED'));
+      await host.advance();
+      await host.remove();
+    }
+  });
+
+  testWidgets('changed-host reviews await every hop decision acknowledgement', (
+    tester,
+  ) async {
+    for (final firstAccepted in [true, false]) {
+      final firstAck = Completer<Map<String, Object>>();
+      final secondAck = Completer<Map<String, Object>>();
+      final host = _SshHost(tester)..pendingDecision = firstAck;
+      await host.open();
+      await host.fill();
+      await host.tapConnect();
+      final id = host.connectCalls.single['requestId'] as String;
+      await host.emit(_changedTicket(id));
+      await host.advance();
+      await tester.tap(find.byKey(const Key('ssh-changed-host-accept')));
+      await host.advance();
+      await host.emit({
+        'type': 'hostKeyChangedDismissed',
+        'requestId': id,
+        'ticketId': 'changed-ticket',
+        'binding': 'a' * 64,
+        'hop': 0,
+      });
+      host.pendingDecision = secondAck;
+      await host.emit({
+        ..._changedTicket(id),
+        'ticketId': 'changed-ticket-2',
+        'binding': 'b' * 64,
+        'hop': 1,
+      });
+      await host.advance();
+      expect(find.text('服务器指纹已变化'), findsOneWidget);
+      await tester.tap(find.byKey(const Key('ssh-changed-host-accept')));
+      await host.advance();
+      expect(host.decisions, hasLength(2));
+      secondAck.complete({'accepted': true});
+      await host.emit({'type': 'state', 'requestId': id, 'state': 'connected'});
+      host.completeConnect();
+      await host.advance();
+      expect(find.text('Open SSH'), findsNothing);
+      firstAck.complete({'accepted': firstAccepted});
+      await host.advance();
+      if (firstAccepted) {
+        expect(find.text('Open SSH'), findsOneWidget);
+      } else {
+        expect(find.text('Open SSH'), findsNothing);
+        expect(host.cancelled, contains(id));
+      }
+      await host.remove();
+    }
+  });
+
+  testWidgets('new-host review waits for its own decision acknowledgement', (
+    tester,
+  ) async {
+    for (final accepted in [true, false]) {
+      final ack = Completer<Map<String, Object>>();
+      final host = _SshHost(tester)..pendingDecision = ack;
+      await host.open();
+      await host.fill();
+      await host.tapConnect();
+      final id = host.connectCalls.single['requestId'] as String;
+      await host.emit(_ticket(id));
+      await host.advance();
+      await tester.tap(find.text('信任并保存'));
+      await host.advance();
+      await host.emit({
+        'type': 'hostKeyDismissed',
+        'requestId': id,
+        'ticketId': 'ticket-a',
+        'binding': 'a' * 64,
+        'hop': 0,
+      });
+      await host.emit({'type': 'state', 'requestId': id, 'state': 'connected'});
+      host.completeConnect();
+      await host.advance();
+      expect(find.text('Open SSH'), findsNothing);
+      ack.complete({'accepted': accepted});
+      await host.advance();
+      if (accepted) {
+        expect(find.text('Open SSH'), findsOneWidget);
+      } else {
+        expect(find.text('Open SSH'), findsNothing);
+        expect(host.cancelled, contains(id));
+      }
+      await host.remove();
+    }
+  });
+
+  testWidgets('mixed host reviews retain earlier acknowledgement ownership', (
+    tester,
+  ) async {
+    for (final firstChanged in [false, true]) {
+      final firstAck = Completer<Map<String, Object>>();
+      final secondAck = Completer<Map<String, Object>>();
+      final host = _SshHost(tester)..pendingDecision = firstAck;
+      await host.open();
+      await host.fill();
+      await host.tapConnect();
+      final id = host.connectCalls.single['requestId'] as String;
+      final first = firstChanged ? _changedTicket(id) : _ticket(id);
+      await host.emit(first);
+      await host.advance();
+      await tester.tap(
+        firstChanged
+            ? find.byKey(const Key('ssh-changed-host-accept'))
+            : find.text('信任并保存'),
+      );
+      await host.advance();
+      await host.emit({
+        'type': firstChanged ? 'hostKeyChangedDismissed' : 'hostKeyDismissed',
+        'requestId': id,
+        'ticketId': first['ticketId']!,
+        'binding': first['binding']!,
+        'hop': 0,
+      });
+      host.pendingDecision = secondAck;
+      final second = firstChanged ? _ticket(id) : _changedTicket(id);
+      await host.emit({
+        ...second,
+        'ticketId': 'second-ticket',
+        'binding': 'b' * 64,
+        'hop': 1,
+      });
+      await host.advance();
+      await tester.tap(
+        firstChanged
+            ? find.text('信任并保存')
+            : find.byKey(const Key('ssh-changed-host-accept')),
+      );
+      await host.advance();
+      secondAck.complete({'accepted': true});
+      await host.emit({'type': 'state', 'requestId': id, 'state': 'connected'});
+      host.completeConnect();
+      await host.advance();
+      expect(find.text('Open SSH'), findsNothing);
+      firstAck.complete({'accepted': false});
+      await host.advance();
+      expect(find.text('Open SSH'), findsNothing);
+      expect(host.cancelled, contains(id));
+      await host.remove();
+    }
+  });
+
+  testWidgets(
+    'untrusted changed-host endpoint is not authorized by hop alone',
+    (tester) async {
+      final host = _SshHost(tester);
+      await host.open();
+      await host.fill();
+      await host.tapConnect();
+      final id = host.connectCalls.single['requestId'] as String;
+      await host.emit({
+        ..._changedTicket(id),
+        'hop': 1,
+        'host': 'jump.invalid',
+        'port': 2201,
+      });
+      await host.advance();
+      expect(find.text('主机信息已变化，请重新连接。'), findsOneWidget);
+      expect(find.text('服务器指纹已变化'), findsNothing);
+      expect(host.decisions, isEmpty);
+      expect(host.cancelled, contains(id));
+      host.completeConnect(error: PlatformException(code: 'SSH_CANCELLED'));
+      await host.advance();
+      await host.remove();
+    },
+  );
+
+  testWidgets('host review displays unambiguous IPv6 endpoints', (
+    tester,
+  ) async {
+    for (final (changed, endpoint) in [
+      (false, '2001:db8::1'),
+      (true, '2001:db8::1'),
+      (false, '[2001:db8::1]'),
+      (true, '[2001:db8::1]'),
+    ]) {
+      final host = _SshHost(tester);
+      await host.open();
+      await host.fill();
+      await tester.enterText(find.byKey(const Key('ssh-host')), endpoint);
+      await tester.enterText(
+        find.byKey(const Key('ssh-password')),
+        'synthetic password',
+      );
+      await host.tapConnect();
+      final id = host.connectCalls.single['requestId'] as String;
+      await host.emit({
+        ...(changed ? _changedTicket(id) : _ticket(id)),
+        'host': endpoint,
+      });
+      await host.advance();
+      expect(find.text('[2001:db8::1]:2222'), findsOneWidget);
+      host.completeConnect(error: PlatformException(code: 'SSH_CANCELLED'));
+      await host.advance();
+      await host.remove();
+    }
+  });
+
   testWidgets('changed-host actions use the same rounded state layer', (
     tester,
   ) async {
@@ -2269,6 +2956,7 @@ void main() {
           'requestId': id,
           'ticketId': 'changed-ticket',
           'binding': 'a' * 64,
+          'hop': 0,
         });
         await host.advance();
         stale();
@@ -2301,6 +2989,7 @@ void main() {
         'requestId': id,
         'ticketId': 'changed-ticket',
         'binding': 'a' * 64,
+        'hop': 0,
       });
       await host.emit({'type': 'state', 'requestId': id, 'state': 'connected'});
       host.completeConnect();
@@ -2716,6 +3405,8 @@ void main() {
       'type': 'hostKeyDismissed',
       'requestId': id,
       'ticketId': 'ticket-a',
+      'binding': 'a' * 64,
+      'hop': 0,
     });
     await host.advance();
     stale();
@@ -2733,6 +3424,11 @@ void main() {
       for (final scenario in [
         ('SSH_HOST_PROOF_INVALID', '主机身份验证未能完成，连接已停止。请重新连接并核对服务器信息。'),
         ('SSH_SESSION_CANCELLED', 'SSH 连接已中止，请重新连接。'),
+        (
+          'SSH_JUMP_HOST_TRUST_REQUIRED',
+          '跳板连接暂不支持在连接中核验新主机或已变化的主机指纹，请检查主机信任记录。',
+        ),
+        ('SSH_JUMP_HOST_TRUST_FAILED', '跳板连接的主机身份未能验证，连接已停止。请检查主机信任配置。'),
       ]) {
         for (final useStateEvent in [false, true]) {
           final host = _SshHost(tester);
@@ -3386,6 +4082,7 @@ Map<String, Object> _ticket(String id) => {
   'binding': List.filled(64, 'a').join(),
   'host': 'server.invalid',
   'port': 2222,
+  'hop': 0,
   'keyType': 'ssh-ed25519',
   'fingerprint': 'SHA256:${List.filled(43, 'A').join()}',
   'remainingMillis': 30000,
@@ -3402,6 +4099,7 @@ Map<String, Object> _changedTicket(String id) => {
   'binding': 'a' * 64,
   'host': 'server.invalid',
   'port': 2222,
+  'hop': 0,
   'source': 'ssh/known_hosts',
   'keyType': 'ssh-ed25519',
   'fingerprint': _changedNewFingerprint,

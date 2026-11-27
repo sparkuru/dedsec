@@ -283,7 +283,8 @@ public final class SshKeyPassphraseTest {
             SshConnectionMaterial.Key key = f.key(source, 0); byte[] blob = key.publicBlob();
             try (SshRoleContext role = role(f, key);
                     SshTransientKey deferred = SshTransientKey.deferred(f.vault, f.profile, key, encryptedBody(),
-                            31000, () -> { if (f.cancelled.get()) throw new VaultException("SSH_CANCELLED", "Synthetic"); }, f.clock)) {
+                            31000, () -> { if (f.cancelled.get()) throw new VaultException("SSH_CANCELLED", "Synthetic"); },
+                            f.clock, new SshSessionOwner.Cancellation())) {
                 SshAuthenticationSelection selected = SshAuthenticationSelection.privateKey(role, f.profile.username,
                         key.path, key.identity, blob, deferred.entryId, f.clock).withAutomaticDiscovery(7, f.clock);
                 deferred.bind(role, selected);
@@ -309,7 +310,8 @@ public final class SshKeyPassphraseTest {
             SshConnectionMaterial.Key key = f.key(source, 0); byte[] blob = key.publicBlob();
             try (SshRoleContext role = role(f, key);
                     SshTransientKey deferred = SshTransientKey.deferred(f.vault, f.profile, key, encryptedBody(),
-                            31000, () -> { if (f.cancelled.get()) throw new VaultException("SSH_CANCELLED", "Synthetic"); }, f.clock)) {
+                            31000, () -> { if (f.cancelled.get()) throw new VaultException("SSH_CANCELLED", "Synthetic"); },
+                            f.clock, new SshSessionOwner.Cancellation())) {
                 SshAuthenticationSelection selected = SshAuthenticationSelection.privateKey(role, f.profile.username,
                         key.path, key.identity, blob, deferred.entryId, f.clock).withAutomaticDiscovery(7, f.clock);
                 deferred.bind(role, selected);

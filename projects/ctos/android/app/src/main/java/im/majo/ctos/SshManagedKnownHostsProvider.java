@@ -11,9 +11,46 @@ import java.util.UUID;
  */
 final class SshManagedKnownHostsProvider implements
         SshManagedProvider.TrustProposalSource, SshManagedProvider.TrustCasWriter, AutoCloseable {
-    interface ChangedCommitObserver {
+    /* Nested close calls each own an invalidation; a JNI exception does not
+     * establish whether that call changed the global invalidator count. */
+    private static final class CleanupInvalidation {
+        private static final int IDLE = 0, BEGIN_UNCONFIRMED = 1, HELD = 2,
+                NO_FENCE = 3, END_UNCONFIRMED = 4;
+        private int state;
+
+        void begin() {
+            if (state != IDLE) throw new IllegalStateException("SSH cleanup invalidation is unconfirmed");
+            state = BEGIN_UNCONFIRMED;
+            int result = SshNativeCallbackAdapter.beginJumpCleanupInvalidation();
+            if (result == -1) {
+                state = IDLE; // Native explicitly reported it did not begin.
+                throw new UnsatisfiedLinkError("SSH cleanup invalidation did not begin");
+            }
+            if (result == 0) state = NO_FENCE;
+            else if (result == 1) state = HELD;
+            else throw new IllegalStateException("SSH cleanup invalidation is unconfirmed");
+        }
+
+        void end() {
+            if (state == NO_FENCE) { state = IDLE; return; }
+            if (state != HELD) throw new IllegalStateException("SSH cleanup invalidation is unconfirmed");
+            state = END_UNCONFIRMED;
+            SshNativeCallbackAdapter.endJumpEffectInvalidation(true);
+            state = IDLE;
+        }
+
+        boolean unconfirmed() { return state == BEGIN_UNCONFIRMED || state == END_UNCONFIRMED; }
+    }
+    /** Publication hooks only update bounded metadata; role/view locks may be held. */
+    interface TrustCommitObserver {
         void persisted();
-        default void proofPublished() { }
+        /** Chained observers must require the exact role they were issued for. */
+        default void requireRole(SshRoleContext role) throws VaultException { }
+        default void bindProvider(SshManagedKnownHostsProvider exact, SshRoleContext role)
+                throws VaultException { requireRole(role); }
+        default void proofPublished() throws VaultException { }
+        default void newPersisted() { }
+        default void newProofPublished() throws VaultException { }
     }
     /** Constructed only after this provider's exact CHANGED CAS has returned successfully. */
     static final class ChangedCommitReceipt {
@@ -62,7 +99,9 @@ final class SshManagedKnownHostsProvider implements
         private final SshRoleContext.Clock clock;
         private byte[] snapshotBinding;
         private byte[] baseDigest;
+        private boolean closing;
         private boolean closed;
+        private final CleanupInvalidation cleanupInvalidation = new CleanupInvalidation();
 
         private SnapshotReceipt(SshRoleContext role, String rootPath, String path, String objectId,
                 String objectIdentity, SshFileSnapshot snapshot, byte[] baseDigest,
@@ -94,7 +133,7 @@ final class SshManagedKnownHostsProvider implements
         }
 
         synchronized void requireLive() throws VaultException {
-            if (closed) throw new VaultException("VAULT_EXPIRED", "The managed trust snapshot is closed");
+            if (closing) throw new VaultException("VAULT_EXPIRED", "The managed trust snapshot is closed");
             role.requireActive(clock);
             long now = clock.now();
             if (now <= 0 || now >= deadline) {
@@ -103,13 +142,26 @@ final class SshManagedKnownHostsProvider implements
         }
 
         synchronized byte[] binding() throws VaultException {
-            if (closed) throw new VaultException("VAULT_EXPIRED", "The managed trust snapshot is closed");
+            if (closing) throw new VaultException("VAULT_EXPIRED", "The managed trust snapshot is closed");
             return snapshotBinding.clone();
         }
 
         synchronized byte[] baseDigest() throws VaultException {
-            if (closed) throw new VaultException("VAULT_EXPIRED", "The managed trust snapshot is closed");
+            if (closing) throw new VaultException("VAULT_EXPIRED", "The managed trust snapshot is closed");
             return baseDigest.clone();
+        }
+
+        /** Classifier facts must originate from this exact protected hostfile. */
+        synchronized void requireEvidence(SshRoleContext candidateRole,
+                SshHostKeyAuthority.Evidence evidence) throws VaultException {
+            requireLive();
+            if (candidateRole != role || evidence == null || evidence.role != role)
+                throw new VaultException("SSH_HOST_KEY_REVIEW", "The managed trust snapshot is not exact");
+            byte[] actual = evidence.baseDigest();
+            try {
+                if (actual == null || !MessageDigest.isEqual(baseDigest, actual))
+                    throw new VaultException("SSH_HOST_KEY_REVIEW", "The managed trust base changed");
+            } finally { VaultCodec.wipe(actual); }
         }
 
         synchronized void requireMatches(SshRoleContext candidateRole,
@@ -160,11 +212,117 @@ final class SshManagedKnownHostsProvider implements
             }
         }
 
+        private synchronized void markClosing() { closing = true; }
+
+        private synchronized boolean cleanupUnconfirmed() { return cleanupInvalidation.unconfirmed(); }
+
         @Override public synchronized void close() {
+            closing = true;
             if (closed) return;
+            cleanupInvalidation.begin();
+            try {
+                VaultCodec.wipe(snapshotBinding);
+                VaultCodec.wipe(baseDigest);
+            } finally { cleanupInvalidation.end(); }
             closed = true;
-            VaultCodec.wipe(snapshotBinding);
-            VaultCodec.wipe(baseDigest);
+        }
+    }
+
+    /**
+     * Receipt and native wire captured from one authenticated vault read.
+     * This is a preparation only: a freshness check here cannot authorize a
+     * later credential copy. The connector must install a final-copy fence
+     * before it can consume this preparation.
+     */
+    static final class ChildTrustSnapshot implements AutoCloseable {
+        private final SshVaultAdapter adapter;
+        private final SshRoleContext.PublicView view;
+        private final SnapshotReceipt receipt;
+        private final long revision;
+        private byte[] wire;
+        private volatile boolean closing;
+        private boolean closed;
+        private final CleanupInvalidation cleanupInvalidation = new CleanupInvalidation();
+
+        private ChildTrustSnapshot(SshVaultAdapter adapter, SshRoleContext.PublicView view,
+                SnapshotReceipt receipt, long revision, byte[] wire) {
+            this.adapter = adapter;
+            this.view = view;
+            this.receipt = receipt;
+            this.revision = revision;
+            this.wire = wire;
+        }
+
+        SnapshotReceipt receipt() throws VaultException {
+            if (closing) throw new VaultException("VAULT_EXPIRED", "The child trust source is closed");
+            return receipt;
+        }
+
+        void requireFor(SshRoleContext role, String path) throws VaultException {
+            if (role == null || role != receipt.role || role.hop == 0
+                    || path == null || !path.equals(receipt.path) || !role.ownsPublicView(view))
+                throw new VaultException("SSH_HOST_KEY_REVIEW", "The child trust source is not exact");
+            requireCurrent();
+        }
+
+        void requireEvidence(SshRoleContext role, SshHostKeyAuthority.Evidence evidence)
+                throws VaultException {
+            requireCurrent();
+            receipt.requireEvidence(role, evidence);
+            requireCurrent();
+        }
+
+        void requireCurrent() throws VaultException {
+            if (closing) throw new VaultException("VAULT_EXPIRED", "The child trust source is closed");
+            receipt.requireLive();
+            adapter.checkChildTrustSnapshot(receipt.epoch, revision, receipt.role, view);
+            if (closing) throw new VaultException("VAULT_EXPIRED", "The child trust source is closed");
+        }
+
+        /** Read-only lifecycle check after a refused candidate has retired its receipt. */
+        void requireRefusalContext(SshRoleContext role) throws VaultException {
+            if (closing || role == null || role != receipt.role || role.hop == 0
+                    || !role.ownsPublicView(view))
+                throw new VaultException("SSH_HOST_KEY_REVIEW", "The child trust source is not exact");
+            role.requireActive(receipt.clock);
+            long now = receipt.clock.now();
+            if (now <= 0 || now >= receipt.deadline)
+                throw new VaultException("VAULT_EXPIRED", "The child trust source expired");
+            adapter.checkChildTrustSnapshot(receipt.epoch, revision, role, view);
+            if (closing) throw new VaultException("VAULT_EXPIRED", "The child trust source is closed");
+        }
+
+        boolean refusalContextAvailable() { return !closing; }
+
+        /** Caller must wipe the transferred buffer even when native open fails. */
+        byte[] takeWire() throws VaultException {
+            requireCurrent();
+            synchronized (this) {
+                if (closing || wire == null)
+                    throw new VaultException("VAULT_EXPIRED", "The child trust source was consumed");
+                byte[] result = wire;
+                wire = null;
+                return result;
+            }
+        }
+
+        @Override public synchronized void close() {
+            /* Publish both barriers while holding the receipt monitor, so a
+             * caller holding an earlier receipt cannot enter between them. */
+            synchronized (receipt) {
+                closing = true;
+                receipt.markClosing();
+            }
+            if (closed) return;
+            if (receipt.cleanupUnconfirmed())
+                throw new IllegalStateException("SSH receipt cleanup is unconfirmed");
+            cleanupInvalidation.begin();
+            try {
+                VaultCodec.wipe(wire);
+                wire = null;
+                receipt.close();
+            } finally { cleanupInvalidation.end(); }
+            closed = true;
         }
     }
 
@@ -173,6 +331,7 @@ final class SshManagedKnownHostsProvider implements
      * are never derived from a fingerprint or formatted by this provider.
      */
     static final class KnownHostsCandidate implements AutoCloseable {
+        private final Object provisionalFixtureIdentity = new Object();
         final String candidateId;
         final String path;
         final String objectId;
@@ -201,6 +360,7 @@ final class SshManagedKnownHostsProvider implements
         final String binding;
         private boolean consumed;
         private boolean closed;
+        private FixtureCandidateReservation fixtureReservation;
 
         private KnownHostsCandidate(SnapshotReceipt snapshot, SshHostKeyAuthority.Evidence evidence,
                 String candidateId, byte[] exactReplacement,
@@ -276,7 +436,11 @@ final class SshManagedKnownHostsProvider implements
         }
 
         synchronized void requireSnapshot(SnapshotReceipt snapshot) throws VaultException {
-            if (closed || consumed || snapshot == null) {
+            requireSnapshot(snapshot, false);
+        }
+
+        private void requireSnapshot(SnapshotReceipt snapshot, boolean transferred) throws VaultException {
+            if (closed || consumed != transferred || snapshot == null) {
                 throw new VaultException("SSH_HOST_KEY_REVIEW", "The managed trust candidate is not exact");
             }
             snapshot.requireLive();
@@ -304,7 +468,12 @@ final class SshManagedKnownHostsProvider implements
 
         synchronized void requireMatches(SnapshotReceipt snapshot,
                 SshHostKeyAuthority.Evidence evidence) throws VaultException {
-            requireSnapshot(snapshot);
+            requireMatches(snapshot, evidence, false);
+        }
+
+        private void requireMatches(SnapshotReceipt snapshot,
+                SshHostKeyAuthority.Evidence evidence, boolean transferred) throws VaultException {
+            requireSnapshot(snapshot, transferred);
             if (evidence == null || evidence.role != snapshot.role
                     || evidence.classification != classification || !keyType.equals(evidence.keyType)
                     || !fingerprint.equals(evidence.fingerprint)) {
@@ -324,16 +493,50 @@ final class SshManagedKnownHostsProvider implements
         }
 
         synchronized byte[] consume() throws VaultException {
-            if (closed || consumed || content == null) {
+            if (closed || consumed || content == null || fixtureReservation != null) {
                 throw new VaultException("SSH_HOST_KEY_REVIEW", "The managed trust candidate is unavailable");
             }
             consumed = true;
             return content.clone();
         }
 
+        private synchronized void reserveFixture(FixtureCandidateReservation reservation) throws VaultException {
+            if (closed || consumed || content == null || fixtureReservation != null || reservation == null)
+                throw new VaultException("SSH_HOST_KEY_REVIEW", "The fixture candidate is unavailable");
+            fixtureReservation = reservation;
+        }
+
+        private synchronized void requireFixtureReservation(FixtureCandidateReservation reservation)
+                throws VaultException {
+            if (closed || consumed || content == null || fixtureReservation != reservation)
+                throw new VaultException("SSH_HOST_KEY_REVIEW", "The fixture candidate is unavailable");
+        }
+
+        private synchronized void transferFixtureReservation(FixtureCandidateReservation reservation,
+                FixtureCandidateTransfer transfer) throws VaultException {
+            requireFixtureReservation(reservation);
+            synchronized (reservation) {
+                if (reservation.revoked || reservation.transfer != null)
+                    throw new VaultException("SSH_HOST_KEY_REVIEW", "The fixture reservation is unavailable");
+                transfer.accept(content);
+                content = null;
+                consumed = true;
+                reservation.transfer = transfer;
+            }
+        }
+
+        private synchronized void requireTransferredFixture(SnapshotReceipt snapshot,
+                SshHostKeyAuthority.Evidence evidence, FixtureCandidateReservation reservation)
+                throws VaultException {
+            if (fixtureReservation != reservation || content != null || !consumed)
+                throw new VaultException("SSH_HOST_KEY_REVIEW", "The fixture candidate is unavailable");
+            requireMatches(snapshot, evidence, true);
+        }
+
         @Override public synchronized void close() {
             if (closed) return;
             closed = true;
+            if (fixtureReservation != null) fixtureReservation.revoke();
             VaultCodec.wipe(baseDigest);
             VaultCodec.wipe(snapshotBinding);
             VaultCodec.wipe(replacementDigest);
@@ -344,14 +547,23 @@ final class SshManagedKnownHostsProvider implements
     private final SshVaultAdapter adapter;
     private final SnapshotReceipt snapshot;
     private KnownHostsCandidate candidate;
+    private FixtureCandidateReservation fixtureReservation;
     private SshTrustProposal activeProposal;
     private VaultOperation activeRequest;
     private AppSecrets.SshTrustContext activeContext;
+    private final Object cleanupLock = new Object();
+    private final CleanupInvalidation cleanupInvalidation = new CleanupInvalidation();
+    private boolean cleanupStarted, cleanupNeedsInvalidation, cleanupRevoked, cleanupComplete;
+    private boolean cleanupResourceUnconfirmed;
     private boolean writing;
     private volatile boolean confirmedCommit;
+    private volatile boolean newCommitConfirmed;
+    private boolean newNativeAcknowledged;
+    private boolean newInvalidated;
     private volatile boolean changedCommitConfirmed;
     private boolean changedNativeAcknowledged;
-    private final ChangedCommitObserver changedCommitObserver;
+    private boolean changedInvalidated;
+    private final TrustCommitObserver commitObserver;
     private boolean closed;
 
     private SshManagedKnownHostsProvider(SshVaultAdapter adapter, SnapshotReceipt snapshot,
@@ -360,14 +572,15 @@ final class SshManagedKnownHostsProvider implements
     }
 
     private SshManagedKnownHostsProvider(SshVaultAdapter adapter, SnapshotReceipt snapshot,
-            KnownHostsCandidate candidate, ChangedCommitObserver changedCommitObserver) throws VaultException {
+            KnownHostsCandidate candidate, TrustCommitObserver commitObserver) throws VaultException {
         if (adapter == null || snapshot == null) throw VaultException.invalid();
         snapshot.requireLive();
         if (candidate != null) candidate.requireSnapshot(snapshot);
         this.adapter = adapter;
         this.snapshot = snapshot;
         this.candidate = candidate;
-        this.changedCommitObserver = java.util.Objects.requireNonNull(changedCommitObserver);
+        this.commitObserver = java.util.Objects.requireNonNull(commitObserver);
+        this.commitObserver.bindProvider(this, snapshot.role);
     }
 
     /** Create a provider owning exactly one candidate and its snapshot receipt. */
@@ -380,8 +593,8 @@ final class SshManagedKnownHostsProvider implements
     /**
      * Create the managed side of the separate native candidate handoff.  It
      * starts without a candidate and accepts exactly one through
-     * SshKnownHostsCandidateHandoff; the normal proposal/CAS path remains the
-     * only way to consume it.
+     * SshKnownHostsCandidateHandoff. A fixture transfer only moves ownership;
+     * it cannot create a normal proposal or authorize a trust write.
      */
     static SshManagedKnownHostsProvider bindForNativeHandoff(SshVaultAdapter adapter,
             SnapshotReceipt snapshot) throws VaultException {
@@ -389,9 +602,26 @@ final class SshManagedKnownHostsProvider implements
     }
 
     static SshManagedKnownHostsProvider bindForNativeHandoff(SshVaultAdapter adapter,
-            SnapshotReceipt snapshot, ChangedCommitObserver changedCommitObserver) throws VaultException {
-        return new SshManagedKnownHostsProvider(adapter, snapshot, null, changedCommitObserver);
+            SnapshotReceipt snapshot, TrustCommitObserver commitObserver) throws VaultException {
+        return new SshManagedKnownHostsProvider(adapter, snapshot, null, commitObserver);
     }
+
+    /** The ledger must be the observer this provider will actually notify. */
+    boolean hasCommitObserver(TrustCommitObserver observer) {
+        return commitObserver == observer;
+    }
+
+    /** Metadata equality is insufficient; the native source and provider must share this receipt. */
+    synchronized boolean ownsChildSnapshot(ChildTrustSnapshot source) {
+        return !closed && source != null && !source.closing
+                && snapshot == source.receipt && adapter == source.adapter;
+    }
+
+    boolean sharesVault(SshManagedKnownHostsProvider other) {
+        return other != null && adapter.sharesVault(other.adapter);
+    }
+
+    boolean sharesVault(AppSecrets other) { return adapter.sharesVault(other); }
 
     SshKnownHostsCandidateHandoff nativeCandidateHandoff() throws VaultException {
         synchronized (this) {
@@ -412,6 +642,179 @@ final class SshManagedKnownHostsProvider implements
         next.requireSnapshot(snapshot);
         candidate = next;
         return true;
+    }
+
+    /* A point-in-time identity check for the isolated JNI fixture.  The
+     * returned token carries no candidate operations or bytes; this neither
+     * reserves the candidate nor authorizes a proposal or trust write. */
+    synchronized Object requireProvisionalFixtureCandidate(ChildTrustSnapshot source,
+            SshHostKeyAuthority.Evidence evidence, String candidateId, Object expected)
+            throws VaultException {
+        if (closed || source == null || source.closing || source.receipt != snapshot || source.adapter != adapter
+                || candidate == null || activeProposal != null
+                || expected != null && candidate.provisionalFixtureIdentity != expected
+                || candidateId == null || !candidateId.equals(candidate.candidateId)
+                || evidence == null || evidence.classification != SshHostKeyAuthority.Classification.NEW)
+            throw new VaultException("SSH_HOST_KEY_REVIEW", "The fixture candidate is unavailable");
+        FixtureCandidateTransfer transfer = fixtureReservation == null ? null : fixtureReservation.transfer();
+        if (transfer == null) candidate.requireMatches(snapshot, evidence);
+        else {
+            if (fixtureReservation.revoked() || !transfer.available())
+                throw new VaultException("SSH_HOST_KEY_REVIEW", "The fixture transfer is unavailable");
+            candidate.requireTransferredFixture(snapshot, evidence, fixtureReservation);
+        }
+        return candidate.provisionalFixtureIdentity;
+    }
+
+    /** Fixture ownership only: it exposes neither candidate bytes nor write authority. */
+    static final class FixtureCandidateReservation implements AutoCloseable {
+        private final SshManagedKnownHostsProvider provider;
+        private final KnownHostsCandidate candidate;
+        private final ChildTrustSnapshot source;
+        private final SshNativeCallbackAdapter.SignedNewFixtureReview review;
+        private final SshNativeSession child;
+        private final Thread owner;
+        private volatile boolean revoked;
+        private FixtureCandidateTransfer transfer;
+
+        private FixtureCandidateReservation(SshManagedKnownHostsProvider provider,
+                KnownHostsCandidate candidate, ChildTrustSnapshot source,
+                SshNativeCallbackAdapter.SignedNewFixtureReview review, SshNativeSession child) {
+            this.provider = provider;
+            this.candidate = candidate;
+            this.source = source;
+            this.review = review;
+            this.child = child;
+            owner = Thread.currentThread();
+        }
+
+        void requireHeldFor(SshNativeSession session) throws VaultException {
+            if (Thread.currentThread() != owner || session != child || revoked)
+                throw new VaultException("SSH_HOST_KEY_REVIEW", "The fixture reservation is unavailable");
+            review.requireLiveFor(child);
+            provider.requireFixtureReservation(this);
+            review.requireLiveFor(child);
+            if (revoked) throw new VaultException("SSH_HOST_KEY_REVIEW", "The fixture reservation expired");
+        }
+
+        FixtureCandidateTransfer transferFor(SshNativeSession session) throws VaultException {
+            if (Thread.currentThread() != owner || session != child || revoked)
+                throw new VaultException("SSH_HOST_KEY_REVIEW", "The fixture reservation is unavailable");
+            review.requireLiveFor(child);
+            FixtureCandidateTransfer result = provider.transferFixtureReservation(this);
+            try {
+                result.requireHeldFor(child);
+                return result;
+            } catch (VaultException | RuntimeException | Error failure) {
+                revoke();
+                throw failure;
+            }
+        }
+
+        synchronized FixtureCandidateTransfer transfer() { return transfer; }
+
+        void revoke() {
+            FixtureCandidateTransfer owned;
+            synchronized (this) { revoked = true; owned = transfer; }
+            if (owned != null) owned.revoke();
+        }
+
+        boolean revoked() { return revoked; }
+
+        @Override public void close() {
+            if (Thread.currentThread() != owner)
+                throw new IllegalStateException("The fixture reservation belongs to another thread");
+            revoke();
+        }
+    }
+
+    /** Owns the moved body under the original provider; it grants no write authority. */
+    static final class FixtureCandidateTransfer implements AutoCloseable {
+        private final FixtureCandidateReservation reservation;
+        private final Thread owner;
+        private byte[] content;
+        private boolean closed;
+
+        private FixtureCandidateTransfer(FixtureCandidateReservation reservation) {
+            this.reservation = reservation;
+            owner = Thread.currentThread();
+        }
+
+        private synchronized void accept(byte[] exact) {
+            if (closed || content != null || exact == null || exact.length == 0)
+                throw new IllegalStateException("The fixture transfer is unavailable");
+            content = exact;
+        }
+
+        private synchronized boolean available() { return !closed && content != null; }
+
+        void requireHeldFor(SshNativeSession session) throws VaultException {
+            if (Thread.currentThread() != owner || session != reservation.child || reservation.revoked())
+                throw new VaultException("SSH_HOST_KEY_REVIEW", "The fixture transfer is unavailable");
+            reservation.review.requireLiveFor(session);
+            reservation.provider.requireFixtureTransfer(this);
+            reservation.review.requireLiveFor(session);
+            if (reservation.revoked() || !available())
+                throw new VaultException("SSH_HOST_KEY_REVIEW", "The fixture transfer expired");
+        }
+
+        private synchronized void revoke() {
+            if (closed) return;
+            closed = true;
+            VaultCodec.wipe(content);
+            content = null;
+        }
+
+        @Override public void close() {
+            if (Thread.currentThread() != owner)
+                throw new IllegalStateException("The fixture transfer belongs to another thread");
+            reservation.revoke();
+        }
+    }
+
+    synchronized FixtureCandidateReservation reserveProvisionalFixture(ChildTrustSnapshot source,
+            SshHostKeyAuthority.Evidence evidence, String candidateId, Object expected,
+            SshNativeCallbackAdapter.SignedNewFixtureReview review, SshNativeSession child,
+            SshHostKeyReviewMailbox.SignedFixtureApproval.Claim claim)
+            throws VaultException {
+        if (fixtureReservation != null || review == null || child == null || claim == null
+                || !claim.matches(review, child, source, evidence, candidateId, expected))
+            throw new VaultException("SSH_HOST_KEY_REVIEW", "The fixture candidate is unavailable");
+        requireProvisionalFixtureCandidate(source, evidence, candidateId, expected);
+        FixtureCandidateReservation reservation = new FixtureCandidateReservation(this, candidate,
+                source, review, child);
+        if (!claim.consume(review, child, source, evidence, candidateId, expected))
+            throw new VaultException("SSH_HOST_KEY_REVIEW", "The fixture candidate is unavailable");
+        candidate.reserveFixture(reservation);
+        fixtureReservation = reservation;
+        return reservation;
+    }
+
+    private synchronized void requireFixtureReservation(FixtureCandidateReservation reservation)
+            throws VaultException {
+        if (closed || reservation == null || reservation.revoked || fixtureReservation != reservation
+                || candidate != reservation.candidate || reservation.source.closing
+                || reservation.source.receipt != snapshot || reservation.source.adapter != adapter)
+            throw new VaultException("SSH_HOST_KEY_REVIEW", "The fixture reservation is unavailable");
+        candidate.requireFixtureReservation(reservation);
+    }
+
+    private synchronized FixtureCandidateTransfer transferFixtureReservation(
+            FixtureCandidateReservation reservation) throws VaultException {
+        requireFixtureReservation(reservation);
+        FixtureCandidateTransfer result = new FixtureCandidateTransfer(reservation);
+        candidate.transferFixtureReservation(reservation, result);
+        return result;
+    }
+
+    private synchronized void requireFixtureTransfer(FixtureCandidateTransfer transfer)
+            throws VaultException {
+        if (closed || transfer == null || fixtureReservation != transfer.reservation
+                || transfer.reservation.revoked() || transfer.reservation.transfer() != transfer
+                || candidate != transfer.reservation.candidate || transfer.reservation.source.closing
+                || transfer.reservation.source.receipt != snapshot
+                || transfer.reservation.source.adapter != adapter || !transfer.available())
+            throw new VaultException("SSH_HOST_KEY_REVIEW", "The fixture transfer is unavailable");
     }
 
     void abortNativeHandoff() { failClosed(); }
@@ -440,20 +843,7 @@ final class SshManagedKnownHostsProvider implements
         try {
             adapter.useFileSnapshot(request, rootPath, role.connectionId, snapshot -> {
                 role.requireActive(clock);
-                VaultManifest.FileObject selected = null;
-                for (VaultManifest.FileObject file : snapshot.publicFiles) {
-                    if (file.path.equals(path) && file.id.equals(objectId)
-                            && file.type == VaultManifest.FileType.KNOWN_HOSTS
-                            && file.identity.equals(objectIdentity)) {
-                        if (selected != null) {
-                            throw new VaultException("VAULT_CONTENT", "The managed trust object is ambiguous");
-                        }
-                        selected = file;
-                    }
-                }
-                if (selected == null) {
-                    throw new VaultException("VAULT_OPERATION", "The exact managed trust object is unavailable");
-                }
+                VaultManifest.FileObject selected = selectedTrustFile(snapshot, path, objectId, objectIdentity);
                 byte[] digest = VaultCodec.digest(selected.content);
                 try {
                     result[0] = new SnapshotReceipt(role, rootPath, path, objectId,
@@ -474,6 +864,73 @@ final class SshManagedKnownHostsProvider implements
             // consumed SSH_FILES operation while the trust review is pending.
             adapter.cancel(request);
         }
+    }
+
+    /** Capture the receipt and native source without replacing the original public lease. */
+    static ChildTrustSnapshot snapshotForChild(SshVaultAdapter adapter, SshRoleContext role,
+            SshRoleContext.Clock clock, SshRoleContext.PublicView originalView, String rootPath,
+            String path, String objectId, String objectIdentity) throws VaultException {
+        if (adapter == null || role == null || clock == null || originalView == null
+                || rootPath == null || path == null || objectId == null || objectIdentity == null)
+            throw VaultException.invalid();
+        VaultManifest.path(rootPath);
+        VaultManifest.path(path);
+        role.requireActive(clock);
+        AppSecrets.EffectGuard origin = new AppSecrets.SshRoleGuard() {
+            @Override public void check() throws VaultException { role.requireActive(clock); }
+            @Override public void withRole(AppSecrets.EffectGuard publication) throws VaultException {
+                role.publishBound(clock, publication);
+            }
+        };
+        AppSecrets.SshPublicReadContext context = adapter.fileContext(role.deadline, origin);
+        VaultOperation request = adapter.fileRequest(rootPath, role.connectionId, context);
+        final ChildTrustSnapshot[] result = new ChildTrustSnapshot[1];
+        try {
+            adapter.useFileSnapshot(request, rootPath, role.connectionId, snapshot -> {
+                long revision = adapter.bindChildTrustSnapshot(request, snapshot, role, originalView);
+                VaultManifest.FileObject selected = selectedTrustFile(snapshot, path, objectId, objectIdentity);
+                byte[] digest = null, wire = null;
+                SnapshotReceipt receipt = null;
+                try {
+                    digest = VaultCodec.digest(selected.content);
+                    receipt = new SnapshotReceipt(role, rootPath, path, objectId,
+                            objectIdentity, snapshot, digest, clock);
+                    wire = SshPublicFileLease.encode(snapshot);
+                    if (adapter.bindChildTrustSnapshot(request, snapshot, role, originalView) != revision)
+                        throw new VaultException("VAULT_CHANGED", "The child trust source changed; try again");
+                    result[0] = new ChildTrustSnapshot(adapter, originalView, receipt, revision, wire);
+                    receipt = null;
+                    wire = null;
+                } finally {
+                    if (receipt != null) receipt.close();
+                    VaultCodec.wipe(digest);
+                    VaultCodec.wipe(wire);
+                }
+            });
+            if (result[0] == null) throw new VaultException("VAULT_OPERATION", "The child trust source is unavailable");
+            result[0].requireCurrent();
+            return result[0];
+        } catch (VaultException | RuntimeException | Error failure) {
+            if (result[0] != null) result[0].close();
+            throw failure;
+        } finally { adapter.cancel(request); }
+    }
+
+    private static VaultManifest.FileObject selectedTrustFile(SshFileSnapshot snapshot,
+            String path, String objectId, String objectIdentity) throws VaultException {
+        VaultManifest.FileObject selected = null;
+        for (VaultManifest.FileObject file : snapshot.publicFiles) {
+            if (file.path.equals(path) && file.id.equals(objectId)
+                    && file.type == VaultManifest.FileType.KNOWN_HOSTS
+                    && file.identity.equals(objectIdentity)) {
+                if (selected != null)
+                    throw new VaultException("VAULT_CONTENT", "The managed trust object is ambiguous");
+                selected = file;
+            }
+        }
+        if (selected == null)
+            throw new VaultException("VAULT_OPERATION", "The exact managed trust object is unavailable");
+        return selected;
     }
 
     /** Build a candidate only from caller-supplied exact replacement bytes. */
@@ -517,7 +974,7 @@ final class SshManagedKnownHostsProvider implements
             throws VaultException {
         if (evidence == null || evidence.classification != expected)
             throw new VaultException("SSH_HOST_KEY_REVIEW", "The exact host candidate is unavailable");
-        if (closed || activeProposal != null || candidate == null) {
+        if (closed || activeProposal != null || candidate == null || fixtureReservation != null) {
             throw new VaultException("SSH_HOST_KEY_REVIEW", "The exact managed trust candidate is unavailable");
         }
         snapshot.requireLive();
@@ -574,6 +1031,7 @@ final class SshManagedKnownHostsProvider implements
             context = activeContext;
         }
         boolean persisted = false;
+        boolean notified = false;
         try {
             snapshot.requireLive();
             proof.requireMatches(snapshot.role, evidence);
@@ -591,6 +1049,9 @@ final class SshManagedKnownHostsProvider implements
             adapter.updateTrust(request, snapshot.role, evidence, proof, snapshot, proposal, () -> { });
             persisted = true;
             confirmedCommit = true;
+            newCommitConfirmed = true;
+            notified = true;
+            commitObserver.newPersisted();
             synchronized (this) {
                 if (closed || activeProposal != proposal)
                     throw new VaultException("VAULT_CANCELLED", "The managed trust request was closed");
@@ -605,7 +1066,14 @@ final class SshManagedKnownHostsProvider implements
             snapshot.close();
             return result;
         } catch (VaultException | RuntimeException | Error failure) {
-            if (persisted) {
+            if (persisted || failure instanceof VaultException
+                    && "VAULT_COMMIT_UNCERTAIN".equals(((VaultException)failure).code)) {
+                confirmedCommit = true;
+                newCommitConfirmed = true;
+                if (!notified) {
+                    try { commitObserver.newPersisted(); }
+                    catch (RuntimeException | Error observerFailure) { failure.addSuppressed(observerFailure); }
+                }
                 VaultException uncertain = adapter.uncertainTrustCommit(failure);
                 try { failClosed(); } catch (RuntimeException | Error cleanup) { uncertain.addSuppressed(cleanup); }
                 throw uncertain;
@@ -617,6 +1085,23 @@ final class SshManagedKnownHostsProvider implements
 
     @Override public VaultException invalidateCommittedResult() {
         return confirmedCommit ? adapter.uncertainTrustCommit(null) : null;
+    }
+
+    /** Only the owner may acknowledge NEW after the native KEX step completed. */
+    synchronized void newProofPublished() throws VaultException {
+        if (!newCommitConfirmed || newNativeAcknowledged || newInvalidated)
+            throw new VaultException("VAULT_COMMIT_UNCERTAIN", "The new-host result was not confirmed");
+        commitObserver.newProofPublished();
+        newNativeAcknowledged = true;
+    }
+
+    VaultException invalidateUnacknowledgedNew() {
+        synchronized (this) {
+            if (!newCommitConfirmed || newNativeAcknowledged) return null;
+            // Prevent a concurrent owner confirmation from overtaking vault invalidation.
+            newInvalidated = true;
+        }
+        return adapter.uncertainTrustCommit(null);
     }
 
     /** Commit one separately authorized CHANGED candidate only after native signed KEX/NEWKEYS. */
@@ -645,7 +1130,7 @@ final class SshManagedKnownHostsProvider implements
             persisted = true;
             changedCommitConfirmed = true;
             confirmedCommit = true;
-            changedCommitObserver.persisted();
+            commitObserver.persisted();
             synchronized (this) {
                 if (closed || activeProposal != proposal)
                     throw new VaultException("VAULT_CANCELLED", "The managed trust request was closed");
@@ -665,7 +1150,7 @@ final class SshManagedKnownHostsProvider implements
             if (uncertain) {
                 changedCommitConfirmed = true;
                 confirmedCommit = true;
-                changedCommitObserver.persisted();
+                commitObserver.persisted();
                 VaultException result = adapter.uncertainTrustCommit(failure);
                 try { failClosed(); } catch (RuntimeException | Error cleanup) { result.addSuppressed(cleanup); }
                 throw result;
@@ -676,43 +1161,86 @@ final class SshManagedKnownHostsProvider implements
     }
 
     synchronized void changedProofPublished() throws VaultException {
-        if (!changedCommitConfirmed || changedNativeAcknowledged)
+        if (!changedCommitConfirmed || changedNativeAcknowledged || changedInvalidated)
             throw new VaultException("SSH_HOST_KEY_CAS", "The changed-host commit is unavailable");
-        changedCommitObserver.proofPublished();
+        commitObserver.proofPublished();
         changedNativeAcknowledged = true;
     }
 
     VaultException invalidateUnacknowledgedChanged() {
         synchronized (this) {
             if (!changedCommitConfirmed || changedNativeAcknowledged) return null;
+            changedInvalidated = true;
         }
         return adapter.uncertainTrustCommit(null);
     }
 
     private void failClosed() {
-        KnownHostsCandidate retiredCandidate;
-        AppSecrets.SshTrustContext retiredContext;
-        VaultOperation retiredRequest;
-        SshTrustProposal retiredProposal;
-        synchronized (this) {
-            closed = true;
-            retiredCandidate = candidate; candidate = null;
-            retiredContext = activeContext; activeContext = null;
-            retiredRequest = activeRequest; activeRequest = null;
-            retiredProposal = activeProposal; activeProposal = null;
-        }
-        try {
-            if (retiredContext != null) retiredContext.cancel();
-        } finally {
-            try { if (retiredRequest != null) adapter.cancel(retiredRequest); }
-            finally {
-                try { if (retiredCandidate != null) retiredCandidate.close(); }
-                finally {
-                    try { if (retiredProposal != null) retiredProposal.close(); }
-                    finally { snapshot.close(); }
+        synchronized (cleanupLock) {
+            synchronized (this) {
+                if (cleanupComplete) return;
+                if (!cleanupStarted) {
+                    cleanupStarted = true;
+                    cleanupNeedsInvalidation = !closed;
+                    if (fixtureReservation != null) fixtureReservation.revoke();
+                    synchronized (snapshot) {
+                        closed = true;
+                        snapshot.markClosing();
+                    }
                 }
+                if (cleanupResourceUnconfirmed)
+                    throw new IllegalStateException("SSH provider cleanup is unconfirmed");
+                if (!cleanupRevoked && cleanupNeedsInvalidation) {
+                    cleanupInvalidation.begin();
+                    try { /* The closed flag revokes new provider use. */ }
+                    finally { cleanupInvalidation.end(); }
+                }
+                cleanupRevoked = true;
             }
+            AppSecrets.SshTrustContext context;
+            VaultOperation request;
+            KnownHostsCandidate ownedCandidate;
+            SshTrustProposal proposal;
+            synchronized (this) {
+                context = activeContext;
+                request = activeRequest;
+                ownedCandidate = candidate;
+                proposal = activeProposal;
+            }
+            Throwable failure = null;
+            if (context != null) try {
+                context.cancel();
+                synchronized (this) { if (activeContext == context) activeContext = null; }
+            } catch (RuntimeException | Error error) { failure = cleanupFailure(failure, error); }
+            if (request != null) try {
+                adapter.cancel(request);
+                synchronized (this) { if (activeRequest == request) activeRequest = null; }
+            } catch (RuntimeException | Error error) { failure = cleanupFailure(failure, error); }
+            if (ownedCandidate != null) try {
+                ownedCandidate.close();
+                synchronized (this) { if (candidate == ownedCandidate) candidate = null; }
+            } catch (RuntimeException | Error error) { failure = cleanupFailure(failure, error); }
+            if (proposal != null) try {
+                proposal.close();
+                synchronized (this) { if (activeProposal == proposal) activeProposal = null; }
+            } catch (RuntimeException | Error error) { failure = cleanupFailure(failure, error); }
+            if (failure != null) synchronized (this) { cleanupResourceUnconfirmed = true; }
+            /* Receipt cleanup is independent and tracks its own uncertainty. */
+            try { snapshot.close(); }
+            catch (RuntimeException | Error error) {
+                if (failure == null) failure = error;
+                else if (failure != error) failure.addSuppressed(error);
+            }
+            if (failure instanceof RuntimeException) throw (RuntimeException)failure;
+            if (failure != null) throw (Error)failure;
+            synchronized (this) { cleanupComplete = true; }
         }
+    }
+
+    private static Throwable cleanupFailure(Throwable first, Throwable next) {
+        if (first == null) return next;
+        if (first != next) first.addSuppressed(next);
+        return first;
     }
 
     @Override public void close() { failClosed(); }

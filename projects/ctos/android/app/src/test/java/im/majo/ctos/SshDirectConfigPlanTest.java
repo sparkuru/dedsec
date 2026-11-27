@@ -24,6 +24,8 @@ public final class SshDirectConfigPlanTest {
         @Override public long open(long view, byte[] request) { return 31; }
         @Override public long reserveDirect() { reserved++; return 31; }
         @Override public long reserveProfileDirect() { reserved++; return 31; }
+        @Override public long reserveProfileRoute() { reserved++; return 31; }
+        @Override public long openProfileRoute(long view, byte[] request) { reserved++; return 31; }
         @Override public long reserveDetached(boolean catalog) { return 32; }
         @Override public void loadDetached(long handle, byte[] source, int root, long deadline, byte[] request) {
             loaded++; assertNotNull(request); assertEquals(0x43534551, ByteBuffer.wrap(request).getInt());
@@ -35,6 +37,7 @@ public final class SshDirectConfigPlanTest {
             if (during != null) during.run(); return result;
         }
         @Override public byte[] profileDirectPlan(long handle) { return directPlan(handle); }
+        @Override public byte[] profileRoute(long handle) { return directPlan(handle); }
         @Override public void cancel(long handle) { cancelled++; }
         @Override public void close(long handle) { closed++; }
         @Override public void destroy(long handle) { destroyed++; }
@@ -49,6 +52,20 @@ public final class SshDirectConfigPlanTest {
         text(out, "actual-alias"); text(out, "actual.example"); text(out, user);
         for (String path : paths) text(out, path);
         text(out, ".ssh/known_hosts"); return bytes.toByteArray();
+    }
+    private static byte[] profileRouteFrame(String alias, String host, String user, int port, int tty)
+            throws IOException {
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream(); DataOutputStream out = new DataOutputStream(bytes);
+        for (int value : new int[] {0x43535050, 5, port, 1, 1, 0, 0, 0, 0,
+                0, 3, 1 << 16, 3000, tty, 3, 0, 1, 1}) out.writeInt(value);
+        text(out, alias); text(out, host); text(out, user); text(out, "/source/key-" + alias);
+        text(out, ".ssh/known_hosts"); return bytes.toByteArray();
+    }
+    private static byte[] routeFrame(byte[]... plans) throws IOException {
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream(); DataOutputStream out = new DataOutputStream(bytes);
+        out.writeInt(0x43535250); out.writeInt(1); out.writeInt(plans.length);
+        for (byte[] plan : plans) { out.writeInt(plan.length); out.write(plan); }
+        return bytes.toByteArray();
     }
     private static byte[] source() {
         byte[] path = ".ssh/config".getBytes(StandardCharsets.US_ASCII);
@@ -65,6 +82,102 @@ public final class SshDirectConfigPlanTest {
     }
     private static void rejected(Work work) throws Exception {
         try { work.run(); fail("Expected direct plan refusal"); } catch (IOException expected) { }
+    }
+    @Test public void profileRouteRetainsIndependentHopsAndExactTargetFromOneOwner() throws Exception {
+        Binding binding = new Binding();
+        byte[] first = profileRouteFrame("first", "jump.example", "alice", 2201, 1);
+        byte[] second = profileRouteFrame("second", "next.example", "bob", 2202, 1);
+        byte[] target = profileRouteFrame("target", "target.example", "carol", 22, 0);
+        binding.response = routeFrame(first, second, target);
+        try (SshConfigEvaluator evaluator = SshConfigEvaluator.prepareProfileRouteDetached(() -> {
+            if (!binding.live) throw new IOException("original guard expired");
+        }, binding)) {
+            rejected(evaluator::profileRoute);
+            evaluator.loadDetached(source(), 0, 31000, request()); evaluator.run();
+            rejected(evaluator::profileDirectPlan); rejected(evaluator::directPlan); rejected(evaluator::summary);
+            SshConfigEvaluator.ProfileRoute result = evaluator.profileRoute();
+            assertEquals(3, result.entries.size()); assertEquals(2, result.jumps().size());
+            assertEquals("jump.example", result.entries.get(0).hostname);
+            assertEquals("alice", result.entries.get(0).user); assertEquals(2201, result.entries.get(0).port);
+            assertEquals("bob", result.entries.get(1).user); assertEquals(2202, result.entries.get(1).port);
+            assertEquals("target.example", result.target().hostname); assertEquals("carol", result.target().user);
+            assertEquals(List.of("/source/key-first"), result.entries.get(0).identityHints);
+            assertEquals(List.of(".ssh/known_hosts"), result.target().userKnownHostsFiles);
+            try { result.entries.clear(); fail(); } catch (UnsupportedOperationException expected) { }
+            evaluator.cancel(); rejected(evaluator::profileRoute); binding.clean();
+        }
+        assertEquals(1, binding.closed); assertEquals(1, binding.destroyed);
+    }
+    @Test public void profileRouteRejectsMalformedPartialAndWrongModeFrames() throws Exception {
+        byte[] jump = profileRouteFrame("jump", "jump.example", "alice", 22, 1);
+        byte[] target = profileRouteFrame("target", "target.example", "bob", 22, 0);
+        byte[] good = routeFrame(jump, target);
+        List<byte[]> bad = new ArrayList<>();
+        bad.add(Arrays.copyOf(good, good.length - 1));
+        bad.add(Arrays.copyOf(good, good.length + 1));
+        byte[] wrongMagic = good.clone(); ByteBuffer.wrap(wrongMagic).putInt(0, 0); bad.add(wrongMagic);
+        byte[] wrongVersion = good.clone(); ByteBuffer.wrap(wrongVersion).putInt(4, 2); bad.add(wrongVersion);
+        byte[] tooMany = good.clone(); ByteBuffer.wrap(tooMany).putInt(8, 10); bad.add(tooMany);
+        byte[] none = good.clone(); ByteBuffer.wrap(none).putInt(8, 0); bad.add(none);
+        byte[] hugeItem = good.clone(); ByteBuffer.wrap(hugeItem).putInt(12, Integer.MAX_VALUE); bad.add(hugeItem);
+        byte[] wrongPlan = jump.clone(); ByteBuffer.wrap(wrongPlan).putInt(0, 0x43534350);
+        bad.add(routeFrame(wrongPlan, target));
+        for (int version = 1; version <= 4; version++) {
+            byte[] oldPlan = jump.clone(); ByteBuffer.wrap(oldPlan).putInt(4, version);
+            bad.add(routeFrame(oldPlan, target));
+        }
+        bad.add(routeFrame(profileRouteFrame("jump", "jump.example", "alice", 22, 0), target));
+        bad.add(routeFrame(profileRouteFrame("jump", "bad_host", "alice", 22, 1), target));
+        for (byte[] item : bad) {
+            Binding binding = new Binding(); binding.response = item;
+            try (SshConfigEvaluator evaluator = SshConfigEvaluator.prepareProfileRouteDetached(() -> { }, binding)) {
+                evaluator.loadDetached(source(), 0, 31000, request()); evaluator.run();
+                rejected(evaluator::profileRoute); binding.clean();
+            }
+        }
+    }
+    @Test public void profileRouteRevocationFencesPublicationAndPreservesCleanup() throws Exception {
+        Binding binding = new Binding();
+        binding.response = routeFrame(profileRouteFrame("target", "target.example", "carol", 22, 0));
+        SshConfigEvaluator evaluator = SshConfigEvaluator.prepareProfileRouteDetached(() -> {
+            if (!binding.live) throw new IOException("revoked");
+        }, binding);
+        evaluator.loadDetached(source(), 0, 31000, request()); evaluator.run();
+        binding.during = () -> binding.live = false;
+        rejected(evaluator::profileRoute); binding.clean(); evaluator.close();
+        assertEquals(1, binding.closed); assertEquals(1, binding.destroyed);
+    }
+    @Test public void profileRouteRejectsRemoteCommandsBeforeNativeEvaluation() throws Exception {
+        Binding binding = new Binding();
+        SshConfigEvaluator.Request command = new SshConfigEvaluator.Request("target", "", "", "local",
+                "local.example", "", "echo forbidden", 0, 1000);
+        SshConfigEvaluator.ViewBinding view = new SshConfigEvaluator.ViewBinding() {
+            @Override public long token() { return 91; }
+            @Override public boolean active() { return true; }
+        };
+        rejected(() -> SshConfigEvaluator.openProfileRoute(view, command, binding));
+        assertEquals(0, binding.reserved);
+        try (SshConfigEvaluator evaluator = SshConfigEvaluator.prepareProfileRouteDetached(() -> { }, binding)) {
+            rejected(() -> evaluator.loadDetached(source(), 0, 31000, command));
+            assertEquals(0, binding.loaded);
+        }
+        assertEquals(1, binding.closed); assertEquals(1, binding.destroyed);
+    }
+    @Test public void liveProfileRouteUsesTheExactViewAndNeverFallsBackToDirect() throws Exception {
+        Binding binding = new Binding();
+        binding.response = routeFrame(profileRouteFrame("target", "target.example", "carol", 22, 0));
+        SshConfigEvaluator.ViewBinding view = new SshConfigEvaluator.ViewBinding() {
+            @Override public long token() { return 91; }
+            @Override public boolean active() { return binding.live; }
+        };
+        try (SshConfigEvaluator evaluator = SshConfigEvaluator.openProfileRoute(view, request(), binding)) {
+            evaluator.run();
+            assertEquals("carol", evaluator.profileRoute().target().user);
+            rejected(evaluator::profileDirectPlan); rejected(evaluator::summary);
+            binding.during = () -> binding.live = false;
+            rejected(evaluator::profileRoute); binding.clean();
+        }
+        assertEquals(1, binding.closed); assertEquals(1, binding.destroyed);
     }
     @Test public void profileHintsAreDistinctFromManagedPathsAndOldGettersStayStrict() throws Exception {
         Binding binding = new Binding();

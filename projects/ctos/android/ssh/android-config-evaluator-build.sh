@@ -9,7 +9,7 @@ readonly SSL="$BASELINE/openssl-prefix"
 readonly CPP="$PROJECT_ROOT/android/app/src/main/cpp"
 readonly BUILD_ROOT="$PROJECT_ROOT/android/ssh"
 readonly NDK_BIN="$PROJECT_ROOT/.devhome/android-sdk/ndk/27.0.12077973/toolchains/llvm/prebuilt/linux-x86_64/bin"
-readonly PATCH_SHA=1aaa7df21678bc522a550ddb708e64deb2557327c6f148e2b85d3d9b781780cf
+readonly PATCH_SHA=a6a01e3d5336d0fa69d02b1907b3a304b28a15041d8af2d0f1f3e3b0fe98705b
 readonly STYLE_TITLE=$'\033[1;36m'
 readonly STYLE_ERROR=$'\033[1;31m'
 readonly STYLE_RESET=$'\033[0m'
@@ -209,13 +209,15 @@ main() {
 		binary=ctos_ssh_config_detached_test
 		effects+=(mlock madvise clock_gettime munlock getpid getuid)
 		effects+=(ctos_ssh_view_borrow_live ctos_ssh_view_borrow_view ctos_ssh_view_borrow_release
+			ctos_ssh_view_borrow_claim ctos_ssh_view_borrow_claim_abort ctos_ssh_view_borrow_claim_release
 			ctos_ssh_view_handle_create ctos_ssh_view_handle_borrow ctos_ssh_view_borrow_owned_view)
 		sha256sum -- "$CPP/ssh_file_io.c" "$CPP/ssh_file_io.h" \
 			"$PROJECT_ROOT/android/app/src/test/cpp/ssh_config_detached_test.c" >>"$output_dir/inputs.sha256"
 		if [[ "$mode" == managed-detached || "$mode" == static-managed-detached ]]; then
 			test_sources=("$CPP/ssh_config_handle.c" "$PROJECT_ROOT/android/app/src/test/cpp/ssh_config_managed_detached_test.c")
 			binary=ctos_ssh_config_managed_detached_test
-			flags+=(-DCTOS_CONFIG_HANDLE_TEST=1)
+			flags+=(-DCTOS_CONFIG_HANDLE_TEST=1 -DCTOS_CONFIG_TEST_DIRECT_KEYWORD_WRAP=1)
+			effects+=(ctos_config_direct_keyword)
 			sha256sum -- "$CPP/ssh_config_handle.c" "$CPP/ssh_config_handle.h" \
 				"$PROJECT_ROOT/android/app/src/test/cpp/ssh_config_managed_detached_test.c" >>"$output_dir/inputs.sha256"
 		fi

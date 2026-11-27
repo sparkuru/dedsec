@@ -1,5 +1,211 @@
 # Changelog
 
+## 2026-11-27 QEMU 临时转储整理
+
+- 清理项目根目录中 5 个历史 SSH/QEMU 测试 core dump，新增仅针对项目根目录 ctOS QEMU 转储及测试交接运行时锁的 Git 忽略规则；已有构建缓存和测试证据保留。
+- 明确测试单的 HEAD／dirty 为创建时记录，同一源码内容提交后仍以实际快照和固定输入核验；本次未运行产品测试。
+
+## 2026-11-27 Codex 测试管理说明
+
+- 补充 [Codex 分发与成果使用流程](codex-test-management.md)，明确任务拆分、依赖与授权、独立证据审核、结果适用范围及失败后的复测管理。
+- 测试仍由用户安排的其他 agent／session 执行；本次只补充协作说明，未运行产品测试。
+
+## 2026-11-27 Agent 间测试交接
+
+- 增加共享文件测试单模板、当前 SSH 待执行／阻塞任务和[协作设计](agent-test-handoff.md)，记录执行者、源码快照、证据、并发锁与独立审核要求。
+- 按用户新安排由其他 agent／session 执行产品测试，Codex 负责编排与审批；本次未执行新增产品测试，SSH 父任务仍进行中。
+
+## 2026-11-27 SSH：明确未开始的会话撤销重试
+
+- 终端在原 owner 上有界重试精确 session 的 checked 预开始拒绝；等待在途取消不消耗预算，未知或混合未知结果仍保留原 owner。内部 `stop()` 不重复重置同一次外部 Stop 的预算。[验证和限制](verification.md#20261127-ssh-terminal-session-cancel-retry)。
+- 定向 JVM、lint 和真实 host JNI 合成故障场景通过；当前 checked `-1` 来自测试钩子，不代表已复现生产故障。SSH 父任务继续进行。
+
+## 2026-11-27 SSH：共享 STOP 本地验证
+
+- 修正真实 JNI 测试接收器及取消异常时连接器待保存材料的过时断言；新增共享 STOP 在 root／child 认证边界及提示交接的检查。
+- 真实 Java／JNI 合成链、回调 JNI、多跳合成接收器、native 认证链和隔离双 sshd 产品路径分层通过；具体覆盖与设备等限制见[验证](verification.md#20261127-ssh-shared-stop-verification)。父任务继续进行。
+
+## 2026-11-27 SSH：native 效果共享 STOP 准入（未验证）
+
+- 为原连接选定的 Java／JNI 凭据复制、native 认证／私钥签名及传输增加共享 STOP 准入；逐跳原 native generation 与各 owner 继续独立约束。[实现及剩余边界](verification.md#20261127-ssh-native-stop-effects)。
+- 按用户要求未运行测试、lint、构建、探针或设备验证；父任务继续实施。
+
+## 2026-11-27 SSH：凭据提示与保存上下文停止顺序（未验证）
+
+- 密码／口令／服务器问题及主机指纹提示与选定的保存 context 使用共享 STOP 准入；连接器取消异常时尝试清理其仍独占的排队字节和当前提示，保留未确认 owner。[实现范围及未完成边界](verification.md#20261127-ssh-prompt-mutation-stop)。
+- 按用户要求没有运行测试、lint、构建或设备验证；完整 SSH 父任务仍在实施中。
+
+## 2026-11-27 SSH：开发与测试约定
+
+- 按用户要求记录“倾向优先实现、禁止过度测试”，并保持当前停止测试的指令；规范已加入 SSH 任务实施与检查上下文。[SSH 开发规范](../.trellis/spec/backend/ssh-development-workflow.md)。
+
+## 2026-11-27 SSH：已启动材料与预览所有权（进行中）
+
+- 对选定的临时密码／密钥、延迟口令和自动保存安装加入共享 STOP 准入；不确定回执锁库按精确对象退役预览，并在未确认撤销时保留状态清理涉及的 operation。已锁屏的新请求保留旧 owner 的原生撤销未知状态。
+- 用户要求停止测试；此前局部结果、未重跑的最终变更和 native permit 窗口见[验证](verification.md#20261127-ssh-started-material-preview)。
+
+## 2026-11-27 SSH：连接结果与服务 owner（进行中）
+
+- 服务先发布原 owner，再绑定可同步触发的取消回调；工厂的创建／结果结算与屏锁及服务失败排序，保留实际不确定回执。
+- bridge 固定已知结果并最多尝试一次回复；状态事件、取消与锁库异常不覆盖回执。回调异常可能发生在发送前，不能推定送达或 owner 已释放。[合同](../.trellis/spec/backend/ssh-connection-result-delivery.md)／[验证与未完成边界](verification.md#20261127-ssh-result-delivery)。
+
+## 2026-11-25 SSH：停止状态与 owner 结果顺序（进行中）
+
+- 停止请求和首因先于 native 撤销可见；未附着 owner 在撤销未知时保留，终端清理状态和连接／handoff 交付各自与停止排序。保存结果与可重试关闭按实际完成边界处理。[合同](../.trellis/spec/backend/ssh-terminal-stop-intent.md)。
+- 完整 JVM、host JNI 故障集和隔离双 sshd 的范围及限制见[验证](verification.md#20261125-ssh-stop-owner-delivery)。桥接错误投递、锁库失败和真实 Android 生命周期仍未完成。
+
+## 2026-11-25 SSH：信任回执与停止请求排序（进行中）
+
+- NEW／CHANGED 信任回执确认改为与停止请求的发布排序，即使 native 撤销仍在等待或抛错、旧取消位尚未设置，也不能事后确认；此前已确认的回执保持原结果。[合同](../.trellis/spec/backend/ssh-trust-commit-ack.md)／[验证](verification.md#20261125-ssh-trust-stop-order)。
+- 这只排序确认，不授权信任写入或证明整个撤销已完成；产品首次信任与跨层清理仍待实现。
+
+## 2026-11-25 SSH：会话与共享视图取消所有权（进行中）
+
+- 单个 session 及 shared view 在自身撤销前先停止本地新用，区分明确未开始和原生结果未知；未知时保留各自原 owner，已确认未开始时允许同一对象重试。[会话合同](../.trellis/spec/backend/ssh-session-cancellation-ownership.md)／[视图合同](../.trellis/spec/backend/ssh-shared-view-cancellation.md)。
+- JVM、真实 host JNI 故障注入和隔离双 sshd 回归的范围与结果见[验证](verification.md#20261125-ssh-session-view-cancel)。
+- 这不代表外层创建期、信任提交、独立 callback／lease 和跨链清理已统一排序；产品首次信任和重连仍未开放。
+
+## 2026-11-25 SSH：终端停止准入（跨层取消仍进行中）
+
+- 取消请求先拒绝新的终端 I/O 和输出准入；原生撤销或终端 port 取消结果不明确时，终端保留原 owner，不重复未确认的操作。仅 callback native 取消失败时仍按既有独立关闭路径重试，不能称为取消已确认；已准入动作可以稍后结束。[合同](../.trellis/spec/backend/ssh-terminal-stop-intent.md)。
+- JVM、host JNI 故障注入、隔离双 sshd 和 release 构建的结果见[验证](verification.md#20261125-ssh-terminal-stop-intent)。此改动不覆盖创建期、信任写入、各跳和共享 view 的所有失效／清理顺序；产品首次信任和重连仍未开放。
+
+## 2026-11-25 SSH：取消异常复现（未修复）
+
+- 使用真实测试 JNI 和模拟终端复现 native 撤销 begin 失败后逻辑取消未生效、下一轮继续处理排队输入；不将模拟端口行为写成真实远端发送。[证据](verification.md#20261125-ssh-cancel-invalidation-failure)。
+- 用户主动重试草案因服务启动及跨层取消未确认问题撤回；相关产品文件已恢复实施前哈希。后续先设计并验证取消准入和 owner 清理，不视为产品修复。
+
+## 2026-11-25 SSH ProxyJump：候选转交（进行中）
+
+- 测试专用 child 的已批准候选可在原 provider 所有权内移动正文并拒绝重复消费；该对象不授予信任写入或认证能力，产品连接器尚未使用。[合同及限制](ssh-proxyjump.md#首次主机信任的下一步设计未实现)。
+- 主机 Java／JNI、JVM 回归及 generation 失效反例见[验证](verification.md#20261125-ssh-jump-candidate-transfer)；首次信任、跨链写入和设备验收仍未完成。
+
+## 2026-11-23 SSH ProxyJump：候选保留夹具（进行中）
+
+- 测试专用签名 child 的模拟同意可生成绑定精确候选的一次性非授权保留；候选消费、关闭和邮箱完成点按各自锁序检查。该保留不产生 host proof、信任写入或凭据权限。[合同](../.trellis/spec/backend/ssh-proxyjump-child.md#scenario-approved-fixture-candidate-reservation)。
+- 最终 host JNI／合成 SSH、独立清理故障、隔离双 sshd 及 Android 构建结果见[验证](verification.md#20261123-ssh-jump-candidate-reservation)；首跳 NEW、跨链写入准入和设备验收仍未完成。
+
+## 2026-11-23 SSH ProxyJump：待审调度夹具（进行中）
+
+- 将非授权签名票据绑定到真实测试 child，在 owner 线程有界推进父连接、relay 和受限 native 输入；同意后仍非 idle 时继续等待，错误 session 不消费正确票据。生产首次信任和信任写入未开放。[设计](ssh-proxyjump.md#首次主机信任的下一步设计未实现)。
+- 主机 JNI／合成 SSH、缺测试符号、本机隔离双 sshd、Android 构建及剩余远端断开和协议边界见[验证](verification.md#20261123-ssh-jump-pending-integrated)。
+
+## 2026-11-23 SSH ProxyJump：签名审阅与受限入站（进行中）
+
+- 测试专用真实 Java／JNI child 增加绑定实际候选、来源和签名周期的非授权审阅票据；独立 native 输入原语对一条合法广告的 `EXT_INFO` 进行有界检查和丢弃。二者尚未连入产品或彼此接通。[设计](ssh-proxyjump.md#首次主机信任的下一步设计未实现)。
+- 合成加密输入与构建检查的实际结果、未测协议边界及后续验证见[记录](verification.md#20261123-ssh-jump-signed-review-ext)；未进行 Android 设备或真实账号测试。
+
+## 2026-11-23 SSH ProxyJump：首次信任等待骨架（进行中）
+
+- 增加一跳签名 NEW 的保守 native 空闲快照，以及保留逐跳期限、在邮箱锁外执行轮询的内部审核等待骨架。两者没有连接产品首次信任；合法目标入站数据也会被保守拒绝，普通审核对象不能代替独立的签名候选票据。[设计](ssh-proxyjump.md#首次主机信任的下一步设计未实现)。
+- 本机合成加密连接、JVM、正式构建和隔离双 sshd 回归结果及未测边界见[验证](verification.md#20261123-ssh-jump-pending-wait)；未在设备安装或验证。
+
+## 2026-11-23 SSH ProxyJump：首次信任原生与 JNI 夹具（进行中）
+
+- 增加仅限真实 child 的 NEW 候选临时 pin 和签名 KEX pending，保持认证、凭据和 shell 拒绝；生产 JNI 尚未启用，用户尚不能在跳板连接中确认或保存新指纹。[设计](ssh-proxyjump.md#首次主机信任的下一步设计未实现)。
+- 修复指定 child 信任清理链在异常时可能提前丢失所有权或继续使用连接的问题；区分明确可重试和原生结果不明确，并在较早清理步骤失败后继续尝试擦除独立候选数据。真实 JNI 故障注入与隔离 sshd 回归通过；其他旧 invalidation 路径不由此推定覆盖。
+- 本机双 sshd 新增未知跳板和未知目标的拒绝基线；真实 Java／JNI 及合成 SSH 夹具验证候选绑定和清理重试。模拟界面不代表产品端到端。[验证](verification.md#20261123-ssh-jump-provisional-new)。
+
+## 2026-11-23 SSH ProxyJump：受限单跳产品路径
+
+- 配置列表和生产连接器开放一条跳板加目标；只支持已知主机、自动方法发现和逐跳明确确认的已保存密码或服务端 `none` 成功。多跳及新／变化主机键仍拒绝；首次使用、临时密码、私钥和 KBI 尚未完成。[设计与限制](ssh-proxyjump.md#当前边界)。
+- 本机隔离的真实双 sshd 经正式 Java／JNI／native 和加密库完成逐跳密码确认及目标 PTY，错误目标密钥、取消和多跳拒绝通过；Android、Flutter 全量检查及 release 构建通过，未接触设备或真实账号。[验证](verification.md#20261123-ssh-jump-product-open)。
+
+## 2026-11-23 SSH ProxyJump：产品入口与确认协议（进行中）
+
+- 当时增加受门禁约束的产品逐跳组装草案及逐跳已保存密码的明确确认协议；当时产品跳板仍在联网和凭据交付前拒绝，配置列表保留严格直连行为。[设计](ssh-proxyjump.md#2026-11-23-产品入口进展)。
+- 本机真实 sshd 夹具已验证原样生产 connector 的跳板拒绝与普通配置直连；Flutter 全量测试通过。该次服务器实测使用中间源码快照，不代表产品跳板成功。[结果及边界](verification.md#20261123-ssh-jump-product-gated)。
+
+## 2026-11-20 SSH ProxyJump：fresh 信任来源与逐跳回执
+
+- 同次加密库读取生成 child 的受保护 hostfile 与 receipt，生产 Java／JNI 比对逐类 host evidence；每跳 provider 独占信任回执，内部下一跳回执须消费精确已认证 parent 的准入。fresh 路径在真正的跨跳效果 guard 完成前拒绝信任写入和认证；旧无来源 child 入口限定为 fake view／fake native 测试，产品 factory 尚未接入。[设计](ssh-proxyjump.md#连接主线与阻塞顺序2026-11-20)。
+- 主机审阅显示实际 hop、绑定票据并等待各笔确认；增加取消／失效、异常清理、畸形 JNI 输入与真实 sshd 新旧信任对照。JVM、Flutter、lint 和 APK 验签及各分层边界见[验证](verification.md#20261120-ssh-jump-fresh-jni)；产品跳板连接尚未开放。
+
+## 2026-11-20 SSH ProxyJump：真实服务器的新旧信任对照
+
+- 扩展隔离双 sshd 夹具，证明旧信任未知目标时不发密码、新快照信任正确目标时成功、错密钥仍拒绝；测试使用 C 合成快照和回调。[验证与边界](verification.md#20261120-ssh-jump-fresh-interop)。
+
+## 2026-11-20 SSH ProxyJump：逐跳配置、身份与认证提示
+
+- 新增从受保护配置快照生成 Java 严格逐跳路由、区分全链身份与逐跳账号的 v2 role，以及从同次真实库读取准备 child 信任回执／原生快照的内部能力。产品 factory、最终效果保护与信任确认仍未贯通。[设计](ssh-proxyjump.md#连接主线与阻塞顺序2026-11-20)。
+- 密码、私钥口令和 KBI 事件显示已注册认证选择的实际 endpoint 和 hop，按 hop 处理 KBI 轮次；本机双 sshd、真实 JNI、加密库和 JVM／Flutter 分层结果见[验证](verification.md#20261120-ssh-jump-route-role)。产品跳板入口保持关闭。
+
+## 2026-11-20 SSH ProxyJump：实际终端链调度
+
+- 终端 NativePort 冻结精确父子会话，逐层推进 jump／relay／target，在逐跳保留并完成目标确认后发布 running；整链取消及逆序清理保留失败重试。[设计](ssh-proxyjump.md#java-终端的跳板链调度)。
+- 修复直连和跳板目标在未确认 RUNNING 前快速关闭、带缓冲输出时可能无限调度的问题；完整 JVM／lint／release 编译及适用范围见[验证](verification.md#20261120-ssh-jump-terminal-chain)。产品连接门禁保持。
+
+## 2026-11-20 SSH ProxyJump：本机隔离 OpenSSH 单跳互通
+
+- 增加可重建的本地测试镜像、双 sshd 夹具及 ARM64 原生跳板驱动；标准客户端和 ctOS 原生单跳、不同逐跳账号及密码、错误目标主机键拒绝均在无网络容器中通过。[环境与重放](ssh-proxyjump.md#本机隔离-openssh-跳板测试环境)、[验证与边界](verification.md#20261120-ssh-jump-docker-interop)。
+- 根据用户授权记录后续会话可自行建立任务专用本机 Docker 测试环境；现有沙箱、设备和真实账号边界不变。产品 ProxyJump 入口仍未开放。
+
+## 2026-11-20 SSH ProxyJump：内部 Java／JNI 父子会话
+
+- 增加预先保留的 child owner、父会话 pin、逐跳状态／relay pump／晋升和可重试的逆序清理；将目标 shell confirmation 推迟到全部祖先晋升。[设计](ssh-proxyjump.md#jni-父子会话内部接入产品编排未实现)。
+- 本地 JNI 合成链与 Java 分层回归通过；产品连接器、当前信任来源刷新、跨跳效果排序、设备及真实服务器仍未完成。[验证和边界](verification.md#20261120-ssh-jump-jni-owner)。
+
+## 2026-11-20 SSH ProxyJump：Java 共享视图内部接入
+
+- 新增精确 lease 的共享 owner 和 session 打开重载，分别跟踪会话退役、即时撤销与失败清理；生产连接器尚无调用方，产品门禁不变。[设计](ssh-proxyjump.md#java-共享租约的内部接入产品编排未实现)、[验证](verification.md#20261120-ssh-shared-java-view)。
+- 将后续实施收敛到可运行的单跳连接，再扩展多跳；明确 Java 与 native 信任快照必须同时刷新，并将重型回归安排在集成检查点。[连接主线](ssh-proxyjump.md#连接主线与阻塞顺序2026-11-20)。
+
+## 2026-11-20 SSH ProxyJump：共享原生视图联合验证
+
+- 用三个独立 borrow 将同一受管 native 视图接入三层合成 SSH 和目标 JNI 会话，检查逐跳晋升、提前撤销、回调内撤销、输出阻断及最终句柄释放。[验证和边界](verification.md#20261120-ssh-shared-view-native)。
+- 本轮只扩展测试；产品 Java 共享租约、逐跳信任刷新、跨跳效果保护和真实互通仍未完成。
+
+## 2026-11-20 SSH ProxyJump：已建立链的原生传输晋升
+
+- 仅在精确子端及其下游已建立后，允许原生跳板从内向外晋升，并持续检查完整上游和下游传输证明；认证视图与凭据选择随晋升退役。[设计](ssh-proxyjump.md#原生已建立链的传输晋升)、[合同](../.trellis/spec/backend/ssh-proxyjump-retained-transport.md)。
+- 在受管视图撤销锁内完成活性检查与借用释放，发布前复核角色期限，并修正已建立会话的认证接口重复探测导致会话失败的问题。原生验证不等同于共享租约、Java 效果 guard、产品后台或真实服务器通过。[验证](verification.md#20261120-ssh-jump-retain)。
+- 真实加密库基础夹具确认信任提交后旧操作及旧摘要均不能覆盖新内容；这仍不是产品共享 view 或真实多跳流程验证。
+
+## 2026-11-20 SSH ProxyJump：主机 JVM 多跳 JNI 联合测试
+
+- 增加基于固定 OpenSSH 源码的本机测试：真实一跳／两跳 native 子连接经生产 JNI 回调，在持有 session 锁时验证接收者、祖先检查、回调内取消及测试凭据擦除。[验证与边界](verification.md#20261120-ssh-callback-jni-multihop)。
+- 使用测试 Java receiver、手工 session 登记和合成信任响应；真实库写入、并发撤销、Android 产品链及真实服务器仍待单独实现或验证。
+
+## 2026-11-20 SSH ProxyJump：绑定接收者的回调 JNI 检查
+
+- 原生 child 的同步回调增加私有 JNI 祖先时点检查，要求精确 Java receiver、JNI 验证器、原线程和实际 native 分派作用域；错误身份或取消时拒绝。[设计](ssh-proxyjump.md)、[合同](../.trellis/spec/backend/ssh-proxyjump-callback-proof.md)。
+- 保持现有产品跳板拒绝：该原语尚未接入逐跳连接，不使信任写入或凭据复制与祖先撤销原子排序。[验证及限制](verification.md#20261120-ssh-callback-jni)。
+
+## 2026-11-20 SSH ProxyJump：回调祖先检查与输出取消顺序
+
+- 原生子连接在自身真实分派的同步回调内可顺序检查上游证明；checker 绑定 callback 和原线程客户端，拒绝直接伪调用。该内部检查不是原子链快照或持久效果授权。[设计](ssh-proxyjump.md)、[合同](../.trellis/spec/backend/ssh-proxyjump-callback-proof.md)。
+- 现有 SSH 输出和 replay 快照与同代次 owner 取消建立原子准入；取消先发生时不公布新字节，已先准入的 listener 仍可能在取消返回后完成。[验证和边界](verification.md#20261120-ssh-callback-output)。
+
+## 2026-11-18 SSH ProxyJump：借用所有权与信任回执
+
+- 原生客户端和实时配置求值器共用借用独占登记；未公开构造失败可归还 claim，正式清理沿原 owner 重试。[设计](ssh-proxyjump.md)、[借用合同](../.trellis/spec/backend/ssh-view-borrow-ownership.md)。
+- 现有直连的 NEW／CHANGED 信任写入在 native KEX 确认前保留可能已提交的回执；屏锁及服务拒绝与在途写入有明确结果顺序，无法确认时锁库并报告不确定。[验证与边界](verification.md#20261118-ssh-borrow-trust)。跨跳效果、JNI 产品跳板和真实服务器互通仍开放。
+
+## 2026-11-18 SSH ProxyJump：原生受管子连接
+
+- 原生跳板可创建绑定下一角色的内部子客户端和中继，递归复查上游证明并保留可重试清理所有者；回调角色独占、错误线程和描述符复用均加入保护。[设计](ssh-proxyjump.md)、[验证与限制](verification.md#20261118-ssh-proxyjump-child)。
+- 产品跳板连接仍拒绝：Java 跨跳信任／凭据效果、端到端生命周期、后台、JNI 和真实服务器互通尚待完成。
+
+## 2026-11-18 SSH ProxyJump：原生有界字节中继
+
+- 已认证跳板通道可拥有单个受限本地流中继，处理双向背压、EOF、远端关闭、取消和父会话的清理顺序；合成双层 SSH 使用该原生中继。
+- 这是传输前置构件；当时子连接的递归证明、跨跳取消和全链路清理、后台延续、JNI 与产品入口均未接入。[设计](ssh-proxyjump.md)、[验证](verification.md#20261118-ssh-proxyjump-relay)。
+
+## 2026-11-18 SSH ProxyJump：原生通道及双层合成链路
+
+- 已认证 JUMP 角色可向同连接下一角色建立受原期限约束的 `direct-tcpip` 字节通道；跳板角色不能打开 shell。角色、回调和 KEX 表支持八个跳板加最终目标。
+- 当时的测试专属中继将目标原生客户端的独立主机证明、密码认证和 PTY shell 字节经过跳板通道；原生中继后续见上条。递归失效／全链路清理、后台延续和产品入口仍未接入。[设计](ssh-proxyjump.md)、[验证](verification.md#20261118-ssh-proxyjump-channel)。
+
+## 2026-11-18 SSH ProxyJump：原生逐跳配置链
+
+- 原生内部求值链沿同一受保护快照、原取消／期限和累计预算解析显式及嵌套跳板，应用每跳配置与 `-W` 上下文；链构建失败不提供部分结果，清理失败可重试。
+- 产品连接仍拒绝跳板，逐跳传输、认证、主机信任和实际互通尚待实现。[设计](ssh-proxyjump.md)、[本地验证](verification.md#20261118-ssh-proxyjump-route)。
+
+## 2026-11-18 SSH ProxyJump：原生声明前置能力
+
+- 原生有效配置可读取最多八个按顺序排列的显式跳板声明，区分未指定用户／端口和名为 `none` 的实际主机；沿用原 owner、期限、取消与无副作用解析。
+- 当时 direct/profile 严格门禁仍拒绝当前目标生效的 `ProxyJump` 指令；逐跳配置、传输、认证和信任当时尚未实现。[设计与边界](ssh-proxyjump.md)、[本地验证](verification.md#20261118-ssh-proxyjump-declaration)。
+
 ## 2026-11-18 SSH 标准 OpenSSH Android 端到端验证
 
 - 用户授权后，指定板隔离应用的默认连接入口通过 KBI 首方法及密码 PARTIAL 后同连接 KBI；测试服务、隔离包和转发已清理，正式包公开身份保持。[设备证据](verification.md#20261118-ssh-openssh-android-ui)。
@@ -158,6 +364,12 @@
 - 忘记仍需实际来源的新预览及确认；新密钥只能在用户重连后单独核验。
 - 本地回归与指定板隔离实机流程通过，当时正常候选已构建；后续正式安装见上条，人工验收待执行。
   [详细证据](verification.md#20261113-ssh-form-host-recovery)。
+
+## 2026-11-13 应用细节待办追加全 App 主题切换（规划）
+
+- 接续 [10-26 应用细节修复 task](../.trellis/tasks/10-26-app-detail-fixes/prd.md)，新增全 App
+  主题切换待办：深色沿用当前外观、增加传统浅色，并考虑其他主题色；具体方案待确定。
+- 任务保持 planning；本轮仅记录需求，未修改产品代码、构建或操作设备。
 
 ## 2026-11-06 MFA正式保留数据更新与启动
 

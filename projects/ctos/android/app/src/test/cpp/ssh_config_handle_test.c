@@ -407,6 +407,30 @@ static unsigned int descriptor_count(void) {
     for (int fd = 0; fd < 1024; fd++) if (fcntl(fd, F_GETFD) >= 0) n++;
     return n;
 }
+static void profile_route_live_view(void) {
+    const char *body = "Host alias\n User target\n ProxyJump alice@jump:2201\n"
+        "Host jump\n HostName jump.example\n IdentityFile /source/jump-key\n"
+        "Host *\n UserKnownHostsFile ~/.ssh/known_hosts\n";
+    ctos_ssh_view_token view = view_new(body, NULL);
+    struct wire request_wire = request(); ctos_ssh_config_token token = 0;
+    CHECK(ctos_ssh_config_handle_open_profile_route(view, request_wire.bytes, request_wire.n, &token) == 0 && token != 0);
+    run_ok(token);
+    unsigned char *out = calloc(CTOS_SSH_CONFIG_ROUTE_BYTES, 1); CHECK(out != NULL);
+    size_t n = 0;
+    CHECK(ctos_ssh_config_handle_profile_route(token, out, &n) == 0 && n > 12);
+    CHECK(at(out) == 0x43535250U && at(out + 4) == 1 && at(out + 8) == 2);
+    const unsigned char *first = out + 16;
+    CHECK(at(first) == 0x43535050U && at(first + 8) == 2201 && at(first + 52) == REQUEST_TTY_NO);
+    const unsigned char *cursor = first + 72;
+    summary_text(&cursor, "jump"); summary_text(&cursor, "jump.example"); summary_text(&cursor, "alice");
+    CHECK(ctos_ssh_view_handle_destroy(view) == 0);
+    memset(out, 0xa5, CTOS_SSH_CONFIG_ROUTE_BYTES); n = 1;
+    CHECK(ctos_ssh_config_handle_profile_route(token, out, &n) == -1 && n == 0);
+    for (size_t i = 0; i < CTOS_SSH_CONFIG_ROUTE_BYTES; i++) if (out[i] != 0) CHECK(0);
+    finish(token); free(out);
+    view = view_new("User okay\n", NULL);
+    CHECK(ctos_ssh_view_handle_destroy(view) == 0);
+}
 static void exhaustion(void) {
     ctos_ssh_view_token v = view_new("User okay\n", NULL); struct wire r = request();
     CHECK(ctos_ssh_config_handle_test_seed_next(INT64_MAX - 1) == 0);
@@ -418,7 +442,7 @@ static void exhaustion(void) {
 }
 int main(void) {
     unsigned int before = descriptor_count();
-    good(); diagnostic_errors(); request_rejections(); request_boundaries(); failed_open_cleanup(); cleanup_retries(); ownership(); cancel_and_revoke(); deadline_checks(); capacity();
+    good(); diagnostic_errors(); request_rejections(); request_boundaries(); failed_open_cleanup(); cleanup_retries(); ownership(); cancel_and_revoke(); deadline_checks(); profile_route_live_view(); capacity();
     for (unsigned int i = 0; i < 40; i++) good();
     exhaustion(); CHECK(descriptor_count() == before); CHECK(atomic_load(&effects) == 0);
     printf("SSH_CONFIG_HANDLE_TEST checks=%u effects=%u gate=pass\n", atomic_load(&checks), atomic_load(&effects));

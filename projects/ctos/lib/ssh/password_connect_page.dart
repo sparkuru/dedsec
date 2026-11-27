@@ -179,6 +179,7 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
   SshPasswordRequest? _secretRequest;
   final _secretResponses = <SshPasswordRequest, Future<bool>?>{};
   int _lastKeyboardRound = 0;
+  int _lastPromptHop = -1, _lastKeyboardHop = -1, _lastReviewHop = -1;
   ModalRoute<dynamic>? _route;
   DialogRoute<bool>? _reviewRoute;
   DialogRoute<void>? _keyboardRoute;
@@ -193,8 +194,9 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
   String? _hostChangedAttemptId;
   Future<void>? _pendingConnect;
   String? _pendingConnectId;
-  bool _changedTrustChallenge = false, _changedTrustDecisionSent = false;
-  Completer<bool>? _changedTrustDecision;
+  bool _changedTrustChallenge = false;
+  _HostReviewDecision? _currentReviewDecision;
+  final _hostReviewDecisions = <_HostReviewDecision>[];
   int _revision = 0;
   int _statusRevision = 0;
   bool _loading = true, _ready = false, _busy = false;
@@ -580,6 +582,8 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
       instruction: pending.instruction,
       prompts: pending.prompts,
       remainingMillis: remaining,
+      endpoint: pending.endpoint,
+      hop: pending.hop,
     );
     _clearPendingKeyboardChallenge();
     _challenge = ready;
@@ -607,7 +611,6 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
       barrierDismissible: false,
       builder: (_) => _KeyboardDialog(
         ticket: _keyboardDialogTicket,
-        target: '${_username.text}@${_host.text}:${_port.text}',
         onSubmit: _submitKeyboard,
         onCancel: cancel,
         onExpired: (ticket) {
@@ -658,7 +661,7 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
       barrierDismissible: false,
       builder: (_) => _SecretPromptDialog(
         ticket: ticket,
-        target: '${_username.text}@${_host.text}:${_port.text}',
+        target: ticket.endpoint.label,
         onSubmit: (value, useSaved, save) =>
             _submitSecret(ticket, value, useSaved: useSaved, save: save),
         onCancel: () {
@@ -1450,9 +1453,11 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
     _hostChangedAttemptId = null;
     _pendingConnectId = requestId;
     _pendingConnect = null;
-    _changedTrustChallenge = _changedTrustDecisionSent = false;
-    _changedTrustDecision = null;
+    _changedTrustChallenge = false;
+    _currentReviewDecision = null;
+    _hostReviewDecisions.clear();
     _lastKeyboardRound = 0;
+    _lastPromptHop = _lastKeyboardHop = _lastReviewHop = -1;
     _challenge = null;
     _retireKeyboardResponses();
     _keyboardRetired = Completer<void>();
@@ -1580,9 +1585,13 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
         }
         throw PlatformException(code: 'SSH_KEYBOARD_CHALLENGE');
       }
-      if (_changedTrustChallenge) {
-        final decision = _changedTrustDecision;
-        if (decision == null || !await decision.future) {
+      if (_hostReviewDecisions.isNotEmpty) {
+        final decisions = List<_HostReviewDecision>.of(_hostReviewDecisions);
+        var approved = true;
+        for (final decision in decisions) {
+          if (!await decision.result.future) approved = false;
+        }
+        if (!approved) {
           if (!_lifetime.handlesCancellation(requestId))
             await _cancelId(requestId, repeat: true);
           throw PlatformException(code: 'SSH_HOST_KEY_REVIEW');
@@ -1617,6 +1626,7 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
       if (!mounted || revision != _revision || _attemptId != requestId) return;
       _finishConnected();
     } catch (error) {
+      _retireHostReviewDecisions();
       if (!cancelledForChallenge && !_lifetime.handlesCancellation(requestId))
         unawaited(_cancelId(requestId, repeat: true));
       if (!_requiresInitialKeyboardSession) _stopKeyboardSession();
@@ -1686,12 +1696,12 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
     }
     if (event is SshStateEvent) {
       if (event.state == SshAttemptState.connected) {
-        if (_changedTrustChallenge && !_changedTrustDecisionSent) {
+        if (_hostReviewDecisions.any((decision) => !decision.sent)) {
           unawaited(_cancelId(event.requestId, repeat: true));
           _invalidate('主机密钥确认未完成，请重新连接。');
         } else if (_hostChangedAttemptId == event.requestId) {
           unawaited(_cancelId(event.requestId, repeat: true));
-        } else if (!_keyboardCapable && !_changedTrustChallenge) {
+        } else if (!_keyboardCapable && _hostReviewDecisions.isEmpty) {
           _finishConnected();
         }
       } else if (event.state == SshAttemptState.failed ||
@@ -1753,7 +1763,9 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
           (event.keyPassphrase && _identity == null) ||
           _challenge != null ||
           _pendingKeyboardChallenge != null ||
-          event.remainingMillis <= 0) {
+          event.remainingMillis <= 0 ||
+          event.hop < _lastPromptHop ||
+          event.hop < _lastReviewHop) {
         _invalidate('认证输入已失效，请重新连接。');
         return;
       }
@@ -1761,11 +1773,16 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
       if (current != null) {
         if (current.ticketId == event.ticketId &&
             current.binding == event.binding &&
-            current.keyPassphrase == event.keyPassphrase)
+            current.keyPassphrase == event.keyPassphrase &&
+            current.hop == event.hop &&
+            current.endpoint == event.endpoint &&
+            current.savedAvailable == event.savedAvailable &&
+            current.savedOnly == event.savedOnly)
           return;
         _invalidate('认证输入顺序无效，请重新连接。');
         return;
       }
+      _lastPromptHop = event.hop;
       _secretRequest = event;
       _secretResponses[event] = null;
       _secretExpiry = Timer(Duration(milliseconds: event.remainingMillis), () {
@@ -1782,17 +1799,25 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
         _dismissSecretDialog();
       }
     } else if (event is SshKeyboardChallenge) {
-      if (!_keyboardCapable || _review != null || event.remainingMillis <= 0) {
+      if (!_keyboardCapable ||
+          _review != null ||
+          event.remainingMillis <= 0 ||
+          event.hop < _lastPromptHop ||
+          event.hop < _lastReviewHop) {
         _invalidate('服务器问题已失效，请重新连接。');
         return;
       }
-      if (event.round <= _lastKeyboardRound) {
+      if (event.hop == _lastKeyboardHop && event.round <= _lastKeyboardRound) {
         if (_challenge?.ticketId == event.ticketId &&
                 _challenge?.binding == event.binding &&
-                _challenge?.round == event.round ||
+                _challenge?.round == event.round &&
+                _challenge?.hop == event.hop &&
+                _challenge?.endpoint == event.endpoint ||
             _pendingKeyboardChallenge?.ticketId == event.ticketId &&
                 _pendingKeyboardChallenge?.binding == event.binding &&
-                _pendingKeyboardChallenge?.round == event.round)
+                _pendingKeyboardChallenge?.round == event.round &&
+                _pendingKeyboardChallenge?.hop == event.hop &&
+                _pendingKeyboardChallenge?.endpoint == event.endpoint)
           return;
         _invalidate('服务器问题已失效，请重新连接。');
         return;
@@ -1803,6 +1828,7 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
         _invalidate('服务器问题顺序无效，请重新连接。');
         return;
       }
+      _lastPromptHop = _lastKeyboardHop = event.hop;
       _lastKeyboardRound = event.round;
       _pendingKeyboardChallenge = event;
       _keyboardResponses[event] = null;
@@ -1838,11 +1864,22 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
         if (current.runtimeType != event.runtimeType ||
             current.ticketId != event.ticketId ||
             current.binding != event.binding ||
+            current.hop != event.hop ||
+            current.host != event.host ||
+            current.port != event.port ||
+            current is SshHostKeyEvent &&
+                event is SshHostKeyEvent &&
+                (current.keyType != event.keyType ||
+                    current.fingerprint != event.fingerprint) ||
             current is SshHostKeyChangedEvent &&
                 event is SshHostKeyChangedEvent &&
                 !_sameChangedReview(current, event)) {
           _streamFailed();
         }
+        return;
+      }
+      if (event.hop <= _lastReviewHop || event.hop <= _lastPromptHop) {
+        _invalidate('主机密钥确认顺序无效，请重新连接。');
         return;
       }
       if (event is SshHostKeyChangedEvent &&
@@ -1858,17 +1895,24 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
           return;
         }
         _changedTrustChallenge = true;
-        _changedTrustDecision = Completer<bool>();
       }
+      final decision = _HostReviewDecision(event);
+      _currentReviewDecision = decision;
+      _hostReviewDecisions.add(decision);
+      _lastReviewHop = event.hop;
       unawaited(_showReview(event));
     } else if (event is SshHostKeyDismissed &&
         _review is SshHostKeyEvent &&
         event.ticketId == _review?.ticketId) {
-      _dismissReview();
+      if (event.binding != _review?.binding || event.hop != _review?.hop) {
+        _streamFailed();
+      } else {
+        _dismissReview();
+      }
     } else if (event is SshHostKeyChangedDismissed &&
         _review is SshHostKeyChangedEvent &&
         event.ticketId == _review?.ticketId) {
-      if (event.binding != _review?.binding) {
+      if (event.binding != _review?.binding || event.hop != _review?.hop) {
         _streamFailed();
       } else {
         _dismissReview();
@@ -2014,9 +2058,12 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
   }
 
   Future<void> _showReview(SshHostReviewEvent ticket) async {
+    final decision = _currentReviewDecision;
     if (!_exposed ||
         ticket.requestId != _attemptId ||
-        ticket.remainingMillis <= 0) {
+        ticket.remainingMillis <= 0 ||
+        decision == null ||
+        !identical(decision.ticket, ticket)) {
       _invalidate('主机密钥确认已过期，请重试。');
       return;
     }
@@ -2070,17 +2117,14 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
           accepted == true &&
           (ticket is! SshHostKeyChangedEvent || explicitChangedDecision) &&
           elapsed.elapsedMilliseconds < ticket.remainingMillis;
-      final decision = ticket is SshHostKeyChangedEvent
-          ? _changedTrustDecision
-          : null;
-      if (ticket is SshHostKeyChangedEvent) _changedTrustDecisionSent = allow;
+      decision.sent = allow;
       bool applied;
       try {
         applied = await widget.api.decide(ticket, accept: allow);
-        if (decision != null && !decision.isCompleted)
-          decision.complete(allow && applied);
+        if (!decision.result.isCompleted)
+          decision.result.complete(allow && applied);
       } catch (_) {
-        if (decision != null && !decision.isCompleted) decision.complete(false);
+        if (!decision.result.isCompleted) decision.result.complete(false);
         rethrow;
       }
       if (!mounted || !identical(_review, ticket) || _leaving || _established)
@@ -2099,24 +2143,23 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
 
   void _dismissReview() {
     final route = _reviewRoute;
-    final decision = _changedTrustDecision;
-    if (_changedTrustChallenge &&
-        !_changedTrustDecisionSent &&
-        decision != null &&
-        !decision.isCompleted) {
-      decision.complete(false);
+    final decision = _currentReviewDecision;
+    if (decision != null && !decision.sent && !decision.result.isCompleted) {
+      decision.result.complete(false);
     }
     _review = null;
     _reviewRoute = null;
+    _currentReviewDecision = null;
     if (route == null) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (route.isActive) route.navigator?.removeRoute(route);
     });
   }
 
-  void _retireChangedTrustDecision() {
-    final decision = _changedTrustDecision;
-    if (decision != null && !decision.isCompleted) decision.complete(false);
+  void _retireHostReviewDecisions() {
+    for (final decision in _hostReviewDecisions) {
+      if (!decision.result.isCompleted) decision.result.complete(false);
+    }
   }
 
   void _finishConnected() {
@@ -2148,7 +2191,7 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
 
   void _invalidate(String message) {
     if (!mounted || _leaving || _established) return;
-    _retireChangedTrustDecision();
+    _retireHostReviewDecisions();
     final attempt = _attemptId;
     final defaults = _defaultsId;
     _revision++;
@@ -2182,7 +2225,7 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
 
   Future<void> _leave() async {
     if (_leaving || _established || _closing) return;
-    _retireChangedTrustDecision();
+    _retireHostReviewDecisions();
     _clearPendingKeyboardChallenge();
     _retireKeyboardResponses();
     setState(() {
@@ -2288,7 +2331,7 @@ class _SshPasswordConnectPageState extends State<SshPasswordConnectPage>
   void dispose() {
     _disposing = true;
     _statusDebounce?.cancel();
-    _retireChangedTrustDecision();
+    _retireHostReviewDecisions();
     if (!_established) {
       if (!_lifetime.owns(_attemptId)) unawaited(_cancelId(_attemptId));
       unawaited(_cancelId(_defaultsId));
@@ -2946,15 +2989,16 @@ class _SecretPromptDialogState extends State<_SecretPromptDialog> {
   }
 
   void _submit() {
+    final useSaved = widget.ticket.savedOnly || _useSaved;
     if (_covered ||
         _submitted ||
-        (!_useSaved && !_form.currentState!.validate()))
+        (!useSaved && !_form.currentState!.validate()))
       return;
-    final value = _useSaved ? '' : _secret.text;
+    final value = useSaved ? '' : _secret.text;
     _secret.clear();
     setState(() => _submitted = true);
     unawaited(
-      widget.onSubmit(value, _useSaved, _save).then((accepted) {
+      widget.onSubmit(value, useSaved, _save).then((accepted) {
         if (mounted && !accepted && !_covered)
           setState(() => _submitted = false);
       }),
@@ -2996,7 +3040,13 @@ class _SecretPromptDialogState extends State<_SecretPromptDialog> {
     child: AlertDialog(
       key: const Key('ssh-secret-dialog'),
       scrollable: true,
-      title: Text(widget.ticket.keyPassphrase ? '输入私钥口令' : '输入登录密码'),
+      title: Text(
+        widget.ticket.savedOnly
+            ? '确认使用已保存的密码'
+            : widget.ticket.keyPassphrase
+            ? '输入私钥口令'
+            : '输入登录密码',
+      ),
       content: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 520),
         child: Form(
@@ -3007,7 +3057,8 @@ class _SecretPromptDialogState extends State<_SecretPromptDialog> {
             children: [
               Text(widget.target),
               const SizedBox(height: 16),
-              if (widget.ticket.savedAvailable) ...[
+              if (widget.ticket.savedOnly) const Text('将使用已保存的密码连接此主机。'),
+              if (widget.ticket.savedAvailable && !widget.ticket.savedOnly) ...[
                 _option(
                   const Key('ssh-secret-use-saved'),
                   widget.ticket.keyPassphrase ? '使用已保存的口令' : '使用已保存的密码',
@@ -3026,7 +3077,7 @@ class _SecretPromptDialogState extends State<_SecretPromptDialog> {
                 ),
                 const SizedBox(height: 8),
               ],
-              if (!_useSaved)
+              if (!_useSaved && !widget.ticket.savedOnly)
                 TextFormField(
                   key: const Key('ssh-secret-input'),
                   controller: _secret,
@@ -3055,7 +3106,7 @@ class _SecretPromptDialogState extends State<_SecretPromptDialog> {
                       : sshPasswordError(value ?? ''),
                   onFieldSubmitted: (_) => _submit(),
                 ),
-              if (!_useSaved)
+              if (!_useSaved && !widget.ticket.savedOnly)
                 _option(
                   const Key('ssh-secret-save'),
                   widget.ticket.keyPassphrase ? '连接成功后保存口令' : '连接成功后保存密码',
@@ -3075,7 +3126,13 @@ class _SecretPromptDialogState extends State<_SecretPromptDialog> {
         FilledButton(
           key: const Key('ssh-secret-submit'),
           onPressed: _covered || _submitted ? null : _submit,
-          child: Text(_submitted ? '正在认证…' : '继续'),
+          child: Text(
+            _submitted
+                ? '正在认证…'
+                : widget.ticket.savedOnly
+                ? '使用已保存的密码'
+                : '继续',
+          ),
         ),
       ],
     ),
@@ -3085,7 +3142,6 @@ class _SecretPromptDialogState extends State<_SecretPromptDialog> {
 class _KeyboardDialog extends StatefulWidget {
   const _KeyboardDialog({
     required this.ticket,
-    required this.target,
     required this.onSubmit,
     required this.onCancel,
     required this.onExpired,
@@ -3093,7 +3149,6 @@ class _KeyboardDialog extends StatefulWidget {
   });
 
   final ValueListenable<SshKeyboardChallenge?> ticket;
-  final String target;
   final Future<bool> Function(SshKeyboardChallenge, List<String>) onSubmit;
   final VoidCallback onCancel, onCovered;
   final ValueChanged<SshKeyboardChallenge> onExpired;
@@ -3184,7 +3239,7 @@ class _KeyboardDialogState extends State<_KeyboardDialog> {
                   : SshKeyboardChallengeForm(
                       key: ValueKey('ssh-keyboard-${ticket.ticketId}'),
                       ticket: ticket,
-                      target: widget.target,
+                      target: ticket.endpoint.label,
                       onSubmit: (answers) => _covered
                           ? Future.value(false)
                           : widget.onSubmit(ticket, answers),
@@ -3263,6 +3318,22 @@ class _AuthenticationDialogState extends State<_AuthenticationDialog> {
   );
 }
 
+class _HostReviewDecision {
+  _HostReviewDecision(this.ticket);
+
+  final SshHostReviewEvent ticket;
+  final result = Completer<bool>();
+  bool sent = false;
+}
+
+String _reviewHostPort(String host, int port) {
+  final address =
+      host.contains(':') && !(host.startsWith('[') && host.endsWith(']'))
+      ? '[$host]'
+      : host;
+  return '$address:$port';
+}
+
 class _HostKeyDialog extends StatefulWidget {
   const _HostKeyDialog({required this.ticket, required this.onCovered});
   final SshHostKeyEvent ticket;
@@ -3320,7 +3391,7 @@ class _HostKeyDialogState extends State<_HostKeyDialog> {
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: [
-        SelectableText('${widget.ticket.host}:${widget.ticket.port}'),
+        SelectableText(_reviewHostPort(widget.ticket.host, widget.ticket.port)),
         const SizedBox(height: 12),
         Text(widget.ticket.keyType),
         const SizedBox(height: 12),
@@ -3509,7 +3580,7 @@ class _ChangedHostKeyDialogState extends State<_ChangedHostKeyDialog> {
                       ),
                     ),
                     SizedBox(height: compact ? 4 : 12),
-                    SelectableText('${ticket.host}:${ticket.port}'),
+                    SelectableText(_reviewHostPort(ticket.host, ticket.port)),
                     SizedBox(height: compact ? 8 : 16),
                     Text(
                       '本次收到的新指纹',

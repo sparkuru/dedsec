@@ -21,6 +21,29 @@ struct session_slot {
     pthread_t owner_thread;
     struct ctos_ssh_native_client *client;
     int opening;
+    ctos_ssh_view_token view_token;
+    uint64_t deadline;
+    uint64_t parent_token;
+    struct ctos_ssh_native_jump_relay *relay;
+    struct ctos_ssh_view_borrow *pending_borrow;
+    struct ctos_ssh_view *fresh_hostfile_view;
+    int jump_child;
+    int jump_state;
+    int client_closed;
+    int relay_closed;
+#ifdef CTOS_SSH_NATIVE_TEST_HOOKS
+    ctos_ssh_callback_token fixture_callback;
+    int fixture_ext_hook_armed;
+    int fixture_ext_seen;
+#endif
+};
+
+enum jump_child_state {
+    JUMP_CHILD_RESERVED = 0,
+    JUMP_CHILD_FAILED_EMPTY = 1,
+    JUMP_CHILD_FAILED_CLIENT = 2,
+    JUMP_CHILD_FAILED_RELAY = 3,
+    JUMP_CHILD_OPEN = 4
 };
 
 static pthread_mutex_t sessions_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -32,6 +55,31 @@ static void wipe_bytes(void *memory, size_t length) {
 
     if (bytes == NULL) return;
     while (length-- != 0) *bytes++ = 0;
+}
+
+/* The slot keeps ownership on every failure, including an unmap failure. */
+static int release_fresh_hostfile_view(struct session_slot *slot) {
+    if (slot->fresh_hostfile_view == NULL) return 0;
+    if (ctos_ssh_view_destroy(slot->fresh_hostfile_view) != 0) return -1;
+    free(slot->fresh_hostfile_view);
+    slot->fresh_hostfile_view = NULL;
+    return 0;
+}
+
+static int load_fresh_hostfile_view(JNIEnv *env, jbyteArray wire, struct session_slot *slot) {
+    if (wire == NULL || slot->fresh_hostfile_view != NULL) { errno = EINVAL; return -1; }
+    jsize length = (*env)->GetArrayLength(env, wire);
+    if ((*env)->ExceptionCheck(env) || length <= 0 || (size_t)length > CTOS_SSH_VIEW_WIRE_BYTES) {
+        errno = EINVAL; return -1;
+    }
+    slot->fresh_hostfile_view = calloc(1, sizeof(*slot->fresh_hostfile_view));
+    if (slot->fresh_hostfile_view == NULL) { errno = ENOMEM; return -1; }
+    slot->fresh_hostfile_view->fd = -1;
+    if (ctos_ssh_view_allocate(slot->fresh_hostfile_view, (size_t)length) != 0) return -1;
+    (*env)->GetByteArrayRegion(env, wire, 0, length,
+        (jbyte *)slot->fresh_hostfile_view->mapping);
+    if ((*env)->ExceptionCheck(env)) { errno = EIO; return -1; }
+    return ctos_ssh_view_validate(slot->fresh_hostfile_view);
 }
 
 static void fail(JNIEnv *env) {
@@ -129,7 +177,14 @@ static struct session_slot *lock_reserved_session(uint64_t token) {
     return slot;
 }
 
-static struct session_slot *lock_session(JNIEnv *env, jlong handle) {
+static int has_children_locked(uint64_t token) {
+    for (size_t index = 0; index < CTOS_SSH_SESSION_SLOTS; index++) {
+        if (sessions[index].token != 0 && sessions[index].parent_token == token) return 1;
+    }
+    return 0;
+}
+
+static struct session_slot *lock_session_for(JNIEnv *env, jlong handle, int cleanup) {
     struct session_slot *slot;
 
     if (handle <= 0 || pthread_mutex_lock(&sessions_lock) != 0) {
@@ -138,6 +193,28 @@ static struct session_slot *lock_session(JNIEnv *env, jlong handle) {
     }
     slot = find_session_locked((uint64_t)handle);
     if (slot == NULL || slot->opening || slot->client == NULL
+        || (slot->jump_child && slot->jump_state != JUMP_CHILD_OPEN && !cleanup)
+        || !pthread_equal(slot->owner_thread, pthread_self())) {
+        pthread_mutex_unlock(&sessions_lock);
+        fail(env);
+        return NULL;
+    }
+    return slot;
+}
+
+static struct session_slot *lock_session(JNIEnv *env, jlong handle) {
+    return lock_session_for(env, handle, 0);
+}
+
+/* A reserved jump owner exists even before a native client has been created. */
+static struct session_slot *lock_jump_child(JNIEnv *env, jlong handle) {
+    struct session_slot *slot;
+    if (handle <= 0 || pthread_mutex_lock(&sessions_lock) != 0) {
+        fail(env);
+        return NULL;
+    }
+    slot = find_session_locked((uint64_t)handle);
+    if (slot == NULL || !slot->jump_child
         || !pthread_equal(slot->owner_thread, pthread_self())) {
         pthread_mutex_unlock(&sessions_lock);
         fail(env);
@@ -269,6 +346,8 @@ static jlong open_session(
     }
     borrow = NULL; /* ownership transferred to the native session */
     reserved->client = client;
+    reserved->view_token = (ctos_ssh_view_token)view;
+    reserved->deadline = (uint64_t)deadline;
     reserved->opening = 0;
     pthread_mutex_unlock(&sessions_lock);
     success = 1;
@@ -318,6 +397,284 @@ JNIEXPORT jlong JNICALL Java_im_majo_ctos_SshNativeSession_00024Native_openManag
     return open_session(env, CTOS_SSH_HOST_KEY_MANAGED, role, owner_uid, callback,
         view, socket_fd, deadline, step_budget, NULL, NULL,
         known_hosts_path, host, candidate_id, selection_wire);
+}
+
+/* The Java owner receives the reservation before any native child or relay can
+ * be created. The token also pins this exact parent until the child is gone. */
+JNIEXPORT jlong JNICALL Java_im_majo_ctos_SshNativeSession_00024Native_reserveJumpChild(
+    JNIEnv *env, jclass type, jlong parent_handle) {
+    struct session_slot *parent, *child = NULL;
+    struct ctos_ssh_native_jump_status status;
+    uint64_t token;
+    (void)type;
+
+    parent = lock_session(env, parent_handle);
+    if (parent == NULL) return 0;
+    if (parent->client_closed || parent->view_token == 0 || parent->deadline == 0
+        || has_children_locked(parent->token)
+        || ctos_ssh_native_client_jump_status(parent->client, &status) != 0
+        || status.phase != CTOS_SSH_JUMP_OPEN || status.remote_eof || status.local_eof)
+        goto failed;
+    for (size_t index = 0; index < CTOS_SSH_SESSION_SLOTS; index++) {
+        if (sessions[index].token == 0) { child = &sessions[index]; break; }
+    }
+    if (child == NULL || next_session_token >= INT64_MAX) goto failed;
+    token = ++next_session_token;
+    memset(child, 0, sizeof(*child));
+    child->token = token;
+    child->owner_thread = pthread_self();
+    child->opening = 1;
+    child->jump_child = 1;
+    child->jump_state = JUMP_CHILD_RESERVED;
+    child->parent_token = parent->token;
+    child->view_token = parent->view_token;
+    child->deadline = parent->deadline;
+    pthread_mutex_unlock(&sessions_lock);
+    return (jlong)token;
+
+failed:
+    pthread_mutex_unlock(&sessions_lock);
+    fail(env);
+    return 0;
+}
+
+static jboolean open_jump_child(
+    JNIEnv *env, jlong handle, jlong role, jint owner_uid,
+    jlong callback, jlong view, jlong deadline, jint step_budget,
+    jstring known_hosts_path, jstring host, jstring candidate_id,
+    jbyteArray selection_wire, jbyteArray fresh_hostfile_wire) {
+    struct session_slot *slot, *parent;
+    struct ctos_ssh_native_client *client = NULL;
+    struct ctos_ssh_native_jump_relay *relay = NULL;
+    struct ctos_ssh_native_client_config config;
+    unsigned char *selection = NULL;
+    size_t selection_length = 0;
+    char known_hosts[513] = {0};
+    char host_name[CTOS_SSH_ROLE_HOST_BYTES + 1U] = {0};
+    char candidate[CTOS_SSH_CALLBACK_CANDIDATE_ID_BYTES] = {0};
+    int result = -1;
+    slot = lock_jump_child(env, handle);
+    if (slot == NULL) return JNI_FALSE;
+    if (slot->jump_state != JUMP_CHILD_RESERVED || !slot->opening) goto done;
+    /* An attempted open is never silently replayed, even on malformed input. */
+    slot->jump_state = JUMP_CHILD_FAILED_EMPTY;
+    parent = find_session_locked(slot->parent_token);
+    if (parent == NULL || parent->opening || parent->client == NULL || parent->client_closed
+        || !pthread_equal(parent->owner_thread, pthread_self())
+        || parent->view_token != slot->view_token || parent->deadline != slot->deadline
+        || role <= 0 || owner_uid < 0 || callback <= 0 || view <= 0
+        || (ctos_ssh_view_token)view != slot->view_token
+        || deadline <= 0 || (uint64_t)deadline != slot->deadline
+        || step_budget <= 0 || (size_t)step_budget > CTOS_SSH_NATIVE_CLIENT_MAX_STEP_BYTES
+        || copy_string(env, known_hosts_path, known_hosts, sizeof(known_hosts)) != 0
+        || copy_string(env, host, host_name, sizeof(host_name)) != 0
+        || copy_string(env, candidate_id, candidate, sizeof(candidate)) != 0
+        || (selection_wire != NULL && copy_array(env, selection_wire,
+            CTOS_SSH_NATIVE_CLIENT_MAX_SELECTION_WIRE_BYTES,
+            &selection, &selection_length) != 0)
+        || ctos_ssh_view_handle_borrow(slot->view_token, &slot->pending_borrow) != 0
+        || (fresh_hostfile_wire != NULL
+            && load_fresh_hostfile_view(env, fresh_hostfile_wire, slot) != 0))
+        goto done;
+
+    config = (struct ctos_ssh_native_client_config){
+        .role = (ctos_ssh_role_token)role,
+        .socket_fd = -1,
+        .owner_uid = (uid_t)owner_uid,
+        .owns_socket = 1,
+        .callback = (ctos_ssh_callback_token)callback,
+        .callback_environment = env,
+        .deadline = (uint64_t)deadline,
+        .step_budget = (size_t)step_budget,
+        .host_key_mode = CTOS_SSH_HOST_KEY_MANAGED,
+        .managed_view_borrow = slot->pending_borrow,
+        .fresh_hostfile_view = slot->fresh_hostfile_view,
+        .known_hosts_path = known_hosts,
+        .host = host_name,
+        .candidate_id = candidate,
+        .authentication_selection_wire = selection,
+        .authentication_selection_wire_length = selection_length
+    };
+    result = ctos_ssh_native_client_open_jump_child(parent->client, &config, &client, &relay);
+    /* Preserve every returned owner before any failure is visible to Java. */
+    slot->relay = relay;
+    if (client != NULL) {
+        slot->client = client;
+        slot->pending_borrow = NULL;
+        slot->opening = 0;
+        slot->jump_state = result == 0 && relay != NULL ? JUMP_CHILD_OPEN
+            : relay != NULL ? JUMP_CHILD_FAILED_RELAY : JUMP_CHILD_FAILED_CLIENT;
+#ifdef CTOS_SSH_NATIVE_TEST_HOOKS
+        slot->fixture_callback = (ctos_ssh_callback_token)callback;
+#endif
+    }
+    if (result == 0 && (client == NULL || relay == NULL)) result = -1;
+
+done:
+    pthread_mutex_unlock(&sessions_lock);
+    wipe_bytes(selection, selection_length);
+    free(selection);
+    wipe_bytes(known_hosts, sizeof(known_hosts));
+    wipe_bytes(host_name, sizeof(host_name));
+    wipe_bytes(candidate, sizeof(candidate));
+    if (result != 0) {
+        fail(env);
+        return JNI_FALSE;
+    }
+    return JNI_TRUE;
+}
+
+JNIEXPORT jboolean JNICALL Java_im_majo_ctos_SshNativeSession_00024Native_openJumpChild(
+    JNIEnv *env, jclass type, jlong handle, jlong role, jint owner_uid,
+    jlong callback, jlong view, jlong deadline, jint step_budget,
+    jstring known_hosts_path, jstring host, jstring candidate_id,
+    jbyteArray selection_wire) {
+    (void)type;
+    return open_jump_child(env, handle, role, owner_uid, callback, view, deadline,
+        step_budget, known_hosts_path, host, candidate_id, selection_wire, NULL);
+}
+
+JNIEXPORT jboolean JNICALL Java_im_majo_ctos_SshNativeSession_00024Native_openJumpChildFresh(
+    JNIEnv *env, jclass type, jlong handle, jlong role, jint owner_uid,
+    jlong callback, jlong view, jlong deadline, jint step_budget,
+    jstring known_hosts_path, jstring host, jstring candidate_id,
+    jbyteArray selection_wire, jbyteArray fresh_hostfile_wire) {
+    (void)type;
+    if (fresh_hostfile_wire == NULL) { fail(env); return JNI_FALSE; }
+    return open_jump_child(env, handle, role, owner_uid, callback, view, deadline,
+        step_budget, known_hosts_path, host, candidate_id, selection_wire, fresh_hostfile_wire);
+}
+
+JNIEXPORT jint JNICALL Java_im_majo_ctos_SshNativeSession_00024Native_jumpChildState(
+    JNIEnv *env, jclass type, jlong handle) {
+    struct session_slot *slot = lock_jump_child(env, handle);
+    jint state;
+    (void)type;
+    if (slot == NULL) return -1;
+    state = (jint)slot->jump_state;
+    pthread_mutex_unlock(&sessions_lock);
+    return state;
+}
+
+/* On close(fd) failure the relay is already logically closed; destroy probes
+ * that state without ever retrying the numeric fd. Preserve an error return. */
+static int close_jump_relay_locked(struct session_slot *slot) {
+    int error;
+    if (slot->relay == NULL) return 0;
+    if (!slot->relay_closed) {
+        if (ctos_ssh_native_jump_relay_close(slot->relay) != 0) {
+            error = errno == 0 ? EIO : errno;
+            if (ctos_ssh_native_jump_relay_destroy(slot->relay) == 0) {
+                slot->relay = NULL;
+                slot->relay_closed = 1;
+            }
+            errno = error;
+            return -1;
+        }
+        slot->relay_closed = 1;
+    }
+    if (ctos_ssh_native_jump_relay_destroy(slot->relay) != 0) return -1;
+    slot->relay = NULL;
+    return 0;
+}
+
+JNIEXPORT void JNICALL Java_im_majo_ctos_SshNativeSession_00024Native_abortJumpChild(
+    JNIEnv *env, jclass type, jlong handle) {
+    struct session_slot *slot = lock_jump_child(env, handle);
+    (void)type;
+    if (slot == NULL) return;
+    if (slot->client != NULL || has_children_locked(slot->token)
+        || close_jump_relay_locked(slot) != 0
+        || (slot->pending_borrow != NULL
+            && ctos_ssh_view_borrow_release(slot->pending_borrow) != 0)) {
+        pthread_mutex_unlock(&sessions_lock);
+        fail(env);
+        return;
+    }
+    slot->pending_borrow = NULL;
+    if (release_fresh_hostfile_view(slot) != 0) {
+        pthread_mutex_unlock(&sessions_lock);
+        fail(env);
+        return;
+    }
+    memset(slot, 0, sizeof(*slot));
+    pthread_mutex_unlock(&sessions_lock);
+}
+
+JNIEXPORT void JNICALL Java_im_majo_ctos_SshNativeSession_00024Native_beginJump(
+    JNIEnv *env, jclass type, jlong handle, jlong next_role) {
+    struct session_slot *slot;
+    int result;
+    (void)type;
+    if (next_role <= 0) { fail(env); return; }
+    slot = lock_session(env, handle);
+    if (slot == NULL) return;
+    result = ctos_ssh_native_client_begin_jump(slot->client, (ctos_ssh_role_token)next_role);
+    pthread_mutex_unlock(&sessions_lock);
+    if (result != 0) fail(env);
+}
+
+JNIEXPORT void JNICALL Java_im_majo_ctos_SshNativeSession_00024Native_beginJumpGuarded(
+    JNIEnv *env, jclass type, jlong handle, jlong next_role, jlong deadline, jlong generation) {
+    (void)type;
+    if (next_role <= 0 || deadline <= 0 || generation <= 0 || (uint64_t)generation >= UINT32_MAX) {
+        fail(env); return;
+    }
+    struct session_slot *slot = lock_session(env, handle);
+    if (slot == NULL) return;
+    int status = ctos_ssh_native_client_begin_jump_guarded(slot->client,
+            (ctos_ssh_role_token)next_role, (uint64_t)deadline, (uint32_t)generation);
+    pthread_mutex_unlock(&sessions_lock);
+    if (status != 0) fail(env);
+}
+
+JNIEXPORT jintArray JNICALL Java_im_majo_ctos_SshNativeSession_00024Native_jumpStatus(
+    JNIEnv *env, jclass type, jlong handle) {
+    struct session_slot *slot;
+    struct ctos_ssh_native_jump_status status;
+    jint values[4];
+    jintArray result = NULL;
+    (void)type;
+    slot = lock_session(env, handle);
+    if (slot == NULL) return NULL;
+    if (ctos_ssh_native_client_jump_status(slot->client, &status) != 0
+        || status.buffered_bytes > INT_MAX) {
+        pthread_mutex_unlock(&sessions_lock);
+        fail(env);
+        return NULL;
+    }
+    values[0] = (jint)status.phase;
+    values[1] = (jint)(status.remote_eof != 0);
+    values[2] = (jint)(status.local_eof != 0);
+    values[3] = (jint)status.buffered_bytes;
+    result = (*env)->NewIntArray(env, 4);
+    if (result != NULL) (*env)->SetIntArrayRegion(env, result, 0, 4, values);
+    pthread_mutex_unlock(&sessions_lock);
+    return result;
+}
+
+JNIEXPORT void JNICALL Java_im_majo_ctos_SshNativeSession_00024Native_pumpJumpRelay(
+    JNIEnv *env, jclass type, jlong handle) {
+    struct session_slot *slot = lock_session(env, handle);
+    int result;
+    (void)type;
+    if (slot == NULL) return;
+    result = !slot->jump_child || slot->client_closed || slot->relay == NULL
+        ? -1 : ctos_ssh_native_jump_relay_pump(slot->relay);
+    pthread_mutex_unlock(&sessions_lock);
+    if (result != 0) fail(env);
+}
+
+JNIEXPORT void JNICALL Java_im_majo_ctos_SshNativeSession_00024Native_retainJumpTransport(
+    JNIEnv *env, jclass type, jlong handle) {
+    struct session_slot *slot = lock_session(env, handle);
+    int result;
+    (void)type;
+    if (slot == NULL) return;
+    result = ctos_ssh_native_client_retain_jump_transport(slot->client);
+    if (result == 0 && release_fresh_hostfile_view(slot) != 0) result = -1;
+    pthread_mutex_unlock(&sessions_lock);
+    if (result != 0) fail(env);
 }
 
 JNIEXPORT jbyteArray JNICALL Java_im_majo_ctos_SshNativeSession_00024Native_authenticationSelectionReceipt(
@@ -371,6 +728,86 @@ JNIEXPORT jintArray JNICALL Java_im_majo_ctos_SshNativeSession_00024Native_step(
     return result;
 }
 
+#ifdef CTOS_SSH_NATIVE_TEST_HOOKS
+static void fixture_ext_consumed(void *context) {
+    struct session_slot *slot = context;
+    slot->fixture_ext_seen = 1;
+}
+
+static int fixture_child_matches(const struct session_slot *slot, jlong callback) {
+    return slot->jump_child && slot->jump_state == JUMP_CHILD_OPEN && !slot->client_closed
+        && slot->relay != NULL && !slot->relay_closed && slot->parent_token != 0
+        && callback > 0 && slot->fixture_callback == (ctos_ssh_callback_token)callback;
+}
+
+/* The session table, not a caller-provided readiness flag, selects the real child. */
+JNIEXPORT jboolean JNICALL Java_im_majo_ctos_SshNativeSession_00024Native_provisionalNewFixtureReady(
+    JNIEnv *env, jclass type, jlong handle, jlong callback) {
+    struct session_slot *slot;
+    int ready = 0;
+    int result;
+    (void)type;
+    slot = lock_session(env, handle);
+    if (slot == NULL) return JNI_FALSE;
+    if (!fixture_child_matches(slot, callback)) {
+        pthread_mutex_unlock(&sessions_lock);
+        fail(env);
+        return JNI_FALSE;
+    }
+    result = ctos_ssh_native_client_provisional_new_ready(slot->client, &ready);
+    pthread_mutex_unlock(&sessions_lock);
+    if (result != 0) { fail(env); return JNI_FALSE; }
+    return ready ? JNI_TRUE : JNI_FALSE;
+}
+
+/* Bit 1 is a fixture observation from the native post-validation hook. */
+JNIEXPORT jint JNICALL Java_im_majo_ctos_SshNativeSession_00024Native_provisionalNewFixturePoll(
+    JNIEnv *env, jclass type, jlong handle, jlong callback) {
+    struct session_slot *slot;
+    int idle = 0, result, observed;
+    (void)type;
+    slot = lock_session(env, handle);
+    if (slot == NULL) return 0;
+    if (!fixture_child_matches(slot, callback)) {
+        pthread_mutex_unlock(&sessions_lock);
+        fail(env);
+        return 0;
+    }
+    if (!slot->fixture_ext_hook_armed) {
+        if (ctos_ssh_native_client_test_provisional_hook(
+                slot->client, 2, fixture_ext_consumed, slot) != 0) {
+            pthread_mutex_unlock(&sessions_lock);
+            fail(env);
+            return 0;
+        }
+        slot->fixture_ext_hook_armed = 1;
+    }
+    result = ctos_ssh_native_client_provisional_new_poll_ext(slot->client, &idle);
+    observed = (idle ? 1 : 0) | (slot->fixture_ext_seen ? 2 : 0);
+    pthread_mutex_unlock(&sessions_lock);
+    if (result != 0) { fail(env); return 0; }
+    return (jint)observed;
+}
+
+/* Read the fixture hook without advancing the child or parsing packets. */
+JNIEXPORT jboolean JNICALL Java_im_majo_ctos_SshNativeSession_00024Native_provisionalNewFixtureExtSeen(
+    JNIEnv *env, jclass type, jlong handle, jlong callback) {
+    struct session_slot *slot;
+    int seen;
+    (void)type;
+    slot = lock_session(env, handle);
+    if (slot == NULL) return JNI_FALSE;
+    if (!fixture_child_matches(slot, callback)) {
+        pthread_mutex_unlock(&sessions_lock);
+        fail(env);
+        return JNI_FALSE;
+    }
+    seen = slot->fixture_ext_seen;
+    pthread_mutex_unlock(&sessions_lock);
+    return seen ? JNI_TRUE : JNI_FALSE;
+}
+#endif
+
 JNIEXPORT void JNICALL Java_im_majo_ctos_SshNativeSession_00024Native_verifyHostKey(
     JNIEnv *env, jclass type, jlong handle, jbyteArray host_key_blob) {
     unsigned char *blob = NULL;
@@ -406,6 +843,17 @@ JNIEXPORT void JNICALL Java_im_majo_ctos_SshNativeSession_00024Native_beginUsera
     if (result != 0) fail(env);
 }
 
+JNIEXPORT void JNICALL Java_im_majo_ctos_SshNativeSession_00024Native_beginUserauthServiceGuarded(
+    JNIEnv *env, jclass type, jlong handle, jlong generation) {
+    (void)type;
+    if (generation <= 0 || (uint64_t)generation >= UINT32_MAX) { fail(env); return; }
+    struct session_slot *slot = lock_session(env, handle);
+    if (slot == NULL) return;
+    int result = ctos_ssh_native_client_begin_userauth_service_guarded(slot->client, (uint32_t)generation);
+    pthread_mutex_unlock(&sessions_lock);
+    if (result != 0) fail(env);
+}
+
 JNIEXPORT jboolean JNICALL Java_im_majo_ctos_SshNativeSession_00024Native_userauthServiceReady(
     JNIEnv *env, jclass type, jlong handle) {
     struct session_slot *slot;
@@ -433,6 +881,17 @@ JNIEXPORT void JNICALL Java_im_majo_ctos_SshNativeSession_00024Native_beginAuthD
     if (status != 0) fail(env);
 }
 
+JNIEXPORT void JNICALL Java_im_majo_ctos_SshNativeSession_00024Native_beginAuthDiscoveryGuarded(
+    JNIEnv *env, jclass type, jlong handle, jlong generation) {
+    (void)type;
+    if (generation <= 0 || (uint64_t)generation >= UINT32_MAX) { fail(env); return; }
+    struct session_slot *slot = lock_session(env, handle);
+    if (slot == NULL) return;
+    int result = ctos_ssh_native_client_begin_auth_discovery_guarded(slot->client, (uint32_t)generation);
+    pthread_mutex_unlock(&sessions_lock);
+    if (result != 0) fail(env);
+}
+
 JNIEXPORT jintArray JNICALL Java_im_majo_ctos_SshNativeSession_00024Native_authDiscoveryResult(
     JNIEnv *env, jclass type, jlong handle) {
     (void)type;
@@ -458,6 +917,17 @@ JNIEXPORT void JNICALL Java_im_majo_ctos_SshNativeSession_00024Native_beginPassw
     slot = lock_session(env, handle);
     if (slot == NULL) return;
     result = ctos_ssh_native_client_begin_password_auth(slot->client);
+    pthread_mutex_unlock(&sessions_lock);
+    if (result != 0) fail(env);
+}
+
+JNIEXPORT void JNICALL Java_im_majo_ctos_SshNativeSession_00024Native_beginPasswordAuthGuarded(
+    JNIEnv *env, jclass type, jlong handle, jlong generation) {
+    (void)type;
+    if (generation <= 0 || (uint64_t)generation >= UINT32_MAX) { fail(env); return; }
+    struct session_slot *slot = lock_session(env, handle);
+    if (slot == NULL) return;
+    int result = ctos_ssh_native_client_begin_password_auth_guarded(slot->client, (uint32_t)generation);
     pthread_mutex_unlock(&sessions_lock);
     if (result != 0) fail(env);
 }
@@ -558,11 +1028,13 @@ JNIEXPORT jbyteArray JNICALL Java_im_majo_ctos_SshNativeSession_00024Native_begi
     if (expected == NULL || (*env)->GetArrayLength(env, expected) != 32) { fail(env); return NULL; }
     (*env)->GetByteArrayRegion(env, expected, 0, 32, (jbyte *)plan);
     if ((*env)->ExceptionCheck(env)) goto out;
-    if (copy_array(env, input, CTOS_SSH_NATIVE_CLIENT_MAX_PASSWORD_BYTES, &password, &length) != 0) {
-        fail(env); goto out;
-    }
     struct session_slot *slot = lock_session(env, handle);
     if (slot == NULL) goto out;
+    if (ctos_ssh_native_client_admit_input_copy(slot->client) != 0
+        || copy_array(env, input, CTOS_SSH_NATIVE_CLIENT_MAX_PASSWORD_BYTES, &password, &length) != 0) {
+        pthread_mutex_unlock(&sessions_lock);
+        fail(env); goto out;
+    }
     int status = ctos_ssh_native_client_begin_discovered_password(slot->client, plan, password, length, stage);
     pthread_mutex_unlock(&sessions_lock);
     if (status != 0) { fail(env); goto out; }
@@ -596,6 +1068,22 @@ JNIEXPORT void JNICALL Java_im_majo_ctos_SshNativeSession_00024Native_pollAuthPr
     struct session_slot *slot = lock_session(env, handle);
     if (slot == NULL) goto out;
     int status = ctos_ssh_native_client_poll_auth_prompt(slot->client, plan, (unsigned int)method);
+    pthread_mutex_unlock(&sessions_lock);
+    if (status != 0) fail(env);
+out:
+    wipe_bytes(plan, sizeof(plan));
+}
+
+JNIEXPORT void JNICALL Java_im_majo_ctos_SshNativeSession_00024Native_pollSelectedPasswordPrompt(
+    JNIEnv *env, jclass type, jlong handle, jbyteArray expected) {
+    (void)type;
+    unsigned char plan[32] = {0};
+    if (expected == NULL || (*env)->GetArrayLength(env, expected) != 32) { fail(env); return; }
+    (*env)->GetByteArrayRegion(env, expected, 0, 32, (jbyte *)plan);
+    if ((*env)->ExceptionCheck(env)) goto out;
+    struct session_slot *slot = lock_session(env, handle);
+    if (slot == NULL) goto out;
+    int status = ctos_ssh_native_client_poll_selected_password_prompt(slot->client, plan);
     pthread_mutex_unlock(&sessions_lock);
     if (status != 0) fail(env);
 out:
@@ -650,12 +1138,11 @@ JNIEXPORT void JNICALL Java_im_majo_ctos_SshNativeSession_00024Native_respondKey
     (void)type;
     unsigned char *bytes = NULL;
     size_t length = 0;
-    if (copy_array(env, input, CTOS_SSH_NATIVE_CLIENT_KBI_WIRE_BYTES, &bytes, &length) != 0) {
-        fail(env); return;
-    }
     struct session_slot *slot = lock_session(env, handle);
     if (slot != NULL) {
-        if (ctos_ssh_native_client_respond_keyboard_interactive(slot->client, bytes, length) != 0) fail(env);
+        if (ctos_ssh_native_client_admit_input_copy(slot->client) != 0
+            || copy_array(env, input, CTOS_SSH_NATIVE_CLIENT_KBI_WIRE_BYTES, &bytes, &length) != 0
+            || ctos_ssh_native_client_respond_keyboard_interactive(slot->client, bytes, length) != 0) fail(env);
         pthread_mutex_unlock(&sessions_lock);
     }
     wipe_bytes(bytes, length);
@@ -741,6 +1228,7 @@ JNIEXPORT void JNICALL Java_im_majo_ctos_SshNativeSession_00024Native_beginShell
     if (slot == NULL) return;
     result = ctos_ssh_native_client_begin_shell(slot->client,
         (unsigned int)columns, (unsigned int)rows);
+    if (result == 0 && release_fresh_hostfile_view(slot) != 0) result = -1;
     pthread_mutex_unlock(&sessions_lock);
     if (result != 0) fail(env);
 }
@@ -880,12 +1368,24 @@ JNIEXPORT jint JNICALL Java_im_majo_ctos_SshNativeSession_00024Native_sendShellE
 JNIEXPORT void JNICALL Java_im_majo_ctos_SshNativeSession_00024Native_close(
     JNIEnv *env, jclass type, jlong handle) {
     struct session_slot *slot;
+    int result;
 
     (void)type;
-    slot = lock_session(env, handle);
+    slot = lock_session_for(env, handle, 1);
     if (slot == NULL) return;
-    if (ctos_ssh_native_client_close(slot->client) != 0) fail(env);
+    if (has_children_locked(slot->token)) {
+        pthread_mutex_unlock(&sessions_lock);
+        fail(env);
+        return;
+    }
+    if (slot->jump_child && slot->client_closed) {
+        pthread_mutex_unlock(&sessions_lock);
+        return;
+    }
+    result = ctos_ssh_native_client_close(slot->client);
+    if (result == 0) slot->client_closed = 1;
     pthread_mutex_unlock(&sessions_lock);
+    if (result != 0) fail(env);
 }
 
 JNIEXPORT void JNICALL Java_im_majo_ctos_SshNativeSession_00024Native_destroy(
@@ -893,9 +1393,12 @@ JNIEXPORT void JNICALL Java_im_majo_ctos_SshNativeSession_00024Native_destroy(
     struct session_slot *slot;
 
     (void)type;
-    slot = lock_session(env, handle);
+    slot = lock_session_for(env, handle, 1);
     if (slot == NULL) return;
-    if (ctos_ssh_native_client_destroy(slot->client) != 0) {
+    if (has_children_locked(slot->token)
+        || (slot->jump_child && (!slot->client_closed || close_jump_relay_locked(slot) != 0))
+        || release_fresh_hostfile_view(slot) != 0
+        || ctos_ssh_native_client_destroy(slot->client) != 0) {
         fail(env);
         pthread_mutex_unlock(&sessions_lock);
         return;

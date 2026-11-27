@@ -43,7 +43,14 @@ final class AppSecrets {
     /** Inner role/view fence, entered only after publication/session/operation locks. */
     interface SshRoleGuard extends EffectGuard {
         void withRole(EffectGuard publication) throws VaultException;
+        default void copySecret(EffectGuard receiver) throws VaultException { receiver.check(); }
     }
+    /** Local STOP admission around the final bounded copy. */
+    interface SshStopCopyGuard extends EffectGuard {
+        void copySecret(EffectGuard receiver) throws VaultException;
+    }
+    /** The child route additionally holds its exact native effect permit. */
+    interface SshSecretCopyGuard extends SshStopCopyGuard { }
     private static void withSshRole(EffectGuard guard, EffectGuard publication) throws VaultException {
         if (guard instanceof SshRoleGuard) ((SshRoleGuard) guard).withRole(publication);
         else publication.check();
@@ -323,6 +330,7 @@ final class AppSecrets {
         private final SshAuthenticationSelection passwordSelection;
         private final SshTransientKey transientKey;
         private volatile boolean cancelled;
+        private boolean jumpEffectBound;
         private boolean admitted;
         private VaultOperation issued;
         private SshSecretReadContext(AppSecrets owner, long epoch, long deadline, EffectGuard guard,
@@ -342,8 +350,20 @@ final class AppSecrets {
         }
         void cancel() {
             VaultOperation retired;
-            synchronized (owner.session) { cancelled = true; retired = issued; }
+            synchronized (owner.session) {
+                boolean begun = !cancelled && jumpEffectBound
+                        && SshNativeCallbackAdapter.beginJumpEffectInvalidation();
+                try { cancelled = true; retired = issued; }
+                finally { SshNativeCallbackAdapter.endJumpEffectInvalidation(begun); }
+            }
             owner.cancelOperation(retired);
+        }
+
+        void bindJumpEffect() throws VaultException {
+            synchronized (owner.session) {
+                if (cancelled || jumpEffectBound) throw denied();
+                jumpEffectBound = true;
+            }
         }
     }
 
@@ -504,6 +524,7 @@ final class AppSecrets {
         private final SshRestoreReview review;
         private volatile boolean valid = true;
         private boolean deliveryClaimed;
+        private int importUses;
         final String reviewBinding;
         private RestoreConsent consent;
         final long epoch;
@@ -554,8 +575,11 @@ final class AppSecrets {
 
     synchronized void attachSshValidator(SshContentValidator validator) {
         synchronized (session) {
-            validatorRegistration = new ValidatorRegistration(validator);
-            if (preview != null && preview.review != null) preview.valid = false;
+            boolean begun = SshNativeCallbackAdapter.beginJumpEffectInvalidation();
+            try {
+                validatorRegistration = new ValidatorRegistration(validator);
+                if (preview != null && preview.review != null) preview.valid = false;
+            } finally { SshNativeCallbackAdapter.endJumpEffectInvalidation(begun); }
         }
         if (preview != null && !preview.valid) cancelPreview();
     }
@@ -824,6 +848,8 @@ final class AppSecrets {
         VaultEnvelope target;
         synchronized (this) {
             if (previewWork != null) throw new VaultException("BUSY", "A restore preview is already being checked");
+            if (preview != null && preview.importUses != 0)
+                throw new VaultException("BUSY", "A restore import is in progress");
             guard.check(); foreground();
             work = new PreviewWork(requestId, session.epoch(), deadline, validatorRegistration, restoreProvider);
             previewWork = work;
@@ -974,6 +1000,8 @@ final class AppSecrets {
             throws VaultException {
         ImportPreview pending = preview;
         if (pending == null || !pending.valid || !pending.id.equals(previewId)) throw new VaultException("VAULT_EXPIRED", "Preview expired");
+        if (pending.importUses != 0) throw new VaultException("BUSY", "A restore import is in progress");
+        pending.importUses++;
         try {
             guard.check();
             foreground();
@@ -1011,7 +1039,7 @@ final class AppSecrets {
                 }));
             } finally { VaultCodec.wipe(encoded); }
             lock();
-        } finally { cancelPreview(); }
+        } finally { pending.importUses--; cancelPreview(); }
     }
 
     private void checkRestoreApproval(ImportPreview pending) throws VaultException {
@@ -1081,10 +1109,45 @@ final class AppSecrets {
     }
 
     synchronized void lock() { session.lock(); cancelPreview(); operations.clear(); }
-    synchronized void cleanupInvalidatedContexts() {
-        long currentEpoch = session.epoch();
-        operations.values().removeIf(operation -> operation.epoch != currentEpoch);
-        if (preview != null && (preview.epoch != currentEpoch || clock.now() >= preview.deadline)) cancelPreview();
+
+    /** Retire only the preview observed by this session lock, even if revocation is unconfirmed. */
+    void lockForUncertainSshResult() {
+        ImportPreview pending;
+        Throwable failure = null;
+        synchronized (session) {
+            pending = preview;
+            try { session.lock(); }
+            catch (RuntimeException | Error caught) { failure = caught; }
+            if (pending != null && preview == pending) pending.valid = false;
+        }
+        try {
+            // A reentrant store/guard may still be using the preview on this same monitor.
+            synchronized (this) {
+                if (pending != null && preview == pending && pending.importUses == 0) cancelPreview();
+            }
+        } catch (RuntimeException | Error caught) {
+            if (failure == null) failure = caught;
+            else if (failure != caught) failure.addSuppressed(caught);
+        }
+        if (failure instanceof Error) throw (Error)failure;
+        if (failure != null) throw (RuntimeException)failure;
+    }
+
+    void cleanupInvalidatedContexts() {
+        // Evaluate any timeout before entering the vault monitor; it can drain native effects.
+        session.epoch();
+        long now = clock.now();
+        synchronized (this) {
+            ImportPreview pending = preview;
+            boolean retirePreview;
+            synchronized (session) {
+                long currentEpoch = session.cleanupEpoch();
+                if (!session.invalidationUnconfirmed())
+                    operations.values().removeIf(operation -> operation.epoch != currentEpoch);
+                retirePreview = pending != null && (pending.epoch != currentEpoch || now >= pending.deadline);
+            }
+            if (retirePreview && preview == pending) cancelPreview();
+        }
     }
 
     VaultOperation beginTotp(String entryId) throws VaultException {
@@ -2805,7 +2868,9 @@ final class AppSecrets {
                     releaseGuard.check();
                     withSshRole(releaseGuard, () -> {
                         checkSshSecretMetadata(work);
-                        receiver.receive(borrowed);
+                        if (releaseGuard instanceof SshRoleGuard)
+                            ((SshRoleGuard) releaseGuard).copySecret(() -> receiver.receive(borrowed));
+                        else receiver.receive(borrowed);
                     });
                 } } }
             }));
@@ -3056,6 +3121,53 @@ final class AppSecrets {
         }
     }
 
+    /**
+     * Bind a child trust source to the already attached public view and the
+     * exact public read currently delivering its snapshot. This is metadata
+     * only; callers perform encoding and JNI work after leaving these locks.
+     */
+    long bindSshChildTrustSnapshot(VaultOperation operation, SshFileSnapshot snapshot,
+            SshRoleContext role, SshRoleContext.PublicView view) throws VaultException {
+        if (operation == null || snapshot == null || role == null || view == null)
+            throw VaultException.invalid();
+        synchronized (this) { synchronized (publicationLock) { synchronized (session) {
+            SshPublicReadState state = operation.sshPublicReadState();
+            if (state == null || state.context.owner != this || state.context.issued != operation
+                    || !state.delivered || sshPublicReadWork == null
+                    || sshPublicReadWork.operation != operation
+                    || state.revision != contentRevision || snapshot.epoch != state.context.epoch
+                    || snapshot.deadline != state.context.deadline || snapshot.deadline != role.deadline
+                    || !snapshot.requestId.equals(operation.requestId)
+                    || !snapshot.connectionId.equals(role.connectionId)
+                    || !snapshot.rootPath.equals(operation.resource)
+                    || session.attachedRevocation(snapshot.epoch) != view
+                    || !role.ownsPublicView(view) || !view.active())
+                throw new VaultException("VAULT_CHANGED", "The child trust source changed; try again");
+            checkSshPublicMetadata(state.context);
+            role.publishBound(clock::now, () -> {
+                if (!view.active() || contentRevision != state.revision)
+                    throw new VaultException("VAULT_CHANGED", "The child trust source changed; try again");
+            });
+            return state.revision;
+        } } }
+    }
+
+    /** Pre-JNI freshness check, not a substitute for a final credential fence. */
+    void checkSshChildTrustSnapshot(long epoch, long revision, SshRoleContext role,
+            SshRoleContext.PublicView view) throws VaultException {
+        if (role == null || view == null) throw VaultException.invalid();
+        synchronized (publicationLock) { synchronized (session) {
+            foreground();
+            if (session.attachedRevocation(epoch) != view || !role.ownsPublicView(view)
+                    || !view.active() || contentRevision != revision)
+                throw new VaultException("VAULT_CHANGED", "The child trust source changed; try again");
+            role.publishBound(clock::now, () -> {
+                if (!view.active() || contentRevision != revision)
+                    throw new VaultException("VAULT_CHANGED", "The child trust source changed; try again");
+            });
+        } }
+    }
+
     SshPublicReadPreparation prepareSshPublicRead(VaultOperation operation, String rootPath, String connectionId)
             throws VaultException {
         return prepareSshPublicRead(operation, rootPath, connectionId, true);
@@ -3235,6 +3347,12 @@ final class AppSecrets {
         if (operations.get(operation.requestId) == operation) operations.remove(operation.requestId);
     }
 
+    void retireOperation(VaultOperation operation) {
+        if (operation == null) return;
+        operation.retire();
+        if (operations.get(operation.requestId) == operation) operations.remove(operation.requestId);
+    }
+
     private static VaultManifest.Entry findEntry(VaultManifest manifest, String id, VaultManifest.EntryType type)
             throws VaultException {
         for (VaultManifest.Entry entry : manifest.entries) if (entry.id.equals(id) && entry.type == type) return entry;
@@ -3274,11 +3392,12 @@ final class AppSecrets {
         synchronized (this) { if (preview != null && preview.requestId.equals(id)) cancelPreview(); }
     }
 
-    private void cancelPreview() {
+    private synchronized void cancelPreview() {
         ImportPreview retired;
         synchronized (session) {
             retired = preview;
             if (retired != null) retired.valid = false;
+            if (retired != null && retired.importUses != 0) return;
             preview = null;
         }
         if (retired != null) retired.close();
@@ -3310,12 +3429,24 @@ final class AppSecrets {
             @Override public void check() throws VaultException { guard.check(); }
             @Override public void beforeCommit() throws VaultException {
                 guard.beforeCommit();
-                synchronized (publicationLock) { contentRevision++; }
+                synchronized (publicationLock) {
+                    boolean begun = SshNativeCallbackAdapter.beginJumpEffectInvalidation();
+                    try { contentRevision++; }
+                    finally { SshNativeCallbackAdapter.endJumpEffectInvalidation(begun); }
+                }
             }
         }); }
         catch (IOException error) { throw new VaultException("VAULT_IO", "Unable to save the vault; previous data retained"); }
         catch (VaultException error) {
-            if (error.code.equals("VAULT_COMMIT_UNCERTAIN")) { session.lock(); operations.clear(); cancelPreview(); }
+            if (error.code.equals("VAULT_COMMIT_UNCERTAIN")) {
+                try {
+                    session.lock();
+                    operations.clear();
+                } catch (Throwable cleanup) { error.addSuppressed(cleanup); }
+                // Preview material is independent of native revocation and can always be retired.
+                try { cancelPreview(); }
+                catch (Throwable cleanup) { error.addSuppressed(cleanup); }
+            }
             throw error;
         }
     }

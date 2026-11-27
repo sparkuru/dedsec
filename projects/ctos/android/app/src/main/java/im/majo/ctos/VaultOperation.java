@@ -33,6 +33,7 @@ final class VaultOperation {
     private AppSecrets.SshTrustState sshTrustState;
     volatile boolean consumed;
     volatile boolean cancelled;
+    private boolean jumpEffectBound;
     private VaultSession.Revocation revocation;
     private String roleBinding;
     private int roleHop = -1;
@@ -330,8 +331,27 @@ final class VaultOperation {
 
     void cancel() {
         VaultSession.Revocation owned;
-        synchronized (this) { cancelled = true; owned = revocation; }
+        synchronized (this) {
+            if (!cancelled) {
+                boolean begun = jumpEffectBound && SshNativeCallbackAdapter.beginJumpEffectInvalidation();
+                try { cancelled = true; }
+                finally { SshNativeCallbackAdapter.endJumpEffectInvalidation(begun); }
+            }
+            owned = revocation;
+        }
         // Revoke without holding the operation monitor; no AppSecrets/session call.
+        if (owned != null) owned.revoke();
+    }
+
+    synchronized void bindJumpEffect() throws VaultException {
+        if (cancelled || jumpEffectBound) throw new VaultException("VAULT_CANCELLED", "The SSH secret request is closed");
+        jumpEffectBound = true;
+    }
+
+    /** Successful one-shot consumption is cleanup, not an external revocation. */
+    void retire() {
+        VaultSession.Revocation owned;
+        synchronized (this) { cancelled = true; owned = revocation; }
         if (owned != null) owned.revoke();
     }
 }

@@ -8,6 +8,9 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.Test;
 
 /** Controller-only fixtures; real encrypted/JNI shell acceptance is verified separately. */
@@ -27,14 +30,20 @@ public final class SshTerminalSessionTest {
         int steps;
         int begins;
         int closes;
+        int cancels;
         int failedCloses;
         boolean live = true;
         boolean cancelled;
         boolean resizeAccepted = true;
         Long exitStatus;
         boolean stepError;
+        boolean cancelError;
+        boolean fatalCancel;
         Exception stepException;
         boolean closeError;
+        Runnable writeHook;
+        Runnable readHook;
+        Runnable cancelHook;
         @Override public void begin(int columns, int rows) { begins++; }
         @Override public SshTerminalSession.Status status() {
             return new SshTerminalSession.Status(phase, output.isEmpty() ? 0 : output.peek().length, exitStatus);
@@ -45,17 +54,27 @@ public final class SshTerminalSessionTest {
             if (stepError) throw new AssertionError("injected step error");
         }
         @Override public int write(byte[] bytes) {
+            if (writeHook != null) writeHook.run();
             int length = Math.min(acceptance, bytes.length);
             written.write(bytes, 0, length);
             return length;
         }
-        @Override public byte[] read(int maximum) { return output.remove(); }
+        @Override public byte[] read(int maximum) {
+            if (readHook != null) readHook.run();
+            return output.remove();
+        }
         @Override public boolean resize(int columns, int rows) {
             sizes.add(columns + "x" + rows);
             return resizeAccepted;
         }
         @Override public boolean publicationLive() { return live && !cancelled; }
-        @Override public void cancel() { cancelled = true; }
+        @Override public void cancel() throws IOException {
+            cancels++;
+            if (cancelHook != null) cancelHook.run();
+            if (fatalCancel) throw new AssertionError("unconfirmed fatal cancellation");
+            if (cancelError) throw new IOException("unconfirmed cancellation");
+            cancelled = true;
+        }
         @Override public void close() throws IOException {
             closes++;
             if (closeError) { closeError = false; throw new AssertionError("injected close error"); }
@@ -155,6 +174,244 @@ public final class SshTerminalSessionTest {
         while (f.releases == 0) f.turns.next();
         assertEquals(1, f.releases);
         assertFalse(f.session.publicationLive());
+    }
+
+    @Test public void stopIntentDropsQueuedInputBeforeAnotherPortAction() {
+        Port port = new Port();
+        Turns turns = new Turns();
+        Events events = new Events();
+        SshSessionOwner.Cancellation cancellation = new SshSessionOwner.Cancellation();
+        int[] releases = {0};
+        SshTerminalSession session = new SshTerminalSession(port, turns, events, () -> releases[0]++, cancellation);
+        session.start(80, 24);
+        turns.next();
+        session.write(new byte[] {1, 2});
+        session.resize(100, 40);
+        int stepsBefore = port.steps;
+        cancellation.cancel();
+        assertFalse(session.publicationLive());
+        try { session.write(new byte[] {3}); fail(); }
+        catch (IllegalStateException expected) { }
+        turns.next();
+        assertEquals(0, port.written.size());
+        assertEquals(stepsBefore, port.steps);
+        assertTrue(port.sizes.isEmpty());
+        assertEquals(0, session.queuedInputBytes());
+        assertEquals(0, port.closes);
+        assertEquals(0, releases[0]);
+        session.requestCancel();
+        turns.next();
+        assertTrue(session.closed());
+        assertEquals(1, port.closes);
+        assertEquals(1, releases[0]);
+    }
+
+    @Test public void admittedWriteMayFinishButStopDeniesFollowingResizeAndStep() throws Exception {
+        Port port = new Port();
+        Turns turns = new Turns();
+        Events events = new Events();
+        SshSessionOwner.Cancellation cancellation = new SshSessionOwner.Cancellation();
+        SshTerminalSession session = new SshTerminalSession(port, turns, events, () -> {}, cancellation);
+        session.start(80, 24);
+        turns.next();
+        session.write(new byte[] {1});
+        session.resize(100, 40);
+        int stepsBefore = port.steps;
+        CountDownLatch entered = new CountDownLatch(1), resume = new CountDownLatch(1);
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        port.writeHook = () -> {
+            entered.countDown();
+            try {
+                if (!resume.await(5, TimeUnit.SECONDS)) throw new AssertionError("write did not resume");
+            } catch (InterruptedException error) {
+                Thread.currentThread().interrupt();
+                throw new AssertionError(error);
+            }
+        };
+        Thread owner = new Thread(() -> {
+            try { turns.next(); }
+            catch (Throwable error) { failure.set(error); }
+        });
+        owner.start();
+        try {
+            assertTrue(entered.await(5, TimeUnit.SECONDS));
+            cancellation.cancel();
+        } finally { resume.countDown(); }
+        owner.join(5000);
+        assertFalse(owner.isAlive());
+        assertNull(failure.get());
+        assertArrayEquals(new byte[] {1}, port.written.toByteArray());
+        assertEquals(stepsBefore, port.steps);
+        assertTrue(port.sizes.isEmpty());
+        assertEquals(0, port.closes);
+        session.requestCancel();
+        turns.next();
+        assertTrue(session.closed());
+    }
+
+    @Test public void stopDuringAdmittedReadWipesBytesAndWaitsForOwnerCancellation() {
+        Port port = new Port();
+        Turns turns = new Turns();
+        Events events = new Events();
+        SshSessionOwner.Cancellation cancellation = new SshSessionOwner.Cancellation();
+        SshTerminalSession session = new SshTerminalSession(port, turns, events, () -> {}, cancellation);
+        session.start(80, 24);
+        turns.next();
+        byte[] output = new byte[] {4, 5};
+        port.output.add(output);
+        port.readHook = cancellation::cancel;
+        turns.next();
+        assertArrayEquals(new byte[2], output);
+        assertTrue(events.data.isEmpty());
+        assertEquals(0, port.cancels);
+        assertEquals(0, port.closes);
+        assertFalse(session.closed());
+        session.requestCancel();
+        turns.next();
+        assertEquals(1, port.cancels);
+        assertTrue(session.closed());
+    }
+
+    @Test public void unconfirmedPortCancellationRetainsTheTerminalOwner() {
+        Fixture f = new Fixture();
+        f.port.cancelError = true;
+        f.session.stop();
+        assertFalse(f.session.closed());
+        assertEquals(0, f.port.closes);
+        assertEquals(0, f.releases);
+        assertEquals(1, f.port.cancels);
+        assertEquals("SSH_TERMINAL_CLEANUP_PENDING", f.events.reasons.get(f.events.reasons.size() - 1));
+        f.session.requestCancel();
+        for (int i = 0; i < 2 && !f.turns.turns.isEmpty(); i++) f.turns.next();
+        assertEquals(1, f.port.cancels);
+        assertEquals(0, f.port.closes);
+        assertEquals(0, f.releases);
+    }
+
+    @Test public void inFlightPortCancellationCannotRaceTerminalClose() throws Exception {
+        Fixture f = new Fixture();
+        CountDownLatch entered = new CountDownLatch(1), resume = new CountDownLatch(1);
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        f.port.cancelHook = () -> {
+            entered.countDown();
+            try {
+                if (!resume.await(5, TimeUnit.SECONDS)) throw new AssertionError("cancel did not resume");
+            } catch (InterruptedException error) {
+                Thread.currentThread().interrupt();
+                throw new AssertionError(error);
+            }
+        };
+        Thread cancelling = new Thread(() -> {
+            try { f.session.requestCancel(); }
+            catch (Throwable error) { failure.set(error); }
+        });
+        cancelling.start();
+        try {
+            assertTrue(entered.await(5, TimeUnit.SECONDS));
+            f.turns.next();
+            assertEquals(0, f.port.closes);
+            assertEquals(0, f.releases);
+        } finally { resume.countDown(); }
+        cancelling.join(5000);
+        assertFalse(cancelling.isAlive());
+        assertNull(failure.get());
+        f.turns.next();
+        assertEquals(1, f.port.closes);
+        assertEquals(1, f.releases);
+    }
+
+    @Test public void originalTerminalErrorSurvivesUnconfirmedPortCancellation() {
+        Fixture f = new Fixture();
+        f.port.stepError = true;
+        f.port.fatalCancel = true;
+        try { f.turns.next(); fail(); }
+        catch (AssertionError error) {
+            assertEquals("injected step error", error.getMessage());
+            assertEquals(1, error.getSuppressed().length);
+            assertEquals("unconfirmed fatal cancellation", error.getSuppressed()[0].getMessage());
+        }
+        assertFalse(f.session.closed());
+        assertEquals(1, f.port.cancels);
+        assertEquals(0, f.port.closes);
+        assertEquals(0, f.releases);
+    }
+
+    @Test public void queuedCancelledOutputIsAcknowledgedWipedAndOwnerReleased() {
+        Port port = new Port();
+        Turns turns = new Turns();
+        SshSessionOwner.Cancellation cancellation = new SshSessionOwner.Cancellation();
+        SshTerminalState state = new SshTerminalState();
+        ArrayDeque<Runnable> ui = new ArrayDeque<>();
+        SshTerminalSession[] session = new SshTerminalSession[1];
+        int[] releases = {0};
+        byte[] output = new byte[] {8, 9};
+        state.begin(1, "ssh", cancellation);
+        session[0] = new SshTerminalSession(port, turns, new SshTerminalSession.Sink() {
+            @Override public void data(byte[] bytes, Runnable consumed) {
+                ui.add(() -> {
+                    try {
+                        if (session[0].publicationLive()) state.data(1, bytes);
+                    } finally { consumed.run(); }
+                });
+            }
+            @Override public void state(String value, Long exit, String reason) {
+                state.state(1, value, exit, reason);
+            }
+        }, () -> releases[0]++, cancellation);
+        session[0].start(80, 24);
+        turns.next();
+        port.output.add(output);
+        turns.next();
+        assertEquals(1, ui.size());
+        assertEquals(2, session[0].outputInFlightBytes());
+        session[0].requestCancel();
+        assertTrue(cancellation.getAsBoolean());
+        ui.remove().run();
+        assertArrayEquals(new byte[0], (byte[])state.snapshot().get("bytes"));
+        for (int i = 0; i < 10 && releases[0] == 0; i++) turns.next();
+        assertEquals(1, releases[0]);
+        assertArrayEquals(new byte[2], output);
+        assertEquals(1, port.closes);
+    }
+
+    @Test public void internalTerminalFailureCancelsSharedOutputAdmission() {
+        Port port = new Port();
+        Turns turns = new Turns();
+        Events events = new Events();
+        SshSessionOwner.Cancellation cancellation = new SshSessionOwner.Cancellation();
+        SshTerminalSession session = new SshTerminalSession(port, turns, events, () -> {}, cancellation);
+        session.start(80, 24);
+        turns.next();
+        port.stepException = new IOException("injected transport failure");
+        turns.next();
+        assertTrue(cancellation.getAsBoolean());
+        assertFalse(cancellation.admitOutput());
+        assertTrue(session.closed());
+    }
+
+    @Test public void publishedStopBeforeNativeBeginSchedulesOwnerRecheck() throws Exception {
+        SshSessionOwner.Cancellation cancellation = new SshSessionOwner.Cancellation();
+        Port port = new Port();
+        Turns turns = new Turns();
+        Events events = new Events();
+        SshTerminalSession session = new SshTerminalSession(port, turns, events, () -> { }, cancellation);
+        Thread stop = new Thread(cancellation::cancel);
+        synchronized (cancellation) {
+            stop.start();
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+            while (!cancellation.stopRequested() && System.nanoTime() < deadline) Thread.yield();
+            assertTrue(cancellation.stopRequested());
+            assertFalse(cancellation.invalidationUnconfirmed());
+            assertTrue(cancellation.invalidationPending());
+            session.start(80, 24);
+            assertEquals(1, turns.turns.size());
+            assertEquals(0, port.begins);
+            assertEquals(0, port.closes);
+            assertTrue(events.states.isEmpty());
+        }
+        stop.join(5000);
+        assertFalse(stop.isAlive());
+        assertFalse(cancellation.invalidationPending());
     }
 
     @Test public void cleanupFailureRetainsOwnerAndRetriesBeforeRelease() {

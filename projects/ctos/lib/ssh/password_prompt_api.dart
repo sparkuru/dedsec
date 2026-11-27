@@ -1,5 +1,50 @@
 part of 'api.dart';
 
+/// The actual endpoint for the selected authentication, supplied by the host.
+final class SshPromptEndpoint {
+  const SshPromptEndpoint({
+    required this.host,
+    required this.port,
+    required this.username,
+  });
+
+  factory SshPromptEndpoint._parse(Map<String, Object?> value) {
+    final username = value['username'];
+    if (username is! String || sshUsernameError(username) != null) {
+      throw _invalid();
+    }
+    return SshPromptEndpoint(
+      host: _host(value['host']),
+      port: _port(value['port']),
+      username: username,
+    );
+  }
+
+  final String host, username;
+  final int port;
+
+  String get label {
+    final address =
+        host.contains(':') && !(host.startsWith('[') && host.endsWith(']'))
+        ? '[$host]'
+        : host;
+    return '$username@$address:$port';
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      other is SshPromptEndpoint &&
+      host == other.host &&
+      port == other.port &&
+      username == other.username;
+
+  @override
+  int get hashCode => Object.hash(host, port, username);
+}
+
+int _sshPromptHop(Object? value) =>
+    value is int && value >= 0 && value < 9 ? value : throw _invalid();
+
 /// A local prompt for a password or for the explicitly selected encrypted key.
 final class SshPasswordRequest extends SshEvent {
   const SshPasswordRequest({
@@ -7,25 +52,42 @@ final class SshPasswordRequest extends SshEvent {
     required this.ticketId,
     required this.binding,
     required this.remainingMillis,
+    required this.endpoint,
+    required this.hop,
     this.keyPassphrase = false,
     this.savedAvailable = false,
+    this.savedOnly = false,
   }) : super(requestId);
 
   factory SshPasswordRequest.parse(Object? raw) {
     final value = _map(raw);
     _keys(
       value,
-      {'type', 'requestId', 'ticketId', 'binding', 'remainingMillis'},
-      {'savedAvailable'},
+      {
+        'type',
+        'requestId',
+        'ticketId',
+        'binding',
+        'remainingMillis',
+        'host',
+        'port',
+        'username',
+        'hop',
+      },
+      {'savedAvailable', 'savedOnly'},
     );
     final remaining = value['remainingMillis'];
     final savedAvailable = value['savedAvailable'];
+    final savedOnly = value['savedOnly'];
     if ((value['type'] != 'passwordRequest' &&
             value['type'] != 'keyPassphraseRequest') ||
         remaining is! int ||
         remaining < 0 ||
         remaining > 60000 ||
-        (value.containsKey('savedAvailable') && savedAvailable is! bool)) {
+        (value.containsKey('savedAvailable') && savedAvailable is! bool) ||
+        (value.containsKey('savedOnly') && savedOnly is! bool) ||
+        (savedOnly == true &&
+            (savedAvailable != true || value['type'] != 'passwordRequest'))) {
       throw _invalid();
     }
     return SshPasswordRequest(
@@ -33,14 +95,18 @@ final class SshPasswordRequest extends SshEvent {
       ticketId: _identifier(value['ticketId']),
       binding: _sshBinding(value['binding']),
       remainingMillis: remaining,
+      endpoint: SshPromptEndpoint._parse(value),
+      hop: _sshPromptHop(value['hop']),
       keyPassphrase: value['type'] == 'keyPassphraseRequest',
       savedAvailable: savedAvailable == true,
+      savedOnly: savedOnly == true,
     );
   }
 
   final String ticketId, binding;
-  final int remainingMillis;
-  final bool keyPassphrase, savedAvailable;
+  final SshPromptEndpoint endpoint;
+  final int remainingMillis, hop;
+  final bool keyPassphrase, savedAvailable, savedOnly;
 }
 
 final class SshPasswordRequestDismissed extends SshEvent {
@@ -109,9 +175,10 @@ extension SshPasswordPromptApi on SshPasswordApi {
     bool useSaved = false,
     bool save = false,
   }) {
-    if (useSaved
-        ? !ticket.savedAvailable || password.isNotEmpty || save
-        : sshPasswordError(password) != null) {
+    if (ticket.savedOnly && !useSaved ||
+        (useSaved
+            ? !ticket.savedAvailable || password.isNotEmpty || save
+            : sshPasswordError(password) != null)) {
       throw _invalid();
     }
     final encoded = utf8.encode(password);

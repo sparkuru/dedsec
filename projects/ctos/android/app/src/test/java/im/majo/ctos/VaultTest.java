@@ -137,6 +137,79 @@ public final class VaultTest {
         try (AppSecrets.Verified recovered = AppSecrets.verify(store.bytes, replacement)) { assertEquals(2, recovered.manifest.entries.size()); }
     }
 
+    @Test public void uncertainCommitRetainsItsReceiptWhenLockCleanupFails() throws Exception {
+        vault.unlock(PASSWORD, () -> { });
+        AppSecrets.ImportPreview preview = vault.preview(fixture, PASSWORD, PASSWORD, "pending", () -> { });
+        byte[] previewKey = preview.source.key;
+        byte[] previewPlaintext = preview.source.plaintext;
+        assertFalse(Arrays.equals(new byte[previewKey.length], previewKey));
+        VaultOperation pending = new TotpVaultAdapter(vault).request("totp1");
+        IllegalStateException cleanupFailure = new IllegalStateException("fixture revocation unconfirmed");
+        int[] calls = {0};
+        VaultSession.Revocation owned = new VaultSession.Revocation() {
+            private boolean active = true;
+            @Override public boolean active() { return active; }
+            @Override public void revoke() { calls[0]++; active = false; throw cleanupFailure; }
+        };
+        vault.session.attachRevocation(vault.session.epoch(), owned);
+        java.lang.reflect.Field keyField = VaultSession.class.getDeclaredField("key");
+        keyField.setAccessible(true);
+        byte[] sessionKey = (byte[]) keyField.get(vault.session);
+        store.uncertain = true;
+        char[] replacement = "replacement".toCharArray();
+        try {
+            vault.changePassword(PASSWORD, replacement, replacement, () -> { });
+            fail("An uncertain write must not report success");
+        } catch (VaultException failure) {
+            assertEquals("VAULT_COMMIT_UNCERTAIN", failure.code);
+            assertArrayEquals(new Throwable[]{cleanupFailure}, failure.getSuppressed());
+        }
+        assertEquals(1, calls[0]);
+        assertFalse(vault.session.unlocked());
+        assertArrayEquals(new byte[sessionKey.length], sessionKey);
+        assertArrayEquals(new byte[previewKey.length], previewKey);
+        assertArrayEquals(new byte[previewPlaintext.length], previewPlaintext);
+        java.lang.reflect.Field ownerField = VaultSession.class.getDeclaredField("revocation");
+        ownerField.setAccessible(true);
+        assertSame(owned, ownerField.get(vault.session));
+        java.lang.reflect.Field operationsField = AppSecrets.class.getDeclaredField("operations");
+        operationsField.setAccessible(true);
+        java.util.Map<?, ?> operations = (java.util.Map<?, ?>) operationsField.get(vault);
+        assertSame(pending, operations.get(pending.requestId));
+        try { vault.session.lock(); fail("Unconfirmed native cleanup must not be repeated"); }
+        catch (IllegalStateException expected) { assertEquals(1, calls[0]); }
+        try (AppSecrets.Verified recovered = AppSecrets.verify(store.bytes, replacement)) {
+            assertEquals(2, recovered.manifest.entries.size());
+        }
+    }
+
+    @Test public void uncertainCommitRetainsItsReceiptWhenPreviewCleanupFails() throws Exception {
+        vault.unlock(PASSWORD, () -> { });
+        AppSecrets.ImportPreview preview = vault.preview(fixture, PASSWORD, PASSWORD, "pending", () -> { });
+        VaultManifest manifest = preview.source.manifest;
+        java.lang.reflect.Field manifestField = AppSecrets.Verified.class.getDeclaredField("manifest");
+        manifestField.setAccessible(true);
+        manifestField.set(preview.source, null); // Inject a Java-only preview close failure.
+        store.uncertain = true;
+        char[] replacement = "replacement".toCharArray();
+        try {
+            try {
+                vault.changePassword(PASSWORD, replacement, replacement, () -> { });
+                fail("An uncertain write must not report success");
+            } catch (VaultException failure) {
+                assertEquals("VAULT_COMMIT_UNCERTAIN", failure.code);
+                assertEquals(1, failure.getSuppressed().length);
+                assertTrue(failure.getSuppressed()[0] instanceof NullPointerException);
+            }
+            assertFalse(vault.session.unlocked());
+            assertArrayEquals(new byte[preview.source.key.length], preview.source.key);
+            assertArrayEquals(new byte[preview.source.plaintext.length], preview.source.plaintext);
+        } finally {
+            manifestField.set(preview.source, manifest);
+            preview.close();
+        }
+    }
+
     @Test public void cancellationBeforeCommitClaimPreservesOldGenerationAndWrapper() throws Exception {
         store.quick = new byte[] {7};
         VaultRequestPhase phase = new VaultRequestPhase();
@@ -321,6 +394,28 @@ public final class VaultTest {
         closed.close();
         rejects("VAULT_EXPIRED", () -> ssh.trustRequest(closed));
         assertArrayEquals(fixture, store.bytes);
+    }
+
+    @Test public void trustCommitInvalidatesPriorRequestAndStaleBaseCannotOverwriteIt() throws Exception {
+        vault.unlock(PASSWORD, () -> { });
+        SshVaultAdapter ssh = new SshVaultAdapter(vault, (connection, target) -> { }, exact -> { });
+        try (SshTrustProposal first = trustProposal("first approved trust");
+             SshTrustProposal stale = trustProposal("second stale trust")) {
+            VaultOperation issuedBeforeCommit = ssh.trustRequest(stale);
+            VaultOperation firstRequest = ssh.trustRequest(first);
+            long previousEpoch = vault.session.epoch();
+            ssh.updateTrust(firstRequest, first, () -> { });
+            assertNotEquals(previousEpoch, vault.session.epoch());
+            byte[] committed = store.bytes.clone();
+            rejects("VAULT_OPERATION", () -> ssh.updateTrust(issuedBeforeCommit, stale, () -> { }));
+            VaultOperation issuedAfterCommit = ssh.trustRequest(stale);
+            rejects("VAULT_CHANGED", () -> ssh.updateTrust(issuedAfterCommit, stale, () -> { }));
+            assertArrayEquals(committed, store.bytes);
+            try (AppSecrets.Verified verified = AppSecrets.verify(store.bytes, PASSWORD)) {
+                assertEquals("first approved trust",
+                        new String(verified.manifest.files.get(2).content, StandardCharsets.UTF_8));
+            }
+        }
     }
 
     private static SshTrustProposal trustProposal(String newContent) throws Exception {

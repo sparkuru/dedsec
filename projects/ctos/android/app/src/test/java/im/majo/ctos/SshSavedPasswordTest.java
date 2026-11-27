@@ -408,6 +408,66 @@ public final class SshSavedPasswordTest {
         }
     }
 
+    @Test public void chainedRolesReadOnlyTheirOwnSavedPassword() throws Exception {
+        byte[] jumpSecret = "jump synthetic password".getBytes(StandardCharsets.UTF_8);
+        byte[] targetSecret = "target synthetic password".getBytes(StandardCharsets.UTF_8);
+        try (Fixture fixture = new Fixture(); SshRoleRegistry roles = new SshRoleRegistry(fixture.clock)) {
+            SshSavedPassword jump = new SshSavedPassword(profile("jump.invalid", 2221, "jump-user"));
+            SshSavedPassword target = new SshSavedPassword(profile("target.invalid", 2222, "target-user"));
+            fixture.save(jump.profile, jumpSecret);
+            fixture.save(target.profile, targetSecret);
+            SshRoleContext.PublicView view = () -> true;
+            byte[] jumpNonce = nonce(), targetNonce = nonce(), connection = nonce();
+            targetNonce[0] = 2;
+            SshRoleContext jumpRole = roles.issue(new SshRoleContext.Bootstrap(SshRoleContext.Program.JUMP,
+                    123, 0, "connection", jump.target, jump.profile.host, jump.profile.port, "view",
+                    jumpNonce, connection, 31000, "chain:target"), view);
+            SshRoleContext targetRole = roles.issue(new SshRoleContext.Bootstrap(SshRoleContext.Program.CLIENT,
+                    123, 1, "connection", target.target, target.profile.host, target.profile.port, "view",
+                    targetNonce, connection, 31000, "chain:target"), view);
+            assertNotEquals(jumpRole.targetIdentity, targetRole.targetIdentity);
+            SshAuthenticationSelection jumpSelection = SshAuthenticationSelection.password(
+                    jumpRole, jump.profile.username, jump.entryId, fixture.clock);
+            SshAuthenticationSelection targetSelection = SshAuthenticationSelection.password(
+                    targetRole, target.profile.username, target.entryId, fixture.clock);
+            SshHostKeyAuthority authority = new SshHostKeyAuthority();
+            SshHostKeyAuthority.Proof jumpProof = authority.requireVerified(jumpRole,
+                    SshHostKeyAuthority.Evidence.fromNative(jumpRole, SshHostKeyAuthority.Classification.KNOWN,
+                            "ssh-ed25519", "SHA256:" + "A".repeat(43), nonce(), nonce()), null);
+            SshHostKeyAuthority.Proof targetProof = authority.requireVerified(targetRole,
+                    SshHostKeyAuthority.Evidence.fromNative(targetRole, SshHostKeyAuthority.Classification.KNOWN,
+                            "ssh-ed25519", "SHA256:" + "B".repeat(43), nonce(), nonce()), null);
+            SshKexProof jumpKex = SshKexProof.fromNative(jumpRole, jumpProof, 1, nonce());
+            SshKexProof targetKex = SshKexProof.fromNative(targetRole, targetProof, 1, nonce());
+            SshCredentialBridge bridge = new SshCredentialBridge(fixture.vault, authority, fixture.clock);
+            SshCredentialBridge.Request jumpRequest = bridge.openSelection(jumpRole, jumpProof, jumpSelection,
+                    jumpKex, () -> { });
+            byte[][] jumpLoan = new byte[1][];
+            bridge.release(jumpRequest, jumpKex, jumpSelection, bytes -> {
+                assertArrayEquals(jumpSecret, bytes);
+                jumpLoan[0] = bytes;
+            });
+            assertArrayEquals(new byte[jumpSecret.length], jumpLoan[0]);
+            SshCredentialBridge.Request targetRequest = bridge.openSelection(targetRole, targetProof,
+                    targetSelection, targetKex, () -> { });
+            byte[][] targetLoan = new byte[1][];
+            bridge.release(targetRequest, targetKex, targetSelection, bytes -> {
+                assertArrayEquals(targetSecret, bytes);
+                targetLoan[0] = bytes;
+            });
+            assertArrayEquals(new byte[targetSecret.length], targetLoan[0]);
+            SshAuthenticationSelection wrongJump = SshAuthenticationSelection.password(
+                    jumpRole, jump.profile.username, target.entryId, fixture.clock);
+            SshAuthenticationSelection wrongTarget = SshAuthenticationSelection.password(
+                    targetRole, target.profile.username, jump.entryId, fixture.clock);
+            code("SSH_AUTH_SELECTION", () -> bridge.openSelection(jumpRole, jumpProof, wrongJump, jumpKex, () -> { }));
+            code("SSH_AUTH_SELECTION", () -> bridge.openSelection(targetRole, targetProof, wrongTarget, targetKex, () -> { }));
+        } finally {
+            VaultCodec.wipe(jumpSecret);
+            VaultCodec.wipe(targetSecret);
+        }
+    }
+
     @Test public void authenticatedSourceAccountReplacementAfterBeginCannotReleaseOldSelectedSecret() throws Exception {
         try (Fixture f = new Fixture()) {
             SshSavedPassword saved = new SshSavedPassword(profile("fixture.invalid", 2222, "user"));

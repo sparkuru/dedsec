@@ -1,5 +1,87 @@
 # SSH 终端实施计划
 
+当前测试由用户安排的其他 agent／session 执行，Codex 负责交接和独立审核；[测试单与协议](../../../design/agent-test-handoff.md)。后续实现继续沿本父任务推进，计划中的能力不视为已通过测试。
+
+## 2026-11-27 接续：终端接续明确未开始的会话撤销（局部完成）
+
+- [x] 接续原 session 已确认 native 撤销未开始时的端口取消：在原会话与 terminal owner 之间传递可证明的重试状态，按原所有权调度有界重试，成功后继续正常关闭。
+- [x] 实现限于 `SshNativeSession` 的取消／逐跳聚合、`SshTerminalSession` 的端口取消与关闭调度及必要测试；JNI 抛错或混合未知结果不能按未开始重试，已开始的 close、callback-only 清理与其他 owner 各自保留原约束。自动重试耗尽后保留原 owner，并允许后续明确 Stop 再次尝试；内部 `stop()` 不重置同一次外部 Stop 的预算。
+- [x] 定向 JVM 和真实 host JNI 故障注入检查明确未开始、重复明确未开始、未知 begin／end、后续独立取消在途和多跳混合结果。[验证](../../../design/verification.md#20261127-ssh-terminal-session-cancel-retry)。首次取消与已准入 close 的竞争仍保留原有未确认处理；此切片不开放逐跳首次信任，不推定 Android 生命周期或设备结果。
+
+## 2026-11-23 接续：逐跳首次信任（进行中）
+
+- [x] 将原连接 shared STOP 接入选定 Java／JNI 凭据复制及 native 认证、签名和传输效果；逐跳效果仍保留原生 generation。独立撤销、信任写入及整链清理未由此完成。[实现](../../../design/verification.md#20261127-ssh-native-stop-effects)／[本地验证](../../../design/verification.md#20261127-ssh-shared-stop-verification)。
+- [x] 为密码／口令／KBI 邮箱及主机指纹审阅的票据、答复和 owner 转交，以及配置凭据 mutation context、自动保存 context／字节接管增加共享 STOP 局部准入；共享 effect fence 撤销异常时仅擦除连接器仍独占的排队字节并取消提示。[实现](../../../design/verification.md#20261127-ssh-prompt-mutation-stop)／[本地验证](../../../design/verification.md#20261127-ssh-shared-stop-verification)。
+- [x] 为选定已启动材料、延迟 key phrase 和自动保存安装加入 shared STOP 局部准入，并按精确 owner 清理不确定回执对应的预览；处理旧 owner 撤销未知时已锁屏的新请求结果。实施时停止测试，后续已做本地回归，Android 生命周期仍未验证。[实现](../../../design/verification.md#20261127-ssh-started-material-preview)／[本地验证](../../../design/verification.md#20261127-ssh-shared-stop-verification)。
+- [x] 服务在同步取消回调前发布精确 owner，创建结果结算不被屏锁／服务拒绝抢先覆盖；bridge 对实际结果最多尝试一次回复，并保留已知不确定回执。[合同](../../spec/backend/ssh-connection-result-delivery.md)／[验证与限制](../../../design/verification.md#20261127-ssh-result-delivery)。
+- [x] 将未启动 connector 的材料退役与真正 create／共享 STOP 准入排序，保留已接管 factory 的原 owner；覆盖构造器和同步 attach 失败。[合同](../../spec/backend/ssh-connector-unstarted-retirement.md)／[最终验证与边界](../../../design/verification.md#20261127-ssh-connector-retirement)。
+- [x] 锁库、后台及 trust epoch 失效失败时擦除 Java key 并保留未确认 lease；真实 lease destroy 失败向 shared owner 报告，保存不确定回执不会被锁库清理异常覆盖。[合同](../../spec/backend/ssh-vault-revocation-ownership.md)／[验证与边界](../../../design/verification.md#20261127-ssh-vault-revocation)。
+- [x] 共享停止及首因先于 native 撤销可见；未附着 owner 清理、终端连接结果和 connector handoff 与停止排序，未确认时保留原 owner，普通可重试关闭仍按原合同等待。[验证及限制](../../../design/verification.md#20261125-ssh-stop-owner-delivery)。
+- [x] 增加 terminal 本地停止准入：native 撤销异常时拒绝新的 terminal I/O 和输出、擦除排队输入并保留未确认的 terminal owner；已准入操作可能稍后完成。[合同](../../spec/backend/ssh-terminal-stop-intent.md)。
+- [x] 为 session 自身及 shared view 的撤销、callback／revoke 和 close 增加独立确认状态；明确未开始可按原对象重试，未知结果保留原 owner。[会话合同](../../spec/backend/ssh-session-cancellation-ownership.md)／[视图合同](../../spec/backend/ssh-shared-view-cancellation.md)。
+- [x] 信任回执确认按停止请求排序，避免 native 撤销仍等待或异常时误确认可能已写入的 NEW／CHANGED 回执；已确认的先前回执保持原结果。[合同](../../spec/backend/ssh-trust-commit-ack.md)／[验证](../../../design/verification.md#20261125-ssh-trust-stop-order)。
+- [ ] 完成跨层取消异常修复：host-review 后的信任写入、其余 mutation／operation、已准入材料后续清理、独立 callback／session／vault 撤销与其他 native 效果、其他显式 operation 移除、vault begin 失败后的独立 lease／role、创建期内部 session 与整链释放仍需统一处理；terminal 首次取消与已准入 close 的竞争仍需单独处理。bridge 至多尝试一次回复，不能证明实际送达。局部门禁不是创建期或持久化保护。[当前验证与边界](../../../design/verification.md#20261127-ssh-terminal-session-cancel-retry)。
+- [x] 补充 `StrictHostKeyChecking ask` 下真实双 sshd 的未知跳板／未知目标拒绝基线，分别确认认证前无密码、无信任写入；模拟 UI 覆盖两跳指纹和密码的实际 endpoint 顺序。[验证](../../../design/verification.md#20261123-ssh-jump-product-open)。
+- [x] 为真实 child NEW 增加 native-only 临时 pin 与签名 KEX pending，禁止由其产生凭据证明、认证或 shell；默认生产路径继续拒绝 NEW。ARM64/QEMU 合成加密子连接专项及独立源码复核通过，JNI 和持久化仍未接入。
+- [x] 用测试专用 JNI hook 接入真实 Java callback、加密库和 child：核验 receiver/source/候选身份、重放和清理重试；生产 JNI 不注册 hooks，时点检查不等于写入授权。
+- [x] 修复 provider/source/receipt 嵌套 invalidation 失败时的精确 owner 清理重试；区分禁止新用、清理完成与 begin/end 结果不确定，不重复结束全局 invalidator，child 关闭未完成时也不得继续发送。已 adopted 与未 adopted 路径均经真实 JNI 故障夹具验证；旧的其他 invalidation 路径不由此推定覆盖。[结果](../../../design/verification.md#20261123-ssh-jump-provisional-new)。
+- [x] 增加受原始逐跳期限和 effect generation 约束的 native-only 保守空闲快照，以及独立的邮箱锁外轮询骨架；前者拒绝任何已观察到的 child 入站数据，后者仍使用普通 Review，二者没有接入产品或互相接通。[合同](../../spec/backend/ssh-proxyjump-child.md#scenario-provisional-new-idle-snapshot-and-review-waiting)。
+- [x] 在测试专用真实 child／JNI 中构造绑定原始签名候选和来源的一次性非授权审阅对象；新增独立的 AEAD 受限输入原语，可分段检查并丢弃一条合法广告的 `EXT_INFO`。该阶段两项均非产品能力，后续测试夹具接线见下条。[合同](../../spec/backend/ssh-proxyjump-child.md#scenario-signed-new-fixture-review-and-bounded-extension-input)。
+- [x] 测试夹具内将签名票据绑定精确 child，以原逐跳期限在 owner 线程推进父连接／relay／受限 JNI poll；同意后非 idle 继续等待，缺 poll 入口及失效状态拒绝。该切片不提交信任或交付凭据。[验证](../../../design/verification.md#20261123-ssh-jump-pending-integrated)。
+- [x] 测试夹具内在同意和提示关闭后一次性保留精确候选；provider 与候选别名的消费竞争、关闭及邮箱取消按各自锁序拒绝或撤销。保留不授予写入、凭据或跨链取消准入。[验证](../../../design/verification.md#20261123-ssh-jump-candidate-reservation)。
+- [x] 由原 provider 一次性转交已保留的测试候选正文，保持原 owner／child 约束及相关关闭时擦除；该对象仍不授予信任写入或认证能力。[验证及代次反例](../../../design/verification.md#20261125-ssh-jump-candidate-transfer)。
+- [ ] 将用户指纹审核移到 native step／JNI 锁之外；设计 pending 期间不认证的子连接输入检查、父连接与 relay 推进和明确的审核期限。现有 child `step()` 与密码提示 poll 均不能直接用于此状态。[调用链](research/proxyjump-new-post-kex-review-20261123.md)。
+- [ ] 将测试夹具的可取消待审流程安全接到产品，并补受限解析器异常、扩展广告和 JNI 远端断开等负例；不能把时点空闲采样、单次签名就绪或普通 NEW Proof 当成写入准入。
+- [ ] 建立同一候选与签名证据的一次性信任写授权及撤销／持久化回执；评估先退役旧链再提交，不能复用已关闭的 role／view 或兼容测试入口。候选消费、逐跳期限、generation 和不确定回执须共同处理，避免将时点采样当成保留。[锁序与清理研究](research/proxyjump-new-trust-cas-retry-20261123.md)／[写入边界](research/proxyjump-new-write-boundaries-20261123.md)。
+- [ ] 另行完成首跳 NEW：它是无上游 relay 的 JUMP 角色，不能直接套用普通直连审核／写入及 child-only pending；须保留逐跳期限、精确来源和写入后的 revision 保护。[首跳研究](research/proxyjump-root-new-trust-20261123.md)。
+- [ ] 解决明确重连结果的发布、service owner 真正释放、配置 binding 刷新和逐跳重新确认，再以真实 sshd 和 Android 分层验证。
+
+## 2026-11-23 接续：受限单跳已贯通，首次使用未完成
+
+- [x] 开放已知主机、逐跳已保存密码确认的单跳产品路线；多跳在联网前拒绝，配置列表与 `ProxyJump none` 同步。
+- [x] 在本机隔离真实 sshd 验证正式 connector、加密库与 JNI：目标 PTY、错误目标密钥、目标确认取消、多跳拒绝和清理；完整 Flutter／JVM／lint／release 构建通过。[验证](../../../design/verification.md#20261123-ssh-jump-product-open)。
+- [ ] 完成逐跳首次主机指纹核验和受保护写入；尤其目标只能经跳板访问时，不能假设用户已能预置信任。保持祖先撤销、CAS、代次、取消和可能已提交未确认的顺序。
+- [ ] 完成每跳当次输入／保存密码、逐跳私钥和 KBI，随后扩展多跳、后台生命周期与设备验证。已开放的受限切片不能代替父任务全部验收。
+
+## 2026-11-23 接续：产品入口与逐跳确认（进行中）
+
+以下是本轮开放之前的历史检查点；当前状态以上一节为准。
+
+- [x] 对精确生产路线准备接入逐跳角色、会话和清理草案；在实际保护与互通完成前，产品总门禁在联网及认证交付前拒绝跳板。
+- [x] 增加每跳已保存密码的明确确认协议及界面；单独提示真实 endpoint、只允许确认或取消，仍不代表产品跳板可用。
+- [x] 将本机 Docker 实测推进到原样生产 connector：跳板被前置拒绝、普通配置直连真实 sshd 并执行 shell。该次为中间源码快照，最终版本需重建重跑。[验证](../../../design/verification.md#20261123-ssh-jump-product-gated)。
+- [ ] 完成并独立复核祖先取消、库和 view／role 失效与实际 secret clone、JNI 复制和密码建包的共同顺序。当前实验性失效／排空骨架尚未接入真实效果，不构成可开放许可。
+- [ ] 为每跳接入服务端方法发现和实际配置优先顺序；现有草案仅检查配置包含 password 就提前提示并直接发起认证，不能开放。修复等待用户确认期间误 step 已完成 KEX session 导致的 `SSH_SESSION_COMPLETE`；同时维持当前跳、祖先及 relay 活性。核对逐跳 `ConnectTimeout` 的起点及用户交互耗时。
+- [ ] 在不修改生产门禁或源码的前提下，验证已知主机、逐跳确认的真实跳板登录及逆序清理；再扩展首次／换键信任、当次输入、私钥、KBI、多跳和后台。列表需与最终连接策略同步开放，并覆盖 `ProxyJump none` 和原预算。
+
+## 2026-11-18 接续：受管 ProxyJump 前置能力（进行中）
+
+1. [x] 核对现有固定 OpenSSH 解析、direct/profile 拒绝门禁和旧探针的覆盖边界。[设计](../../../design/ssh-proxyjump.md)。
+2. [x] 增加只读原生有序跳板声明，复用既有解析和原始生命周期；不得视为完整逐跳连接计划或解除现有拒绝。
+3. [x] 运行实际解析器和原有连接门禁回归，记录结果与剩余逐跳配置、认证、信任和传输工作。[验证](../../../design/verification.md#20261118-ssh-proxyjump-declaration)。
+4. [x] 在同一受保护配置快照上实现原生逐跳有效配置、嵌套优先级、有限循环检查和累计预算；链构建失败不公布部分结果，清理失败可重试。[验证](../../../design/verification.md#20261118-ssh-proxyjump-route)。
+5. [x] 增加只允许已认证 JUMP 角色使用、绑定下一角色的原生 `direct-tcpip` 通道；扩容至八跳加目标的九个角色，并用双层合成 SSH 验证独立主机证明、认证与终端数据。[验证](../../../design/verification.md#20261118-ssh-proxyjump-channel)。
+6. [x] 增加由跳板通道持有的原生有界本地字节中继，覆盖背压、半关闭、取消与中继／父会话的精确清理顺序；双层 SSH 中下游服务端仍由测试驱动。[验证](../../../design/verification.md#20261118-ssh-proxyjump-relay)。
+7. [x] 增加内部原生子连接与递归祖先证明；保护已排队子端密文、callback 角色／所有权、原线程重试及 fd 复用，并用多层合成链验证。[合同](../../spec/backend/ssh-proxyjump-child.md)、[结果](../../../design/verification.md#20261118-ssh-proxyjump-child)。
+8. [x] 在原生客户端和实时配置求值器之间独占活跃 borrow，保留构造失败、原所有者清理重试及内部线性指针边界。[合同](../../spec/backend/ssh-view-borrow-ownership.md)。
+9. [x] 修复现有直连 NEW／CHANGED 信任写入和 native 确认之间的取消／屏锁回执，保持凭据保存与服务错误的已有优先级。[合同](../../spec/backend/ssh-trust-commit-ack.md)。
+10. [x] 增加绑定真实 native child 分派回调的顺序祖先证明检查，拒绝伪造/直接调用；这是内部时点检查，不授予效果能力。ARM64 多层专项已通过。[合同](../../spec/backend/ssh-proxyjump-callback-proof.md)、[验证](../../../design/verification.md#20261120-ssh-callback-output)。
+11. [x] 对现有 Java 终端 data 和 replay 快照按 owner／代次与取消顺序准入；已准入 listener 的物理完成、role/view/祖先独立失效仍有明确边界。[合同](../../spec/backend/ssh-terminal-output-cancellation.md)。
+12. [x] 增加仅在真实分派范围内可用的私有 JNI 时点检查，绑定精确 Java receiver、callback、原线程与环境，不重入 session 表；该原语尚不参与产品效果。
+13. [x] 用主机 JVM 将真实 JNI callback／session 锁和原生一跳、两跳加密合成链串在一起，验证 host／KEX／选中凭据回调、直接及更深祖先取消、精确 receiver 与字节擦除；测试使用自有 Java receiver 和手工 session 登记，不构成产品连接。[验证](../../../design/verification.md#20261120-ssh-callback-jni-multihop)。
+14. [x] 增加已建立子端后的原生跳板逐跳晋升、双向链证明和认证权限退役；受管视图撤销与最终借用释放共同排序，发布前复核角色期限。该原语没有共享 Java 租约或产品后台 owner。[合同](../../spec/backend/ssh-proxyjump-retained-transport.md)、[验证](../../../design/verification.md#20261120-ssh-jump-retain)。
+15. [x] 用真实加密库的基础测试确认第一次信任提交推进 epoch、使旧请求失效，并拒绝新请求携带的旧内容摘要；夹具使用兼容测试入口和内存 Store，不等同产品多跳。
+16. [x] 用同一真实 native 受管句柄和三个独立 borrow 运行三层 SSH／目标 JNI 合成链，覆盖逐跳晋升、统一撤销、回调内撤销及确认句柄最终释放；Java 共享 lease 和实际信任效果仍未实现。[验证](../../../design/verification.md#20261120-ssh-shared-view-native)。
+17. [ ] 沿[连接主线](../../../design/ssh-proxyjump.md#连接主线与阻塞顺序2026-11-20)完成产品链，而不是继续把孤立前置测试视为交付：
+    - [ ] 实现并接入精确 Java 共享租约的链 owner：各 native 借用独立退役，未完成的借用阻止普通关闭；锁屏／取消立即撤销，清理失败由原 owner 重试。内部 owner 和会话打开重载已实现并经分层验证；产品连接器、真实跳板晋升及其他 native owner 的完整清理尚未接入。[结果](../../../design/verification.md#20261120-ssh-shared-java-view)。
+    - [ ] 接入生产 JNI 父子会话与逐跳角色编排，保留完整的失败清理所有权；先保持产品拒绝门禁。内部 Java／JNI 子会话 owner、跳板状态／中继／晋升及失败清理已实现；产品连接器、真实角色链和后台 owner 尚未调用。[结果](../../../design/verification.md#20261120-ssh-jump-jni-owner)。
+    - [ ] 使每跳 native 主机分类和 Java trust CAS 使用同一份当前受保护信任来源。内部 fresh Java/JNI owner 已绑定同次真实库读取的 child receipt／wire，逐类 host evidence 复核 base digest；fresh 敏感效果在真正的祖先 guard 实现前主动拒绝，原租约继续负责撤销。真实 vault／生产 Java callback／JNI 尚未同次贯通，own CAS 后的更新来源及最终效果仍待实现；旧无来源 child 入口仅供 fake view／fake native 测试，受管 lease 或生产 JNI binding 会被拒绝。
+    - [ ] 分离整条链的共同身份与每跳账号身份，保持旧角色格式兼容；逐跳保存凭据各自按 host／port／username／key 精确绑定。内部 v2 已区分 chain／target 且拒绝混版本。每跳 trust provider 现在独占一次性 receipt，共享取消并聚合未确认写入；下一跳须消费已认证 parent session 的精确 `JumpAdmission`。该准入只顺序检查 Java 祖先，不是 native 效果原子 guard；产品 factory 尚未发行逐跳角色，同一 hop 的多笔写入另需设计。
+    - [ ] 让逐跳认证及审阅展示实际 endpoint／账号。密码、私钥口令和 KBI 提示及 NEW／CHANGED 审阅已携带实际角色的 endpoint／hop，审阅分别等待每笔确认；排队后的失效 NEW 在发布前复查，但检查与发送非原子。产品多跳 factory、各跳密钥选择及可信路由绑定后的跳板换键审阅仍未完成。
+    - [ ] 将实际祖先撤销、信任提交、秘密最终复制及输出发布建立共同顺序，处理持久化结果不确定及清理重试；用真实 Java／秘密库／JNI 联合验证一条单跳链。
+    - [ ] 完成多跳、后台 owner、界面及真实服务器互通；当前语法循环检查不证明实际端点无循环。实际终端 NativePort 已能冻结并调度内部父子链、逐跳保留和逆序清理，但产品 factory、真实效果及后台端到端仍未完成。[设计](../../../design/ssh-proxyjump.md#java-终端的跳板链调度)。全部门禁及授权范围内验证完成后才考虑开放产品连接。
+18. [x] 按用户授权创建可重建的本机隔离 Docker 测试环境，贯通真实 sshd 上的原生单跳正向和错误目标密钥拒绝；生产 Java／JNI／vault 产品链及多跳仍在第 17 项。[环境](../../../design/ssh-proxyjump.md#本机隔离-openssh-跳板测试环境)、[验证](../../../design/verification.md#20261120-ssh-jump-docker-interop)。
+
 ## 2026-11-18 隔离 OpenSSH 互通（指定板端到端通过）
 
 1. [x] 在无网络的临时 OpenSSH／PAM 服务器上验证 ARM64 原生 KBI 首方法、密码 PARTIAL 后同连接 KBI、拒绝与 PTY shell。

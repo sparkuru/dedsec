@@ -7,6 +7,10 @@ void main() {
 
   final request = <String, Object>{
     'type': 'passwordRequest',
+    'hop': 0,
+    'host': 'server.invalid',
+    'port': 2222,
+    'username': 'alice',
     'requestId': 'attempt_1',
     'ticketId': 'ticket_1',
     'binding': 'a' * 64,
@@ -19,6 +23,15 @@ void main() {
     expect(parsed.remainingMillis, 25000);
     expect(parsed.keyPassphrase, isFalse);
     expect(parsed.savedAvailable, isFalse);
+    expect(parsed.savedOnly, isFalse);
+    expect(parsed.endpoint.label, 'alice@server.invalid:2222');
+    expect(parsed.hop, 0);
+    for (final host in ['2001:db8::1', '[2001:db8::1]']) {
+      final endpoint =
+          (SshEvent.parse({...request, 'host': host}) as SshPasswordRequest)
+              .endpoint;
+      expect(endpoint.label, 'alice@[2001:db8::1]:2222');
+    }
     expect(
       (SshEvent.parse({...request, 'type': 'keyPassphraseRequest'})
               as SshPasswordRequest)
@@ -32,6 +45,25 @@ void main() {
       {...request, 'remainingMillis': 60001},
       {...request, 'remainingMillis': 'soon'},
       {...request, 'savedAvailable': 'true'},
+      {...request, 'savedOnly': 'true'},
+      {...request, 'savedOnly': true},
+      {...request, 'savedOnly': true, 'savedAvailable': false},
+      {
+        ...request,
+        'type': 'keyPassphraseRequest',
+        'savedOnly': true,
+        'savedAvailable': true,
+      },
+      {...request}..remove('host'),
+      {...request}..remove('port'),
+      {...request}..remove('username'),
+      {...request}..remove('hop'),
+      {...request, 'host': 'https://invalid'},
+      {...request, 'port': 0},
+      {...request, 'username': ''},
+      {...request, 'hop': -1},
+      {...request, 'hop': 9},
+      {...request, 'hop': '0'},
     ]) {
       expect(() => SshEvent.parse(bad), throwsFormatException);
     }
@@ -77,6 +109,43 @@ void main() {
         () => SshPasswordApi().passwordResponse(ticket, ''),
         throwsFormatException,
       );
+    },
+  );
+
+  test(
+    'saved-only confirmation cannot submit a typed or saved-new secret',
+    () async {
+      final messenger =
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+      const channel = MethodChannel('ctos/native');
+      final calls = <Map>[];
+      messenger.setMockMethodCallHandler(channel, (call) async {
+        calls.add(call.arguments as Map);
+        return {'accepted': true};
+      });
+      addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+      final ticket =
+          SshEvent.parse({
+                ...request,
+                'savedAvailable': true,
+                'savedOnly': true,
+              })
+              as SshPasswordRequest;
+      final api = SshPasswordApi();
+      expect(ticket.savedOnly, isTrue);
+      expect(
+        () => api.passwordResponse(ticket, 'synthetic'),
+        throwsFormatException,
+      );
+      expect(
+        () => api.passwordResponse(ticket, 'synthetic', save: true),
+        throwsFormatException,
+      );
+      expect(() => api.passwordResponse(ticket, ''), throwsFormatException);
+      expect(await api.passwordResponse(ticket, '', useSaved: true), isTrue);
+      expect(calls.single['password'], isEmpty);
+      expect(calls.single['useSaved'], isTrue);
+      expect(calls.single['save'], isFalse);
     },
   );
 

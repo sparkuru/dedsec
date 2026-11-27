@@ -1,0 +1,145 @@
+{
+  "schema_version": "1.0.0",
+  "kind": "test_task",
+  "worker_instructions": "执行方先阅读 test/codex-wont-do/template.json、AGENTS.md 和本任务所列资源；按模板领取并完成符合前置条件的测试，将实际结果和证据追加到本文件的 execution.attempts，交独立 Codex 审核。阻塞或失败时如实报告。",
+  "task_id": "20261127T062718Z-gpt-6-ssh-tcp-forwarding",
+  "state": "blocked",
+  "created_at_utc": "2026-11-27T06:44:11Z",
+  "creator": {
+    "agent": "codex",
+    "model": "gpt-6",
+    "model_precision": "family_only",
+    "start_timestamp_utc": "2026-11-27T06:27:18Z"
+  },
+  "request": {
+    "title": "SSH 配置中的 TCP 转发及会话清理",
+    "goal": "验证规划中的 LocalForward、固定目标 RemoteForward 和 DynamicForward 的真实传输、授权和停止资源回收。",
+    "baseline": {
+      "git_head": "d281fb5b6b770d137d44bf8d921e3743e7451691",
+      "dirty_worktree": true,
+      "pinned_files": [
+        {
+          "path": "android/app/src/main/java/im/majo/ctos/SshNativeSession.java",
+          "sha256": "c89a53acec83cd5a975163b6afc4f6e8090fbf627292adca3acc62142624adc7"
+        },
+        {
+          "path": "android/app/src/main/java/im/majo/ctos/SshTerminalSession.java",
+          "sha256": "a7b0e6003423f2dac627f6119ff1fd6a2c319bc2508e1adbac67a4ba5a1e4ffe"
+        },
+        {
+          "path": "android/app/src/main/java/im/majo/ctos/SshSessionOwner.java",
+          "sha256": "fffd8ebd782efa5a607a3300dd033ad0d9d2897e713cedf54d65c0a1b70918a9"
+        },
+        {
+          "path": "android/app/src/main/cpp/ssh_native_client.c",
+          "sha256": "3496b25dede9a9329ec0c85c27d1c5d4d44c7aee5727177771b9e266c20cf6ea"
+        }
+      ],
+      "capture_policy": "此快照仅记录任务创建时状态；实现或授权前置条件满足后由 Codex 刷新测试单的固定输入。执行方另记测试前后完整相关输入、dirty 状态和产物清单。"
+    },
+    "resources": {
+      "read": [
+        {
+          "path": "design/agent-test-handoff.md",
+          "why": "协作流程"
+        },
+        {
+          "path": "design/handoff-ssh-terminal-client.md",
+          "why": "SSH 当前状态与限制"
+        },
+        {
+          "path": "design/verification.md",
+          "why": "核对历史验证，避免重复或夸大"
+        },
+        {
+          "path": ".trellis/tasks/10-08-ssh-terminal/implement.md",
+          "why": "父任务剩余实施与验收计划"
+        },
+        {
+          "path": "design/ssh-terminal.md",
+          "why": "用户批准的基础转发方向与外部监听确认要求"
+        },
+        {
+          "path": "design/constraints.md",
+          "why": "安全与网络范围"
+        }
+      ],
+      "environment": [
+        "只使用本机、隔离或回环上的合成测试资源；不访问真实账号、凭据或生产服务。",
+        "测试环境与权限不足时如实阻塞，不安装依赖或扩大网络/设备权限。",
+        "使用隔离 SSH 对端和本机或隔离回环合成目标；不开放公网监听。"
+      ],
+      "allowed_writes": [
+        "build/codex-wont-do/<task_id>/<attempt_id>/ 下的专属报告、输入清单与无秘密日志",
+        "仅经测试单或后续明确授权的测试专用夹具与产物；保留完整 diff，不得修改产品行为或覆盖他人改动"
+      ],
+      "exclusive_locks": [
+        "android-release-build",
+        "ssh-test-inputs"
+      ],
+      "secrets_policy": "仅使用合成测试数据；禁止记录真实凭据、私钥、令牌和用户数据。"
+    },
+    "dependencies": [],
+    "preconditions": [
+      "Codex 先完成并审阅相关合同与产品实现，核对最新设计和可复用的历史覆盖，再细化本任务、更新固定输入并转 queued。"
+    ],
+    "cases": [
+      {
+        "id": "transport",
+        "exercise": "分别验证本地、固定目标远端和 SOCKS4/5 动态转发的双向合成数据，覆盖受支持的地址族。",
+        "pass": "端点与方向符合配置，传输双向可审计；不把监听建立误作数据传输成功。"
+      },
+      {
+        "id": "exposure-consent",
+        "exercise": "覆盖默认 loopback、明确非 loopback 的确认/拒绝/取消、配置变更及旧确认复用。",
+        "pass": "未经本次绑定的确认不建立对外监听，变更需要重新审核；远端实际范围未知时准确报告。"
+      },
+      {
+        "id": "failure-and-stop",
+        "exercise": "制造端口冲突、服务器拒绝及目标不可达，检查 ExitOnForwardFailure、后台重建和 Stop。",
+        "pass": "失败按配置正确终止或报告；不重复监听，Stop 后本次创建的监听与连接被回收。"
+      }
+    ],
+    "commands": [],
+    "acceptance": [
+      "三种转发均经真实产品会话与隔离对端验证，且监听授权和清理证据完整。",
+      "实际案例全部有可核对证据；记录失败、错误、跳过和未覆盖部分，缺少必需案例不得标 pass。"
+    ],
+    "stop_conditions": [
+      "native 基础转发或用户确认流程尚未接入，或需要未经授权的对外监听。",
+      "需修改产品代码、未授权设备/外部网络/真实账号、资源缺失或固定源码不匹配时停止并记录原因；不更改验收标准。"
+    ],
+    "codex_review": [
+      "核对 listener 方向、绑定地址、实际数据、会话/配置确认归属和停止后的资源回收。",
+      "核对执行者独立性、当前授权与范围，源码和测试前后输入、产物哈希、实际命令/退出码、每个案例与跳过项及证据。",
+      "检查测试专用代码和 diff，区分测试报告被接受、实际测试通过和产品任务完成。"
+    ]
+  },
+  "blockers": [
+    {
+      "kind": "implementation_or_contract",
+      "detail": "父任务仍需接入 native 基础 TCP 转发、监听确认、失败策略与 Stop 清理。",
+      "release_condition": "Codex 完成并审阅必要合同／实现及权限，复核既有覆盖、更新断言和固定源码后转 queued。"
+    }
+  ],
+  "execution": {
+    "claim": null,
+    "attempts": []
+  },
+  "review": {
+    "status": "pending",
+    "reviewer": null,
+    "reviewed_at_utc": null,
+    "findings": [],
+    "decision_scope": null,
+    "decisions": []
+  },
+  "history": [
+    {
+      "at_utc": "2026-11-27T06:44:11Z",
+      "actor": "codex",
+      "event": "created",
+      "detail": "父任务仍有对应未完成设计或实现；建立未来测试请求，未执行测试。"
+    }
+  ]
+}

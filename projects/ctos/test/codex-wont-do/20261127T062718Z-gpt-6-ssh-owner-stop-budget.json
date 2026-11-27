@@ -1,0 +1,159 @@
+{
+  "schema_version": "1.0.0",
+  "kind": "test_task",
+  "worker_instructions": "执行方先阅读 test/codex-wont-do/template.json、AGENTS.md 和本任务所列资源；按模板领取并完成符合前置条件的测试，将实际结果和证据追加到本文件的 execution.attempts，交独立 Codex 审核。阻塞或失败时如实报告。",
+  "task_id": "20261127T062718Z-gpt-6-ssh-owner-stop-budget",
+  "state": "queued",
+  "created_at_utc": "2026-11-27T06:39:36Z",
+  "creator": {
+    "agent": "codex",
+    "model": "gpt-6",
+    "model_precision": "family_only",
+    "start_timestamp_utc": "2026-11-27T06:27:18Z"
+  },
+  "request": {
+    "title": "真实 owner 到 terminal/native 的 Stop 预算与重试",
+    "goal": "补齐先前模式 130 只模拟 terminal 调用的缺口：在真实 Java owner 驱动下，验证同一次 Stop 的 bounded retry 与后续显式 Stop。",
+    "baseline": {
+      "git_head": "d281fb5b6b770d137d44bf8d921e3743e7451691",
+      "dirty_worktree": true,
+      "pinned_files": [
+        {
+          "path": "android/app/src/main/java/im/majo/ctos/SshNativeSession.java",
+          "sha256": "c89a53acec83cd5a975163b6afc4f6e8090fbf627292adca3acc62142624adc7"
+        },
+        {
+          "path": "android/app/src/main/java/im/majo/ctos/SshTerminalSession.java",
+          "sha256": "a7b0e6003423f2dac627f6119ff1fd6a2c319bc2508e1adbac67a4ba5a1e4ffe"
+        },
+        {
+          "path": "android/app/src/main/java/im/majo/ctos/SshSessionOwner.java",
+          "sha256": "fffd8ebd782efa5a607a3300dd033ad0d9d2897e713cedf54d65c0a1b70918a9"
+        },
+        {
+          "path": "android/app/src/test/jni-vault-chain/im/majo/ctos/SshFreshVaultRealJniTest.java",
+          "sha256": "adf5173c257250a16f3d225bda6aa3118894aa8e4d5145021da1d3446ce8ca22"
+        },
+        {
+          "path": "android/ssh/host-jni-vault-chain-test.sh",
+          "sha256": "eea66b42b3039c0e620cce22a5588cf88016e8c637b8a800b92d6fae707ce7fd"
+        }
+      ],
+      "capture_policy": "HEAD 和 dirty_worktree 是任务创建时状态，原样提交后可能变化；执行时核对固定文件并记录实际 HEAD、dirty 状态和运行前后全部相关源码、测试及构建输入的 SHA-256 清单。固定输入不符先交由 Codex 更新任务，不得自行改验收。"
+    },
+    "resources": {
+      "read": [
+        {
+          "path": "design/agent-test-handoff.md",
+          "why": "协作流程"
+        },
+        {
+          "path": "design/handoff-ssh-terminal-client.md",
+          "why": "SSH 当前状态、旧证据与限制"
+        },
+        {
+          "path": "design/verification.md",
+          "why": "核对实际历史验证，避免重复或夸大"
+        },
+        {
+          "path": ".trellis/spec/backend/ssh-session-cancellation-ownership.md",
+          "why": "session 撤销及未知结果所有权合同"
+        },
+        {
+          "path": ".trellis/spec/backend/ssh-terminal-stop-intent.md",
+          "why": "终端 STOP 顺序"
+        },
+        {
+          "path": "android/app/src/main/java/im/majo/ctos/SshTerminalSession.java",
+          "why": "终端 retry 与 stop() 路径"
+        },
+        {
+          "path": "android/app/src/main/java/im/majo/ctos/SshSessionOwner.java",
+          "why": "实际 requestStop 调用链"
+        },
+        {
+          "path": "android/app/src/test/jni-vault-chain/im/majo/ctos/SshFreshVaultRealJniTest.java",
+          "why": "可复用的 JNI 故障注入夹具"
+        },
+        {
+          "path": "android/ssh/host-jni-vault-chain-test.sh",
+          "why": "host JNI 执行方式"
+        }
+      ],
+      "environment": [
+        "只使用本机、隔离或回环上的合成测试资源；不访问真实账号、凭据或生产服务。",
+        "测试环境与权限不足时如实阻塞，不安装依赖或扩大网络/设备权限。",
+        "只使用现有测试 JNI、线程受控 fault hook 和合成 peer；测试 hook 的 checked -1 不代表生产 JNI 自行产生该返回。"
+      ],
+      "allowed_writes": [
+        "build/codex-wont-do/<task_id>/<attempt_id>/ 下的专属报告、输入清单与无秘密日志",
+        "本任务明确列出的构建或测试专用产物；不得清理不属于本次尝试的文件",
+        "仅 android/app/src/test/ 下为本测试必要的新测试或测试专用夹具；记录完整 diff，不覆盖他人改动"
+      ],
+      "exclusive_locks": [
+        "android-release-build",
+        "ssh-test-inputs"
+      ],
+      "secrets_policy": "仅使用合成测试数据；禁止记录真实凭据、私钥、令牌和用户数据。"
+    },
+    "dependencies": [],
+    "preconditions": [
+      "现有 release classes 与受测源码快照匹配；JNI 编译与离线合成 peer 条件具备。",
+      "如果测试无法仅通过 src/test 夹具构造，在需要产品代码或 main/cpp 修改时标 blocked，交 Codex 判断。"
+    ],
+    "cases": [
+      {
+        "id": "owner-single-budget",
+        "exercise": "通过真实 SshSessionOwner.requestStop() 驱动实际 SshTerminalSession 与受控真实 JNI session；用确定性屏障和调用线程上的故障钩子观察同次内部 stop()。",
+        "pass": "同一次 Stop 的明确未开始撤销按合同最多使用三轮预算，内部 stop() 不把同一请求重置为新预算；证据显示真实调用链、调用次数及线程。"
+      },
+      {
+        "id": "later-explicit-stop",
+        "exercise": "耗尽预算且保留原 owner 后，发出独立的后续显式 Stop。",
+        "pass": "新请求按合同获得新预算并只作用于同一个受管 session；不把原请求的内部调用当成新请求。"
+      },
+      {
+        "id": "unknown-and-admitted",
+        "exercise": "分别构造正在进行的取消等待和结果未知分支，记录 owner 与 session。",
+        "pass": "等待在途操作不错误消耗预算；未知或混合未知保留原 owner，不盲目重试或声称释放完成。"
+      }
+    ],
+    "commands": [],
+    "acceptance": [
+      "三个案例都由真实 owner→terminal→测试 JNI 的可见调用链支持，事件顺序与计数可审计。",
+      "仅 test-only checked 结果，不宣称生产 JNI 已自然触发该故障；设备生命周期不在此覆盖范围。",
+      "实际案例全部有可核对证据；记录失败、错误、跳过和未覆盖部分，缺少必需案例不得标 pass。"
+    ],
+    "stop_conditions": [
+      "无法用测试专用代码获得确定性屏障或可用的线程局部故障注入。",
+      "固定源码不匹配、未经授权的设备/网络/账号、缺少资源或需要修改产品行为时停止并记录原因；不更改验收标准。"
+    ],
+    "codex_review": [
+      "核验不是直接调用 terminal 模拟 owner，观察预算、第二次显式请求、未知状态的证据及线程局部 hook 覆盖。",
+      "对照 template.json 核验独立执行者、当前授权、明确的测试范围和实际 outcome。",
+      "核对执行前后 dirty 状态、相关输入和产物哈希、命令退出码、全部案例、跳过项与可读取证据；不能用 HEAD 代替未提交内容。",
+      "检查允许的测试夹具改动及 diff，区分报告有效与产品测试通过；源码漂移或证据不足时要求补充，且不能更新为当前通过。"
+    ]
+  },
+  "blockers": [],
+  "execution": {
+    "claim": null,
+    "attempts": []
+  },
+  "review": {
+    "status": "pending",
+    "reviewer": null,
+    "reviewed_at_utc": null,
+    "findings": [],
+    "decision_scope": null,
+    "decisions": []
+  },
+  "history": [
+    {
+      "at_utc": "2026-11-27T06:39:36Z",
+      "actor": "codex",
+      "event": "created",
+      "detail": "建立待其他 agent/session 执行的测试请求；未执行测试。"
+    }
+  ]
+}

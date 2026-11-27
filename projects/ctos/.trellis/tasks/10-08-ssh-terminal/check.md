@@ -1,5 +1,147 @@
 # 初步规划检查
 
+## 2026-11-27 测试交接（父任务进行中）
+
+用户安排其他 agent／session 执行产品测试，Codex 负责审核与项目管理。[测试单](../../../test/codex-wont-do/)包含可领取项和因实现、合同或设备授权未具备而阻塞的项；本次只核对交接文件，未执行新增产品测试。
+
+## 2026-11-27 终端 session 撤销重试（父任务进行中）
+
+最终源码的相关 JVM **201 项／3 套**、lint **0 错误／3 个既有警告**和真实 host JNI 的 **14 个定向场景**通过；独立复核发现的内部 stop 重置预算已以反例修复。checked `-1` 目前由测试钩子构造，Android Service／设备和首次取消与已准入 close 的竞争未由本轮证明。[验证与边界](../../../design/verification.md#20261127-ssh-terminal-session-cancel-retry)。
+
+## 2026-11-27 共享 STOP 本地验证（父任务进行中）
+
+用户已明确要求验证，取代此前停测要求。完整 JVM 1,189 项／70 套、真实 Java／测试 JNI 的 93 个默认模式和 124 个独立 JVM 场景、回调目标与异常拒绝、多跳合成接收器、native 认证链和隔离双 sshd 产品路径均按[验证记录](../../../design/verification.md#20261127-ssh-shared-stop-verification)分层检查。首次信任、信任持久化、独立撤销、完整并发顺序、Android 生命周期和设备仍未完成或未验证。
+
+## 2026-11-27 native 效果共享 STOP 准入（未验证）
+
+这是实施当时的检查点；当时按用户要求停测，后续检查见上节。[实现范围](../../../design/verification.md#20261127-ssh-native-stop-effects)。
+
+## 2026-11-27 提示与保存上下文 STOP 顺序（未验证）
+
+遵照用户停止测试的要求，本次只阅读和修改源码及记录；未运行测试、lint、构建、等价探针或设备验证。历史通过计数不适用于本次源码。[实现及仍未完成范围](../../../design/verification.md#20261127-ssh-prompt-mutation-stop)。
+
+## 2026-11-27 服务 owner 与连接结果（父任务进行中）
+
+最终 JVM **1,158 项／68 套**、callback JNI host scope、lint／release 和 v2 验签通过；host JNI **89 个默认模式／111 个隔离场景**、无外网双 sshd 已知主机回归通过。owner settlement 屏障在临时恢复旧状态逻辑后失败，当前通过；bridge 的 fake Result 测试包括发送前异常，结果最多尝试一次而非保证送达。两场新 JNI 故障使用真实 owner／测试 JNI 和 fake factory，不是 Android service 或真实 trust 写入。精确范围、当前 APK 及未完成的材料／认证／preview／生命周期边界见[验证](../../../design/verification.md#20261127-ssh-result-delivery)。
+
+## 2026-11-25 停止与 owner 结果顺序（父任务进行中）
+
+最终 JVM **1,124 项／66 套**、callback JNI scope、lint／release 与 v2 验签通过；host JNI 默认 88 模式及 84 场隔离故障、无外网双 sshd 已知主机回归通过。一次中间全量有 1 项清理重试测试失败，保留原断言修正后重跑通过。bridge／锁库的独立故障 probe 与未完成边界见[验证](../../../design/verification.md#20261125-ssh-stop-owner-delivery)；不将 host 测试当作 Android 或真实账号验收。
+
+## 2026-11-25 信任回执与停止顺序（父任务进行中）
+
+最终 Android JVM **1,115 项／66 套**、callback JNI scope、lint／release 与 APK v2 验签通过；host JNI 默认 88 场及隔离场景 31 场、本机无外网双 sshd 已知主机回归通过。新增两场实际 JNI 故障／等待测试以合成回执证明停止先发生时确认被拒；修复前两场均复现错误确认。信任写入准入、创建期和跨层取消、Android 生命周期仍开放。[完整证据与边界](../../../design/verification.md#20261125-ssh-trust-stop-order)。
+
+## 2026-11-25 会话与共享视图取消所有权（跨层取消进行中）
+
+最终 Android JVM **1,115 项／66 套**、callback JNI scope、lint／release 及 APK v2 验签通过；host JNI 的默认 88 场及隔离取消故障 29 场、无外网双 sshd 产品已知主机路径均通过。host JNI 的 shared view 使用 fake source，session 包含合成 peer 的 root 和 child；双 sshd 驱动未覆盖 Android service 或首次信任写入。此前旧 fake 测试强行清理未知状态的 parent 造成 1 项失败，调整为验证原 owner 保留后重跑通过。[验证及未完成范围](../../../design/verification.md#20261125-ssh-session-view-cancel)。
+
+## 2026-11-25 终端停止准入（跨层取消进行中）
+
+最终 Android JVM 1,106 项／66 套、callback JNI scope、lint／release 构建及 APK v2 验签通过；本机真实测试 JNI 的默认 88 场及 10 个隔离取消故障、无外网双 sshd 的产品已知主机路径和 210 项定向 JVM 通过。此前完整 JVM 发现 callback 取消失败的关闭兼容性回归，区分独立关闭与混合未知错误后重跑通过。[验证及未完成范围](../../../design/verification.md#20261125-ssh-terminal-stop-intent)。
+
+## 2026-11-25 取消异常反例（未修复）
+
+真实测试 JNI 注入 native begin 前异常后，共享逻辑取消未生效，模拟 terminal pump 的排队 write 和 step 仍发生。该结果是缺陷复现，不是通过；Android／真实远端和其他 native 失效时序未测。[验证](../../../design/verification.md#20261125-ssh-cancel-invalidation-failure)。用户主动重试草案已撤回且六个相关产品文件哈希恢复；下一轮需先建立跨层取消与清理合同。
+
+## 2026-11-25 候选转交（父任务仍进行中）
+
+最终源码真实 host JNI／合成 SSH 默认 88 场、完整 JVM 1,099 项、lint 和 release 构建通过；独立反例确认转交本身不检查原 native generation。首次信任的写入准入、清理与重连仍未完成，产品 gate 继续关闭；具体范围和未测边界见[验证](../../../design/verification.md#20261125-ssh-jump-candidate-transfer)。
+
+## 2026-11-23 候选保留夹具（父任务仍进行中）
+
+真实 host JNI／合成 SSH 默认 78 场、6 场独立清理故障和缺 poll 符号拒绝、本机隔离双 sshd 已知主机回归、1,099 项 JVM、lint／release 和签名／符号检查通过。[证据与未测项](../../../design/verification.md#20261123-ssh-jump-candidate-reservation)。保留只排序测试候选消费与邮箱完成点，不能代替跨链取消、期限或信任写入准入；首跳 NEW 和设备验收仍未完成。
+
+## 2026-11-23 待审调度夹具（父任务仍进行中）
+
+此节为上一检查点；当前进度以上一节为准。
+
+真实 host JNI／合成 SSH 默认 66 场、6 场独立清理故障及缺 poll 符号拒绝、本机隔离双 sshd 已知主机回归、1,099 项 JVM、lint／release 和签名／符号检查通过。[证据与未测项](../../../design/verification.md#20261123-ssh-jump-pending-integrated)。本地 child 关闭或注入 socket 故障不能冒充远端 EOF；产品首次信任、信任写入、重连及设备验收仍未完成。
+
+## 2026-11-23 签名审阅夹具与受限入站（父任务仍进行中）
+
+此节为上一检查点；当前进度以上一节为准。
+
+真实 Java／JNI 合成连接的默认 58 场及 6 场独立 JVM 清理故障、最终 Android 归档的 15 场受限输入和 21 场旧空闲检查、本机隔离双 sshd、1,099 项 JVM、lint／release 构建与签名和符号核对通过。[实际结果、失败修复及未测边界](../../../design/verification.md#20261123-ssh-jump-signed-review-ext)。票据和原生 poll 尚未与父链 pump 接通，产品首次确认／写入／重连及设备验收仍未完成；异常报文和扩展广告负例仍需补测。
+
+## 2026-11-23 首次信任等待内部原语（父任务仍进行中）
+
+以下为上一检查点；当前签名票据与受限输入进度见上节。
+
+独立审查 native 状态、锁序、半包和 Java 审核邮箱期限；22 项邮箱定向、最终 Android 归档的 21 场合成原生专项、1,099 项 JVM、lint／构建及本机隔离双 sshd 回归通过。生产首次信任、独立签名候选票据、可处理合法入站报文的等待、写入／清理后重连与设备验收仍未完成；详细证据、故障注入及未测组合见[验证](../../../design/verification.md#20261123-ssh-jump-pending-wait)。
+
+## 2026-11-23 受限单跳产品路径（父任务仍进行中）
+
+正式 connector／真实加密库／生产 JNI 与本机隔离双 sshd 已验证逐跳密码确认、目标 PTY、错误或未知目标密钥、取消、多跳拒绝及清理；Flutter 510 项、JVM 1,088 项／66 套、lint 和 release 构建分别按[记录](../../../design/verification.md#20261123-ssh-jump-product-open)通过。配置列表与 `ProxyJump none` 已纳入检查。首次信任、当次输入密码、多跳和设备仍未完成，不得将受限切片当作父任务验收。
+
+## 2026-11-23 产品入口及确认协议（进行中）
+
+历史检查点：当时 Flutter 静态检查及完整 510 项通过，列表已恢复严格直连策略；原样生产 connector 只验证了跳板前置拒绝和普通直连，跨跳效果 guard 当时尚未接入真实复制或建包。[历史验证](../../../design/verification.md#20261123-ssh-jump-product-gated)，当前状态见上一节。
+
+## 2026-11-20 受管 ProxyJump：fresh 信任和逐跳回执
+
+独立复核后修复 fresh 门禁掩盖先发生的取消／失效及 callback 异常清理；旧无来源 child 入口拒绝受管 lease 与生产 JNI binding。最终完整 JVM **1,055 项／62 套**、Flutter **507 项**、全项目 Dart 分析、Android lint **0 错误／3 个既有警告**和 APK 构建／v2 验签通过。host JNI fresh 合成链及畸形输入 **97,065 次检查**，真实隔离双 sshd 的旧／新快照和错密钥对照通过；两者分别使用测试 receiver 或 callback，不能相加视为产品端到端。最终构建复用未改动生产 SSH native 产物，APK 未安装，测试容器已清理。跨跳效果原子顺序、可信逐跳路由和产品 factory、逐跳密钥、后台及 Android 联合验证仍未完成，产品门禁保持。[证据](../../../design/verification.md#20261120-ssh-jump-fresh-jni)。
+
+## 2026-11-20 受管 ProxyJump：逐跳路由、角色、信任准备及提示
+
+独立复核路由、角色、信任快照及认证提示；发现的 spec 旧描述、混版本测试盲点、库 generation 假设与 Java 测试缺失导入已修正。最终 ARM64 原生驱动通过本机无网络双 sshd 正向／错误目标密钥测试；真实 host JVM／JNI 的路由与角色验证通过，fresh JNI 验证到失败清理且真实 hostfile 分类由独立 C 夹具覆盖；真实加密库 JVM 用例通过。最终完整 JVM **1,015 项／61 套**、Flutter **500 项**、全项目 Dart 分析、Android lint **0 错误／3 个既有警告**及 APK 构建／v2 验签通过，原生库在首轮实际重编后复用，APK 未安装。逐跳 factory、KNOWN 摘要与真实 receipt 绑定、跨跳 trust／凭据取消顺序、多次信任回执、主机换键审阅及逐跳密钥选择、八跳 memlock、Android 和真实用户端到端仍未完成，产品门禁保持。[逐项证据](../../../design/verification.md#20261120-ssh-jump-route-role)。
+
+## 2026-11-20 受管 ProxyJump：终端链调度和快速关闭
+
+实际 Java NativePort 加 fake native 的单跳／双跳 pump、晋升后确认、祖先 EOF、取消及逆序失败重试通过；直连和单跳在尚未确认 RUNNING 时 CLOSED+buffered 的无限调度已改为有限失败。完整 JVM **61 套／996 项通过**，lint **0 错误／3 个既有警告**，release APK 构建及 v2 验签通过、未安装；原生编译显式跳过。[命令和边界](../../../design/verification.md#20261120-ssh-jump-terminal-chain)。
+
+## 2026-11-20 受管 ProxyJump：本机 Docker 真实单跳
+
+新建可重建的项目专用 OpenSSH 镜像，单容器回环双 sshd／无网络／无宿主端口；标准客户端及 ARM64／Bionic ctOS 原生驱动使用不同逐跳账号和密码的真实单跳通过，错误目标密钥在目标密码认证前被拒。脚本检查和容器清理通过，测试回调与预置信任不代表产品 Java／JNI／vault 或 Android 验收。[命令与边界](../../../design/verification.md#20261120-ssh-jump-docker-interop)。
+
+## 2026-11-20 受管 ProxyJump：内部 Java／JNI 父子会话
+
+完整 JVM **61 套／987 项通过**，release lint **0 错误／3 个既有警告**，APK 构建及 v2 验签通过；host JNI 加密合成链 10 个模式通过，含实际 child-only 故障、测试注入的 child+relay 故障和真实 fd 复用重试。祖先由 C 夹具登记，Java receiver／对端为测试实现；Java session 回归使用 fake native。真实产品 Java／加密库／JNI 联合链、跨跳效果／输出原子排序、Android 及真实服务器仍未验证。[命令与边界](../../../design/verification.md#20261120-ssh-jump-jni-owner)。
+
+## 2026-11-20 受管 ProxyJump：Java 共享视图内部接入
+
+完整 JVM **61 套／979 项通过**，release lint **0 错误／3 个既有警告**；命令跳过原生重编译。主机 JNI 烟测用真实 Java lease、`VaultSession.lock` 和两份真实 native borrow 验证共享、撤销与最终重新创建；role／callback 为替身，会话领用由夹具手动标记，不代表真实多跳连接。独立复核发现的测试／生产 view 身份混用入口已修正；产品 JNI 子连接、信任刷新、跨跳效果、后台及真实服务器仍待完成。[实际命令和限制](../../../design/verification.md#20261120-ssh-shared-java-view)。
+
+## 2026-11-20 受管 ProxyJump：共享 native 视图与 JNI 合成链
+
+真实受管句柄的三份独立 borrow、逐个退役与统一撤销的主机测试及 ASan／UBSan（未启用泄漏检测）通过。主机 JNI 合成链全部十个场景通过：后四种以单一受管 native 视图运行三层 SSH，覆盖目标 JNI 晋升后逐跳保留、提前撤销、目标已运行时撤销、凭据回调内撤销、已缓冲输出阻断以及最终新句柄创建。C 夹具手工登记 child 并驱动祖先，Java receiver、信任结果和服务端为测试实现；不代表产品 Java 共享 lease、真实 trust CAS、并发效果、Android 或真实服务器已验证。本轮仅改测试、文档与规范；[完整命令与结果](../../../design/verification.md#20261120-ssh-shared-view-native)。
+
+## 2026-11-20 受管 ProxyJump：原生传输晋升与视图撤销排序
+
+原生三层合成链的定向晋升测试 **734,130 次检查通过**，最终归档的完整 ARM64 合成回归 **6,327,328 次检查通过**（均含协议循环）；覆盖期限到达后的双向数据、下游 EOF、各层取消、KEX 失效、借用释放故障，以及在检查后注入视图撤销和角色过期。真实受管 view 句柄的两种顺序、64 次并发竞争、真实视图到期、销毁失败和 ASan／UBSan（未启用泄漏检测）通过。最终源码主机 JNI 六场景通过；真实加密库基础夹具确认旧请求及旧信任摘要在首次提交后均被拒绝。最终 APK 构建及 v2 验签通过，新增测试后完整 JVM **973 项／61 套通过**，单元测试 lint 重新分析、报告 0 错误／3 个既有警告；这些后续任务明确跳过原生编译。此前旧版完整运行发现竞态后主动停止，不计通过。共享租约、真实库效果排序、产品 JNI／后台、八跳性能、设备和真实服务器仍未验证。[命令和范围](../../../design/verification.md#20261120-ssh-jump-retain)。
+
+## 2026-11-20 受管 ProxyJump：主机 JNI 多跳联合验证
+
+主机 JVM 在真实 JNI session 锁持有期间，经生产 JNI callback 和实际 native 一跳／两跳加密合成链完成六种正常／祖先回调内取消场景；验证错误 receiver／token／线程、回调外重放及测试 Java 凭据数组擦除。C 夹具手工登记 child 并驱动祖先，Java receiver／KNOWN 信任结果为测试实现；未验证真实秘密库 CAS、并发撤销、Android 或产品 Java 跳板连接。主机构建源及补丁校验、输入前后摘要、`-Xcheck:jni` 和 shell 语法／ShellCheck／shfmt 通过。[命令、结果及边界](../../../design/verification.md#20261120-ssh-callback-jni-multihop)。
+
+## 2026-11-20 受管 ProxyJump：回调 JNI 接收者
+
+主机 JVM 实际 JNI 回调、receiver／验证器绑定、取消及嵌套检查通过；祖先 checker 为测试替身。callback 主机、UID 包装及 ASan／UBSan（关闭泄漏检测）各 56 项通过。最终 APK 原生归档的 ARM64 合成完整客户端 **5,592,828 次检查**通过，含协议循环；真实多跳证明和 receiver 绑定在此驱动中以 C 测试对象验证。完整 JVM 972 项／61 套通过，最终构建复用结果；lint 报告 0 错误／3 个既有警告。APK `fe6356f1…` v2 验签通过、未安装。上述 JNI 与真实多跳证据互相独立，不能据此宣称 Android JNI 多跳通过或跨跳效果已受保护。[命令、结果及边界](../../../design/verification.md#20261120-ssh-callback-jni)。
+
+## 2026-11-20 受管 ProxyJump：回调祖先检查与输出取消顺序
+
+原生 callback 主机、UID 包装及 ASan／UBSan（关闭泄漏检测）各 56 次检查通过；ARM64／QEMU 多层跳板专项 2,374,014 次及最终 APK 归档的完整客户端 5,593,886 次检查通过，计数包括协议循环。完整 JVM 972 项／61 套通过，release 构建和 lint 通过，lint 报告为 0 错误／3 个既有警告；JVM 测试与 lint 报告在最终构建时命中缓存。APK `294a3665…` v2 验签通过、未安装。时点祖先证明不构成跨跳效果原子性；已准入 listener 可能在取消后物理完成。Java 夹具使用真实加密逻辑和内存 Store、native binding 为替身；JNI／设备与真实服务器仍待验证。[命令、结果及边界](../../../design/verification.md#20261120-ssh-callback-output)。
+
+## 2026-11-18 受管 ProxyJump：借用与信任回执
+
+主机 borrow 竞争、真实 `munmap` 故障注入和 ASan／UBSan（关闭泄漏检测）、ARM64 固定配置求值器 4,430 次检查及相关配置回归通过；ARM64 完整合成客户端同源码前版 5,040,851 次、最终 APK 原生归档版 5,037,284 次检查通过。最终完整 JVM 964 项／61 套通过，release lint 0 错误／3 个既有警告，APK `698bbfad…` 构建与 v2 验签通过、未安装。存储使用真实加密逻辑与内存 Store，Java native binding 为替身；跨跳 effect guard、最终输出与后台、JNI／设备和真实服务器仍开放。[命令、结果和限制](../../../design/verification.md#20261118-ssh-borrow-trust)。
+
+## 2026-11-18 受管 ProxyJump：原生子连接与递归证明
+
+ARM64／QEMU 的 `v5` 跳板专项 1,724,863 次检查通过；同产品源码 `v6` 完整客户端 4,945,902 次检查，以及最终 APK 归档的 `v7` 完整客户端 4,946,706 次检查通过。独立复核、实际测试范围、缓存 JVM／lint、APK 签名和未覆盖边界见[验证](../../../design/verification.md#20261118-ssh-proxyjump-child)。Java 跨跳 effect guard、全链生命周期、后台、JNI／设备及真实互通仍开放，产品门禁保持。
+
+## 2026-11-18 受管 ProxyJump：原生本地字节中继
+
+最终归档的 ARM64 跳板专项 454,605 次检查通过；同源码前版完整原生客户端 3,675,299 次检查通过。双层合成 SSH 使用原生中继，覆盖双向背压、EOF／远端关闭、角色撤销及精确关闭顺序。JVM 结果 939 项、lint 0 错误／3 个既有警告，最终 APK 构建与 v2 验签通过。子会话递归上游证明、全链路取消及后台、JNI／设备与真实服务器仍开放。[命令与证据](../../../design/verification.md#20261118-ssh-proxyjump-relay)。
+
+## 2026-11-18 受管 ProxyJump：原生通道本地检查
+
+固定原生客户端的跳板专项 388,929 项、现有 shell 专项 581,825 项及完整客户端 3,585,887 项分别通过；测试专属中继验证两层 SSH 的独立主机证明、密码认证和 PTY 数据。角色／回调主机测试和 939 项 JVM 通过，release lint 0 错误、3 个既有警告，APK 构建及 v2 验签通过。生产中继、上游失效传播、JNI／设备和真实服务器仍开放。[命令与证据](../../../design/verification.md#20261118-ssh-proxyjump-channel)。
+
+## 2026-11-18 受管 ProxyJump：逐跳配置链本地检查
+
+固定解析器 ARM64／QEMU 配置求值器 4,399 项通过，包含 64 KiB memlock 逐跳子进程；direct／profile、配置句柄、目录、detached、审计和资源引用的独立回归通过。release lint 为 0 错误、3 个既有警告，APK 构建和 v2 验签通过。原生结果不代表 JNI、设备或真实跳板连接已验证。[实际命令和限制](../../../design/verification.md#20261118-ssh-proxyjump-route)。
+
 ## 2026-11-18 自动凭据保存和复用：指定板实测
 
 正式 `8b7cf8da…` 已保留数据安装并启动，设备包身份、UID、数据目录和首次安装时间核对通过。隔离合成密码 Flutter 界面 1 项／31.198 秒、私钥口令 Android 桥接／JNI 1 项／23.800 秒通过，共观察到七次成功 PTY 和 shell。密码首轮驱动失败后调整无障碍等待并完整复测通过。已确认清理隔离包、两份请求、reverse、合成服务和专用 ADB。[实际证据与边界](../../../design/verification.md#20261118-ssh-automatic-credentials-device)。

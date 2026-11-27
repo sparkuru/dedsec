@@ -8,3 +8,9 @@ android/local.properties
 *.keystore
 dist/
 android/app/src/main/java/io/flutter/plugins/GeneratedPluginRegistrant.java
+
+# QEMU test crash dumps in the project root.
+/qemu_ctos_*.core
+
+# Runtime locks for the shared test handoff directory.
+/test/codex-wont-do/.locks/

@@ -23,11 +23,14 @@ final class SshPasswordConnectBridge implements AutoCloseable {
         java.util.concurrent.CompletableFuture<String> attach(MainActivity.AuthenticatedSshFactory factory,
                 String mode, int columns, int rows);
     }
+    interface CompletionDispatcher { boolean post(Runnable action); }
     private final AppSecretsBridge secrets;
     private final AppSecrets vault;
     private final SshProfilesBridge profiles;
     private final Attacher attacher;
     private final Handler main = new Handler(Looper.getMainLooper());
+    private final CompletionDispatcher completionDispatcher;
+    private final java.util.function.Predicate<SshPasswordConnector> publicationLive;
     private final ScheduledExecutorService defaultsWorker = Executors.newSingleThreadScheduledExecutor();
     private boolean cleanupQueued;
     private final EventChannel channel;
@@ -54,7 +57,8 @@ final class SshPasswordConnectBridge implements AutoCloseable {
         final String id;
         final SshPasswordConnector connector;
         final MethodChannel.Result result;
-        boolean finished;
+        final AtomicBoolean completing = new AtomicBoolean();
+        final AtomicBoolean resultAdmitted = new AtomicBoolean();
         Attempt(String id, SshPasswordConnector connector, MethodChannel.Result result) {
             this.id = id; this.connector = connector; this.result = result;
         }
@@ -62,6 +66,8 @@ final class SshPasswordConnectBridge implements AutoCloseable {
 
     SshPasswordConnectBridge(android.app.Activity activity, AppSecretsBridge secrets, BinaryMessenger messenger, Attacher attacher) {
         this.secrets = secrets; vault = secrets.sshVault(); this.attacher = attacher;
+        completionDispatcher = main::post;
+        publicationLive = SshPasswordConnector::handoffLive;
         profiles = new SshProfilesBridge(activity, secrets, () -> active != null || mutating != null, this::emit, this::admit);
         channel = new EventChannel(messenger, "ctos/ssh");
         channel.setStreamHandler(new EventChannel.StreamHandler() {
@@ -278,7 +284,7 @@ final class SshPasswordConnectBridge implements AutoCloseable {
                 if (idle == request) retireIdle();
                 if (reason == null) result.success(VaultCollections.map("forgotten", true));
                 else {
-                    if (wrote) { vault.session.lock(); reason = "VAULT_COMMIT_UNCERTAIN"; }
+                    if (wrote) reason = uncertainAfterWrite(vault);
                     error(result, reason);
                 }
             });
@@ -339,7 +345,7 @@ final class SshPasswordConnectBridge implements AutoCloseable {
                 }
                 if (idle == request) retireIdle();
                 if (reason == null) result.success(VaultCollections.map("forgotten", true));
-                else { if (wrote) { vault.session.lock(); reason = "VAULT_COMMIT_UNCERTAIN"; } error(result, reason); }
+                else { if (wrote) reason = uncertainAfterWrite(vault); error(result, reason); }
             });
             finishDefaultsCleanup();
         });
@@ -382,7 +388,11 @@ final class SshPasswordConnectBridge implements AutoCloseable {
                     : new SshPasswordConnector(vault, profile, password, useSaved, save, SystemClock.elapsedRealtime() + 60_000,
                     () -> { if (closed) throw failure("SSH_CANCELLED"); secrets.requireSshConsumer(); },
                     events(id));
-            connector.setContinuationMode(continuation);
+            try { connector.setContinuationMode(continuation); }
+            catch (VaultException | RuntimeException | Error failure) {
+                connector.retireIfUnstarted();
+                throw failure;
+            }
         } finally { VaultCodec.wipe(password); }
         attach(id, connector, columns, rows, result);
     }
@@ -410,7 +420,11 @@ final class SshPasswordConnectBridge implements AutoCloseable {
         SshPasswordConnector connector = new SshPasswordConnector(vault, manual, keyId, alias, binding, username, phrase, useSaved, save,
                 SystemClock.elapsedRealtime() + 60_000,
                 () -> { if (closed) throw failure("SSH_CANCELLED"); secrets.requireSshConsumer(); }, events(id));
-        connector.setContinuationMode(continuation);
+        try { connector.setContinuationMode(continuation); }
+        catch (VaultException | RuntimeException | Error failure) {
+            connector.retireIfUnstarted();
+            throw failure;
+        }
         attach(id, connector, columns, rows, result);
         } finally { VaultCodec.wipe(phrase); }
     }
@@ -462,7 +476,11 @@ final class SshPasswordConnectBridge implements AutoCloseable {
         SshPasswordConnector connector = keyId.isEmpty()
                 ? new SshPasswordConnector(vault, manual, alias, binding, username, deadline, guard, events(id))
                 : new SshPasswordConnector(vault, manual, keyId, alias, binding, username, deadline, guard, events(id));
-        connector.useServerDrivenAuthentication();
+        try { connector.useServerDrivenAuthentication(); }
+        catch (VaultException | RuntimeException | Error failure) {
+            connector.retireIfUnstarted();
+            throw failure;
+        }
         attach(id, connector, columns, rows, result);
     }
 
@@ -472,55 +490,133 @@ final class SshPasswordConnectBridge implements AutoCloseable {
 
     private void attach(String id, SshPasswordConnector connector, int columns, int rows, MethodChannel.Result result) {
         Attempt attempt = new Attempt(id, connector, result); active = attempt;
-        state(id, "connecting", null);
+        safeState(id, "connecting", null);
         try {
-            attacher.attach(connector, "ssh", columns, rows).whenComplete((mode, failure) -> main.post(() -> {
-                if (attempt.finished) return;
-                attempt.finished = true;
-                if (active == attempt) active = null;
-                String completionFailure = failure == null ? null : code(failure);
-                if (completionFailure == null) {
-                    try {
-                        if (closed || !connector.handoffLive()) throw failure("SSH_CANCELLED");
-                        secrets.requireSshConsumer();
-                    } catch (VaultException invalidated) {
-                        connector.cancel(); completionFailure = invalidated.code;
-                    }
-                }
-                if (completionFailure != null && connector.automaticCredentialWritten())
-                    completionFailure = "VAULT_COMMIT_UNCERTAIN";
-                completionFailure = completionFailure(vault, completionFailure,
-                        connector.changedTrustPublicationUncertain(), connector.durableWrite());
-                if (completionFailure == null) {
-                    // A late form leave may arrive after publication but before Flutter handles it.
-                    // Keep one exact receipt; event-stream disposal alone must not stop this shell.
-                    handedOff = attempt;
-                    state(id, "connected", null);
-                    result.success(VaultCollections.map("requestId", id, "status", "connected"));
-                } else {
-                    // Uninvoked factories have no native owner/resources; wipe their source immediately.
-                    if (!connector.started()) connector.cancel();
-                    String reason = completionFailure;
-                    state(id, isCancelled(reason) ? "cancelled" : "failed", reason);
-                    error(result, reason);
-                }
-            }));
-        } catch (RuntimeException failure) {
-            active = null; connector.cancel(); error(result, "SSH_FAILED"); state(id, "failed", "SSH_FAILED");
+            attacher.attach(connector, "ssh", columns, rows).whenComplete((mode, failure) -> {
+                Runnable completion = () -> finishAttach(attempt, failure, true);
+                boolean posted = false;
+                try { posted = completionDispatcher.post(completion); }
+                catch (RuntimeException | Error ignored) { /* Deliver the fixed result below. */ }
+                if (!posted) finishAttach(attempt, failure, false);
+            });
+        } catch (RuntimeException | Error failure) {
+            if (connector.retireIfUnstarted()) finishAttach(attempt, failure, true);
+            else {
+                // An entered factory may still own an in-flight trust write. Its owner
+                // must return its completion future; do not guess that receipt here.
+                try { connector.cancel(); } catch (RuntimeException | Error ignored) { }
+            }
         }
     }
 
+    private void finishAttach(Attempt attempt, Throwable failure, boolean onMain) {
+        if (!attempt.completing.compareAndSet(false, true)) return;
+        SshPasswordConnector connector = attempt.connector;
+        String reason = failure == null ? null : code(failure);
+        if (!onMain && reason == null) {
+            String stopped = connector.trustCancellation().stopCode();
+            reason = stopped == null ? "SSH_FAILED" : stopped;
+            try { if (!connector.retireIfUnstarted()) connector.cancel(); }
+            catch (RuntimeException | Error ignored) { }
+        }
+        if (reason == null) {
+            try {
+                if (closed || !publicationLive.test(connector)) {
+                    String stopped = connector.trustCancellation().stopCode();
+                    throw failure(stopped == null ? "SSH_CANCELLED" : stopped);
+                }
+                secrets.requireSshConsumer();
+            } catch (VaultException invalidated) {
+                reason = invalidated.code;
+                try { if (!connector.retireIfUnstarted()) connector.cancel(); }
+                catch (RuntimeException | Error ignored) { /* Retain the original result. */ }
+            } catch (RuntimeException | Error invalidated) {
+                reason = "SSH_FAILED";
+                try { if (!connector.retireIfUnstarted()) connector.cancel(); }
+                catch (RuntimeException | Error ignored) { }
+            }
+        }
+        if (reason != null) {
+            try { connector.retireIfUnstarted(); } catch (RuntimeException | Error ignored) { }
+            boolean automaticWritten = connector.automaticCredentialWritten();
+            if (automaticWritten) reason = "VAULT_COMMIT_UNCERTAIN";
+            reason = completionFailure(vault, reason, connector.trustPublicationUncertain(),
+                    automaticWritten || connector.durableWrite());
+        }
+        if (onMain) {
+            if (active == attempt) active = null;
+            if (reason == null) {
+                // Preserve the exact receipt for a late cancellation of a live shell.
+                handedOff = attempt;
+                safeState(attempt.id, "connected", null);
+            } else safeState(attempt.id, isCancelled(reason) ? "cancelled" : "failed", reason);
+        }
+        if (!attempt.resultAdmitted.compareAndSet(false, true)) return;
+        try {
+            if (reason == null) attempt.result.success(VaultCollections.map("requestId", attempt.id, "status", "connected"));
+            else error(attempt.result, reason);
+        } catch (RuntimeException | Error ignored) {
+            // A channel reply can throw after delivery; it must never be repeated.
+        }
+    }
+
+    private void safeState(String id, String value, String reason) {
+        try { state(id, value, reason); }
+        catch (RuntimeException | Error ignored) { /* State listeners cannot own the connection result. */ }
+    }
+
     /** Interpret the actual connection completion before publishing it to MethodChannel. */
-    static String completionFailure(AppSecrets vault, String failure, boolean changedUncertain,
+    static String completionFailure(AppSecrets vault, String failure, boolean trustUncertain,
             boolean credentialWritten) {
-        if (failure != null && (changedUncertain || credentialWritten && (isCancelled(failure)
-                || failure.startsWith("VAULT_") || failure.equals("SSH_TIMED_OUT")))) {
-            vault.session.lock();
-            return "VAULT_COMMIT_UNCERTAIN";
+        if (failure != null && (trustUncertain || credentialWritten && (isCancelled(failure)
+                || failure.startsWith("VAULT_") || failure.equals("SSH_TIMED_OUT")
+                || failure.equals("SSH_SCREEN_LOCKED") || failure.equals("SSH_SERVICE_START")))) {
+            return uncertainAfterWrite(vault);
         }
         return failure;
     }
 
+    private static String uncertainAfterWrite(AppSecrets vault) {
+        try { vault.lockForUncertainSshResult(); }
+        catch (RuntimeException | Error ignored) { /* Keep the uncertain receipt and its original owner. */ }
+        return "VAULT_COMMIT_UNCERTAIN";
+    }
+
+
+    static Map<String, Object> hostReviewEvent(String id, SshHostKeyReviewMailbox.Ticket ticket, long remaining) {
+        if (ticket.changed) {
+            java.util.List<Map<String, Object>> oldKeys = new java.util.ArrayList<>();
+            for (SshHostTrustMaterial.Record row : ticket.oldRecords)
+                oldKeys.add(VaultCollections.map("keyType", row.algorithm, "fingerprint", row.fingerprint));
+            return VaultCollections.map("type", "hostKeyChanged", "requestId", id, "ticketId", ticket.id,
+                    "binding", ticket.binding, "host", ticket.host, "port", ticket.port, "hop", ticket.hop,
+                    "source", ticket.source, "keyType", ticket.keyType, "fingerprint", ticket.fingerprint,
+                    "oldKeys", oldKeys, "remainingMillis", Math.min(30_000L, remaining));
+        }
+        return VaultCollections.map("type", "hostKey", "requestId", id, "ticketId", ticket.id,
+                "binding", ticket.binding, "host", ticket.host, "port", ticket.port, "hop", ticket.hop,
+                "keyType", ticket.keyType, "fingerprint", ticket.fingerprint,
+                "remainingMillis", Math.min(30_000L, remaining));
+    }
+
+    static Map<String, Object> hostReviewDismissal(String id, SshHostKeyReviewMailbox.Ticket ticket) {
+        return VaultCollections.map("type", ticket.changed ? "hostKeyChangedDismissed" : "hostKeyDismissed",
+                "requestId", id, "ticketId", ticket.id, "binding", ticket.binding, "hop", ticket.hop);
+    }
+
+    interface HostReviewPending {
+        boolean test(SshHostKeyReviewMailbox.Ticket ticket) throws VaultException;
+    }
+
+    /** Admission is a point-in-time check; it does not serialize later cancellation with publication. */
+    static boolean publishPendingHostReview(SshHostKeyReviewMailbox.Ticket ticket,
+            AppSecrets.EffectGuard consumer, HostReviewPending pending, AppSecrets.EffectGuard publication)
+            throws VaultException {
+        consumer.check();
+        if (!pending.test(ticket)) return false;
+        publication.check();
+        return true;
+    }
 
     private SshPasswordConnector.Events events(String id) {
         return new SshPasswordConnector.Events() {
@@ -528,41 +624,21 @@ final class SshPasswordConnectBridge implements AutoCloseable {
                             if (closed) throw failure("SSH_CANCELLED");
                             main.post(() -> {
                                 if (active == null || !active.id.equals(id) || sink == null) return;
-                                if (ticket.changed) {
-                                    try {
-                                        secrets.requireSshConsumer();
-                                        if (!active.connector.hostKeyPending(ticket)) return;
-                                    } catch (VaultException | RuntimeException failure) {
-                                        active.connector.cancel();
-                                        return;
-                                    }
-                                }
-                                long remaining = ticket.deadline - SystemClock.elapsedRealtime();
-                                if (remaining <= 0) { active.connector.cancel(); return; }
-                                state(id, "reviewing", null);
-                                if (ticket.changed) {
-                                    java.util.List<Map<String, Object>> oldKeys = new java.util.ArrayList<>();
-                                    for (SshHostTrustMaterial.Record row : ticket.oldRecords)
-                                        oldKeys.add(VaultCollections.map("keyType", row.algorithm,
-                                                "fingerprint", row.fingerprint));
-                                    emit(VaultCollections.map("type", "hostKeyChanged", "requestId", id,
-                                            "ticketId", ticket.id, "binding", ticket.binding, "host", ticket.host,
-                                            "port", ticket.port, "source", ticket.source, "keyType", ticket.keyType,
-                                            "fingerprint", ticket.fingerprint, "oldKeys", oldKeys,
-                                            "remainingMillis", Math.min(30_000L, remaining)));
-                                } else {
-                                    emit(VaultCollections.map("type", "hostKey", "requestId", id, "ticketId", ticket.id,
-                                            "binding", ticket.binding, "host", ticket.host, "port", ticket.port,
-                                            "keyType", ticket.keyType, "fingerprint", ticket.fingerprint,
-                                            "remainingMillis", Math.min(30_000L, remaining)));
+                                try {
+                                    publishPendingHostReview(ticket, secrets::requireSshConsumer,
+                                            active.connector::hostKeyPending, () -> {
+                                                long remaining = ticket.deadline - SystemClock.elapsedRealtime();
+                                                if (remaining <= 0) { active.connector.cancel(); return; }
+                                                state(id, "reviewing", null);
+                                                emit(hostReviewEvent(id, ticket, remaining));
+                                            });
+                                } catch (VaultException | RuntimeException failure) {
+                                    active.connector.cancel();
                                 }
                             });
                         }
                         @Override public void dismiss(SshHostKeyReviewMailbox.Ticket ticket) {
-                            if (ticket.changed) main.post(() -> emit(VaultCollections.map("type", "hostKeyChangedDismissed",
-                                    "requestId", id, "ticketId", ticket.id, "binding", ticket.binding)));
-                            else main.post(() -> emit(VaultCollections.map("type", "hostKeyDismissed", "requestId", id,
-                                    "ticketId", ticket.id)));
+                            main.post(() -> emit(hostReviewDismissal(id, ticket)));
                         }
                         @Override public void present(SshKeyboardMailbox.Ticket ticket) throws VaultException {
                             if (closed) throw failure("SSH_CANCELLED");
@@ -578,6 +654,7 @@ final class SshPasswordConnectBridge implements AutoCloseable {
                                         prompts.add(VaultCollections.map("text", prompt.text, "echo", prompt.echo));
                                     emit(VaultCollections.map("type", "keyboardChallenge", "requestId", id,
                                             "ticketId", ticket.id, "binding", ticket.binding, "round", ticket.challenge.round,
+                                            "host", ticket.host, "port", ticket.port, "username", ticket.username, "hop", ticket.hop,
                                             "name", ticket.challenge.name, "instruction", ticket.challenge.instruction,
                                             "prompts", prompts, "remainingMillis", Math.min(60_000L, remaining)));
                                 } catch (VaultException | RuntimeException failure) { active.connector.cancel(); }
@@ -599,7 +676,8 @@ final class SshPasswordConnectBridge implements AutoCloseable {
                                     emit(VaultCollections.map("type", ticket.purpose == SshPasswordMailbox.Purpose.PASSWORD
                                                     ? "passwordRequest" : "keyPassphraseRequest", "requestId", id,
                                             "ticketId", ticket.id, "binding", ticket.binding,
-                                            "savedAvailable", ticket.savedAvailable,
+                                            "host", ticket.host, "port", ticket.port, "username", ticket.username, "hop", ticket.hop,
+                                            "savedAvailable", ticket.savedAvailable, "savedOnly", ticket.savedOnly,
                                             "remainingMillis", Math.min(60_000L, remaining)));
                                 } catch (VaultException | RuntimeException failure) { active.connector.cancel(); }
                             });

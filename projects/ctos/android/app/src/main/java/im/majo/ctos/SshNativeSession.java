@@ -2,6 +2,10 @@ package im.majo.ctos;
 
 import java.io.IOException;
 import java.security.MessageDigest;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.IdentityHashMap;
+import java.util.List;
 
 /**
  * Same-process SSH session-owner seam.
@@ -146,6 +150,40 @@ final class SshNativeSession implements AutoCloseable {
         }
     }
 
+    enum JumpPhase {
+        OPENING(1), OPEN(2), CLOSED(3), REJECTED(4);
+
+        final int tag;
+        JumpPhase(int tag) { this.tag = tag; }
+
+        private static JumpPhase fromNative(int tag) throws IOException {
+            for (JumpPhase phase : values()) if (phase.tag == tag) return phase;
+            throw new IOException("invalid SSH jump phase");
+        }
+
+        boolean terminal() { return this == CLOSED || this == REJECTED; }
+    }
+
+    /** Validated channel metadata; it does not authorize the next host. */
+    static final class JumpStatus {
+        final JumpPhase phase;
+        final boolean remoteEof;
+        final boolean localEof;
+        final int bufferedBytes;
+
+        private JumpStatus(int[] values) throws IOException {
+            if (values == null || values.length != 4
+                    || (values[1] != 0 && values[1] != 1)
+                    || (values[2] != 0 && values[2] != 1)
+                    || values[3] < 0 || values[3] > MAX_SHELL_BUFFER_BYTES)
+                throw new IOException("invalid SSH jump status");
+            phase = JumpPhase.fromNative(values[0]);
+            remoteEof = values[1] != 0;
+            localEof = values[2] != 0;
+            bufferedBytes = values[3];
+        }
+    }
+
     private enum Phase { KEX_ONLY, SERVICE_PENDING, SERVICE_READY, DISCOVERY_PENDING, PASSWORD_PENDING,
         PRIVATE_KEY_PENDING, KEYBOARD_PENDING, FINISHED }
 
@@ -175,11 +213,49 @@ final class SshNativeSession implements AutoCloseable {
                 String candidateId, byte[] selectionWire) throws IOException {
             throw new IOException("SSH managed host-key discovery is unavailable");
         }
+        default long reserveJumpChild(long parentHandle) throws IOException {
+            throw new IOException("SSH jump child is unavailable");
+        }
+        default boolean openJumpChild(long childHandle, long role, int ownerUid, long callback,
+                long view, long deadline, int stepBudget, String knownHostsPath, String host,
+                String candidateId, byte[] selectionWire) throws IOException {
+            throw new IOException("SSH jump child is unavailable");
+        }
+        default boolean openJumpChildFresh(long childHandle, long role, int ownerUid, long callback,
+                long view, long deadline, int stepBudget, String knownHostsPath, String host,
+                String candidateId, byte[] selectionWire, byte[] freshWire) throws IOException {
+            throw new IOException("SSH fresh jump trust source is unavailable");
+        }
+        default int jumpChildState(long childHandle) throws IOException {
+            throw new IOException("SSH jump child state is unavailable");
+        }
+        default void abortJumpChild(long childHandle) throws IOException {
+            throw new IOException("SSH jump child cleanup is unavailable");
+        }
+        default void beginJump(long parentHandle, long nextRole) throws IOException {
+            throw new IOException("SSH jump channel is unavailable");
+        }
+        default void beginJumpGuarded(long parentHandle, long nextRole, long deadline, long generation)
+                throws IOException {
+            throw new IOException("SSH guarded jump channel is unavailable");
+        }
+        default int[] jumpStatus(long parentHandle) throws IOException {
+            throw new IOException("SSH jump channel is unavailable");
+        }
+        default void pumpJumpRelay(long childHandle) throws IOException {
+            throw new IOException("SSH jump relay is unavailable");
+        }
+        default void retainJumpTransport(long parentHandle) throws IOException {
+            throw new IOException("SSH jump transport is unavailable");
+        }
         default byte[] authenticationSelectionReceipt(long handle) throws IOException {
             throw new IOException("SSH selection receipt is unavailable");
         }
         default void beginUserauthService(long handle) throws IOException {
             throw new IOException("SSH userauth service is unavailable");
+        }
+        default void beginUserauthServiceGuarded(long handle, long generation) throws IOException {
+            throw new IOException("SSH guarded userauth service is unavailable");
         }
         default boolean userauthServiceReady(long handle) throws IOException {
             throw new IOException("SSH userauth service is unavailable");
@@ -187,11 +263,17 @@ final class SshNativeSession implements AutoCloseable {
         default void beginPasswordAuth(long handle) throws IOException {
             throw new IOException("SSH password authentication is unavailable");
         }
+        default void beginPasswordAuthGuarded(long handle, long generation) throws IOException {
+            throw new IOException("SSH guarded password authentication is unavailable");
+        }
         default byte[] beginDiscoveredPassword(long handle, byte[] planReceipt, byte[] password) throws IOException {
             throw new IOException("SSH discovered password authentication is unavailable");
         }
         default void beginAuthDiscovery(long handle) throws IOException {
             throw new IOException("SSH method discovery is unavailable");
+        }
+        default void beginAuthDiscoveryGuarded(long handle, long generation) throws IOException {
+            throw new IOException("SSH guarded method discovery is unavailable");
         }
         default int[] authDiscoveryResult(long handle) throws IOException {
             throw new IOException("SSH method discovery is unavailable");
@@ -201,6 +283,9 @@ final class SshNativeSession implements AutoCloseable {
         }
         default void pollAuthPrompt(long handle, byte[] planReceipt, int method) throws IOException {
             throw new IOException("SSH prompt transport polling is unavailable");
+        }
+        default void pollSelectedPasswordPrompt(long handle, byte[] planReceipt) throws IOException {
+            throw new IOException("SSH selected password polling is unavailable");
         }
         default int passwordAuthResult(long handle) throws IOException {
             throw new IOException("SSH password authentication is unavailable");
@@ -322,6 +407,44 @@ final class SshNativeSession implements AutoCloseable {
                     stepBudget, knownHostsPath, host, candidateId, selectionWire);
         }
 
+        @Override public long reserveJumpChild(long parentHandle) throws IOException {
+            return Native.reserveJumpChild(parentHandle);
+        }
+        @Override public boolean openJumpChild(long childHandle, long role, int ownerUid,
+                long callback, long view, long deadline, int stepBudget, String knownHostsPath,
+                String host, String candidateId, byte[] selectionWire) throws IOException {
+            return Native.openJumpChild(childHandle, role, ownerUid, callback, view, deadline,
+                    stepBudget, knownHostsPath, host, candidateId, selectionWire);
+        }
+        @Override public boolean openJumpChildFresh(long childHandle, long role, int ownerUid,
+                long callback, long view, long deadline, int stepBudget, String knownHostsPath,
+                String host, String candidateId, byte[] selectionWire, byte[] freshWire) throws IOException {
+            return Native.openJumpChildFresh(childHandle, role, ownerUid, callback, view, deadline,
+                    stepBudget, knownHostsPath, host, candidateId, selectionWire, freshWire);
+        }
+        @Override public int jumpChildState(long childHandle) throws IOException {
+            return Native.jumpChildState(childHandle);
+        }
+        @Override public void abortJumpChild(long childHandle) throws IOException {
+            Native.abortJumpChild(childHandle);
+        }
+        @Override public void beginJump(long parentHandle, long nextRole) throws IOException {
+            Native.beginJump(parentHandle, nextRole);
+        }
+        @Override public void beginJumpGuarded(long parentHandle, long nextRole, long deadline, long generation)
+                throws IOException {
+            Native.beginJumpGuarded(parentHandle, nextRole, deadline, generation);
+        }
+        @Override public int[] jumpStatus(long parentHandle) throws IOException {
+            return Native.jumpStatus(parentHandle);
+        }
+        @Override public void pumpJumpRelay(long childHandle) throws IOException {
+            Native.pumpJumpRelay(childHandle);
+        }
+        @Override public void retainJumpTransport(long parentHandle) throws IOException {
+            Native.retainJumpTransport(parentHandle);
+        }
+
         @Override public long open(long role, int ownerUid, long callback, long view, int socketFd,
                 long deadline, int stepBudget, byte[] hostKeyBlob, byte[] expectedFingerprint,
                 String knownHostsPath, String host, String candidateId) throws IOException {
@@ -344,6 +467,9 @@ final class SshNativeSession implements AutoCloseable {
         @Override public void beginUserauthService(long handle) throws IOException {
             Native.beginUserauthService(handle);
         }
+        @Override public void beginUserauthServiceGuarded(long handle, long generation) throws IOException {
+            Native.beginUserauthServiceGuarded(handle, generation);
+        }
 
         @Override public boolean userauthServiceReady(long handle) throws IOException {
             return Native.userauthServiceReady(handle);
@@ -352,11 +478,17 @@ final class SshNativeSession implements AutoCloseable {
         @Override public void beginPasswordAuth(long handle) throws IOException {
             Native.beginPasswordAuth(handle);
         }
+        @Override public void beginPasswordAuthGuarded(long handle, long generation) throws IOException {
+            Native.beginPasswordAuthGuarded(handle, generation);
+        }
         @Override public byte[] beginDiscoveredPassword(long handle, byte[] planReceipt, byte[] password) throws IOException {
             return Native.beginDiscoveredPassword(handle, planReceipt, password);
         }
         @Override public void beginAuthDiscovery(long handle) throws IOException {
             Native.beginAuthDiscovery(handle);
+        }
+        @Override public void beginAuthDiscoveryGuarded(long handle, long generation) throws IOException {
+            Native.beginAuthDiscoveryGuarded(handle, generation);
         }
         @Override public int[] authDiscoveryResult(long handle) throws IOException {
             return Native.authDiscoveryResult(handle);
@@ -366,6 +498,9 @@ final class SshNativeSession implements AutoCloseable {
         }
         @Override public void pollAuthPrompt(long handle, byte[] planReceipt, int method) throws IOException {
             Native.pollAuthPrompt(handle, planReceipt, method);
+        }
+        @Override public void pollSelectedPasswordPrompt(long handle, byte[] planReceipt) throws IOException {
+            Native.pollSelectedPasswordPrompt(handle, planReceipt);
         }
 
         @Override public int passwordAuthResult(long handle) throws IOException {
@@ -454,19 +589,38 @@ final class SshNativeSession implements AutoCloseable {
         static native long openManaged(long role, int ownerUid, long callback, long view,
                 int socketFd, long deadline, int stepBudget, String knownHostsPath, String host,
                 String candidateId, byte[] selectionWire) throws IOException;
+        static native long reserveJumpChild(long parentHandle) throws IOException;
+        static native boolean openJumpChild(long childHandle, long role, int ownerUid, long callback,
+                long view, long deadline, int stepBudget, String knownHostsPath, String host,
+                String candidateId, byte[] selectionWire) throws IOException;
+        static native boolean openJumpChildFresh(long childHandle, long role, int ownerUid, long callback,
+                long view, long deadline, int stepBudget, String knownHostsPath, String host,
+                String candidateId, byte[] selectionWire, byte[] freshWire) throws IOException;
+        static native int jumpChildState(long childHandle) throws IOException;
+        static native void abortJumpChild(long childHandle) throws IOException;
+        static native void beginJump(long parentHandle, long nextRole) throws IOException;
+        static native void beginJumpGuarded(long parentHandle, long nextRole, long deadline, long generation)
+                throws IOException;
+        static native int[] jumpStatus(long parentHandle) throws IOException;
+        static native void pumpJumpRelay(long childHandle) throws IOException;
+        static native void retainJumpTransport(long parentHandle) throws IOException;
         static native long open(long role, int ownerUid, long callback, long view, int socketFd,
                 long deadline, int stepBudget, byte[] hostKeyBlob,
                 byte[] expectedFingerprint, String knownHostsPath, String host,
                 String candidateId, byte[] selectionWire) throws IOException;
         static native byte[] authenticationSelectionReceipt(long handle) throws IOException;
         static native void beginUserauthService(long handle) throws IOException;
+        static native void beginUserauthServiceGuarded(long handle, long generation) throws IOException;
         static native boolean userauthServiceReady(long handle) throws IOException;
         static native void beginPasswordAuth(long handle) throws IOException;
+        static native void beginPasswordAuthGuarded(long handle, long generation) throws IOException;
         static native byte[] beginDiscoveredPassword(long handle, byte[] planReceipt, byte[] password) throws IOException;
         static native void beginAuthDiscovery(long handle) throws IOException;
+        static native void beginAuthDiscoveryGuarded(long handle, long generation) throws IOException;
         static native int[] authDiscoveryResult(long handle) throws IOException;
         static native int authContinuationMethods(long handle) throws IOException;
         static native void pollAuthPrompt(long handle, byte[] planReceipt, int method) throws IOException;
+        static native void pollSelectedPasswordPrompt(long handle, byte[] planReceipt) throws IOException;
         static native int passwordAuthResult(long handle) throws IOException;
         static native void beginPrivateKeyAuth(long handle) throws IOException;
         static native byte[] continuePrivateKeyAuth(long handle, byte[] planReceipt) throws IOException;
@@ -486,6 +640,10 @@ final class SshNativeSession implements AutoCloseable {
         static native int resizeShell(long handle, int columns, int rows) throws IOException;
         static native int sendShellEof(long handle) throws IOException;
         static native int[] step(long handle, boolean cancelled) throws IOException;
+        /* Test library only. The release JNI library deliberately has no such entry. */
+        static native boolean provisionalNewFixtureReady(long handle, long callback) throws IOException;
+        static native int provisionalNewFixturePoll(long handle, long callback) throws IOException;
+        static native boolean provisionalNewFixtureExtSeen(long handle, long callback) throws IOException;
         static native void verifyHostKey(long handle, byte[] hostKeyBlob) throws IOException;
         static native void close(long handle) throws IOException;
         static native void destroy(long handle) throws IOException;
@@ -501,14 +659,27 @@ final class SshNativeSession implements AutoCloseable {
     private final int stepBudget;
     private final byte[] expectedSelectionReceipt;
     private final boolean managedHostKey;
+    private SshSharedPublicView sharedView;
+    private volatile JumpChildOwner jumpChildOwner;
+    private JumpAdmission jumpAdmission;
+    private JumpChildOwner ownedByJump;
     private boolean nativeClosed;
     private boolean callbackClosed;
     private boolean roleReleased;
     private boolean viewReleased;
     private boolean destroyed;
+    private boolean closeInProgress;
+    private boolean cancellationInProgress;
+    private boolean cancellationNeedsCompletion;
+    private boolean cancellationExplicitlyUnstarted;
+    private boolean cancellationComplete;
+    private boolean callbackCancelCleanupOnly;
+    private Throwable cancellationUnconfirmed;
     private boolean complete;
     private volatile Phase phase = Phase.KEX_ONLY;
     private ShellPhase shellPhase = ShellPhase.DISABLED;
+    private JumpPhase jumpPhase;
+    private JumpStatus lastJumpStatus;
     private boolean serverAliveConfigured;
     private boolean noPtyConfigured;
     private ShellStatus lastShellStatus;
@@ -531,6 +702,8 @@ final class SshNativeSession implements AutoCloseable {
     private volatile Object keyboardStage;
     private volatile Object passwordPromptStage;
     private boolean passwordPromptIssued;
+    private volatile Object selectedPasswordPromptStage;
+    private boolean selectedPasswordPromptIssued;
     private volatile Object privateKeyPromptStage;
     private boolean privateKeyPromptIssued;
     private volatile boolean cancellationRequested;
@@ -632,6 +805,38 @@ final class SshNativeSession implements AutoCloseable {
         } finally { NATIVE_ENTRY.remove(); }
     }
 
+    /** Shared chain use retains the exact lease until every native owner retires its own borrow. */
+    static SshNativeSession openManaged(SshNativeCallbackAdapter callback, SshSharedPublicView owner,
+            SshSocketOwnership socket, String knownHostsPath, String candidateId, int stepBudget)
+            throws VaultException {
+        requireOpenOwner(callback);
+        if (owner == null || !owner.hasManagedLease()) throw invalid();
+        return openManaged(callback, owner, socket, knownHostsPath, candidateId, stepBudget,
+                new ProductionNativeBinding());
+    }
+
+    /** JVM seam for the same shared-view ownership and native handoff order. */
+    static SshNativeSession openManaged(SshNativeCallbackAdapter callback, SshSharedPublicView owner,
+            SshSocketOwnership socket, String knownHostsPath, String candidateId, int stepBudget,
+            NativeBinding binding) throws VaultException {
+        requireOpenOwner(callback);
+        enterNative();
+        try {
+            if (owner == null || socket == null || binding == null) throw invalid();
+            SshSharedPublicView.Binding view = owner.issue(callback);
+            try {
+                SshNativeSession result = openInternal(callback, view, socket.descriptor(), null,
+                        null, candidateId, stepBudget, binding, true, socket, knownHostsPath);
+                result.sharedView = owner;
+                return result;
+            } catch (Throwable failure) {
+                try { view.abortUnadopted(); }
+                catch (Throwable cleanup) { failure.addSuppressed(cleanup); }
+                throw failure;
+            }
+        } finally { NATIVE_ENTRY.remove(); }
+    }
+
     static SshNativeSession openManaged(SshNativeCallbackAdapter callback, ViewBinding view,
             SshSocketOwnership socket, String candidateId, int stepBudget, NativeBinding binding)
             throws VaultException {
@@ -648,6 +853,379 @@ final class SshNativeSession implements AutoCloseable {
             return openInternal(callback, view, socket.descriptor(), null, null, candidateId,
                     stepBudget, binding, true, socket, knownHostsPath);
         } finally { NATIVE_ENTRY.remove(); }
+    }
+
+    /** Legacy fixture seam; real leases and the production JNI binding require a fresh source. */
+    static JumpChildOwner prepareJumpChild(SshNativeSession parent, SshNativeCallbackAdapter callback,
+            SshSharedPublicView shared, String knownHostsPath, String candidateId, int stepBudget,
+            NativeBinding nativeBinding) throws VaultException {
+        if ((shared != null && shared.hasManagedLease()) || nativeBinding instanceof ProductionNativeBinding)
+            throw failure("SSH_JUMP_EFFECT_GUARD");
+        return prepareJumpChild(parent, callback, shared, knownHostsPath, candidateId, stepBudget,
+                null, null, nativeBinding);
+    }
+
+    /** The exact same-read vault receipt also owns the one-shot native source. */
+    static JumpChildOwner prepareJumpChildFresh(SshNativeSession parent, SshNativeCallbackAdapter callback,
+            SshSharedPublicView shared, String knownHostsPath, String candidateId, int stepBudget,
+            SshManagedKnownHostsProvider.ChildTrustSnapshot source,
+            SshPasswordConnector.TrustCommitState trustState) throws VaultException {
+        if (shared == null || !shared.hasManagedLease() || source == null || trustState == null) throw invalid();
+        if (parent != null && parent.ownedByJump != null) throw failure("SSH_JUMP_CHAIN_UNSUPPORTED");
+        return prepareJumpChild(parent, callback, shared, knownHostsPath, candidateId, stepBudget,
+                source, trustState, parent == null ? null : parent.nativeBinding);
+    }
+
+    /** Existing source-only tests cannot use a managed lease or the production JNI binding. */
+    static JumpChildOwner prepareJumpChildFresh(SshNativeSession parent, SshNativeCallbackAdapter callback,
+            SshSharedPublicView shared, String knownHostsPath, String candidateId, int stepBudget,
+            SshManagedKnownHostsProvider.ChildTrustSnapshot source, NativeBinding nativeBinding)
+            throws VaultException {
+        if (source == null) throw invalid();
+        if ((shared != null && shared.hasManagedLease()) || nativeBinding instanceof ProductionNativeBinding)
+            throw failure("SSH_JUMP_EFFECT_GUARD");
+        return prepareJumpChild(parent, callback, shared, knownHostsPath, candidateId, stepBudget,
+                source, null, nativeBinding);
+    }
+
+    /** JVM seam for the same strict admission/provider checks with fake transport owners. */
+    static JumpChildOwner prepareJumpChildFresh(SshNativeSession parent, SshNativeCallbackAdapter callback,
+            SshSharedPublicView shared, String knownHostsPath, String candidateId, int stepBudget,
+            SshManagedKnownHostsProvider.ChildTrustSnapshot source,
+            SshPasswordConnector.TrustCommitState trustState, NativeBinding nativeBinding)
+            throws VaultException {
+        if (source == null || trustState == null) throw invalid();
+        if ((shared != null && shared.hasManagedLease()) || nativeBinding instanceof ProductionNativeBinding)
+            throw failure("SSH_JUMP_EFFECT_GUARD");
+        return prepareJumpChild(parent, callback, shared, knownHostsPath, candidateId, stepBudget,
+                source, trustState, nativeBinding);
+    }
+
+    private static JumpChildOwner prepareJumpChild(SshNativeSession parent, SshNativeCallbackAdapter callback,
+            SshSharedPublicView shared, String knownHostsPath, String candidateId, int stepBudget,
+            SshManagedKnownHostsProvider.ChildTrustSnapshot source,
+            SshPasswordConnector.TrustCommitState trustState, NativeBinding nativeBinding)
+            throws VaultException {
+        requireOpenOwner(callback);
+        if (parent == null || shared == null || parent.sharedView != shared
+                || parent.nativeBinding != nativeBinding || parent.jumpChildOwner != null
+                || callback == parent.callback || callback.deadline() != parent.callback.deadline()
+                || stepBudget <= 0 || stepBudget > MAX_STEP_BUDGET || !identifier(candidateId)
+                || knownHostsPath == null) throw invalid();
+        parent.requireOwnerThread();
+        parent.requireProtocolState();
+        if (parent.jumpAdmission != null && (!parent.jumpAdmission.consumed
+                || !callback.ownsIssued(parent.jumpAdmission.next))) throw invalid();
+        try { VaultManifest.path(knownHostsPath); }
+        catch (VaultException failure) { throw invalid(); }
+        if (trustState != null) {
+            if (parent.jumpAdmission == null) throw phaseFailure();
+            trustState.requireChildAssemblySlot(parent.jumpAdmission);
+            parent.requireJumpAdmissionLive(parent.jumpAdmission);
+            trustState.requireChildAssembly(parent.jumpAdmission, parent.callback, callback, source, knownHostsPath);
+        }
+        if (source != null) callback.bindChildTrustSnapshot(source, knownHostsPath);
+        else callback.requireNoChildTrustSnapshot();
+        JumpChildOwner result = new JumpChildOwner(parent, callback, shared, knownHostsPath,
+                candidateId, stepBudget, nativeBinding, source, trustState);
+        try {
+            if (trustState != null && shared.hasManagedLease() && nativeBinding instanceof ProductionNativeBinding) {
+                SshNativeCallbackAdapter.enableJumpEffectFence();
+                result.effectFenceRegistered = true;
+                callback.bindChildEffectOwner(result);
+            }
+            result.view = shared.issue(callback);
+            if (trustState != null) {
+                parent.requireJumpAdmissionLive(parent.jumpAdmission);
+                trustState.claimChildAssembly(parent.jumpAdmission, parent.callback, callback, source, knownHostsPath);
+            }
+            parent.jumpChildOwner = result;
+            return result;
+        } catch (Throwable failure) {
+            callback.unbindChildEffectOwner(result);
+            result.releaseEffectFence();
+            if (result.view != null) {
+                try { result.view.abortUnadopted(); }
+                catch (Throwable cleanup) { if (cleanup != failure) failure.addSuppressed(cleanup); }
+            }
+            throw failure;
+        }
+    }
+
+    /**
+     * A caller retains this object before native reservation. A failed open can
+     * leave a cleanup-only native child; the same owner must retry close.
+     */
+    static final class JumpChildOwner implements AutoCloseable {
+        private final SshNativeSession parent;
+        private final SshNativeCallbackAdapter callback;
+        private final SshSharedPublicView shared;
+        private final String knownHostsPath;
+        private final String candidateId;
+        private final int stepBudget;
+        private final NativeBinding nativeBinding;
+        private final SshManagedKnownHostsProvider.ChildTrustSnapshot trustSource;
+        private final SshPasswordConnector.TrustCommitState trustState;
+        private final Thread owner = Thread.currentThread();
+        private SshSharedPublicView.Binding view;
+        private SshNativeCallbackAdapter.NativeSessionClaim callbackClaim;
+        private SshNativeSession child;
+        private boolean attempted;
+        private boolean callbackAdopted;
+        private boolean viewAdopted;
+        private volatile boolean closing;
+        private volatile boolean closed;
+        private boolean effectFenceRegistered;
+        private long token;
+        private long guardedHopDeadline;
+
+        private JumpChildOwner(SshNativeSession parent, SshNativeCallbackAdapter callback,
+                SshSharedPublicView shared, String knownHostsPath, String candidateId,
+                int stepBudget, NativeBinding nativeBinding,
+                SshManagedKnownHostsProvider.ChildTrustSnapshot trustSource,
+                SshPasswordConnector.TrustCommitState trustState) {
+            this.parent = parent;
+            this.callback = callback;
+            this.shared = shared;
+            this.knownHostsPath = knownHostsPath;
+            this.candidateId = candidateId;
+            this.stepBudget = stepBudget;
+            this.nativeBinding = nativeBinding;
+            this.trustSource = trustSource;
+            this.trustState = trustState;
+        }
+
+        boolean ownsCallback(SshNativeCallbackAdapter actual) { return callback == actual; }
+        private boolean unavailable() { return closing || closed; }
+
+        void requireProtectedMetadata() throws VaultException {
+            if (!effectFenceRegistered || trustState == null || trustSource == null || child == null
+                    || child.ownedByJump != this || child.callback != callback
+                    || unavailable() || parent.jumpChildOwner != this || !callbackAdopted || !viewAdopted
+                    || !shared.hasManagedLease())
+                throw failure("SSH_JUMP_EFFECT_GUARD");
+            if (trustState.publicationUncertain()) throw failure("VAULT_COMMIT_UNCERTAIN");
+            if (!trustState.cancellation.liveForJumpEffect()) throw failure("SSH_SESSION_CANCELLED");
+            trustSource.requireCurrent();
+            SshNativeSession current = child;
+            for (int index = callback.roleHop(); index >= 0; index--) {
+                if (current == null || current.sharedView != shared || current.callback.roleHop() != index)
+                    throw phaseFailure();
+                current.requireTransportLive();
+                JumpChildOwner link = current.ownedByJump;
+                if (index == 0) {
+                    if (link != null) throw phaseFailure();
+                } else {
+                    if (link == null || link.unavailable() || !link.callbackAdopted || !link.viewAdopted
+                            || link.child != current || link.callback != current.callback
+                            || link.shared != shared || link.parent.jumpChildOwner != link)
+                        throw phaseFailure();
+                    current = link.parent;
+                }
+            }
+            callback.requireSelectedSavedChild(this);
+            if (!trustState.cancellation.liveForJumpEffect()) throw failure("SSH_SESSION_CANCELLED");
+        }
+
+        void requireProtectedEffect() throws VaultException {
+            requireOwner();
+            requireProtectedMetadata();
+        }
+
+        long captureProtectedEffect() throws VaultException {
+            long generation = SshNativeCallbackAdapter.captureJumpEffectGeneration();
+            requireProtectedEffect();
+            return generation;
+        }
+
+        long captureProtectedJumpOpen(long hopDeadline) throws VaultException {
+            requireCurrent();
+            if (!effectFenceRegistered || trustState == null || trustSource == null || !shared.hasManagedLease()
+                    || hopDeadline <= 0 || hopDeadline > callback.deadline() || attempted || view == null)
+                throw failure("SSH_JUMP_EFFECT_GUARD");
+            long generation = SshNativeCallbackAdapter.captureJumpEffectGeneration();
+            if (trustState.publicationUncertain()) throw failure("VAULT_COMMIT_UNCERTAIN");
+            if (!trustState.cancellation.liveForJumpEffect()) throw failure("SSH_SESSION_CANCELLED");
+            trustSource.requireCurrent();
+            callback.requireAuthenticationSelectionLive();
+            if (!view.active()) throw failure("SSH_FILE_VIEW");
+            SshNativeSession current = parent;
+            for (int index = parent.callback.roleHop(); index >= 0; index--) {
+                if (current == null || current.sharedView != shared || current.callback.roleHop() != index)
+                    throw phaseFailure();
+                current.requireTransportLive();
+                JumpChildOwner link = current.ownedByJump;
+                if (index == 0) {
+                    if (link != null) throw phaseFailure();
+                } else {
+                    if (link == null || link.unavailable() || !link.callbackAdopted || !link.viewAdopted
+                            || link.child != current || link.parent.jumpChildOwner != link || link.shared != shared)
+                        throw phaseFailure();
+                    current = link.parent;
+                }
+            }
+            if (!trustState.cancellation.liveForJumpEffect()) throw failure("SSH_SESSION_CANCELLED");
+            return generation;
+        }
+
+        private void releaseEffectFence() {
+            if (!effectFenceRegistered) return;
+            SshNativeCallbackAdapter.disableJumpEffectFence();
+            effectFenceRegistered = false;
+        }
+
+        private void requireOwner() throws VaultException {
+            if (Thread.currentThread() != owner) throw failure("SSH_SESSION_THREAD");
+        }
+
+        private void requireCurrent() throws VaultException {
+            requireOwner();
+            if (unavailable() || parent.jumpChildOwner != this || parent.sharedView != shared)
+                throw phaseFailure();
+        }
+
+        /** Only state 4 with all post-open checks returns a usable child. */
+        SshNativeSession open() throws VaultException {
+            requireCurrent();
+            enterNative();
+            byte[] wire = null, supplied = null, receipt = null, freshWire = null;
+            try {
+                if (attempted || parent.jumpPhase == null) throw phaseFailure();
+                parent.requireProtocolState();
+                parent.requireTransportLive();
+                JumpStatus status = parent.queryJumpStatus();
+                if (status.phase != JumpPhase.OPEN || status.remoteEof || status.localEof)
+                    throw phaseFailure();
+                callback.requireAuthenticationSelectionLive();
+                if (!view.active()) throw failure("SSH_FILE_VIEW");
+                wire = callback.authenticationSelectionWire();
+                if (wire != null) {
+                    if (wire.length == 0 || wire.length > SshAuthenticationSelection.MAX_WIRE_BYTES)
+                        throw SshAuthenticationSelection.invalid();
+                    supplied = wire.clone();
+                    receipt = VaultCodec.digest(wire);
+                }
+                if (trustSource != null) {
+                    callback.requireChildTrustSnapshot(trustSource, knownHostsPath);
+                    freshWire = trustSource.takeWire();
+                } else callback.requireNoChildTrustSnapshot();
+                attempted = true;
+                callbackClaim = callback.beginNativeSessionOpen();
+                child = new SshNativeSession(callback, view, nativeBinding, callbackClaim, 0,
+                        stepBudget, receipt, true);
+                receipt = null;
+                child.sharedView = shared;
+                child.ownedByJump = this;
+                try {
+                    token = nativeBinding.reserveJumpChild(parent.nativeHandle);
+                    if (token <= 0) throw new IOException("SSH jump reservation is unavailable");
+                    child.nativeHandle = token;
+                    boolean opened = trustSource == null
+                            ? nativeBinding.openJumpChild(token, callback.roleToken(), callback.ownerUid(),
+                                callback.nativeCallbackToken(), view.token(), callback.deadline(), stepBudget,
+                                knownHostsPath, callback.host(), candidateId, supplied)
+                            : nativeBinding.openJumpChildFresh(token, callback.roleToken(), callback.ownerUid(),
+                                callback.nativeCallbackToken(), view.token(), callback.deadline(), stepBudget,
+                                knownHostsPath, callback.host(), candidateId, supplied, freshWire);
+                    int state = childState();
+                    if (state >= 2) adopt();
+                    if (!opened || state != 4) throw new IOException("SSH jump child did not open");
+                    parent.requireTransportLive();
+                    callback.requireAuthenticationSelectionLive();
+                    if (trustSource != null) trustSource.requireCurrent();
+                    if (!view.active()) throw failure("SSH_FILE_VIEW");
+                    if (trustSource != null) callback.activateChildTrustSnapshot(trustSource, knownHostsPath);
+                    return child;
+                } catch (IOException | LinkageError | RuntimeException failure) {
+                    throw SshNativeSession.unavailable();
+                }
+            } finally {
+                VaultCodec.wipe(wire);
+                VaultCodec.wipe(supplied);
+                VaultCodec.wipe(receipt);
+                VaultCodec.wipe(freshWire);
+                NATIVE_ENTRY.remove();
+            }
+        }
+
+        private int childState() throws IOException {
+            int state = nativeBinding.jumpChildState(token);
+            if (state < 0 || state > 4) throw new IOException("invalid SSH jump child state");
+            return state;
+        }
+
+        private void adopt() throws VaultException {
+            if (!callbackAdopted) {
+                callback.finishNativeSessionOpen(callbackClaim, true);
+                callbackAdopted = true;
+            }
+            if (!viewAdopted) {
+                view.nativeAdopted(callback);
+                viewAdopted = true;
+            }
+        }
+
+        private void childDestroyed(SshNativeSession candidate) throws VaultException {
+            if (candidate == child) finish();
+        }
+
+        private void finish() throws VaultException {
+            if (closed) return;
+            closing = true;
+            token = 0;
+            try {
+                if (trustSource != null) trustSource.close();
+                callback.unbindChildEffectOwner(this);
+                releaseEffectFence();
+            } catch (RuntimeException | LinkageError failure) {
+                VaultException unconfirmed = cleanupFailure();
+                unconfirmed.initCause(failure);
+                throw unconfirmed;
+            }
+            if (parent.jumpChildOwner == this) parent.jumpChildOwner = null;
+            closed = true;
+        }
+
+        @Override public void close() throws VaultException {
+            requireOwner();
+            if (closed) return;
+            enterNative();
+            try {
+                closing = true;
+                if (child != null && child.closed()) { finish(); return; }
+                if (token > 0 && !callbackAdopted) {
+                    final int state;
+                    try { state = childState(); }
+                    catch (IOException | LinkageError | RuntimeException failure) { throw cleanupFailure(); }
+                    if (state >= 2) adopt();
+                    else {
+                        try { nativeBinding.abortJumpChild(token); }
+                        catch (IOException | LinkageError | RuntimeException failure) { throw cleanupFailure(); }
+                        token = 0;
+                    }
+                }
+                if (callbackAdopted) {
+                    if (!viewAdopted) adopt();
+                    child.closeInternal();
+                } else {
+                    if (callbackClaim != null) callback.finishNativeSessionOpen(callbackClaim, false);
+                    view.abortUnadopted();
+                    if (child != null) VaultCodec.wipe(child.expectedSelectionReceipt);
+                    if (trustSource != null) try {
+                        callback.closeUnadoptedChildTrust(trustSource);
+                    } catch (RuntimeException | LinkageError failure) {
+                        VaultException unconfirmed = cleanupFailure();
+                        unconfirmed.initCause(failure);
+                        throw unconfirmed;
+                    }
+                    finish();
+                }
+            } finally { NATIVE_ENTRY.remove(); }
+        }
+
+        private static VaultException cleanupFailure() {
+            return new VaultException("SSH_SESSION_CLEANUP", "The SSH jump child cleanup is unconfirmed");
+        }
     }
 
     private static SshNativeSession openInternal(SshNativeCallbackAdapter callback, ViewBinding view,
@@ -667,6 +1245,8 @@ final class SshNativeSession implements AutoCloseable {
         }
         try { VaultManifest.path(knownHostsPath); }
         catch (VaultException failure) { throw invalid(); }
+        if (view instanceof SshSharedPublicView.Binding)
+            ((SshSharedPublicView.Binding) view).requireForOpen(callback);
         callback.requireNativeSessionLive();
         byte[] wire = null;
         byte[] suppliedWire = null;
@@ -709,6 +1289,8 @@ final class SshNativeSession implements AutoCloseable {
             } catch (IOException | LinkageError | RuntimeException failure) { throw unavailable(); }
             if (handle <= 0) throw unavailable();
             prepared.nativeHandle = handle;
+            if (view instanceof SshSharedPublicView.Binding)
+                ((SshSharedPublicView.Binding) view).nativeAdopted(callback);
             if (socket != null) socket.nativeAdopted();
             callback.finishNativeSessionOpen(claim, true);
             opened = true;
@@ -737,13 +1319,261 @@ final class SshNativeSession implements AutoCloseable {
         }
     }
 
+    /** Exact owner of a checked native refusal before invalidation began. */
+    private static final class CancellationNotStarted extends UnsatisfiedLinkError {
+        private final SshNativeSession session;
+
+        private CancellationNotStarted(SshNativeSession session) {
+            super("SSH session invalidation did not begin");
+            this.session = session;
+        }
+    }
+
+    private static final int RETRY_COMPLETE = 0, RETRY_WAIT = 1, RETRY_CLEANUP_ONLY = 2;
+
     /** Request cancellation from any thread; all native I/O remains owner-thread only. */
     void cancel() throws VaultException {
         synchronized (stateLock) {
             if (destroyed || nativeClosed) return;
             cancellationRequested = true;
+            if (cancellationUnconfirmed != null)
+                throw new IllegalStateException("SSH session cancellation is unconfirmed", cancellationUnconfirmed);
+            if (cancellationComplete) return;
+            if (callbackCancelCleanupOnly)
+                throw new VaultException("SSH_CALLBACK_NATIVE", "The SSH callback cancellation failed");
+            cancellationNeedsCompletion = true;
+            if (closeInProgress || cancellationInProgress)
+                throw new VaultException("SSH_SESSION_CLEANUP", "SSH session cleanup is in progress");
+            cancellationExplicitlyUnstarted = false;
+            cancellationInProgress = true;
         }
-        callback.cancel();
+        cancelReserved();
+    }
+
+    private void cancelReserved() throws VaultException {
+        boolean explicitlyUnstarted = false;
+        try {
+            int begun = SshNativeCallbackAdapter.beginJumpCleanupInvalidation();
+            if (begun == -1) {
+                explicitlyUnstarted = true;
+                synchronized (stateLock) { cancellationExplicitlyUnstarted = true; }
+                throw new CancellationNotStarted(this);
+            }
+            if (begun == 1) SshNativeCallbackAdapter.endJumpEffectInvalidation(true);
+            else if (begun != 0) throw new IllegalStateException("SSH session invalidation is unconfirmed");
+            try { callback.cancel(); }
+            catch (VaultException failure) {
+                synchronized (stateLock) {
+                    if ("SSH_CALLBACK_NATIVE".equals(failure.code) && failure.getCause() == null
+                            && failure.getSuppressed().length == 0) {
+                        cancellationNeedsCompletion = false;
+                        callbackCancelCleanupOnly = true;
+                    } else cancellationUnconfirmed = failure;
+                }
+                throw failure;
+            }
+            synchronized (stateLock) {
+                cancellationNeedsCompletion = false;
+                cancellationComplete = true;
+            }
+        } catch (RuntimeException | Error failure) {
+            if (!explicitlyUnstarted) synchronized (stateLock) { cancellationUnconfirmed = failure; }
+            throw failure;
+        } finally {
+            synchronized (stateLock) { cancellationInProgress = false; }
+        }
+    }
+
+    /** Retry only a checked pre-begin refusal; another caller may have resolved it. */
+    private int retryExplicitlyUnstarted() throws VaultException {
+        synchronized (stateLock) {
+            if (destroyed || nativeClosed || cancellationComplete) return RETRY_COMPLETE;
+            if (cancellationUnconfirmed != null)
+                throw new IllegalStateException("SSH session cancellation is unconfirmed", cancellationUnconfirmed);
+            if (callbackCancelCleanupOnly) return RETRY_CLEANUP_ONLY;
+            if (closeInProgress || cancellationInProgress) return RETRY_WAIT;
+            if (!cancellationExplicitlyUnstarted)
+                throw new IllegalStateException("SSH session cancellation cannot be retried");
+            cancellationExplicitlyUnstarted = false;
+            cancellationInProgress = true;
+        }
+        cancelReserved();
+        return RETRY_COMPLETE;
+    }
+
+    private boolean cleanupOnlyCancellation(Throwable failure) {
+        synchronized (stateLock) {
+            return callbackCancelCleanupOnly && cancellationUnconfirmed == null
+                    && failure instanceof VaultException && "SSH_CALLBACK_NATIVE".equals(((VaultException)failure).code)
+                    && failure.getCause() == null && failure.getSuppressed().length == 0;
+        }
+    }
+
+    /** Fixed session ownership for the terminal; no new authentication authority. */
+    static final class TerminalChain {
+        static final int CANCEL_CONFIRMED = 0, CANCEL_RETRYABLE = 1, CANCEL_CLEANUP_ONLY = 2,
+                CANCEL_WAIT = 3;
+        private final List<SshNativeSession> sessions;
+        private List<SshNativeSession> retryableCancellation = Collections.emptyList();
+        private boolean cancellationCleanupOnly;
+        private Throwable cancellationFailure;
+
+        private TerminalChain(List<SshNativeSession> sessions) {
+            this.sessions = Collections.unmodifiableList(sessions);
+        }
+
+        private SshNativeSession target() { return sessions.get(sessions.size() - 1); }
+
+        ShellStatus status() throws VaultException {
+            SshNativeSession target = target();
+            ShellStatus result = target.shellStatus();
+            if (sessions.size() == 1 || result.phase != ShellPhase.RUNNING) return result;
+            for (int index = sessions.size() - 2; index >= 0; index--) {
+                SshNativeSession ancestor = sessions.get(index);
+                if (!ancestor.established) ancestor.retainJumpTransport();
+                else if (!ancestor.authenticationRetired) throw phaseFailure();
+            }
+            // The first query may observe RUNNING before its confirmation can run.
+            result = target.shellStatus();
+            if (result.phase == ShellPhase.RUNNING
+                    && (!target.jumpAncestorsRetained() || target.shellConfirmationPending
+                            || !target.shellOutputPublicationLive()))
+                throw phaseFailure();
+            return result;
+        }
+
+        void step() throws VaultException {
+            int last = sessions.size() - 1;
+            for (int index = 0; index <= last; index++) {
+                SshNativeSession current = sessions.get(index);
+                if (index > 0) current.pumpJumpRelay();
+                if (index < last) {
+                    JumpStatus status = current.jumpStatus();
+                    if (status.phase == JumpPhase.REJECTED) throw failure("SSH_SESSION_JUMP_STATUS");
+                    // Closed jump channels may still have accepted bytes to drain.
+                    if (status.phase != JumpPhase.CLOSED) current.step();
+                } else current.step();
+                if (index > 0) current.pumpJumpRelay();
+            }
+        }
+
+        /** Called from any thread; all callbacks are attempted even on failure. */
+        void cancel() throws VaultException {
+            Throwable first = null;
+            for (int index = sessions.size() - 1; index >= 0; index--) {
+                try { sessions.get(index).cancel(); }
+                catch (VaultException | RuntimeException | Error failure) {
+                    if (first == null) first = failure;
+                    else if (first != failure) first.addSuppressed(failure);
+                }
+            }
+            if (first instanceof VaultException) throw (VaultException) first;
+            if (first instanceof RuntimeException) throw (RuntimeException) first;
+            if (first != null) throw (Error) first;
+        }
+
+        /** Preserve each checked refusal and never turn another failure into a retry grant. */
+        int cancelForTerminal() throws VaultException {
+            List<SshNativeSession> retryable = new ArrayList<>();
+            Throwable first = null;
+            boolean cleanupOnly = false, unknown = false;
+            for (int index = sessions.size() - 1; index >= 0; index--) {
+                SshNativeSession session = sessions.get(index);
+                try { session.cancel(); }
+                catch (VaultException | RuntimeException | Error failure) {
+                    if (unstartedCancellation(session, failure)) retryable.add(session);
+                    else if (session.cleanupOnlyCancellation(failure)) cleanupOnly = true;
+                    else unknown = true;
+                    if (first == null) first = failure;
+                    else if (first != failure) first.addSuppressed(failure);
+                }
+            }
+            if (unknown) { throwCancellationFailure(first); }
+            cancellationCleanupOnly = cleanupOnly;
+            cancellationFailure = first;
+            retryableCancellation = retryable;
+            if (!retryable.isEmpty()) return CANCEL_RETRYABLE;
+            cancellationFailure = null;
+            return cleanupOnly ? CANCEL_CLEANUP_ONLY : CANCEL_CONFIRMED;
+        }
+
+        /** Called only by the chain's owner, for the exact sessions that refused to begin. */
+        int retryCancellationForTerminal() throws VaultException {
+            target().requireCleanupOwnerThread();
+            if (retryableCancellation.isEmpty())
+                throw new IllegalStateException("SSH session cancellation is not retryable");
+            List<SshNativeSession> retryable = new ArrayList<>();
+            Throwable failure = null;
+            boolean unknown = false, refused = false;
+            for (SshNativeSession session : retryableCancellation) {
+                try {
+                    int status = session.retryExplicitlyUnstarted();
+                    if (status == RETRY_WAIT) retryable.add(session);
+                    else if (status == RETRY_CLEANUP_ONLY) cancellationCleanupOnly = true;
+                } catch (VaultException | RuntimeException | Error error) {
+                    if (unstartedCancellation(session, error)) { retryable.add(session); refused = true; }
+                    else if (session.cleanupOnlyCancellation(error)) cancellationCleanupOnly = true;
+                    else unknown = true;
+                    if (failure == null) failure = error;
+                    else if (failure != error) failure.addSuppressed(error);
+                }
+            }
+            if (unknown) {
+                if (cancellationFailure != null && cancellationFailure != failure) {
+                    cancellationFailure.addSuppressed(failure);
+                    failure = cancellationFailure;
+                }
+                throwCancellationFailure(failure);
+            }
+            retryableCancellation = retryable;
+            if (!retryable.isEmpty()) return refused ? CANCEL_RETRYABLE : CANCEL_WAIT;
+            cancellationFailure = null;
+            return cancellationCleanupOnly ? CANCEL_CLEANUP_ONLY : CANCEL_CONFIRMED;
+        }
+
+        private static boolean unstartedCancellation(SshNativeSession session, Throwable failure) {
+            return failure instanceof CancellationNotStarted
+                    && ((CancellationNotStarted)failure).session == session
+                    && failure.getCause() == null && failure.getSuppressed().length == 0;
+        }
+
+        private static void throwCancellationFailure(Throwable failure) throws VaultException {
+            if (failure instanceof VaultException) throw (VaultException)failure;
+            if (failure instanceof RuntimeException) throw (RuntimeException)failure;
+            throw (Error)failure;
+        }
+
+        /** Stop on the first unconfirmed child/relay close; retry the same owners. */
+        void close() throws VaultException {
+            for (int index = sessions.size() - 1; index >= 0; index--)
+                sessions.get(index).close();
+        }
+    }
+
+    /** Snapshot only the exact Java/JNI owner chain on its original thread. */
+    static TerminalChain terminalChain(SshNativeSession target) throws VaultException {
+        if (target == null) throw invalid();
+        List<SshNativeSession> reversed = new ArrayList<>();
+        IdentityHashMap<SshNativeSession, Boolean> seen = new IdentityHashMap<>();
+        SshNativeSession current = target;
+        if (current.jumpChildOwner != null) throw phaseFailure();
+        while (current != null) {
+            current.requireOwnerThread();
+            current.requireProtocolState();
+            if (seen.put(current, Boolean.TRUE) != null || reversed.size() >= SshRoleContext.MAX_HOPS)
+                throw phaseFailure();
+            reversed.add(current);
+            JumpChildOwner link = current.ownedByJump;
+            if (link == null) break;
+            SshNativeSession parent = link.parent;
+            if (link.unavailable() || !link.callbackAdopted || !link.viewAdopted || link.child != current
+                    || link.callback != current.callback || link.shared != current.sharedView
+                    || parent == null || parent.jumpChildOwner != link || parent.sharedView != link.shared
+                    || parent.ownerThread != current.ownerThread) throw phaseFailure();
+            current = parent;
+        }
+        Collections.reverse(reversed);
+        return new TerminalChain(reversed);
     }
 
     StepResult step() throws VaultException {
@@ -753,12 +1583,129 @@ final class SshNativeSession implements AutoCloseable {
         finally { NATIVE_ENTRY.remove(); }
     }
 
+    /** Fixture-only observation bound to one real child, never a trust or credential grant. */
+    static final class SignedNewFixtureReady {
+        private final SshNativeSession session;
+        private final JumpChildOwner link;
+        private final SshNativeCallbackAdapter callback;
+        private final long handle, callbackToken, deadline;
+
+        private SignedNewFixtureReady(SshNativeSession session, JumpChildOwner link,
+                SshNativeCallbackAdapter callback, long handle, long callbackToken, long deadline) {
+            this.session = session;
+            this.link = link;
+            this.callback = callback;
+            this.handle = handle;
+            this.callbackToken = callbackToken;
+            this.deadline = deadline;
+        }
+
+        long deadline() { return deadline; }
+
+        boolean belongsTo(SshNativeSession candidate) { return session == candidate; }
+
+        boolean matches(JumpChildOwner owner, SshManagedKnownHostsProvider.ChildTrustSnapshot source,
+                String candidateId) {
+            return link == owner && link.trustSource == source && link.candidateId.equals(candidateId);
+        }
+
+        void requireLive(SshNativeCallbackAdapter exact) throws VaultException {
+            if (exact == null || callback != exact || session.callback != exact)
+                throw failure("SSH_HOST_KEY_REVIEW");
+            session.requireSignedNewFixtureState(link, handle, callbackToken, deadline);
+        }
+    }
+
+    /** Called after step returns; missing fixture JNI or an undrained KEX cannot issue a review. */
+    SshNativeCallbackAdapter.SignedNewFixtureReview signedNewFixtureReview() throws VaultException {
+        requireOwnerThread();
+        JumpChildOwner link = ownedByJump;
+        long handle;
+        synchronized (stateLock) { handle = nativeHandle; }
+        long callbackToken = callback.nativeCallbackToken();
+        long hopDeadline = link == null ? 0 : link.guardedHopDeadline;
+        requireSignedNewFixtureState(link, handle, callbackToken, hopDeadline);
+        callback.requireSignedNewFixturePending();
+        boolean ready;
+        enterNative();
+        try {
+            ready = Native.provisionalNewFixtureReady(handle, callbackToken);
+        } catch (IOException | LinkageError | RuntimeException unavailable) {
+            throw failure("SSH_HOST_KEY_REVIEW");
+        } finally {
+            NATIVE_ENTRY.remove();
+        }
+        if (!ready) return null;
+        SignedNewFixtureReady observation = new SignedNewFixtureReady(this, link, callback,
+                handle, callbackToken, hopDeadline);
+        observation.requireLive(callback);
+        return callback.claimSignedNewFixtureReview(observation);
+    }
+
+    /** One bounded fixture turn; bit 0 is idle and bit 1 records a validated extension. */
+    int pollSignedNewFixture(SshNativeCallbackAdapter.SignedNewFixtureReview review) throws VaultException {
+        requireOwnerThread();
+        if (review == null) throw failure("SSH_HOST_KEY_REVIEW");
+        review.requireLiveFor(this);
+        JumpChildOwner link = ownedByJump;
+        if (link == null || link.parent == null) throw failure("SSH_HOST_KEY_REVIEW");
+        pumpJumpRelay();
+        link.parent.step();
+        pumpJumpRelay();
+        review.requireLiveFor(this);
+        long handle;
+        synchronized (stateLock) { handle = nativeHandle; }
+        long callbackToken = callback.nativeCallbackToken();
+        int observed;
+        enterNative();
+        try {
+            observed = Native.provisionalNewFixturePoll(handle, callbackToken);
+        } catch (IOException | LinkageError | RuntimeException unavailable) {
+            throw failure("SSH_HOST_KEY_REVIEW");
+        } finally {
+            NATIVE_ENTRY.remove();
+        }
+        if ((observed & ~3) != 0) throw failure("SSH_HOST_KEY_REVIEW");
+        review.requireLiveFor(this);
+        return observed;
+    }
+
+    /* No Java state, callback, view or vault monitor is held across the JNI query above. */
+    private void requireSignedNewFixtureState(JumpChildOwner link, long handle, long callbackToken,
+            long hopDeadline) throws VaultException {
+        synchronized (stateLock) {
+            if (nativeClosed || destroyed || cancellationRequested || terminalFailure != null
+                    || complete || phase != Phase.KEX_ONLY || nativeHandle != handle || handle <= 0)
+                throw failure("SSH_SESSION_CLOSED");
+        }
+        if (!(nativeBinding instanceof ProductionNativeBinding) || link == null || ownedByJump != link
+                || link.child != this || link.callback != callback || link.unavailable()
+                || link.parent == null || link.parent.jumpChildOwner != link || link.shared != sharedView
+                || link.nativeBinding != nativeBinding || link.callbackClaim != callbackClaim
+                || link.view != view || link.token != handle
+                || !link.callbackAdopted || !link.viewAdopted || !link.effectFenceRegistered
+                || link.trustSource == null || link.trustState == null || !link.shared.hasManagedLease()
+                || callbackToken <= 0 || callback.nativeCallbackToken() != callbackToken
+                || hopDeadline <= 0 || link.guardedHopDeadline != hopDeadline
+                || !link.trustState.cancellation.liveForJumpEffect() || link.trustState.publicationUncertain())
+            throw failure("SSH_HOST_KEY_REVIEW");
+        link.parent.requireTransportLive();
+        if (!view.active()) throw failure("SSH_FILE_VIEW");
+        link.trustSource.requireCurrent();
+        if (!link.trustState.cancellation.liveForJumpEffect() || link.unavailable())
+            throw failure("SSH_HOST_KEY_REVIEW");
+    }
+
     private StepResult stepInternal() throws VaultException {
         synchronized (stateLock) {
             if (nativeClosed || destroyed) throw failure("SSH_SESSION_CLOSED");
+            if (cancellationRequested && (cancellationInProgress
+                    || cancellationNeedsCompletion || cancellationUnconfirmed != null || callbackCancelCleanupOnly))
+                throw failure("SSH_SESSION_CANCELLED");
             if (terminalFailure != null) throw failure(terminalFailure);
             if (phase == Phase.SERVICE_READY
-                    || (phase == Phase.FINISHED && shellPhase == ShellPhase.DISABLED)) throw phaseFailure();
+                    || (phase == Phase.FINISHED && shellPhase == ShellPhase.DISABLED
+                        && jumpPhase == null)) throw phaseFailure();
             if (complete && phase == Phase.KEX_ONLY) throw failure("SSH_SESSION_COMPLETE");
         }
         boolean explicit = phase != Phase.KEX_ONLY;
@@ -766,12 +1713,14 @@ final class SshNativeSession implements AutoCloseable {
             requireTransportLive();
             if (shellPhase != ShellPhase.DISABLED && queryShellStatus().phase.terminal())
                 throw phaseFailure();
+            if (jumpPhase != null && queryJumpStatus().phase.terminal()) throw phaseFailure();
         }
         if (cancellationRequested) {
             terminalFailure = "SSH_SESSION_CANCELLED";
         } else if (!explicit) {
             try {
                 callback.requireNativeSessionLive();
+                callback.requireLocalEffectAdmission();
             } catch (VaultException callbackFailure) {
                 String code = sessionFailureCode(callbackFailure.code);
                 synchronized (stateLock) { terminalFailure = code; }
@@ -788,6 +1737,7 @@ final class SshNativeSession implements AutoCloseable {
             if (explicit) {
                 requireTransportLive();
                 if (shellPhase != ShellPhase.DISABLED) queryShellStatus();
+                else if (jumpPhase != null) queryJumpStatus();
                 else if (phase == Phase.SERVICE_PENDING) queryServiceReady();
                 else if (phase == Phase.DISCOVERY_PENDING) queryAuthDiscovery();
                 else if (phase == Phase.PASSWORD_PENDING) queryPasswordResult();
@@ -812,11 +1762,13 @@ final class SshNativeSession implements AutoCloseable {
         requireOwnerThread();
         enterNative();
         try {
+            long generation = captureFreshSelectedEffect();
             requireProtocolState();
             if (!complete || phase != Phase.KEX_ONLY) throw phaseFailure();
             requireProtocolLive();
             try {
-                nativeBinding.beginUserauthService(nativeHandle);
+                if (generation == 0) nativeBinding.beginUserauthService(nativeHandle);
+                else nativeBinding.beginUserauthServiceGuarded(nativeHandle, generation);
                 requireProtocolLive();
                 phase = Phase.SERVICE_PENDING;
             } catch (IOException | LinkageError | RuntimeException nativeFailure) {
@@ -843,13 +1795,15 @@ final class SshNativeSession implements AutoCloseable {
         requireOwnerThread();
         enterNative();
         try {
+            long generation = captureFreshSelectedEffect();
             requireProtocolState();
             if (phase != Phase.SERVICE_READY || discoveryResult != AuthDiscoveryResult.NOT_STARTED)
                 throw phaseFailure();
             if (expectedSelectionReceipt == null) throw SshAuthenticationSelection.invalid();
             requireProtocolLive();
             try {
-                nativeBinding.beginAuthDiscovery(nativeHandle);
+                if (generation == 0) nativeBinding.beginAuthDiscovery(nativeHandle);
+                else nativeBinding.beginAuthDiscoveryGuarded(nativeHandle, generation);
                 requireProtocolLive();
                 discoveryResult = AuthDiscoveryResult.PENDING;
                 phase = Phase.DISCOVERY_PENDING;
@@ -942,6 +1896,7 @@ final class SshNativeSession implements AutoCloseable {
         requireOwnerThread();
         enterNative();
         try {
+            requireFreshEffectGuard();
             requireProtocolState();
             if (phase != Phase.SERVICE_READY || !discoveryAllows(AuthDiscoveryStatus.PASSWORD)) throw phaseFailure();
             if (expectedSelectionReceipt == null) throw SshAuthenticationSelection.invalid();
@@ -962,8 +1917,76 @@ final class SshNativeSession implements AutoCloseable {
         } finally { NATIVE_ENTRY.remove(); }
     }
 
+    /** One prompt for the exact saved password after a server method discovery. */
+    Object selectedPasswordPromptStage() throws VaultException {
+        requireOwnerThread();
+        requireSelectedPasswordMetadata();
+        if (selectedPasswordPromptIssued || expectedSelectionReceipt == null || phase != Phase.SERVICE_READY
+                || (discoveryResult != AuthDiscoveryResult.METHODS && discoveryResult != AuthDiscoveryResult.PARTIAL)
+                || (discoveryMethods & AuthDiscoveryStatus.PASSWORD) == 0) throw phaseFailure();
+        callback.requirePlainSavedPasswordSelection();
+        selectedPasswordPromptIssued = true;
+        selectedPasswordPromptStage = new Object();
+        return selectedPasswordPromptStage;
+    }
+
+    /** Metadata only; the UI response thread does not enter native code. */
+    void requireSelectedPasswordPromptStageLive(Object stage) throws VaultException {
+        requireSelectedPasswordMetadata();
+        if (stage == null || selectedPasswordPromptStage != stage || phase != Phase.SERVICE_READY
+                || (discoveryResult != AuthDiscoveryResult.METHODS && discoveryResult != AuthDiscoveryResult.PARTIAL)
+                || (discoveryMethods & AuthDiscoveryStatus.PASSWORD) == 0) throw phaseFailure();
+        callback.requirePlainSavedPasswordSelection();
+    }
+
+    void pollSelectedPasswordPrompt(Object stage) throws VaultException {
+        requireOwnerThread(); enterNative();
+        byte[] receipt = null;
+        try {
+            requireSelectedPasswordPromptStageLive(stage);
+            if (expectedSelectionReceipt == null) throw SshAuthenticationSelection.invalid();
+            receipt = expectedSelectionReceipt.clone();
+            try {
+                nativeBinding.pollSelectedPasswordPrompt(nativeHandle, receipt);
+                requireSelectedPasswordPromptStageLive(stage);
+            } catch (IOException | LinkageError | RuntimeException nativeFailure) {
+                throw protocolNativeFailure("SSH_SESSION_STEP");
+            } catch (Error nativeFailure) { terminalFailure = "SSH_SESSION_STEP"; throw nativeFailure; }
+        } finally { VaultCodec.wipe(receipt); NATIVE_ENTRY.remove(); }
+    }
+
+    /** The stage can only dispatch the already selected native saved-password callback once. */
+    void beginSelectedSavedPassword(Object stage) throws VaultException {
+        requireOwnerThread(); enterNative();
+        try {
+            requireSelectedPasswordPromptStageLive(stage);
+            long generation = captureFreshSelectedEffect();
+            requireSelectedPasswordPromptStageLive(stage);
+            selectedPasswordPromptStage = null;
+            try {
+                if (generation == 0) nativeBinding.beginPasswordAuth(nativeHandle);
+                else nativeBinding.beginPasswordAuthGuarded(nativeHandle, generation);
+                requireProtocolLive();
+                phase = Phase.PASSWORD_PENDING;
+                authenticationResult = PasswordAuthResult.PENDING;
+            } catch (IOException | LinkageError | RuntimeException nativeFailure) {
+                throw protocolNativeFailure("SSH_SESSION_AUTH");
+            } catch (Error nativeFailure) { terminalFailure = "SSH_SESSION_AUTH"; throw nativeFailure; }
+        } finally { NATIVE_ENTRY.remove(); }
+    }
+
+    private void requireSelectedPasswordMetadata() throws VaultException {
+        requireProtocolState();
+        requireProtocolLive();
+        if (callback.hasChildTrustSource()) {
+            if (ownedByJump == null) throw failure("SSH_JUMP_EFFECT_GUARD");
+            ownedByJump.requireProtectedMetadata();
+        }
+    }
+
     Object passwordPromptStage() throws VaultException {
         requireOwnerThread();
+        requireFreshEffectGuard();
         requireProtocolState(); requireProtocolLive();
         boolean initial = phase == Phase.SERVICE_READY
                 && (discoveryResult == AuthDiscoveryResult.METHODS || discoveryResult == AuthDiscoveryResult.PARTIAL)
@@ -980,6 +2003,7 @@ final class SshNativeSession implements AutoCloseable {
 
     /** Metadata-only; safe on the event publisher thread. */
     void requirePasswordPromptStageLive(Object stage) throws VaultException {
+        requireFreshEffectGuard();
         requireProtocolState(); requireProtocolLive();
         if (stage == null || passwordPromptStage != stage
                 || !(phase == Phase.SERVICE_READY || phase == Phase.FINISHED && authenticationCanContinue())) throw phaseFailure();
@@ -995,7 +2019,7 @@ final class SshNativeSession implements AutoCloseable {
     }
 
     Object privateKeyPromptStage() throws VaultException {
-        requireOwnerThread(); requireProtocolState(); requireProtocolLive();
+        requireOwnerThread(); requireFreshEffectGuard(); requireProtocolState(); requireProtocolLive();
         boolean initial = phase == Phase.SERVICE_READY
                 && (discoveryResult == AuthDiscoveryResult.METHODS || discoveryResult == AuthDiscoveryResult.PARTIAL)
                 && (discoveryMethods & AuthDiscoveryStatus.PUBLIC_KEY) != 0;
@@ -1009,6 +2033,7 @@ final class SshNativeSession implements AutoCloseable {
     }
 
     void requirePrivateKeyPromptStageLive(Object stage) throws VaultException {
+        requireFreshEffectGuard();
         requireProtocolState(); requireProtocolLive();
         if (stage == null || privateKeyPromptStage != stage
                 || !(phase == Phase.SERVICE_READY || phase == Phase.FINISHED && authenticationCanContinue())) throw phaseFailure();
@@ -1049,6 +2074,7 @@ final class SshNativeSession implements AutoCloseable {
         enterNative();
         byte[] expected = null, received = null, owned = null;
         try {
+            requireFreshEffectGuard();
             requireProtocolState(); requireProtocolLive();
             if (expectedSelectionReceipt == null || authenticationStage >= 4) throw phaseFailure();
             requirePasswordPromptStageLive(stage);
@@ -1057,7 +2083,9 @@ final class SshNativeSession implements AutoCloseable {
             SshKexProof kex = callback.kexProof();
             SshHostKeyAuthority.Proof host = callback.hostProof();
             if (kex == null || host == null) throw SshAuthenticationSelection.invalid();
-            expected = expectedSelectionReceipt.clone(); owned = password.clone();
+            expected = expectedSelectionReceipt.clone();
+            callback.requireLocalEffectAdmission();
+            owned = password.clone();
             passwordPromptStage = null;
             try {
                 received = nativeBinding.beginDiscoveredPassword(nativeHandle, expected, owned);
@@ -1135,6 +2163,7 @@ final class SshNativeSession implements AutoCloseable {
         requireOwnerThread();
         enterNative();
         try {
+            requireFreshEffectGuard();
             requireProtocolState();
             if (phase != Phase.SERVICE_READY || privateKeyPromptStage != null
                     || !discoveryAllows(AuthDiscoveryStatus.PUBLIC_KEY)) throw phaseFailure();
@@ -1161,6 +2190,7 @@ final class SshNativeSession implements AutoCloseable {
         requireOwnerThread(); enterNative();
         byte[] expected = null, received = null;
         try {
+            requireFreshEffectGuard();
             requireProtocolState(); requireProtocolLive();
             if (phase != Phase.FINISHED || !authenticationCanContinue() || authenticationStage >= 4 || privateKeyPromptStage != null
                     || expectedSelectionReceipt == null) throw phaseFailure();
@@ -1221,6 +2251,7 @@ final class SshNativeSession implements AutoCloseable {
         requireOwnerThread();
         enterNative();
         try {
+            requireFreshEffectGuard();
             requireProtocolState();
             if (phase != Phase.SERVICE_READY || !discoveryAllows(AuthDiscoveryStatus.KEYBOARD_INTERACTIVE)) throw phaseFailure();
             if (expectedSelectionReceipt == null) throw SshAuthenticationSelection.invalid();
@@ -1245,6 +2276,7 @@ final class SshNativeSession implements AutoCloseable {
         enterNative();
         byte[] expected = null, received = null;
         try {
+            requireFreshEffectGuard();
             requireProtocolState(); requireProtocolLive();
             if (phase != Phase.FINISHED || keyboardInteractiveAuthentication || keyboardStage != null
                     || expectedSelectionReceipt == null) throw phaseFailure();
@@ -1281,6 +2313,7 @@ final class SshNativeSession implements AutoCloseable {
         enterNative();
         byte[] expected = null, received = null;
         try {
+            requireFreshEffectGuard();
             requireProtocolState(); requireProtocolLive();
             if (phase != Phase.SERVICE_READY || keyboardStage != null || expectedSelectionReceipt == null
                     || (discoveryResult != AuthDiscoveryResult.METHODS && discoveryResult != AuthDiscoveryResult.PARTIAL)
@@ -1335,6 +2368,7 @@ final class SshNativeSession implements AutoCloseable {
 
     /** Metadata-only guard is safe for the event publisher; native entry remains owner-only. */
     void requireKeyboardStageLive(Object stage) throws VaultException {
+        requireFreshEffectGuard();
         requireProtocolState(); requireProtocolLive();
         if (stage == null || keyboardStage != stage || !keyboardInteractiveAuthentication
                 || phase != Phase.KEYBOARD_PENDING) throw phaseFailure();
@@ -1410,11 +2444,13 @@ final class SshNativeSession implements AutoCloseable {
         enterNative();
         byte[] owned = null;
         try {
+            requireFreshEffectGuard();
             requireProtocolState(); requireProtocolLive();
             if (phase != Phase.KEYBOARD_PENDING || keyboardResult != KeyboardInteractiveAuthResult.CHALLENGE
                     || challenge == null || keyboardChallenge != challenge) throw phaseFailure();
             try {
                 challenge.requireResponse(response);
+                callback.requireLocalEffectAdmission();
                 owned = response.clone();
                 nativeBinding.respondKeyboardInteractive(nativeHandle, owned);
                 requireProtocolLive();
@@ -1437,10 +2473,120 @@ final class SshNativeSession implements AutoCloseable {
                 : authenticationResult == PasswordAuthResult.SUCCESS));
     }
 
+    /** One-shot factory assembly admission; native still independently checks USERAUTH_SUCCESS. */
+    static final class JumpAdmission {
+        private final SshNativeSession parent;
+        private final SshNativeRoleBootstrap.Issued previous;
+        private final SshNativeRoleBootstrap.Issued next;
+        private final SshSharedPublicView shared;
+        private final SshRoleContext.PublicView view;
+        private boolean consumed;
+
+        private JumpAdmission(SshNativeSession parent, SshNativeRoleBootstrap.Issued previous,
+                SshNativeRoleBootstrap.Issued next, SshSharedPublicView shared,
+                SshRoleContext.PublicView view) {
+            this.parent = parent; this.previous = previous; this.next = next;
+            this.shared = shared; this.view = view;
+        }
+
+        void requireTrustParent(SshPasswordConnector.TrustCommitState state,
+                SshNativeRoleBootstrap.Issued actualPrevious) throws VaultException {
+            parent.requireOwnerThread();
+            if (state == null || actualPrevious != previous || parent.jumpAdmission != this || consumed)
+                throw phaseFailure();
+            parent.requireProtocolState();
+            parent.requireTransportLive();
+            SshManagedKnownHostsProvider provider = state.providerFor(actualPrevious);
+            if (!parent.callback.ownsIssued(actualPrevious) || !parent.callback.ownsTrustProvider(provider))
+                throw phaseFailure();
+        }
+
+        void requireFixture() throws VaultException {
+            parent.requireOwnerThread();
+            if (shared == null || shared.hasManagedLease() || parent.nativeBinding instanceof ProductionNativeBinding)
+                throw failure("SSH_JUMP_EFFECT_GUARD");
+        }
+
+        void consume(SshNativeRoleBootstrap.Issued actualPrevious, SshNativeRoleBootstrap.Issued actualNext,
+                SshRoleContext.PublicView actualView) throws VaultException {
+            parent.requireOwnerThread();
+            if (actualPrevious != previous || actualNext != next || actualView != view || consumed
+                    || parent.jumpAdmission != this) throw phaseFailure();
+            enterNative();
+            try {
+                parent.requireJumpAdmissionLive(this);
+                synchronized (parent.stateLock) {
+                    if (parent.nativeClosed || parent.destroyed) throw failure("SSH_SESSION_CLOSED");
+                    if (parent.terminalFailure != null) throw failure(parent.terminalFailure);
+                    if (parent.cancellationRequested) throw failure("SSH_SESSION_CANCELLED");
+                    if (consumed) throw phaseFailure();
+                    consumed = true;
+                }
+            } finally { NATIVE_ENTRY.remove(); }
+        }
+    }
+
+    JumpAdmission issueJumpAdmission(SshNativeRoleBootstrap.Issued previous,
+            SshNativeRoleBootstrap.Issued next, SshSharedPublicView shared,
+            SshRoleContext.PublicView originalView) throws VaultException {
+        requireOwnerThread();
+        enterNative();
+        try {
+            if (jumpAdmission != null) throw phaseFailure();
+            JumpAdmission result = new JumpAdmission(this, previous, next, shared, originalView);
+            requireJumpAdmissionLive(result);
+            jumpAdmission = result;
+            return result;
+        } finally { NATIVE_ENTRY.remove(); }
+    }
+
+    private void requireJumpAdmissionLive(JumpAdmission admission) throws VaultException {
+        SshNativeRoleBootstrap.Issued previous = admission.previous, next = admission.next;
+        SshRoleContext.PublicView originalView = admission.view;
+        if (admission.parent != this || previous == null || next == null || originalView == null
+                || admission.shared == null || sharedView != admission.shared
+                || !callback.ownsIssued(previous) || previous.token <= 0 || next.token <= 0
+                || previous.token == next.token || previous.registry == null
+                || previous.registry != next.registry || previous.role == null || next.role == null
+                || previous.ownerUid != next.ownerUid || previous.role.program != SshRoleContext.Program.JUMP
+                || previous.role.identityVersion != SshRoleContext.IDENTITY_V2
+                || next.role.identityVersion != previous.role.identityVersion
+                || next.role.hop != previous.role.hop + 1 || next.role.ownerPid != previous.role.ownerPid
+                || next.role.deadline != previous.role.deadline
+                || !next.role.connectionId.equals(previous.role.connectionId)
+                || !next.role.chainIdentity.equals(previous.role.chainIdentity)
+                || !previous.role.ownsPublicView(originalView) || !next.role.ownsPublicView(originalView)
+                || !callback.ownsPublicView(originalView) || !originalView.active()
+                || !authenticationSucceeded() || shellPhase != ShellPhase.DISABLED || jumpPhase != null
+                || jumpChildOwner != null || expectedSelectionReceipt == null || established)
+            throw phaseFailure();
+        if (previous.role.hop == 0 ? ownedByJump != null
+                : ownedByJump == null || ownedByJump.unavailable() || ownedByJump.child != this
+                    || ownedByJump.parent.jumpChildOwner != ownedByJump || ownedByJump.callback != callback
+                    || ownedByJump.shared != admission.shared || !ownedByJump.callbackAdopted
+                    || !ownedByJump.viewAdopted) throw phaseFailure();
+        previous.registry.requireOwned(previous.role);
+        next.registry.requireOwned(next.role);
+        byte[] before = null, after = null;
+        try {
+            before = previous.role.connectionBinding();
+            after = next.role.connectionBinding();
+            if (!MessageDigest.isEqual(before, after)) throw phaseFailure();
+        } finally { VaultCodec.wipe(before); VaultCodec.wipe(after); }
+        TerminalChain chain = terminalChain(this);
+        if (chain.sessions.size() != previous.role.hop + 1) throw phaseFailure();
+        for (int index = 0; index < chain.sessions.size(); index++) {
+            SshNativeSession ancestor = chain.sessions.get(index);
+            if (ancestor.sharedView != admission.shared || !ancestor.callback.ownsPublicView(originalView)
+                    || ancestor.callback.roleHop() != index) throw phaseFailure();
+            ancestor.requireTransportLive();
+        }
+    }
+
     void configureServerAlive(int interval, int countMax) throws VaultException {
         shellEntry("SSH_SESSION_KEEPALIVE", () -> {
             if (!authenticationSucceeded() || shellPhase != ShellPhase.DISABLED
-                    || expectedSelectionReceipt == null || serverAliveConfigured) throw phaseFailure();
+                    || jumpPhase != null || expectedSelectionReceipt == null || serverAliveConfigured) throw phaseFailure();
             if (interval < 0 || countMax < 0) throw invalid();
             nativeBinding.configureServerAlive(nativeHandle, interval, countMax);
             requireTransportLive();
@@ -1452,7 +2598,7 @@ final class SshNativeSession implements AutoCloseable {
     void configureNoPty() throws VaultException {
         shellEntry("SSH_SESSION_SHELL", () -> {
             if (!authenticationSucceeded() || shellPhase != ShellPhase.DISABLED
-                    || expectedSelectionReceipt == null || noPtyConfigured) throw phaseFailure();
+                    || jumpPhase != null || expectedSelectionReceipt == null || noPtyConfigured) throw phaseFailure();
             nativeBinding.configureNoPty(nativeHandle);
             requireTransportLive();
             noPtyConfigured = true;
@@ -1463,7 +2609,7 @@ final class SshNativeSession implements AutoCloseable {
     void beginShell(int columns, int rows) throws VaultException {
         shellEntry("SSH_SESSION_SHELL", () -> {
             if (!authenticationSucceeded() || shellPhase != ShellPhase.DISABLED
-                    || expectedSelectionReceipt == null) throw phaseFailure();
+                    || jumpPhase != null || expectedSelectionReceipt == null) throw phaseFailure();
             requireDimensions(columns, rows);
             nativeBinding.beginShell(nativeHandle, columns, rows);
             try { callback.retainEstablishedSession(callbackClaim); }
@@ -1480,6 +2626,116 @@ final class SshNativeSession implements AutoCloseable {
             shellPhase = ShellPhase.OPENING;
             return null;
         });
+    }
+
+    /** Begin a channel only for the exact child owner and its frozen role. */
+    void beginJump(JumpChildOwner next) throws VaultException {
+        if (next != null && next.effectFenceRegistered) throw failure("SSH_JUMP_EFFECT_GUARD");
+        beginJumpInternal(next, 0);
+    }
+
+    void beginJump(JumpChildOwner next, long hopDeadline) throws VaultException {
+        if (next == null || !next.effectFenceRegistered) throw failure("SSH_JUMP_EFFECT_GUARD");
+        beginJumpInternal(next, hopDeadline);
+    }
+
+    private void beginJumpInternal(JumpChildOwner next, long hopDeadline) throws VaultException {
+        shellEntry("SSH_SESSION_JUMP", () -> {
+            if (!authenticationSucceeded() || shellPhase != ShellPhase.DISABLED || jumpPhase != null
+                    || expectedSelectionReceipt == null || next == null || next != jumpChildOwner
+                    || next.parent != this || next.unavailable() || next.attempted) throw phaseFailure();
+            if (jumpAdmission != null && (!jumpAdmission.consumed
+                    || !next.callback.ownsIssued(jumpAdmission.next))) throw phaseFailure();
+            next.callback.requireAuthenticationSelectionLive();
+            if (!next.view.active()) throw failure("SSH_FILE_VIEW");
+            if (hopDeadline == 0) nativeBinding.beginJump(nativeHandle, next.callback.roleToken());
+            else {
+                long generation = next.captureProtectedJumpOpen(hopDeadline);
+                nativeBinding.beginJumpGuarded(nativeHandle, next.callback.roleToken(), hopDeadline, generation);
+                next.guardedHopDeadline = hopDeadline;
+            }
+            requireTransportLive();
+            jumpPhase = JumpPhase.OPENING;
+            return null;
+        });
+    }
+
+    JumpStatus jumpStatus() throws VaultException {
+        return shellEntry("SSH_SESSION_JUMP_STATUS", this::queryJumpStatus);
+    }
+
+    private JumpStatus queryJumpStatus() throws VaultException {
+        if (jumpPhase == null) throw phaseFailure();
+        try {
+            JumpStatus result = new JumpStatus(nativeBinding.jumpStatus(nativeHandle));
+            requireTransportLive();
+            if (jumpPhase.terminal() && result.phase != jumpPhase
+                    || jumpPhase == JumpPhase.OPEN && result.phase == JumpPhase.OPENING
+                    || lastJumpStatus != null && (lastJumpStatus.remoteEof && !result.remoteEof
+                            || lastJumpStatus.localEof && !result.localEof))
+                throw new IOException("SSH jump status regressed");
+            jumpPhase = result.phase;
+            lastJumpStatus = result;
+            return result;
+        } catch (IOException | LinkageError | RuntimeException nativeFailure) {
+            throw protocolNativeFailure("SSH_SESSION_JUMP_STATUS");
+        } catch (Error nativeFailure) {
+            recordProtocolError("SSH_SESSION_JUMP_STATUS");
+            throw nativeFailure;
+        }
+    }
+
+    /** Pump only the relay owned by this published child session. */
+    void pumpJumpRelay() throws VaultException {
+        shellEntry("SSH_SESSION_JUMP_RELAY", () -> {
+            if (ownedByJump == null || ownedByJump.unavailable() || !ownedByJump.callbackAdopted
+                    || !ownedByJump.viewAdopted) throw phaseFailure();
+            nativeBinding.pumpJumpRelay(nativeHandle);
+            requireTransportLive();
+            return null;
+        });
+    }
+
+    /** Retire this jump's auth/view only after its exact child is established. */
+    void retainJumpTransport() throws VaultException {
+        shellEntry("SSH_SESSION_JUMP_RETAIN", () -> {
+            JumpChildOwner next = jumpChildOwner;
+            if (jumpPhase == null || established || next == null || next.unavailable()
+                    || next.child == null || !next.callbackAdopted || !next.viewAdopted
+                    || !next.child.established || next.child.closed()) throw phaseFailure();
+            JumpStatus status = queryJumpStatus();
+            if (status.phase != JumpPhase.OPEN || status.remoteEof || status.localEof)
+                throw phaseFailure();
+            if (!next.child.readyForJumpRetention()) throw phaseFailure();
+            nativeBinding.retainJumpTransport(nativeHandle);
+            try { callback.retainEstablishedSession(callbackClaim); }
+            catch (VaultException lifecycle) { throw selectionLifecycleFailure(lifecycle); }
+            established = true;
+            view.close();
+            viewReleased = true;
+            VaultCodec.wipe(expectedSelectionReceipt);
+            AppSecrets.EffectGuard retirement = authenticationRetirement;
+            if (retirement != null) retirement.check();
+            authenticationRetirement = null;
+            authenticationRetired = true;
+            requireTransportLive();
+            return null;
+        });
+    }
+
+    /** Inspect the child without running its shell-confirmation publication. */
+    private boolean readyForJumpRetention() throws IOException, VaultException {
+        requireProtocolState();
+        requireTransportLive();
+        if (jumpPhase != null) {
+            JumpStatus status = queryJumpStatus();
+            return status.phase == JumpPhase.OPEN && !status.remoteEof && !status.localEof;
+        }
+        if (shellPhase == ShellPhase.DISABLED || shellPhase.terminal()) return false;
+        ShellStatus status = new ShellStatus(nativeBinding.shellStatus(nativeHandle));
+        requireTransportLive();
+        return status.phase == ShellPhase.RUNNING && !status.remoteEof && !status.localEof
+                && (lastShellStatus == null || !lastShellStatus.remoteEof && !lastShellStatus.localEof);
     }
 
     /** Called on the original owner before shell promotion; no UI or native entry may reenter. */
@@ -1503,6 +2759,7 @@ final class SshNativeSession implements AutoCloseable {
         requireOwnerThread();
         if (!shellConfirmationPending || shellPhase != ShellPhase.RUNNING) throw phaseFailure();
         requireTransportLive();
+        if (!jumpAncestorsRetained()) throw phaseFailure();
     }
 
     ShellStatus shellStatus() throws VaultException {
@@ -1514,6 +2771,7 @@ final class SshNativeSession implements AutoCloseable {
             requireRunningShell();
             if (shellEofAccepted || lastShellStatus.localEof) throw phaseFailure();
             if (bytes == null || bytes.length == 0 || bytes.length > MAX_SHELL_IO_BYTES) throw invalid();
+            callback.requireLocalEffectAdmission();
             byte[] copy = bytes.clone();
             try {
                 int accepted = nativeBinding.writeShell(nativeHandle, copy);
@@ -1596,7 +2854,8 @@ final class SshNativeSession implements AutoCloseable {
                 throw new IOException("SSH shell status regressed");
             shellPhase = result.phase;
             lastShellStatus = result;
-            if (result.phase == ShellPhase.RUNNING && shellConfirmation != null) {
+            if (result.phase == ShellPhase.RUNNING && shellConfirmation != null
+                    && jumpAncestorsRetained()) {
                 AppSecrets.EffectGuard confirmation = shellConfirmation;
                 shellConfirmation = null;
                 try {
@@ -1643,6 +2902,48 @@ final class SshNativeSession implements AutoCloseable {
         terminalFailure = code;
     }
 
+    private void requireFreshEffectGuard() throws VaultException {
+        if (!callback.hasChildTrustSource()) return;
+        try {
+            if ("VAULT_COMMIT_UNCERTAIN".equals(callback.lastFailureCode()))
+                throw failure("VAULT_COMMIT_UNCERTAIN");
+            requireProtocolState();
+            requireProtocolLive();
+            callback.requireChildEffectGuard();
+        } catch (VaultException denied) {
+            if ("VAULT_COMMIT_UNCERTAIN".equals(denied.code)
+                    || "VAULT_COMMIT_UNCERTAIN".equals(callback.lastFailureCode()))
+                throw failure("VAULT_COMMIT_UNCERTAIN");
+            requireProtocolState();
+            requireProtocolLive();
+            throw denied;
+        }
+    }
+
+    private long captureFreshSelectedEffect() throws VaultException {
+        if (!callback.hasChildTrustSource()) return 0;
+        if (ownedByJump == null || !ownedByJump.effectFenceRegistered) {
+            // Preserve lifecycle diagnostics and the lock-free role check for
+            // child sources that have not installed the native effect fence.
+            requireFreshEffectGuard();
+            throw failure("SSH_JUMP_EFFECT_GUARD");
+        }
+        try {
+            if ("VAULT_COMMIT_UNCERTAIN".equals(callback.lastFailureCode()))
+                throw failure("VAULT_COMMIT_UNCERTAIN");
+            requireProtocolState();
+            requireProtocolLive();
+            return ownedByJump.captureProtectedEffect();
+        } catch (VaultException denied) {
+            if ("VAULT_COMMIT_UNCERTAIN".equals(denied.code)
+                    || "VAULT_COMMIT_UNCERTAIN".equals(callback.lastFailureCode()))
+                throw failure("VAULT_COMMIT_UNCERTAIN");
+            requireProtocolState();
+            requireProtocolLive();
+            throw denied;
+        }
+    }
+
     private void requireProtocolState() throws VaultException {
         synchronized (stateLock) {
             if (nativeClosed || destroyed) throw failure("SSH_SESSION_CLOSED");
@@ -1666,13 +2967,26 @@ final class SshNativeSession implements AutoCloseable {
                 if (!authenticationRetired) throw phaseFailure();
             }
             callback.requireEstablishedSessionBound(callbackClaim);
+            callback.requireLocalEffectAdmission();
         } catch (VaultException lifecycle) { throw selectionLifecycleFailure(lifecycle); }
+    }
+
+    /** Java-side readiness only; native still checks the real relay/proof chain. */
+    private boolean jumpAncestorsRetained() throws VaultException {
+        for (JumpChildOwner link = ownedByJump; link != null; link = link.parent.ownedByJump) {
+            SshNativeSession ancestor = link.parent;
+            if (link.unavailable() || ancestor.jumpChildOwner != link || !ancestor.established
+                    || !ancestor.authenticationRetired) return false;
+            ancestor.requireTransportLive();
+        }
+        return true;
     }
 
     private VaultException protocolNativeFailure(String code) throws VaultException {
         if (!cancellationRequested && callback.changedPolicyRejected()) {
             synchronized (stateLock) {
                 if (!cancellationRequested && view.active()) {
+                    callback.requireLocalEffectAdmission();
                     terminalFailure = "SSH_HOST_CHANGED_POLICY";
                     return failure(terminalFailure);
                 }
@@ -1727,10 +3041,12 @@ final class SshNativeSession implements AutoCloseable {
         }
         callback.requireAuthenticationSelectionLive();
         if (!view.active()) throw failure("SSH_FILE_VIEW");
+        callback.requireLocalEffectAdmission();
     }
 
     private VaultException selectionLifecycleFailure(VaultException lifecycle) {
-        String code = cancellationRequested || "SSH_CALLBACK_CANCELLED".equals(lifecycle.code)
+        String code = "VAULT_COMMIT_UNCERTAIN".equals(lifecycle.code) ? lifecycle.code
+                : cancellationRequested || "SSH_CALLBACK_CANCELLED".equals(lifecycle.code)
                 ? "SSH_SESSION_CANCELLED" : sessionFailureCode(lifecycle.code);
         synchronized (stateLock) {
             if (!established || !"SSH_SESSION_EXPIRED".equals(code)) terminalFailure = code;
@@ -1780,15 +3096,36 @@ final class SshNativeSession implements AutoCloseable {
      * stage remains pending and later owner-thread calls retry that stage.
      */
     @Override public void close() throws VaultException {
-        requireOwnerThread();
+        requireCleanupOwnerThread();
         enterNative();
         try { closeInternal(); }
         finally { NATIVE_ENTRY.remove(); }
     }
 
     private void closeInternal() throws VaultException {
+        boolean alreadyDestroyed;
         synchronized (stateLock) {
-            if (destroyed) return;
+            alreadyDestroyed = destroyed;
+            if (!alreadyDestroyed && jumpChildOwner != null)
+                throw new VaultException("SSH_SESSION_CLEANUP", "The SSH jump child still owns its parent");
+            if (closeInProgress || !nativeClosed && (cancellationInProgress
+                    || cancellationNeedsCompletion || cancellationUnconfirmed != null))
+                throw new VaultException("SSH_SESSION_CLEANUP", "SSH session cancellation is unconfirmed");
+            closeInProgress = true;
+        }
+        try { closeAdmitted(alreadyDestroyed); }
+        finally { synchronized (stateLock) { closeInProgress = false; } }
+    }
+
+    private void closeAdmitted(boolean alreadyDestroyed) throws VaultException {
+        if (alreadyDestroyed) {
+            if (ownedByJump != null) ownedByJump.childDestroyed(this);
+            return;
+        }
+        if (ownedByJump != null) {
+            if (ownedByJump.child != this || ownedByJump.parent.jumpChildOwner != ownedByJump)
+                throw JumpChildOwner.cleanupFailure();
+            ownedByJump.closing = true;
         }
         if (!nativeClosed) {
             try {
@@ -1822,6 +3159,7 @@ final class SshNativeSession implements AutoCloseable {
         shellConfirmation = null;
         shellConfirmationPending = false;
         synchronized (stateLock) { destroyed = true; }
+        if (ownedByJump != null) ownedByJump.childDestroyed(this);
     }
 
     /** Drops previously read output at its eventual UI publication; grants no native entry. */
@@ -1830,6 +3168,7 @@ final class SshNativeSession implements AutoCloseable {
         try {
             if (!established) return false;
             callback.requireEstablishedSessionBound(callbackClaim);
+            if (!jumpAncestorsRetained()) return false;
         }
         catch (VaultException lifecycle) { return false; }
         return authenticationRetired && !shellConfirmationPending && outputPublicationStateLive();
@@ -1846,6 +3185,14 @@ final class SshNativeSession implements AutoCloseable {
     boolean ownsCallback(SshNativeCallbackAdapter candidate) { return callback == candidate; }
 
     private void requireOwnerThread() throws VaultException {
+        requireCleanupOwnerThread();
+        if (ownedByJump != null && ownedByJump.unavailable())
+            throw failure("SSH_SESSION_CLOSED");
+        if (jumpChildOwner != null && jumpChildOwner.unavailable())
+            throw failure("SSH_SESSION_CLOSED");
+    }
+
+    private void requireCleanupOwnerThread() throws VaultException {
         if (Thread.currentThread() != ownerThread) throw new VaultException("SSH_SESSION_THREAD",
                 "SSH session I/O must run on its event-loop thread");
     }

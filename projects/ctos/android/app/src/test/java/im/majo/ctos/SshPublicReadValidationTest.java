@@ -44,6 +44,7 @@ public final class SshPublicReadValidationTest {
         volatile boolean active = true;
         int revokes;
         @Override public boolean active() { return active; }
+        @Override public boolean revocationConfirmed() { return !active; }
         @Override public void revoke() {
             // Existing VaultSession.lock invokes its exact revoker under session; helper failure cleanup must not.
             assertFalse(Thread.holdsLock(vault)); assertFalse(Thread.holdsLock(phase));

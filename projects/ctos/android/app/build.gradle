@@ -188,6 +188,8 @@ def sshProductionStreamPatch = rootProject.file(
     'ssh/openssh-10.6p1-hostfile-stream-writer.patch')
 def sshProductionKexPatch = rootProject.file(
     'ssh/openssh-10.6p1-kex-guard.patch')
+def sshProductionProvisionalPatch = rootProject.file(
+    'ssh/openssh-10.6p1-provisional-input.patch')
 def sshProductionBaseline = rootProject.file(
     '../build/ssh-native-g1/stock-run.lOHF9Oai')
 def sshProductionBaselineFile = { String relative ->
@@ -207,7 +209,7 @@ def sshProductionSources = files(
     'src/main/cpp/ssh_key_policy.c', 'src/main/cpp/ssh_key_policy.h')
 tasks.register('compileSshProductionObjects', Exec) {
     inputs.files(sshProductionRunner, sshProductionAbiPatch, sshProductionBannerPatch,
-        sshProductionStreamPatch, sshProductionKexPatch,
+        sshProductionStreamPatch, sshProductionKexPatch, sshProductionProvisionalPatch,
         sshProductionSources,
         sshProductionBaselineFile('inputs/openssh-10.6p1.tar.gz'),
         sshProductionBaselineFile('inputs/openssl-3.5.9.tar.gz'),
@@ -621,6 +623,41 @@ tasks.register('testSshCallbackAdapterHost') {
                 '-o', binary.absolutePath
         }
         project.exec { commandLine binary.absolutePath }
+    }
+}
+
+// Real host JVM/JNI receiver and callback-scope checks; the ancestor checker
+// is a fixture, while the multi-hop client is tested by the native runner.
+def sshCallbackJniHostTest = layout.buildDirectory.dir('verification/sshCallbackJni')
+tasks.register('testSshCallbackJniHost') {
+    inputs.files('src/main/cpp/ssh_role_bootstrap.c', 'src/main/cpp/ssh_role_bootstrap.h',
+        'src/main/cpp/ssh_callback_adapter.c', 'src/main/cpp/ssh_callback_adapter.h',
+        'src/main/cpp/ssh_callback_jni.c', 'src/main/cpp/ssh_native_client.h',
+        'src/main/cpp/ssh_view_handle.h', 'src/test/cpp/ssh_callback_jni_scope_test.c',
+        'src/test/jni/im/majo/ctos/SshNativeCallbackAdapter.java')
+    outputs.upToDateWhen { false }
+    doLast {
+        File directory = sshCallbackJniHostTest.get().asFile
+        File library = new File(directory, 'libctos_callback_jni_test.so')
+        File java = new File(System.getProperty('java.home'), 'bin/java')
+        File jniHeaders = new File(android.ndkDirectory,
+            'toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include')
+        directory.mkdirs()
+        project.exec {
+            commandLine '/usr/bin/cc', '-std=c11', '-O2', '-Wall', '-Wextra', '-Werror',
+                '-pthread', '-shared', '-fPIC', '-Wl,--no-undefined', '-Isrc/main/cpp', '-idirafter', jniHeaders.absolutePath,
+                'src/main/cpp/ssh_role_bootstrap.c', 'src/main/cpp/ssh_callback_adapter.c',
+                'src/main/cpp/ssh_callback_jni.c', 'src/test/cpp/ssh_callback_jni_scope_test.c',
+                '-o', library.absolutePath
+        }
+        project.exec {
+            commandLine java.absolutePath, '-m', 'jdk.compiler/com.sun.tools.javac.Main', '-d',
+                directory.absolutePath, 'src/test/jni/im/majo/ctos/SshNativeCallbackAdapter.java'
+        }
+        project.exec {
+            commandLine java.absolutePath, '-Xcheck:jni', '-cp', directory.absolutePath,
+                'im.majo.ctos.SshNativeCallbackAdapter', library.absolutePath
+        }
     }
 }
 

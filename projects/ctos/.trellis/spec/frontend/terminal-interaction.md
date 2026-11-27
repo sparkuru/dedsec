@@ -1,5 +1,29 @@
 # Terminal interaction contract
 
+## 2026-11-23 saved-only hop confirmation
+
+An optional `savedOnly: true` password prompt requires `savedAvailable: true`
+and the exact endpoint and hop already required for every prompt. Present the
+actual endpoint and explicit “使用已保存的密码” and cancel actions; show no
+typed-input or save controls. Submit only an empty secret with `useSaved: true`
+and `save: false` after that action. A changed `savedOnly` value on the same
+ticket invalidates the attempt. Absent or false preserves existing automatic
+prompt behavior; reject a saved-only key-passphrase prompt or a missing saved
+password. This protocol and UI do not themselves enable ProxyJump.
+
+The current product route accepts one jump only with already-known host keys and
+automatic server `none` or explicitly confirmed saved passwords. Respect the
+configured per-hop authentication order. Explain unsupported methods without
+offering the direct-target changed-key recovery for a jump trust failure; the
+target and jump may be different endpoints. The UI currently has no complete
+first-use flow for an unknown target accessible only through the jump.
+
+## 2026-11-20 authentication prompt endpoint
+
+Password, private-key phrase and keyboard-interactive prompt events require the host, port, username and hop from the callback's exact registered selection and role. Display that endpoint, not the connection form's eventual target; bracket an unbracketed IPv6 host before appending its port. Reject missing or malformed endpoint/hop data. Preserve it through delayed KBI presentation and successive rounds; each hop starts its own round sequence, earlier-hop late events are refused, and identical endpoints do not collapse distinct hops. These event fields alone do not authorize a jump route or replace host-review and per-hop credential selection work.
+
+NEW and CHANGED host review events also require the role ticket's hop and exact endpoint; dismissal must match the ticket's binding and hop. Reject an earlier hop, a repeated ticket whose contents changed, or a mismatched dismissal. Keep every review's explicit decision acknowledgement until it resolves and wait for all of them before connection handoff. Until the product factory provides a protected route bound to the original request, the existing CHANGED endpoint check against the direct form remains in force; self-reported event fields are not a route authorization.
+
 ## 2026-11-16 server-driven connection update
 
 The default SSH form takes the target and an optional explicitly selected key;

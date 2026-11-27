@@ -54,6 +54,7 @@ extern int ctos_config_upstream_read_config_file(const char *, struct passwd *, 
     const char *, const char *, Options *, int, int *);
 extern int ctos_config_upstream_ssh_valid_hostname(const char *);
 extern int ctos_config_upstream_ssh_valid_ruser(const char *);
+extern int ctos_config_upstream_parse_jump(const char *, Options *, int, int);
 extern int ctos_config_upstream_config_has_permitted_cnames(Options *);
 extern char *ctos_config_upstream_ssh_connection_hash(const char *, const char *, const char *, const char *, const char *);
 
@@ -66,6 +67,11 @@ struct ctos_ssh_config_eval {
     _Atomic int cancelled;
     enum ctos_ssh_config_state state;
     struct ctos_ssh_view_borrow *borrow;
+    struct ctos_ssh_view_borrow_claim *borrow_claim;
+    struct ctos_ssh_config_eval *parent, *child;
+    struct ctos_ssh_config_route *route;
+    char *jump_override;
+    unsigned int jump_depth;
     unsigned char *owned;
     size_t owned_length;
     struct ctos_ssh_file *owned_files;
@@ -87,12 +93,23 @@ struct ctos_ssh_config_eval {
     struct config_origin host_origin, user_origin, diagnostic_origin, algorithm_origin[6];
     struct config_origin identity_origin[CTOS_SSH_CONFIG_LIST], hostfile_origin[CTOS_SSH_CONFIG_HOSTFILES];
     struct config_input input[CTOS_SSH_CONFIG_DEPTH + 1];
-    int options_live, profile_identities;
+    int options_live, profile_identities, profile_route;
     enum ctos_ssh_config_mode mode;
     struct ctos_ssh_config_catalog *catalog;
     struct ctos_ssh_config_audit *audit;
     struct ctos_ssh_config_resource_audit *resource_audit;
     unsigned char visited[CTOS_SSH_VIEW_FILES];
+};
+enum config_route_state { ROUTE_BUILDING, ROUTE_READY, ROUTE_CLOSING, ROUTE_CLOSED };
+struct ctos_ssh_config_route {
+    pthread_t owner;
+    pid_t pid;
+    uid_t uid;
+    struct ctos_ssh_config_eval *root;
+    struct ctos_ssh_config_eval *hops[CTOS_SSH_CONFIG_JUMPS];
+    unsigned int count;
+    enum config_route_state state;
+    int busy;
 };
 static pthread_mutex_t parser_lock = PTHREAD_MUTEX_INITIALIZER;
 /* Only accessed with parser_lock held. No callbacks or global logger mutation. */
@@ -116,6 +133,7 @@ static int milliseconds(uint64_t *out) {
 static int live(const struct ctos_ssh_config_eval *e) {
     if (owner(e) != 0) return -1;
     if (atomic_load_explicit(&e->cancelled, memory_order_acquire)) { errno = ECANCELED; return -1; }
+    if (e->parent != NULL) return live(e->parent);
     if (!e->detached) return ctos_ssh_view_borrow_live(e->borrow);
     uint64_t now;
     if (milliseconds(&now) != 0) return -1;
@@ -123,6 +141,10 @@ static int live(const struct ctos_ssh_config_eval *e) {
     return 0;
 }
 static int source_live(const void *e) { return live(e); }
+static struct ctos_ssh_config_eval *budget_owner(struct ctos_ssh_config_eval *e) {
+    while (e->parent != NULL) e = e->parent;
+    return e;
+}
 int ctos_config_reject(unsigned int reason, int error_number) {
     if (current != NULL && current->error.reason == CTOS_CONFIG_OK) {
         current->error.reason = reason;
@@ -222,8 +244,15 @@ static int direct_authentication_order(const char *list, struct ctos_ssh_config_
     return 0;
 }
 
-int ctos_config_direct_keyword(const char *keyword, int active, int count, char **args) {
+int ctos_config_direct_keyword(const char *keyword, int active, int count, char **args, const char *raw) {
     if (current == NULL || current->direct_plan == NULL || !active) return 0;
+    if (strcmp(keyword, "proxyjump") == 0) {
+        if (current->profile_route) return 0;
+        /* Match parse_jump's raw remainder: tokenizing removes comments and quotes
+         * that would otherwise turn a host literally named "none" into a bypass. */
+        if (count == 1 && raw != NULL && strcasecmp(raw, "none") == 0) return 0;
+        return ctos_config_reject(CTOS_CONFIG_UNSUPPORTED, ENOTSUP);
+    }
     static const char *const accepted[] = {"host", "match", "include", "hostname", "user", "port",
         "identityfile", "identitiesonly", "userknownhostsfile", "stricthostkeychecking", "connecttimeout",
         "requesttty", "pubkeyauthentication", "passwordauthentication", "kbdinteractiveauthentication",
@@ -620,6 +649,12 @@ char *ctos_config_percent(const char *s, ...) {
 const char *ctos_config_remote_user(const Options *o) {
     return o->user != NULL ? o->user : current->fallback[0] != 0 ? current->fallback : NULL;
 }
+/* OpenSSH marks the ProxyJump none directive with port 0 until defaults
+ * normalize it to NULL. A host literally named none remains a real jump. */
+static int jump_configured(const Options *o) {
+    return o->jump_host != NULL && !(strcmp(o->jump_host, "none") == 0 &&
+        o->jump_port == 0 && o->jump_user == NULL);
+}
 char *ctos_config_include(const char *path, Options *o, const char *host_arg, const char *original, int final) {
     if (ctos_config_scan_mode()) {
         char *copy = strdup(path);
@@ -634,7 +669,9 @@ char *ctos_config_include(const char *path, Options *o, const char *host_arg, co
     snprintf(port, sizeof(port), "%d", o->port <= 0 ? 22 : o->port);
     snprintf(uid, sizeof(uid), "%llu", (unsigned long long)current->request.local_uid);
     memcpy(short_host, current->local_host, sizeof(short_host)); short_host[strcspn(short_host, ".")] = 0;
-    const char *jump = o->jump_host == NULL || strcmp(o->jump_host, "none") == 0 ? "" : o->jump_host;
+    /* The pinned readconf Include expander uses option_clear_or_none here,
+     * even for an actual jump host named none. User expansion runs later. */
+    const char *jump = o->jump_host == NULL || strcasecmp(o->jump_host, "none") == 0 ? "" : o->jump_host;
     char *hash = NULL;
     int needs_hash = 0;
     for (size_t i = 0; path[i]; i++) {
@@ -729,6 +766,8 @@ static int open_mode(struct ctos_ssh_view_borrow *borrow,
     if (ctos_ssh_view_borrow_live(borrow) != 0) return -1;
     struct ctos_ssh_config_eval *e = new_eval(r, catalog_mode);
     if (e == NULL) return -1;
+    if (ctos_ssh_view_borrow_claim(borrow, e, &e->borrow_claim) != 0) goto failed;
+    if (ctos_ssh_view_borrow_live(borrow) != 0) goto failed;
     const struct ctos_ssh_view *view = ctos_ssh_view_borrow_view(borrow);
     if (view == NULL || view->root.length > 512 ||
         ctos_ssh_view_path(view->root.data, view->root.length, 0) != 0) { errno = EINVAL; goto failed; }
@@ -739,7 +778,9 @@ static int open_mode(struct ctos_ssh_view_borrow *borrow,
 failed: {
         int failure = errno;
         if (e->catalog != NULL) explicit_bzero(e->catalog, sizeof(*e->catalog));
-        free(e->catalog); explicit_bzero(e, sizeof(*e)); free(e); errno = failure; return -1;
+        free(e->catalog);
+        ctos_ssh_view_borrow_claim_abort(e->borrow_claim);
+        explicit_bzero(e, sizeof(*e)); free(e); errno = failure; return -1;
     }
 }
 int ctos_ssh_config_eval_open(struct ctos_ssh_view_borrow *borrow,
@@ -748,6 +789,20 @@ int ctos_ssh_config_eval_open(struct ctos_ssh_view_borrow *borrow,
 }
 int ctos_ssh_config_eval_open_catalog(struct ctos_ssh_view_borrow *borrow, struct ctos_ssh_config_eval **out) {
     return open_mode(borrow, NULL, 1, out);
+}
+int ctos_ssh_config_eval_enable_profile_route(struct ctos_ssh_config_eval *e) {
+    if (owner(e) != 0) return -1;
+    if (e->state != CTOS_CONFIG_NEW || e->mode != CTOS_CONFIG_EFFECTIVE
+        || e->direct_plan != NULL || e->route != NULL || e->child != NULL || e->command[0] != 0) {
+        errno = EINVAL; return -1;
+    }
+    if (live(e) != 0) return -1;
+    struct ctos_ssh_config_direct_plan *plan = calloc(1, sizeof(*plan));
+    if (plan == NULL) return -1;
+    e->direct_plan = plan;
+    e->profile_identities = 1;
+    e->profile_route = 1;
+    return 0;
 }
 static int detached_shape(const struct ctos_ssh_config_file *files, unsigned int count,
     unsigned int root, size_t *length) {
@@ -986,6 +1041,17 @@ static int direct_path(struct ctos_ssh_config_eval *e, const char *raw, unsigned
     e->diagnostic_origin = (struct config_origin){0};
     return 0;
 }
+static int profile_route_host(const char *host) {
+    size_t length = strlen(host);
+    if (length == 0 || length > 253U) return 0;
+    for (size_t i = 0; i < length; i++) {
+        unsigned char c = (unsigned char)host[i];
+        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+              (c >= '0' && c <= '9') || c == '.' || c == ':' || c == '%' ||
+              c == '[' || c == ']' || c == '-')) return 0;
+    }
+    return 1;
+}
 static int finish_direct_plan(struct ctos_ssh_config_eval *e) {
     struct ctos_ssh_config_direct_plan *plan = e->direct_plan;
     if (plan == NULL) return 0;
@@ -993,7 +1059,13 @@ static int finish_direct_plan(struct ctos_ssh_config_eval *e) {
     if (o->num_identity_files < 0 || o->num_identity_files > (int)CTOS_SSH_CONFIG_LIST ||
         o->num_user_hostfiles > CTOS_SSH_CONFIG_HOSTFILES ||
         o->request_tty < REQUEST_TTY_AUTO || o->request_tty > REQUEST_TTY_FORCE ||
-        o->session_type != SESSION_TYPE_DEFAULT || !clear_or_none(o->jump_host) ||
+        (e->profile_route && !profile_route_host(e->summary.hostname)) ||
+        ((!e->profile_route && (o->session_type != SESSION_TYPE_DEFAULT || jump_configured(o))) ||
+         (e->profile_route && e->parent == NULL && o->session_type != SESSION_TYPE_DEFAULT) ||
+         (e->profile_route && e->parent != NULL && (o->session_type != SESSION_TYPE_NONE ||
+             o->request_tty != REQUEST_TTY_NO || o->stdio_forward_host == NULL ||
+             strcmp(o->stdio_forward_host, e->parent->summary.hostname) != 0 ||
+             o->stdio_forward_port != (int)e->parent->summary.port))) ||
         !clear_or_none(o->remote_command) || o->num_local_forwards != 0 || o->num_remote_forwards != 0 ||
         o->num_certificate_files != 0 || o->host_key_alias != NULL ||
         o->server_alive_interval < 0 || o->server_alive_count_max < 0 ||
@@ -1048,6 +1120,11 @@ int ctos_ssh_config_eval_run(struct ctos_ssh_config_eval *e, struct ctos_ssh_con
     if (e->state == CTOS_CONFIG_RUNNING) { errno = EBUSY; return -1; }
     if (e->state != CTOS_CONFIG_NEW) { errno = EALREADY; return -1; }
     if (pthread_mutex_trylock(&parser_lock) != 0) { errno = EBUSY; return -1; }
+    struct ctos_ssh_config_eval *budget = budget_owner(e);
+    if (budget != e) {
+        e->io.opens = budget->io.opens; e->io.read_bytes = budget->io.read_bytes;
+        e->total_lines = budget->total_lines;
+    }
     current = e; e->state = CTOS_CONFIG_RUNNING;
     int ret = -1, final = 0;
     if (ctos_config_check() != 0) goto done;
@@ -1068,6 +1145,18 @@ int ctos_ssh_config_eval_run(struct ctos_ssh_config_eval *e, struct ctos_ssh_con
     if (e->request.port) o->port = (int)e->request.port;
     if (o->host_arg == NULL || (e->user[0] && o->user == NULL) || (e->tag[0] && o->tag == NULL)) {
         ctos_config_reject(CTOS_CONFIG_IO, ENOMEM); goto done;
+    }
+    if (e->parent != NULL) {
+        /* A managed jump models the pinned client's -W config context only;
+         * this does not create or authorize a forwarding channel. */
+        o->stdio_forward_host = strdup(e->parent->summary.hostname);
+        o->stdio_forward_port = (int)e->parent->summary.port;
+        o->request_tty = REQUEST_TTY_NO; o->session_type = SESSION_TYPE_NONE;
+        if (o->stdio_forward_host == NULL) { ctos_config_reject(CTOS_CONFIG_IO, ENOMEM); goto done; }
+    }
+    if (e->jump_override != NULL &&
+        ctos_config_upstream_parse_jump(e->jump_override, o, 1, 1) != 0) {
+        ctos_config_reject(CTOS_CONFIG_INPUT, EINVAL); goto done;
     }
     struct passwd pw = {.pw_name = e->local_user, .pw_dir = CTOS_SSH_VIRTUAL_HOME, .pw_uid = e->request.local_uid};
     if (ctos_config_upstream_read_config_file(e->root, &pw, e->alias, e->alias,
@@ -1100,7 +1189,7 @@ int ctos_ssh_config_eval_run(struct ctos_ssh_config_eval *e, struct ctos_ssh_con
             "u", e->local_user, "l", e->local_host, "d", CTOS_SSH_VIRTUAL_HOME,
             "p", port, "i", uid, "L", short_host,
             "k", o->host_key_alias == NULL ? o->hostname : o->host_key_alias,
-            "j", clear_or_none(o->jump_host) ? "" : o->jump_host, (char *)NULL);
+            "j", jump_configured(o) ? o->jump_host : "", (char *)NULL);
         if (user == NULL) goto done;
         if (strlen(user) > CTOS_SSH_CONFIG_NAME_BYTES || *user == 0 || !ctos_config_upstream_ssh_valid_ruser(user)) {
             free(user); ctos_config_reject(CTOS_CONFIG_INPUT, EINVAL); goto done;
@@ -1130,6 +1219,10 @@ int ctos_ssh_config_eval_run(struct ctos_ssh_config_eval *e, struct ctos_ssh_con
     ret = 0;
  done:
     if (ret != 0 && e->error.reason == CTOS_CONFIG_OK) ctos_config_reject(CTOS_CONFIG_INPUT, EINVAL);
+    if (budget != e) {
+        budget->io.opens = e->io.opens; budget->io.read_bytes = e->io.read_bytes;
+        budget->total_lines = e->total_lines;
+    }
     e->state = ret == 0 ? CTOS_CONFIG_READY : CTOS_CONFIG_FAILED;
     if (error != NULL) *error = e->error;
     current = NULL; pthread_mutex_unlock(&parser_lock);
@@ -1145,7 +1238,9 @@ int ctos_ssh_config_eval_usage(const struct ctos_ssh_config_eval *e, uint32_t ou
     if (out == NULL) { errno = EINVAL; return -1; }
     memset(out, 0, sizeof(uint32_t) * 3);
     if (result_live(e) != 0) return -1;
-    out[0] = e->io.opens; out[1] = e->io.read_bytes; out[2] = e->total_lines;
+    const struct ctos_ssh_config_eval *budget = e;
+    while (budget->parent != NULL) budget = budget->parent;
+    out[0] = budget->io.opens; out[1] = budget->io.read_bytes; out[2] = budget->total_lines;
     return 0;
 }
 int ctos_ssh_config_eval_summary(const struct ctos_ssh_config_eval *e, struct ctos_ssh_config_summary *out) {
@@ -1154,6 +1249,252 @@ int ctos_ssh_config_eval_summary(const struct ctos_ssh_config_eval *e, struct ct
     if (result_live(e) != 0) return -1;
     if (e->mode != CTOS_CONFIG_EFFECTIVE) { errno = EINVAL; return -1; }
     *out = e->summary; return 0;
+}
+static int jump_hop_copy(struct ctos_ssh_config_jump_hop *out, const Options *o) {
+    if (o->jump_host == NULL || *o->jump_host == 0
+        || !ctos_config_upstream_ssh_valid_hostname(o->jump_host)
+        || (o->jump_user != NULL && (*o->jump_user == 0
+            || !ctos_config_upstream_ssh_valid_ruser(o->jump_user)))
+        || (o->jump_port != -1 && (o->jump_port < 1 || o->jump_port > 65535))) {
+        errno = EINVAL; return -1;
+    }
+    if (copy_text(out->host, sizeof(out->host), o->jump_host, 0) != 0
+        || copy_text(out->user, sizeof(out->user), o->jump_user, 1) != 0) return -1;
+    out->user_specified = o->jump_user != NULL;
+    out->port = o->jump_port < 0 ? 0U : (unsigned int)o->jump_port;
+    return 0;
+}
+int ctos_ssh_config_eval_jump_declaration(struct ctos_ssh_config_eval *e,
+    struct ctos_ssh_config_jump_declaration *out) {
+    if (out == NULL) { errno = EINVAL; return -1; }
+    memset(out, 0, sizeof(*out));
+    if (result_live(e) != 0) return -1;
+    if (e->mode != CTOS_CONFIG_EFFECTIVE || e->direct_plan != NULL) { errno = EINVAL; return -1; }
+    if (pthread_mutex_trylock(&parser_lock) != 0) { errno = EBUSY; return -1; }
+    struct ctos_ssh_config_jump_declaration reverse = {0}, result = {0};
+    struct ctos_ssh_config_error saved_error = e->error;
+    char *prefix = NULL;
+    int status = -1, failure = 0;
+    current = e;
+    if (live(e) != 0) goto done;
+    if (jump_configured(&e->options)) {
+        if (jump_hop_copy(&reverse.hops[reverse.count++], &e->options) != 0) goto done;
+        if (e->options.jump_extra != NULL) {
+            prefix = strdup(e->options.jump_extra);
+            if (prefix == NULL) goto done;
+        }
+    }
+    while (prefix != NULL) {
+        if (live(e) != 0) goto done;
+        if (reverse.count >= CTOS_SSH_CONFIG_JUMPS) { errno = E2BIG; goto done; }
+        Options parsed;
+        ctos_config_upstream_initialize_options(&parsed);
+        /* A bare none in a multi-hop list is a hostname. Parsed alone it is
+         * a directive, so use the equivalent URI to preserve its meaning. */
+        char explicit_host[sizeof("ssh://none")] = {0};
+        const char *input = prefix;
+        if (strcasecmp(prefix, "none") == 0) {
+            snprintf(explicit_host, sizeof(explicit_host), "ssh://%s", prefix);
+            input = explicit_host;
+        }
+        int parsed_ok = ctos_config_upstream_parse_jump(input, &parsed, 0, 1);
+        explicit_bzero(explicit_host, sizeof(explicit_host));
+        explicit_bzero(prefix, strlen(prefix)); free(prefix); prefix = NULL;
+        if (parsed_ok != 0 || jump_hop_copy(&reverse.hops[reverse.count], &parsed) != 0) {
+            if (parsed_ok != 0 && e->error.error_number != 0) errno = e->error.error_number;
+            else if (parsed_ok != 0) errno = EINVAL;
+            failure = errno;
+            ctos_config_upstream_free_options(&parsed); errno = failure; goto done;
+        }
+        reverse.count++;
+        if (parsed.jump_extra != NULL) {
+            prefix = strdup(parsed.jump_extra);
+            if (prefix == NULL) {
+                failure = errno;
+                ctos_config_upstream_free_options(&parsed); errno = failure; goto done;
+            }
+        }
+        ctos_config_upstream_free_options(&parsed);
+    }
+    if (live(e) != 0) goto done;
+    result.count = reverse.count;
+    for (unsigned int i = 0; i < result.count; i++) result.hops[i] = reverse.hops[result.count - 1U - i];
+    *out = result;
+    if (live(e) != 0) { memset(out, 0, sizeof(*out)); goto done; }
+    status = 0;
+done:
+    failure = errno;
+    if (prefix != NULL) { explicit_bzero(prefix, strlen(prefix)); free(prefix); }
+    explicit_bzero(&reverse, sizeof(reverse)); explicit_bzero(&result, sizeof(result));
+    e->error = saved_error; current = NULL; pthread_mutex_unlock(&parser_lock);
+    if (status != 0) errno = failure == 0 ? EINVAL : failure;
+    return status;
+}
+int ctos_ssh_config_eval_open_next_jump(struct ctos_ssh_config_eval *parent,
+    struct ctos_ssh_config_eval **out) {
+    if (out == NULL) { errno = EINVAL; return -1; }
+    *out = NULL;
+    if (result_live(parent) != 0) return -1;
+    if (parent->mode != CTOS_CONFIG_EFFECTIVE || (parent->direct_plan != NULL && !parent->profile_route)) { errno = EINVAL; return -1; }
+    if (parent->route != NULL && parent->route->state != ROUTE_BUILDING) { errno = EBUSY; return -1; }
+    if (parent->child != NULL) { errno = EBUSY; return -1; }
+    if (!jump_configured(&parent->options)) return 0;
+    if (parent->jump_depth >= CTOS_SSH_CONFIG_JUMPS) { errno = E2BIG; return -1; }
+    struct ctos_ssh_config_jump_hop hop = {0};
+    if (jump_hop_copy(&hop, &parent->options) != 0) return -1;
+    for (const struct ctos_ssh_config_eval *ancestor = parent; ancestor != NULL; ancestor = ancestor->parent) {
+        if (strcasecmp(ancestor->alias, hop.host) == 0 &&
+            strcmp(ancestor->user, hop.user_specified ? hop.user : "") == 0 &&
+            ancestor->request.port == hop.port) { errno = ELOOP; return -1; }
+    }
+    struct ctos_ssh_config_request request = {
+        .alias = hop.host, .remote_user = hop.user_specified ? hop.user : NULL,
+        .port = hop.port, .local_user = parent->local_user,
+        .local_hostname = parent->local_host, .local_uid = parent->request.local_uid
+    };
+    struct ctos_ssh_config_eval *child = new_eval(&request, 0);
+    explicit_bzero(&hop, sizeof(hop));
+    if (child == NULL) return -1;
+    child->parent = parent; child->jump_depth = parent->jump_depth + 1;
+    if (parent->profile_route && ctos_ssh_config_eval_enable_profile_route(child) != 0) goto failed;
+    memcpy(child->root, parent->root, sizeof(child->root));
+    const char *prefix = parent->options.jump_extra;
+    if (prefix != NULL) {
+        /* In a list, a bare none names a host; -J none alone disables jumping. */
+        if (strcasecmp(prefix, "none") == 0) {
+            char uri[sizeof("ssh://none")];
+            snprintf(uri, sizeof(uri), "ssh://%s", prefix);
+            child->jump_override = strdup(uri);
+            explicit_bzero(uri, sizeof(uri));
+        } else child->jump_override = strdup(prefix);
+        if (child->jump_override == NULL) goto failed;
+    }
+    if (ctos_ssh_io_init_source(&child->io, parent->io.files, parent->io.count,
+        source_live, parent, fclose) != 0 || live(child) != 0) goto failed;
+    struct ctos_ssh_config_eval *budget = budget_owner(parent);
+    child->io.max_opens = budget->io.max_opens; child->io.max_read_bytes = budget->io.max_read_bytes;
+    child->max_lines = budget->max_lines;
+    parent->child = child;
+    if (live(child) != 0) goto failed;
+    *out = child;
+    if (live(child) != 0) { *out = NULL; goto failed; }
+    return 0;
+failed: {
+        int failure = errno;
+        if (parent->child == child) parent->child = NULL;
+        if (child->jump_override != NULL) {
+            explicit_bzero(child->jump_override, strlen(child->jump_override)); free(child->jump_override);
+        }
+        if (child->direct_plan != NULL) {
+            explicit_bzero(child->direct_plan, sizeof(*child->direct_plan)); free(child->direct_plan);
+        }
+        explicit_bzero(child, sizeof(*child)); free(child); errno = failure; return -1;
+    }
+}
+static int route_owner(const struct ctos_ssh_config_route *route) {
+    if (route == NULL) { errno = EINVAL; return -1; }
+    if (route->pid != getpid() || route->uid != getuid() || !pthread_equal(route->owner, pthread_self())) {
+        errno = EPERM; return -1;
+    }
+    return 0;
+}
+int ctos_ssh_config_route_close(struct ctos_ssh_config_route *route) {
+    if (route_owner(route) != 0) return -1;
+    if (route->state == ROUTE_CLOSED) return 0;
+    if (route->busy) { errno = EBUSY; return -1; }
+    route->busy = 1; route->state = ROUTE_CLOSING;
+    while (route->count != 0) {
+        struct ctos_ssh_config_eval *hop = route->hops[route->count - 1];
+        if (ctos_ssh_config_eval_close(hop) != 0 || ctos_ssh_config_eval_destroy(hop) != 0) {
+            route->busy = 0; return -1;
+        }
+        route->hops[--route->count] = NULL;
+    }
+    route->root->route = NULL; route->root = NULL;
+    route->state = ROUTE_CLOSED; route->busy = 0; return 0;
+}
+int ctos_ssh_config_route_destroy(struct ctos_ssh_config_route *route) {
+    if (route_owner(route) != 0) return -1;
+    if (route->state != ROUTE_CLOSED || route->busy) { errno = EBUSY; return -1; }
+    explicit_bzero(route, sizeof(*route)); free(route); return 0;
+}
+int ctos_ssh_config_route_build(struct ctos_ssh_config_eval *root,
+    struct ctos_ssh_config_route **out, struct ctos_ssh_config_error *error) {
+    if (error != NULL) memset(error, 0, sizeof(*error));
+    if (out == NULL) { errno = EINVAL; return -1; }
+    *out = NULL;
+    if (result_live(root) != 0) return -1;
+    if (root->mode != CTOS_CONFIG_EFFECTIVE || (root->direct_plan != NULL && !root->profile_route)) { errno = EINVAL; return -1; }
+    if (root->route != NULL || root->child != NULL) { errno = EBUSY; return -1; }
+    struct ctos_ssh_config_route *route = calloc(1, sizeof(*route));
+    if (route == NULL) return -1;
+    route->owner = pthread_self(); route->pid = getpid(); route->uid = getuid();
+    route->root = root; root->route = route;
+    struct ctos_ssh_config_eval *current_hop = root;
+    for (;;) {
+        struct ctos_ssh_config_eval *next = NULL;
+        if (ctos_ssh_config_eval_open_next_jump(current_hop, &next) != 0) goto failed;
+        if (next == NULL) break;
+        route->hops[route->count++] = next;
+        if (ctos_ssh_config_eval_run(next, error) != 0) goto failed;
+        current_hop = next;
+    }
+    if (live(root) != 0) goto failed;
+    route->state = ROUTE_READY; *out = route;
+    if (live(root) != 0) { *out = NULL; goto failed; }
+    return 0;
+failed: {
+        int failure = errno;
+        if (ctos_ssh_config_route_close(route) != 0) *out = route;
+        else (void)ctos_ssh_config_route_destroy(route);
+        errno = failure; return -1;
+    }
+}
+static int route_live(const struct ctos_ssh_config_route *route) {
+    if (route_owner(route) != 0) return -1;
+    if (route->state != ROUTE_READY || route->busy) { errno = EAGAIN; return -1; }
+    return live(route->root);
+}
+int ctos_ssh_config_route_count(const struct ctos_ssh_config_route *route, unsigned int *out) {
+    if (out == NULL) { errno = EINVAL; return -1; }
+    *out = 0;
+    if (route_live(route) != 0) return -1;
+    *out = route->count;
+    if (route_live(route) != 0) { *out = 0; return -1; }
+    return 0;
+}
+int ctos_ssh_config_route_summary(const struct ctos_ssh_config_route *route, unsigned int index,
+    struct ctos_ssh_config_summary *out) {
+    if (out == NULL) { errno = EINVAL; return -1; }
+    memset(out, 0, sizeof(*out));
+    if (route_live(route) != 0) return -1;
+    if (index >= route->count) { errno = ERANGE; return -1; }
+    if (ctos_ssh_config_eval_summary(route->hops[route->count - 1 - index], out) != 0) return -1;
+    if (route_live(route) != 0) { memset(out, 0, sizeof(*out)); return -1; }
+    return 0;
+}
+int ctos_ssh_config_route_options(const struct ctos_ssh_config_route *route, unsigned int index,
+    const Options **out) {
+    if (out == NULL) { errno = EINVAL; return -1; }
+    *out = NULL;
+    if (route_live(route) != 0) return -1;
+    if (index >= route->count) { errno = ERANGE; return -1; }
+    if (ctos_ssh_config_eval_options(route->hops[route->count - 1 - index], out) != 0) return -1;
+    if (route_live(route) != 0) { *out = NULL; return -1; }
+    return 0;
+}
+int ctos_ssh_config_route_profile_plan(const struct ctos_ssh_config_route *route, unsigned int index,
+    const struct ctos_ssh_config_direct_plan **out) {
+    if (out == NULL) { errno = EINVAL; return -1; }
+    *out = NULL;
+    if (route_live(route) != 0) return -1;
+    if (!route->root->profile_route || index > route->count) { errno = EINVAL; return -1; }
+    const struct ctos_ssh_config_eval *hop = index == route->count
+        ? route->root : route->hops[route->count - 1 - index];
+    if (!hop->profile_route || hop->direct_plan == NULL || result_live(hop) != 0) return -1;
+    *out = hop->direct_plan;
+    if (route_live(route) != 0) { *out = NULL; return -1; }
+    return 0;
 }
 int ctos_ssh_config_eval_direct_plan(const struct ctos_ssh_config_eval *e,
     const struct ctos_ssh_config_direct_plan **out) {
@@ -1169,7 +1510,7 @@ int ctos_ssh_config_eval_profile_direct_plan(const struct ctos_ssh_config_eval *
     const struct ctos_ssh_config_direct_plan **out) {
     if (out == NULL) { errno = EINVAL; return -1; }
     *out = NULL;
-    if (e == NULL || !e->profile_identities) { errno = EINVAL; return -1; }
+    if (e == NULL || !e->profile_identities || e->profile_route) { errno = EINVAL; return -1; }
     if (result_live(e) != 0) return -1;
     if (e->direct_plan == NULL || e->mode != CTOS_CONFIG_EFFECTIVE) { errno = EINVAL; return -1; }
     *out = e->direct_plan;
@@ -1220,6 +1561,7 @@ int ctos_ssh_config_eval_close(struct ctos_ssh_config_eval *e) {
     if (owner(e) != 0) return -1;
     if (e->state == CTOS_CONFIG_CLOSED) return 0;
     if (e->state == CTOS_CONFIG_RUNNING) { errno = EBUSY; return -1; }
+    if (e->child != NULL || e->route != NULL) { errno = EBUSY; return -1; }
     e->state = CTOS_CONFIG_CLOSING;
     if (e->resource_audit != NULL) { explicit_bzero(e->resource_audit, sizeof(*e->resource_audit)); free(e->resource_audit); e->resource_audit = NULL; }
     if (e->audit != NULL) { explicit_bzero(e->audit, sizeof(*e->audit)); free(e->audit); e->audit = NULL; }
@@ -1227,6 +1569,10 @@ int ctos_ssh_config_eval_close(struct ctos_ssh_config_eval *e) {
     if (e->options_live) { ctos_config_upstream_free_options(&e->options); e->options_live = 0; }
     if (e->direct_plan != NULL) {
         explicit_bzero(e->direct_plan, sizeof(*e->direct_plan)); free(e->direct_plan); e->direct_plan = NULL;
+    }
+    if (e->jump_override != NULL) {
+        explicit_bzero(e->jump_override, strlen(e->jump_override));
+        free(e->jump_override); e->jump_override = NULL;
     }
     (void)ctos_ssh_io_destroy(&e->io);
     if (e->owned_files != NULL) {
@@ -1258,9 +1604,11 @@ int ctos_ssh_config_eval_close(struct ctos_ssh_config_eval *e) {
     }
     if (failure != 0) { errno = failure; return -1; }
     if (e->borrow != NULL) {
-        if (ctos_ssh_view_borrow_release(e->borrow) != 0) return -1;
+        if (ctos_ssh_view_borrow_claim_release(e->borrow_claim, e) != 0) return -1;
+        e->borrow_claim = NULL;
         e->borrow = NULL;
     }
+    if (e->parent != NULL) { e->parent->child = NULL; e->parent = NULL; }
     e->state = CTOS_CONFIG_CLOSED; return 0;
 }
 int ctos_ssh_config_eval_destroy(struct ctos_ssh_config_eval *e) {

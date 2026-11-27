@@ -399,6 +399,175 @@ public final class SshNativeRoleBootstrapTest {
         rejects(version, clock);
     }
 
+    @Test public void chainedRecordsKeepPerHopTargetsAndExactChainIdentity() throws Exception {
+        Clock clock = new Clock();
+        byte[] jump = chainedRecord(41, 42, 1001, 2, 0, 2222, "target:jump-account",
+                "target:final-connection", 7, 8);
+        byte[] target = chainedRecord(42, 42, 1001, 1, 1, 2223, "target:target-account",
+                "target:final-connection", 9, 8);
+        SshNativeRoleBootstrap.Decoded jumpDecoded = SshNativeRoleBootstrap.decode(jump, clock);
+        SshNativeRoleBootstrap.Decoded targetDecoded = SshNativeRoleBootstrap.decode(target, clock);
+        assertEquals(SshRoleContext.IDENTITY_V2, jumpDecoded.bootstrap.identityVersion);
+        assertEquals("target:jump-account", jumpDecoded.bootstrap.targetIdentity);
+        assertEquals("target:target-account", targetDecoded.bootstrap.targetIdentity);
+        assertEquals("target:final-connection", jumpDecoded.bootstrap.chainIdentity);
+        assertEquals(jumpDecoded.bootstrap.chainIdentity, targetDecoded.bootstrap.chainIdentity);
+
+        SshRoleRegistry registry = new SshRoleRegistry(clock);
+        View view = new View();
+        try {
+            SshNativeRoleBootstrap.Issued first = SshNativeRoleBootstrap.issue(jump, registry,
+                    view, clock, decoded -> Arrays.equals(jump, decoded.canonicalWire()));
+            SshNativeRoleBootstrap.Issued second = SshNativeRoleBootstrap.issue(target, registry,
+                    view, clock, decoded -> Arrays.equals(target, decoded.canonicalWire()));
+            assertEquals(SshRoleContext.IDENTITY_V2, first.role.identityVersion);
+            assertEquals("target:jump-account", first.role.targetIdentity);
+            assertEquals("target:target-account", second.role.targetIdentity);
+            assertEquals(first.role.chainIdentity, second.role.chainIdentity);
+            assertFalse(first.role.binding().equals(second.role.binding()));
+        } finally { registry.close(); }
+
+        byte[] forged = jump.clone();
+        forged[forged.length - 1] ^= 1;
+        SshRoleRegistry other = new SshRoleRegistry(clock);
+        try {
+            try {
+                SshNativeRoleBootstrap.issue(forged, other, view, clock,
+                        decoded -> Arrays.equals(jump, decoded.canonicalWire()));
+                fail("modified chain identity must not pass the exact ownership proof");
+            } catch (VaultException expected) { assertEquals("SSH_ROLE_REQUIRED", expected.code); }
+            assertEquals(0, other.size());
+        } finally { other.close(); }
+    }
+
+    @Test public void chainedRecordsRejectMissingInvalidAndTrailingIdentity() throws Exception {
+        Clock clock = new Clock();
+        byte[] valid = chainedRecord(43, 42, 1001, 2, 0, 2222, "target:jump-account",
+                "target:final-connection", 7, 8);
+        rejects(Arrays.copyOf(valid, valid.length - 1), clock);
+        rejects(Arrays.copyOf(valid, valid.length + 1), clock);
+        rejects(chainedRecord(44, 42, 1001, 2, 0, 2222, "target:jump-account", "", 7, 8), clock);
+        rejects(chainedRecord(45, 42, 1001, 2, 0, 2222, "target:jump-account", "bad chain", 7, 8), clock);
+        byte[] unknown = valid.clone();
+        unknown[4] = 3;
+        rejects(unknown, clock);
+        byte[] disguisedLegacy = valid.clone();
+        disguisedLegacy[4] = 1;
+        rejects(disguisedLegacy, clock);
+    }
+
+    @Test public void chainedRoleBindingIncludesChainIdentityNonceAndConnectionBinding() throws Exception {
+        Clock clock = new Clock();
+        View view = new View();
+        String[] chainIdentities = {"chain:first", "chain:second", "chain:first", "chain:first"};
+        int[] nonces = {7, 7, 8, 7};
+        int[] bindings = {8, 8, 8, 9};
+        String[] results = new String[chainIdentities.length];
+        for (int index = 0; index < results.length; index++) {
+            SshRoleRegistry registry = new SshRoleRegistry(clock);
+            try {
+                SshRoleContext.Bootstrap bootstrap = new SshRoleContext.Bootstrap(
+                        SshRoleContext.Program.JUMP, 1001, 0, "connection_1", "target:jump-account",
+                        "example.invalid", 2222, "view_1", filled(nonces[index]),
+                        filled(bindings[index]), 30_000, chainIdentities[index]);
+                results[index] = registry.issue(bootstrap, view).binding();
+            } finally { registry.close(); }
+        }
+        for (int index = 1; index < results.length; index++) assertFalse(results[0].equals(results[index]));
+    }
+
+    @Test public void legacyRecordsRetainImplicitChainIdentity() throws Exception {
+        Clock clock = new Clock();
+        byte[] wire = record(46, 42, 1001, 1, 0, 22, 30_000, "connection_46",
+                "target:user@example.invalid:22", "example.invalid", "view_46", 4, 5);
+        SshNativeRoleBootstrap.Decoded decoded = SshNativeRoleBootstrap.decode(wire, clock);
+        assertEquals(SshRoleContext.IDENTITY_V1, decoded.bootstrap.identityVersion);
+        assertEquals(decoded.bootstrap.targetIdentity, decoded.bootstrap.chainIdentity);
+        assertArrayEquals(wire, decoded.canonicalWire());
+        SshRoleRegistry registry = new SshRoleRegistry(clock);
+        try {
+            assertEquals("a6d5d9b8e84670cd48f2dbd82d1a796301dd9f74178369099802a6064367705f",
+                    registry.issue(decoded.bootstrap, new View()).binding());
+        } finally { registry.close(); }
+    }
+
+    @Test public void unissuedChainedRoleRetainsOwnerAcrossRejectedProofAndCleanupRetry() throws Exception {
+        Clock clock = new Clock();
+        byte[] wire = chainedRecord(47, 42, 1001, 2, 0, 2222, "target:jump-account",
+                "target:final-connection", 7, 8);
+        SshRoleRegistry registry = new SshRoleRegistry(clock);
+        int[] releases = {0};
+        boolean[] failRelease = {true};
+        SshNativeRoleBootstrap.Unissued pending = SshNativeRoleBootstrap.prepare(
+                SshNativeRoleBootstrap.decode(wire, clock).bootstrap, ignored -> wire.clone(),
+                ignored -> false, (token, uid) -> {
+                    assertEquals(47, token);
+                    assertEquals(42, uid);
+                    releases[0]++;
+                    if (failRelease[0]) throw new IOException("unconfirmed native close");
+                });
+        try {
+            pending.open();
+            java.util.concurrent.atomic.AtomicReference<Throwable> foreign =
+                    new java.util.concurrent.atomic.AtomicReference<>();
+            Thread otherThread = new Thread(() -> {
+                try { pending.closeUnissued(); }
+                catch (Throwable failure) { foreign.set(failure); }
+            });
+            otherThread.start();
+            otherThread.join();
+            assertTrue(foreign.get() instanceof VaultException);
+            assertEquals(0, releases[0]);
+            try { pending.issue(registry, new View(), clock); fail("unowned v2 role"); }
+            catch (VaultException expected) { assertEquals("SSH_ROLE_REQUIRED", expected.code); }
+            assertEquals(0, registry.size());
+            try { pending.closeUnissued(); fail("failed close must remain retryable"); }
+            catch (VaultException expected) { assertEquals("SSH_ROLE_REQUIRED", expected.code); }
+            failRelease[0] = false;
+            pending.closeUnissued();
+            pending.closeUnissued();
+            assertEquals(2, releases[0]);
+        } finally { registry.close(); }
+    }
+
+    @Test public void eightJumpsAndTargetRetainNineDistinctBoundRoles() throws Exception {
+        Clock clock = new Clock();
+        SshRoleRegistry registry = new SshRoleRegistry(clock);
+        SshNativeRoleBootstrap.Issued[] roles = new SshNativeRoleBootstrap.Issued[9];
+        try {
+            assertEquals(9, SshRoleContext.MAX_HOPS);
+            for (int hop = 0; hop < roles.length; hop++) {
+                int program = hop == 8 ? 1 : 2;
+                byte[] wire = record(hop + 1, 42, 1001, program, hop, 2200 + hop, 30_000,
+                        "connection_chain", "target:user@example.invalid:22", "example.invalid",
+                        "view_chain", hop + 1, 55);
+                roles[hop] = SshNativeRoleBootstrap.issue(wire, registry,
+                        new View(), clock, decoded -> true);
+                assertEquals(hop, roles[hop].role.hop);
+                assertEquals(program == 1 ? SshRoleContext.Program.CLIENT : SshRoleContext.Program.JUMP,
+                        roles[hop].role.program);
+            }
+            assertEquals(9, registry.size());
+            byte[] invalid = record(10, 42, 1001, 1, 9, 22, 30_000,
+                    "connection_chain", "target:user@example.invalid:22", "example.invalid",
+                    "view_chain", 10, 55);
+            rejects(invalid, clock);
+            try {
+                registry.issue(new SshRoleContext.Bootstrap(SshRoleContext.Program.CLIENT, 1001, 0,
+                        "connection_other", "target:user@example.invalid:22", "example.invalid", 22,
+                        "view_other", filled(99), filled(55), 31_000), new View());
+                fail("the tenth role must not exceed registry capacity");
+            } catch (VaultException expected) {
+                assertEquals("SSH_ROLE_BUSY", expected.code);
+            }
+            registry.release(roles[4].role);
+            assertTrue(roles[8].role.active());
+            assertEquals(8, registry.size());
+        } finally {
+            registry.close();
+        }
+    }
+
     private static void rejects(byte[] wire, Clock clock) throws Exception {
         try {
             SshNativeRoleBootstrap.decode(wire, clock);
@@ -429,6 +598,19 @@ public final class SshNativeRoleBootstrapTest {
         text(output, targetIdentity);
         text(output, host);
         text(output, view);
+        output.flush();
+        return bytes.toByteArray();
+    }
+
+    private static byte[] chainedRecord(long token, int uid, int pid, int program, int hop, int port,
+            String targetIdentity, String chainIdentity, int nonceValue, int bindingValue) throws IOException {
+        byte[] legacy = record(token, uid, pid, program, hop, port, 30_000, "connection_chain",
+                targetIdentity, "example.invalid", "view_chain", nonceValue, bindingValue);
+        legacy[4] = 2;
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        DataOutputStream output = new DataOutputStream(bytes);
+        output.write(legacy);
+        text(output, chainIdentity);
         output.flush();
         return bytes.toByteArray();
     }

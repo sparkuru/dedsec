@@ -92,13 +92,12 @@ static int same_bytes(const unsigned char *left, const unsigned char *right, siz
     return difference == 0;
 }
 
-JNIEXPORT jbyteArray JNICALL Java_im_majo_ctos_SshNativeRoleBootstrap_00024Native_open(
-    JNIEnv *env, jclass type, jint program, jint hop, jint port, jlong deadline,
+static jbyteArray open_role(JNIEnv *env, jint program, jint hop, jint port, jlong deadline,
     jstring connection_id, jstring target_identity, jstring host, jstring public_view_id,
-    jbyteArray role_nonce, jbyteArray connection_binding) {
-    (void)type;
+    jbyteArray role_nonce, jbyteArray connection_binding, jstring chain_identity, int chained) {
     char connection[CTOS_SSH_ROLE_CONNECTION_ID_BYTES + 1] = {0};
     char target[CTOS_SSH_ROLE_TARGET_ID_BYTES + 1] = {0};
+    char chain[CTOS_SSH_ROLE_TARGET_ID_BYTES + 1] = {0};
     char host_name[CTOS_SSH_ROLE_HOST_BYTES + 1] = {0};
     char view[CTOS_SSH_ROLE_VIEW_ID_BYTES + 1] = {0};
     unsigned char nonce[32] = {0};
@@ -117,6 +116,7 @@ JNIEXPORT jbyteArray JNICALL Java_im_majo_ctos_SshNativeRoleBootstrap_00024Nativ
         || (uint64_t)owner_uid > INT32_MAX
         || copy_text(env, connection_id, connection, sizeof(connection), ROLE_IDENTIFIER) != 0
         || copy_text(env, target_identity, target, sizeof(target), ROLE_TARGET) != 0
+        || (chained && copy_text(env, chain_identity, chain, sizeof(chain), ROLE_TARGET) != 0)
         || copy_text(env, host, host_name, sizeof(host_name), ROLE_HOST) != 0
         || copy_text(env, public_view_id, view, sizeof(view), ROLE_IDENTIFIER) != 0
         || copy_binding(env, role_nonce, nonce) != 0
@@ -134,7 +134,8 @@ JNIEXPORT jbyteArray JNICALL Java_im_majo_ctos_SshNativeRoleBootstrap_00024Nativ
         .host = host_name,
         .public_view_id = view,
         .role_nonce = nonce,
-        .connection_binding = binding
+        .connection_binding = binding,
+        .chain_identity = chained ? chain : NULL
     };
     if (ctos_ssh_role_bootstrap_open(&request, &token) != 0 || token == 0) goto done;
     if (ctos_ssh_role_bootstrap_encode(token, encoded, sizeof(encoded), &encoded_length) != 0
@@ -150,6 +151,7 @@ done:
     if (!keep_token && token != 0) (void)ctos_ssh_role_bootstrap_close(token);
     wipe(connection, sizeof(connection));
     wipe(target, sizeof(target));
+    wipe(chain, sizeof(chain));
     wipe(host_name, sizeof(host_name));
     wipe(view, sizeof(view));
     wipe(nonce, sizeof(nonce));
@@ -161,6 +163,24 @@ done:
         return NULL;
     }
     return result;
+}
+
+JNIEXPORT jbyteArray JNICALL Java_im_majo_ctos_SshNativeRoleBootstrap_00024Native_open(
+    JNIEnv *env, jclass type, jint program, jint hop, jint port, jlong deadline,
+    jstring connection_id, jstring target_identity, jstring host, jstring public_view_id,
+    jbyteArray role_nonce, jbyteArray connection_binding) {
+    (void)type;
+    return open_role(env, program, hop, port, deadline, connection_id, target_identity,
+        host, public_view_id, role_nonce, connection_binding, NULL, 0);
+}
+
+JNIEXPORT jbyteArray JNICALL Java_im_majo_ctos_SshNativeRoleBootstrap_00024Native_openChained(
+    JNIEnv *env, jclass type, jint program, jint hop, jint port, jlong deadline,
+    jstring connection_id, jstring target_identity, jstring host, jstring public_view_id,
+    jbyteArray role_nonce, jbyteArray connection_binding, jstring chain_identity) {
+    (void)type;
+    return open_role(env, program, hop, port, deadline, connection_id, target_identity,
+        host, public_view_id, role_nonce, connection_binding, chain_identity, 1);
 }
 
 JNIEXPORT jboolean JNICALL Java_im_majo_ctos_SshNativeRoleBootstrap_00024Native_owns(

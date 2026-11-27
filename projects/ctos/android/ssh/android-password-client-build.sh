@@ -27,7 +27,7 @@ style_text() {
 }
 usage() {
 	style_text "$STYLE_TITLE" 'Pinned static AArch64/Bionic SSH client test build'
-	printf '\nUsage: %s --output <new-/app/build/directory> [--client | --interop | --key-interop | --auto-interop | --issuer]\n' "${0##*/}" >&2
+	printf '\nUsage: %s --output <new-/app/build/directory> [--client | --interop | --key-interop | --auto-interop | --jump-interop | --issuer]\n' "${0##*/}" >&2
 	printf 'Build only; no target execution. Default: complete native client matrix.\n' >&2
 }
 die() {
@@ -62,7 +62,7 @@ parse_args() {
 			output_dir=$2
 			shift 2
 			;;
-		--client | --interop | --key-interop | --auto-interop | --issuer)
+		--client | --interop | --key-interop | --auto-interop | --jump-interop | --issuer)
 			mode=${1#--}
 			shift
 			;;
@@ -106,11 +106,14 @@ main() {
 		test_source="$TEST_CPP/ssh_password_interop_test.c"
 		if [[ "$mode" == key-interop ]]; then binary=ctos_ssh_key_interop_test; fi
 		if [[ "$mode" == auto-interop ]]; then binary=ctos_ssh_auto_interop_test; fi
+	elif [[ "$mode" == jump-interop ]]; then
+		binary=ctos_ssh_jump_interop_test
+		test_source="$TEST_CPP/ssh_jump_interop_test.c"
 	elif [[ "$mode" == issuer ]]; then
 		binary=ctos_ssh_hostfile_issuer_test
 		test_source="$TEST_CPP/ssh_hostfile_issuer_test.c"
 	fi
-	local -a native_sources=() inputs=("${BASH_SOURCE[0]}" "$TEST_CPP/ssh_native_client_test.c" "$test_source" "$archive" "$PRODUCTION_INCLUDE/hostfile.h")
+	local -a native_sources=() inputs=("${BASH_SOURCE[0]}" "$TEST_CPP/ssh_native_client_test.c" "$test_source" "$archive" "$PRODUCTION_INCLUDE/hostfile.h" "$CPP/ssh_config_eval.h")
 	local unit
 	for unit in ssh_file_view ssh_view_handle ssh_role_bootstrap ssh_callback_adapter ssh_hostfile_issuer ssh_hostfile_changed ssh_host_trust ssh_material_inspect ssh_kex_guard ssh_native_client ssh_key_policy; do
 		native_sources+=("$CPP/$unit.c")
@@ -124,6 +127,7 @@ main() {
 		-Wno-deprecated-declarations -Wno-misleading-indentation
 		-static -fno-pie -fno-emulated-tls '-Wl,--no-undefined' '-Wl,-z,max-page-size=16384'
 	)
+	if [[ "$mode" == client ]]; then flags+=(-DCTOS_SSH_NATIVE_TEST_HOOKS=1); fi
 	if [[ "$mode" == key-interop ]]; then flags+=(-DCTOS_INTEROP_PRIVATE_KEY=1); fi
 	if [[ "$mode" == auto-interop ]]; then flags+=(-DCTOS_INTEROP_AUTOMATIC=1); fi
 	mkdir -p -- "${output_dir%/*}"

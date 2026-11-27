@@ -21,6 +21,8 @@ final class SshKeyboardChallenge extends SshEvent {
     required this.instruction,
     required this.prompts,
     required this.remainingMillis,
+    required this.endpoint,
+    required this.hop,
   }) : super(requestId);
 
   factory SshKeyboardChallenge.parse(Object? raw) {
@@ -35,6 +37,10 @@ final class SshKeyboardChallenge extends SshEvent {
       'instruction',
       'prompts',
       'remainingMillis',
+      'host',
+      'port',
+      'username',
+      'hop',
     });
     final binding = value['binding'];
     final round = value['round'];
@@ -76,11 +82,14 @@ final class SshKeyboardChallenge extends SshEvent {
       instruction: instruction,
       prompts: List.unmodifiable(parsed),
       remainingMillis: remaining,
+      endpoint: SshPromptEndpoint._parse(value),
+      hop: _sshPromptHop(value['hop']),
     );
   }
 
   final String ticketId, binding, name, instruction;
-  final int round, remainingMillis;
+  final int round, remainingMillis, hop;
+  final SshPromptEndpoint endpoint;
   final List<SshKeyboardPrompt> prompts;
 }
 

@@ -1,5 +1,16 @@
 # SSH Native Gates
 
+For all SSH work, follow the [implementation-first and testing limits](ssh-development-workflow.md), including the current user instruction to stop tests.
+
+2026-11-18 current increment: native live clients and CONFIG evaluators reserve each borrow
+exclusively under the [view-borrow ownership](ssh-view-borrow-ownership.md) contract. Existing
+direct NEW/CHANGED trust write completion follows the separate
+[trust acknowledgement](ssh-trust-commit-ack.md) contract; it is not an ancestor-chain grant.
+
+2026-11-18 earlier increment: [ProxyJump native channel](ssh-proxyjump-channel.md) admits at most eight jump roles plus one target role. The native role, KEX and callback capacities are nine; older sections describing an eight-role limit are historical. A single authenticated JUMP channel remains bound to its live next role and original deadline; at this point no native relay or product ProxyJump connection was enabled.
+
+2026-11-18 later increment: the internal [bounded byte relay](ssh-proxyjump-relay.md) was added without child authorization or a product entry. The subsequent [native child constructor](ssh-proxyjump-child.md) adds recursive native proof and cleanup ownership; cross-layer effect atomicity, complete lifecycle orchestration, JNI and product entry remain open.
+
 2026-11-16: [early channel output](ssh-shell-early-output.md) may be buffered once the
 session channel opens, including while PTY/shell requests await replies. Only actual
 shell success permits publication; failures before success wipe the pending bytes.

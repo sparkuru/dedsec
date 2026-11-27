@@ -9,6 +9,7 @@
 #include <string.h>
 
 #include "ssh_callback_adapter.h"
+#include "ssh_native_client.h"
 
 struct jni_callback_target {
     JavaVM *vm;
@@ -23,7 +24,129 @@ struct jni_callback_target {
     jmethodID credential;
     jmethodID credential_bytes;
     jmethodID credential_bytes_selected;
+    jmethodID effect_admission;
+#ifdef CTOS_SSH_NATIVE_TEST_HOOKS
+    jmethodID provisional_new_candidate;
+    jmethodID provisional_new_review;
+    jmethodID provisional_new_kex;
+#endif
 };
+
+#ifdef CTOS_SSH_NATIVE_TEST_HOOKS
+extern int ctos_ssh_native_client_provisional_scope_check(ctos_ssh_callback_token,
+    void *, enum ctos_ssh_provisional_new_stage) __attribute__((weak, visibility("hidden")));
+static _Thread_local int test_provisional_next;
+static _Thread_local jobject test_provisional_wrong_receiver;
+static _Thread_local int test_fail_effect_invalidation;
+static _Thread_local int test_fail_legacy_effect_invalidation;
+static _Thread_local unsigned int test_fail_cleanup_begin_countdown;
+static _Thread_local int test_fail_cleanup_begin_unknown;
+static _Thread_local int test_fail_effect_end;
+static _Thread_local unsigned int test_fail_effect_end_countdown;
+static _Thread_local int test_before_provisional_stage;
+static _Thread_local void (*test_before_provisional_hook)(void *);
+static _Thread_local void *test_before_provisional_context;
+__attribute__((visibility("hidden")))
+int ctos_ssh_callback_jni_test_before_provisional(int stage, void (*hook)(void *), void *context) {
+    if ((stage != CTOS_SSH_PROVISIONAL_NEW_REVIEW && stage != CTOS_SSH_PROVISIONAL_NEW_KEX)
+        || hook == NULL || test_before_provisional_hook != NULL) return -1;
+    test_before_provisional_stage = stage;
+    test_before_provisional_hook = hook;
+    test_before_provisional_context = context;
+    return 0;
+}
+__attribute__((visibility("hidden")))
+void ctos_ssh_callback_jni_test_clear_before_provisional(void) {
+    test_before_provisional_stage = 0;
+    test_before_provisional_hook = NULL;
+    test_before_provisional_context = NULL;
+}
+static int run_before_provisional(JNIEnv *env, int stage) {
+    if (stage == test_before_provisional_stage && test_before_provisional_hook != NULL) {
+        void (*hook)(void *) = test_before_provisional_hook;
+        void *context = test_before_provisional_context;
+        ctos_ssh_callback_jni_test_clear_before_provisional();
+        hook(context);
+        if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return -1; }
+    }
+    return 0;
+}
+__attribute__((visibility("hidden")))
+int ctos_ssh_callback_jni_test_enable_provisional_next(void) {
+    if (test_provisional_next) return -1;
+    test_provisional_next = 1;
+    return 0;
+}
+__attribute__((visibility("hidden")))
+int ctos_ssh_callback_jni_test_fail_effect_invalidation_once(void) {
+    if (test_fail_effect_invalidation) return -1;
+    test_fail_effect_invalidation = 1;
+    return 0;
+}
+__attribute__((visibility("hidden")))
+int ctos_ssh_callback_jni_test_fail_legacy_effect_invalidation_once(void) {
+    if (test_fail_legacy_effect_invalidation) return -1;
+    test_fail_legacy_effect_invalidation = 1;
+    return 0;
+}
+__attribute__((visibility("hidden")))
+void ctos_ssh_callback_jni_test_clear_effect_invalidation(void) {
+    test_fail_effect_invalidation = 0;
+}
+__attribute__((visibility("hidden")))
+int ctos_ssh_callback_jni_test_fail_cleanup_begin(unsigned int countdown) {
+    if (countdown == 0 || test_fail_cleanup_begin_countdown != 0) return -1;
+    test_fail_cleanup_begin_countdown = countdown;
+    return 0;
+}
+__attribute__((visibility("hidden")))
+int ctos_ssh_callback_jni_test_fail_cleanup_begin_unknown(int when) {
+    if ((when != 1 && when != 2) || test_fail_cleanup_begin_unknown != 0) return -1;
+    test_fail_cleanup_begin_unknown = when;
+    return 0;
+}
+__attribute__((visibility("hidden")))
+int ctos_ssh_callback_jni_test_fail_effect_end(int when) {
+    if ((when != 1 && when != 2) || test_fail_effect_end != 0) return -1;
+    test_fail_effect_end = when;
+    test_fail_effect_end_countdown = 1;
+    return 0;
+}
+__attribute__((visibility("hidden")))
+int ctos_ssh_callback_jni_test_fail_effect_end_after(int when, unsigned int countdown) {
+    if ((when != 1 && when != 2) || countdown == 0 || test_fail_effect_end != 0) return -1;
+    test_fail_effect_end = when;
+    test_fail_effect_end_countdown = countdown;
+    return 0;
+}
+__attribute__((visibility("hidden")))
+int ctos_ssh_callback_jni_test_wrong_provisional_receiver(JNIEnv *env, jobject receiver) {
+    if (env == NULL || receiver == NULL || test_provisional_wrong_receiver != NULL) return -1;
+    test_provisional_wrong_receiver = (*env)->NewGlobalRef(env, receiver);
+    return test_provisional_wrong_receiver == NULL ? -1 : 0;
+}
+__attribute__((visibility("hidden")))
+void ctos_ssh_callback_jni_test_clear_provisional_receiver(JNIEnv *env) {
+    if (env != NULL && test_provisional_wrong_receiver != NULL)
+        (*env)->DeleteGlobalRef(env, test_provisional_wrong_receiver);
+    test_provisional_wrong_receiver = NULL;
+    test_provisional_next = 0;
+}
+static _Thread_local int test_exception_after_selected_return;
+static _Thread_local void (*test_before_selected_jni_copy)(void *);
+static _Thread_local void *test_before_selected_jni_copy_context;
+static _Thread_local int test_last_selected_array_wiped;
+void ctos_ssh_callback_jni_test_exception_after_selected_return(void) {
+    test_exception_after_selected_return = 1;
+}
+int ctos_ssh_callback_jni_test_before_selected_jni_copy(void (*hook)(void *), void *context) {
+    if (hook == NULL || test_before_selected_jni_copy != NULL) return -1;
+    test_before_selected_jni_copy = hook;
+    test_before_selected_jni_copy_context = context;
+    return 0;
+}
+int ctos_ssh_callback_jni_test_last_selected_array_wiped(void) { return test_last_selected_array_wiped; }
+#endif
 
 static void wipe_bytes(unsigned char *bytes, size_t length) {
     if (bytes == NULL) return;
@@ -62,6 +185,34 @@ static int attached(void *context, void *environment) {
         || vm == NULL || vm != target->vm
         || (*vm)->GetEnv(vm, (void **)&current, JNI_VERSION_1_6) != JNI_OK
         || current != env) return -1;
+    return 0;
+}
+
+static int same_receiver(void *context, void *environment, const void *receiver) {
+    struct jni_callback_target *target = context;
+    JNIEnv *env = environment;
+    if (target == NULL || env == NULL || target->object == NULL || receiver == NULL)
+        return -1;
+    return (*env)->IsSameObject(env, target->object, (jobject)receiver) == JNI_TRUE
+        && !(*env)->ExceptionCheck(env) ? 0 : -1;
+}
+
+/* The Java method is restricted to the connection's atomic STOP admission. */
+static int jni_effect_admission(void *context, void *environment) {
+    struct jni_callback_target *target = context;
+    JNIEnv *env = environment;
+    if (env == NULL || (*env)->ExceptionCheck(env) || attached(target, environment) != 0
+        || target->object == NULL || target->effect_admission == NULL) {
+        errno = ECANCELED;
+        return -1;
+    }
+    jboolean admitted = (*env)->CallBooleanMethod(env, target->object, target->effect_admission);
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        errno = ECANCELED;
+        return -1;
+    }
+    if (admitted != JNI_TRUE) { errno = ECANCELED; return -1; }
     return 0;
 }
 
@@ -346,8 +497,8 @@ done:
     return callback_result;
 }
 
-static int jni_known_hosts_candidate(void *context, void *environment,
-    const struct ctos_ssh_known_hosts_candidate *candidate) {
+static int jni_known_hosts_candidate_method(void *context, void *environment,
+    const struct ctos_ssh_known_hosts_candidate *candidate, jmethodID method) {
     struct jni_callback_target *target = context;
     JNIEnv *env = environment;
     const struct ctos_ssh_host_evidence *evidence;
@@ -363,7 +514,7 @@ static int jni_known_hosts_candidate(void *context, void *environment,
         || candidate->replacement_body_length == 0
         || candidate->replacement_body_length > CTOS_SSH_CALLBACK_MAX_FILE_BYTES
         || candidate->candidate_id[0] == '\0'
-        || attached(target, environment) != 0
+        || attached(target, environment) != 0 || method == NULL
         || ascii_field(evidence->connection_id, CTOS_SSH_ROLE_CONNECTION_ID_BYTES) != 0
         || ascii_field(evidence->target_identity, CTOS_SSH_ROLE_TARGET_ID_BYTES) != 0
         || ascii_field(evidence->host, CTOS_SSH_ROLE_HOST_BYTES) != 0
@@ -393,7 +544,7 @@ static int jni_known_hosts_candidate(void *context, void *environment,
         (const jbyte *)candidate->replacement_body);
     if ((*env)->ExceptionCheck(env)) goto done;
     callback_result = (*env)->CallBooleanMethod(env, target->object,
-        target->known_hosts_candidate, (jlong)evidence->role, (jint)evidence->hop,
+        method, (jlong)evidence->role, (jint)evidence->hop,
         (jint)evidence->port, connection, target_identity, host,
         (jint)evidence->classification, key, fingerprint, base, replacement,
         candidate_id, body) ? 0 : EIO;
@@ -419,6 +570,24 @@ done:
     if (body != NULL) (*env)->DeleteLocalRef(env, body);
     return callback_result;
 }
+
+static int jni_known_hosts_candidate(void *context, void *environment,
+    const struct ctos_ssh_known_hosts_candidate *candidate) {
+    struct jni_callback_target *target = context;
+    return jni_known_hosts_candidate_method(context, environment, candidate,
+        target == NULL ? NULL : target->known_hosts_candidate);
+}
+
+#ifdef CTOS_SSH_NATIVE_TEST_HOOKS
+static int jni_provisional_new_candidate(void *context, void *environment,
+    const struct ctos_ssh_known_hosts_candidate *candidate) {
+    struct jni_callback_target *target = context;
+    if (candidate == NULL || candidate->evidence.classification != CTOS_SSH_CALLBACK_HOST_NEW)
+        return EINVAL;
+    return jni_known_hosts_candidate_method(context, environment, candidate,
+        target == NULL ? NULL : target->provisional_new_candidate);
+}
+#endif
 
 static int jni_changed_host_candidate(void *context, void *environment,
     const struct ctos_ssh_changed_host_candidate *changed) {
@@ -490,15 +659,15 @@ done:
     return result;
 }
 
-static int jni_changed_host_review(void *context, void *environment,
-    const struct ctos_ssh_host_evidence *evidence) {
+static int jni_host_review_method(void *context, void *environment,
+    const struct ctos_ssh_host_evidence *evidence, jmethodID method, int classification) {
     struct jni_callback_target *target = context;
     JNIEnv *env = environment;
     jstring connection = NULL, target_identity = NULL, host = NULL, key = NULL, fingerprint = NULL;
     jbyteArray base = NULL, replacement = NULL;
     int result = EIO;
-    if (evidence == NULL || attached(target, environment) != 0 || target->changed_host_review == NULL
-        || evidence->classification != CTOS_SSH_CALLBACK_HOST_CHANGED
+    if (evidence == NULL || attached(target, environment) != 0 || method == NULL
+        || evidence->classification != classification
         || ascii_field(evidence->connection_id, CTOS_SSH_ROLE_CONNECTION_ID_BYTES) != 0
         || ascii_field(evidence->target_identity, CTOS_SSH_ROLE_TARGET_ID_BYTES) != 0
         || ascii_field(evidence->host, CTOS_SSH_ROLE_HOST_BYTES) != 0
@@ -517,7 +686,7 @@ static int jni_changed_host_review(void *context, void *environment,
     (*env)->SetByteArrayRegion(env, base, 0, 32, (const jbyte *)evidence->base_digest);
     (*env)->SetByteArrayRegion(env, replacement, 0, 32, (const jbyte *)evidence->replacement_digest);
     if ((*env)->ExceptionCheck(env)) goto done;
-    result = (*env)->CallBooleanMethod(env, target->object, target->changed_host_review,
+    result = (*env)->CallBooleanMethod(env, target->object, method,
         (jlong)evidence->role, (jint)evidence->hop, (jint)evidence->port, connection,
         target_identity, host, (jint)evidence->classification, key, fingerprint, base, replacement) ? 0 : EIO;
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); result = EFAULT; }
@@ -533,6 +702,24 @@ done:
     return result;
 }
 
+static int jni_changed_host_review(void *context, void *environment,
+    const struct ctos_ssh_host_evidence *evidence) {
+    struct jni_callback_target *target = context;
+    return jni_host_review_method(context, environment, evidence,
+        target == NULL ? NULL : target->changed_host_review, CTOS_SSH_CALLBACK_HOST_CHANGED);
+}
+
+#ifdef CTOS_SSH_NATIVE_TEST_HOOKS
+static int jni_provisional_new_review(void *context, void *environment,
+    const struct ctos_ssh_host_evidence *evidence) {
+    struct jni_callback_target *target = context;
+    if (attached(target, environment) != 0
+        || run_before_provisional(environment, CTOS_SSH_PROVISIONAL_NEW_REVIEW) != 0) return EFAULT;
+    return jni_host_review_method(context, environment, evidence,
+        target == NULL ? NULL : target->provisional_new_review, CTOS_SSH_CALLBACK_HOST_NEW);
+}
+#endif
+
 static int jni_known_hosts_candidate_abort(void *context, void *environment) {
     struct jni_callback_target *target = context;
     JNIEnv *env = environment;
@@ -546,25 +733,47 @@ static int jni_known_hosts_candidate_abort(void *context, void *environment) {
     return 0;
 }
 
-static int jni_kex_complete(void *context, void *environment, uint64_t cycle,
-    const unsigned char session_digest[32]) {
+static int jni_kex_complete_method(void *context, void *environment, uint64_t cycle,
+    const unsigned char session_digest[32], jmethodID method, int wipe_array) {
     struct jni_callback_target *target = context;
     JNIEnv *env = environment;
     jbyteArray digest = NULL;
     int result = EIO;
-    if (attached(target, environment) != 0) return EPERM;
+    if (attached(target, environment) != 0 || method == NULL || session_digest == NULL) return EPERM;
     digest = (*env)->NewByteArray(env, 32);
     if (digest == NULL || (*env)->ExceptionCheck(env)) goto done;
     (*env)->SetByteArrayRegion(env, digest, 0, 32, (const jbyte *)session_digest);
     if ((*env)->ExceptionCheck(env)) goto done;
-    result = (*env)->CallBooleanMethod(env, target->object, target->kex_complete,
+    result = (*env)->CallBooleanMethod(env, target->object, method,
         (jlong)cycle, digest) ? 0 : EIO;
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); result = EFAULT; }
 done:
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); result = EFAULT; }
+    if (wipe_array && digest != NULL && zero_java_array(env, digest, 32) != 0) {
+        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+        result = EFAULT;
+    }
     if (digest != NULL) (*env)->DeleteLocalRef(env, digest);
     return result;
 }
+
+static int jni_kex_complete(void *context, void *environment, uint64_t cycle,
+    const unsigned char session_digest[32]) {
+    struct jni_callback_target *target = context;
+    return jni_kex_complete_method(context, environment, cycle, session_digest,
+        target == NULL ? NULL : target->kex_complete, 0);
+}
+
+#ifdef CTOS_SSH_NATIVE_TEST_HOOKS
+static int jni_provisional_new_kex(void *context, void *environment, uint64_t cycle,
+    const unsigned char session_digest[32]) {
+    struct jni_callback_target *target = context;
+    if (attached(target, environment) != 0
+        || run_before_provisional(environment, CTOS_SSH_PROVISIONAL_NEW_KEX) != 0) return EFAULT;
+    return jni_kex_complete_method(context, environment, cycle, session_digest,
+        target == NULL ? NULL : target->provisional_new_kex, 1);
+}
+#endif
 
 static int jni_credential(void *context, void *environment, int kind) {
     struct jni_callback_target *target = context;
@@ -594,6 +803,9 @@ static int jni_credential_bytes_common(void *context, void *environment, int kin
     if (length == NULL || output == NULL || capacity == 0) return EINVAL;
     if (capacity > CTOS_SSH_CALLBACK_MAX_CREDENTIAL_BYTES) return EOVERFLOW;
     if (attached(target, environment) != 0) return EPERM;
+#ifdef CTOS_SSH_NATIVE_TEST_HOOKS
+    if (selected) test_last_selected_array_wiped = -1;
+#endif
     if (selected) {
         if (target->credential_bytes_selected == NULL) return ENOSYS;
         if (selection_receipt == NULL || session_digest == NULL || cycle == 0
@@ -613,6 +825,21 @@ static int jni_credential_bytes_common(void *context, void *environment, int kin
         returned = (jbyteArray)(*env)->CallObjectMethod(env, target->object,
             target->credential_bytes, (jint)kind);
     }
+#ifdef CTOS_SSH_NATIVE_TEST_HOOKS
+    if (selected && test_exception_after_selected_return) {
+        test_exception_after_selected_return = 0;
+        if (!(*env)->ExceptionCheck(env)) {
+            jclass exception = (*env)->FindClass(env, "java/lang/IllegalStateException");
+            if (exception != NULL) {
+                (void)(*env)->ThrowNew(env, exception, "fixture exception");
+                (*env)->DeleteLocalRef(env, exception);
+            }
+        }
+    }
+#endif
+    /* No JNI operation is needed to release an abandoned frame-owned permit;
+     * do it before the adapter can enter an invalidator on this thread. */
+    int effect_cleanup = selected ? ctos_ssh_native_client_effect_java_callback_returned() : 0;
     if ((*env)->ExceptionCheck(env)) {
         (*env)->ExceptionClear(env);
         result = EFAULT;
@@ -628,6 +855,7 @@ static int jni_credential_bytes_common(void *context, void *environment, int kin
         result = EFAULT;
         goto done;
     }
+    if (effect_cleanup != 0) { result = ECANCELED; goto done; }
     if (returned_length <= 0) {
         result = EINVAL;
         goto done;
@@ -637,8 +865,20 @@ static int jni_credential_bytes_common(void *context, void *environment, int kin
         result = EOVERFLOW;
         goto done;
     }
-    (*env)->GetByteArrayRegion(env, returned, 0, returned_length,
-        (jbyte *)output);
+#ifdef CTOS_SSH_NATIVE_TEST_HOOKS
+    if (selected && test_before_selected_jni_copy != NULL) {
+        void (*hook)(void *) = test_before_selected_jni_copy;
+        void *hook_context = test_before_selected_jni_copy_context;
+        test_before_selected_jni_copy = NULL;
+        test_before_selected_jni_copy_context = NULL;
+        hook(hook_context);
+    }
+#endif
+    int effect = selected ? ctos_ssh_native_client_effect_jni_copy_begin(env,
+        target->object, same_receiver) : 1;
+    if (effect < 0) { result = ECANCELED; goto done; }
+    (*env)->GetByteArrayRegion(env, returned, 0, returned_length, (jbyte *)output);
+    if (effect == 0) ctos_ssh_native_client_effect_jni_copy_end();
     if ((*env)->ExceptionCheck(env)) {
         (*env)->ExceptionClear(env);
         result = EFAULT;
@@ -648,6 +888,16 @@ static int jni_credential_bytes_common(void *context, void *environment, int kin
     result = 0;
 done:
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); result = EFAULT; }
+    /* A rejected or exceptional callback may still have returned an array.
+     * Determine its size before cleanup even when the main path stopped early. */
+    if (returned != NULL && returned_length == 0) {
+        returned_length = (*env)->GetArrayLength(env, returned);
+        if ((*env)->ExceptionCheck(env)) {
+            (*env)->ExceptionClear(env);
+            returned_length = -1;
+            result = EFAULT;
+        }
+    }
     if (receipt != NULL && zero_java_array(env, receipt, 32) != 0) {
         if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
         result = EFAULT;
@@ -658,10 +908,31 @@ done:
     }
     /* Zero the managed array before releasing the local reference, including
      * the too-large and provider-failure paths.  No payload is logged. */
-    if (returned != NULL && returned_length >= 0
-        && zero_java_array(env, returned, returned_length) != 0) {
-        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
-        result = EFAULT;
+    if (returned != NULL && returned_length >= 0) {
+        if (zero_java_array(env, returned, returned_length) != 0) {
+            if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+            result = EFAULT;
+        }
+#ifdef CTOS_SSH_NATIVE_TEST_HOOKS
+        else if (selected) {
+            jbyte probe[256];
+            test_last_selected_array_wiped = 1;
+            for (jsize offset = 0; offset < returned_length; offset += (jsize)sizeof(probe)) {
+                jsize count = returned_length - offset;
+                if (count > (jsize)sizeof(probe)) count = (jsize)sizeof(probe);
+                (*env)->GetByteArrayRegion(env, returned, offset, count, probe);
+                if ((*env)->ExceptionCheck(env)) {
+                    (*env)->ExceptionClear(env);
+                    test_last_selected_array_wiped = 0;
+                    result = EFAULT;
+                    break;
+                }
+                for (jsize index = 0; index < count; index++)
+                    if (probe[index] != 0) test_last_selected_array_wiped = 0;
+                wipe_bytes(probe, sizeof(probe));
+            }
+        }
+#endif
     }
     if (result != 0) {
         wipe_bytes(output, capacity);
@@ -716,6 +987,10 @@ JNIEXPORT jlong JNICALL Java_im_majo_ctos_SshNativeCallbackAdapter_00024Native_o
     jclass callback_class = NULL;
     ctos_ssh_callback_token callback = 0;
     struct ctos_ssh_callback_target target;
+#ifdef CTOS_SSH_NATIVE_TEST_HOOKS
+    int provisional_fixture = test_provisional_next;
+    test_provisional_next = 0;
+#endif
     memset(&target, 0, sizeof(target));
     if (env == NULL || callback_target == NULL || role <= 0 || owner_uid < 0
         || deadline <= 0 || (*env)->GetJavaVM(env, &vm) != JNI_OK || vm == NULL) goto failed;
@@ -751,6 +1026,20 @@ JNIEXPORT jlong JNICALL Java_im_majo_ctos_SshNativeCallbackAdapter_00024Native_o
         "onNativeChangedHostReview",
         "(JIILjava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/String;Ljava/lang/String;[B[B)Z");
     if (context->changed_host_review == NULL || (*env)->ExceptionCheck(env)) goto failed;
+#ifdef CTOS_SSH_NATIVE_TEST_HOOKS
+    if (provisional_fixture) {
+        context->provisional_new_candidate = (*env)->GetMethodID(env, callback_class,
+            "onNativeProvisionalNewCandidateForFixture",
+            "(JIILjava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/String;Ljava/lang/String;[B[BLjava/lang/String;[B)Z");
+        context->provisional_new_review = (*env)->GetMethodID(env, callback_class,
+            "onNativeProvisionalNewReviewForFixture",
+            "(JIILjava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/String;Ljava/lang/String;[B[B)Z");
+        context->provisional_new_kex = (*env)->GetMethodID(env, callback_class,
+            "onNativeProvisionalNewKexForFixture", "(J[B)Z");
+        if (context->provisional_new_candidate == NULL || context->provisional_new_review == NULL
+            || context->provisional_new_kex == NULL || (*env)->ExceptionCheck(env)) goto failed;
+    }
+#endif
     context->credential_bytes = (*env)->GetMethodID(env, callback_class,
         "onNativeCredentialBytes", "(I)[B");
     if ((*env)->ExceptionCheck(env)) {
@@ -765,6 +1054,17 @@ JNIEXPORT jlong JNICALL Java_im_majo_ctos_SshNativeCallbackAdapter_00024Native_o
         (*env)->ExceptionClear(env);
         context->credential_bytes_selected = NULL;
     }
+    context->effect_admission = (*env)->GetMethodID(env, callback_class,
+        "onNativeEffectAdmission", "()Z");
+#ifdef CTOS_SSH_NATIVE_TEST_HOOKS
+    /* Older fixture receivers are not product callback adapters. */
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        context->effect_admission = NULL;
+    }
+#else
+    if (context->effect_admission == NULL || (*env)->ExceptionCheck(env)) goto failed;
+#endif
     target.context = context;
     target.validate_environment = attached;
     target.host_key = jni_host_key;
@@ -779,6 +1079,15 @@ JNIEXPORT jlong JNICALL Java_im_majo_ctos_SshNativeCallbackAdapter_00024Native_o
     target.credential_bytes_selected = jni_credential_bytes_selected;
     target.changed_host_candidate = jni_changed_host_candidate;
     target.changed_host_review = jni_changed_host_review;
+    target.validate_receiver = same_receiver;
+    if (context->effect_admission != NULL) target.admit_effect = jni_effect_admission;
+#ifdef CTOS_SSH_NATIVE_TEST_HOOKS
+    if (provisional_fixture) {
+        target.provisional_new_candidate = jni_provisional_new_candidate;
+        target.provisional_new_review = jni_provisional_new_review;
+        target.provisional_new_kex = jni_provisional_new_kex;
+    }
+#endif
     if (ctos_ssh_callback_open(&target, (ctos_ssh_role_token)role, owner_uid,
             (uint64_t)deadline, env, &callback) != 0 || callback == 0) goto failed;
     if (callback_class != NULL) (*env)->DeleteLocalRef(env, callback_class);
@@ -789,6 +1098,150 @@ failed:
     jni_target_release_on_open_failure(context, env);
     fail(env);
     return 0;
+}
+
+JNIEXPORT jboolean JNICALL Java_im_majo_ctos_SshNativeCallbackAdapter_nativeCallbackAncestorProofsLive(
+    JNIEnv *env, jobject receiver, jlong callback) {
+    if (env == NULL || receiver == NULL || callback <= 0) return JNI_FALSE;
+    return ctos_ssh_native_client_callback_ancestor_proofs_check_receiver(
+        (ctos_ssh_callback_token)callback, env, receiver, same_receiver) == 0 ? JNI_TRUE : JNI_FALSE;
+}
+
+#ifdef CTOS_SSH_NATIVE_TEST_HOOKS
+JNIEXPORT jboolean JNICALL Java_im_majo_ctos_SshNativeCallbackAdapter_nativeProvisionalNewFixtureScope(
+    JNIEnv *env, jobject receiver, jlong callback, jint stage) {
+    jobject checked_receiver = receiver;
+    int result;
+    if (env == NULL || receiver == NULL || callback <= 0
+        || stage < CTOS_SSH_PROVISIONAL_NEW_CANDIDATE || stage > CTOS_SSH_PROVISIONAL_NEW_KEX
+        || ctos_ssh_native_client_provisional_scope_check == NULL) return JNI_FALSE;
+    if (test_provisional_wrong_receiver != NULL) checked_receiver = test_provisional_wrong_receiver;
+    result = ctos_ssh_native_client_provisional_scope_check((ctos_ssh_callback_token)callback,
+            env, (enum ctos_ssh_provisional_new_stage)stage) != 0
+        || ctos_ssh_native_client_callback_ancestor_proofs_check_receiver(
+            (ctos_ssh_callback_token)callback, env, checked_receiver, same_receiver) != 0
+        || ctos_ssh_native_client_provisional_scope_check((ctos_ssh_callback_token)callback,
+            env, (enum ctos_ssh_provisional_new_stage)stage) != 0;
+    ctos_ssh_callback_jni_test_clear_provisional_receiver(env);
+    return result ? JNI_FALSE : JNI_TRUE;
+}
+#endif
+
+JNIEXPORT jboolean JNICALL Java_im_majo_ctos_SshNativeCallbackAdapter_00024Native_effectAvailable(
+    JNIEnv *env, jclass cls) {
+    uint32_t generation;
+    (void)env;
+    (void)cls;
+    return ctos_ssh_effect_snapshot(&generation) == 0 ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jlong JNICALL Java_im_majo_ctos_SshNativeCallbackAdapter_00024Native_effectSnapshot(
+    JNIEnv *env, jclass cls) {
+    uint32_t generation;
+    (void)env;
+    (void)cls;
+    return ctos_ssh_effect_snapshot(&generation) == 0 ? (jlong)generation : 0;
+}
+
+JNIEXPORT jboolean JNICALL Java_im_majo_ctos_SshNativeCallbackAdapter_nativeSelectedEffectCopyBegin(
+    JNIEnv *env, jobject receiver) {
+    return ctos_ssh_native_client_effect_java_copy_begin(env, receiver, same_receiver) == 0
+        ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT void JNICALL Java_im_majo_ctos_SshNativeCallbackAdapter_nativeSelectedEffectCopyEnd(
+    JNIEnv *env, jobject receiver) {
+    ctos_ssh_native_client_effect_java_copy_end(env, receiver, same_receiver);
+}
+
+JNIEXPORT void JNICALL Java_im_majo_ctos_SshNativeCallbackAdapter_00024Native_effectInvalidateBegin(
+    JNIEnv *env, jclass cls) {
+    (void)cls;
+#ifdef CTOS_SSH_NATIVE_TEST_HOOKS
+    if (test_fail_effect_invalidation || test_fail_legacy_effect_invalidation) {
+        test_fail_effect_invalidation = 0;
+        test_fail_legacy_effect_invalidation = 0;
+        jclass error = (*env)->FindClass(env, "java/lang/UnsatisfiedLinkError");
+        if (error != NULL) {
+            (*env)->ThrowNew(env, error, "test effect invalidation failure");
+            (*env)->DeleteLocalRef(env, error);
+        }
+        return;
+    }
+#else
+    (void)env;
+#endif
+    ctos_ssh_effect_invalidate_begin();
+}
+
+/* -1 explicitly means no invalidation was started; 1 means it completed.
+ * An exception gives no such guarantee and cleanup ownership must be kept. */
+JNIEXPORT jint JNICALL Java_im_majo_ctos_SshNativeCallbackAdapter_00024Native_effectInvalidateBeginCleanup(
+    JNIEnv *env, jclass cls) {
+    (void)cls;
+#ifdef CTOS_SSH_NATIVE_TEST_HOOKS
+    if (test_fail_effect_invalidation) {
+        test_fail_effect_invalidation = 0;
+        return -1;
+    }
+    if (test_fail_cleanup_begin_countdown != 0 && --test_fail_cleanup_begin_countdown == 0)
+        return -1;
+    int fail_when = test_fail_cleanup_begin_unknown;
+    test_fail_cleanup_begin_unknown = 0;
+    if (fail_when == 1) {
+        jclass error = (*env)->FindClass(env, "java/lang/UnsatisfiedLinkError");
+        if (error != NULL) {
+            (*env)->ThrowNew(env, error, "test cleanup begin failure before native begin");
+            (*env)->DeleteLocalRef(env, error);
+        }
+        return 0;
+    }
+#else
+    (void)env;
+#endif
+    ctos_ssh_effect_invalidate_begin();
+#ifdef CTOS_SSH_NATIVE_TEST_HOOKS
+    if (fail_when == 2) {
+        jclass error = (*env)->FindClass(env, "java/lang/UnsatisfiedLinkError");
+        if (error != NULL) {
+            (*env)->ThrowNew(env, error, "test cleanup begin failure after native begin");
+            (*env)->DeleteLocalRef(env, error);
+        }
+    }
+#endif
+    return 1;
+}
+
+JNIEXPORT void JNICALL Java_im_majo_ctos_SshNativeCallbackAdapter_00024Native_effectInvalidateEnd(
+    JNIEnv *env, jclass cls) {
+    (void)cls;
+#ifdef CTOS_SSH_NATIVE_TEST_HOOKS
+    int fail_when = 0;
+    if (test_fail_effect_end_countdown != 0 && --test_fail_effect_end_countdown == 0) {
+        fail_when = test_fail_effect_end;
+        test_fail_effect_end = 0;
+    }
+    if (fail_when == 1) {
+        jclass error = (*env)->FindClass(env, "java/lang/UnsatisfiedLinkError");
+        if (error != NULL) {
+            (*env)->ThrowNew(env, error, "test effect end failure before native end");
+            (*env)->DeleteLocalRef(env, error);
+        }
+        return;
+    }
+#else
+    (void)env;
+#endif
+    ctos_ssh_effect_invalidate_end();
+#ifdef CTOS_SSH_NATIVE_TEST_HOOKS
+    if (fail_when == 2) {
+        jclass error = (*env)->FindClass(env, "java/lang/UnsatisfiedLinkError");
+        if (error != NULL) {
+            (*env)->ThrowNew(env, error, "test effect end failure after native end");
+            (*env)->DeleteLocalRef(env, error);
+        }
+    }
+#endif
 }
 
 JNIEXPORT void JNICALL Java_im_majo_ctos_SshNativeCallbackAdapter_00024Native_cancel(

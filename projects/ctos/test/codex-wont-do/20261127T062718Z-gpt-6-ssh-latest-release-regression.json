@@ -1,0 +1,161 @@
+{
+  "schema_version": "1.0.0",
+  "kind": "test_task",
+  "worker_instructions": "执行方先阅读 test/codex-wont-do/template.json、AGENTS.md 和本任务所列资源；按模板领取并完成符合前置条件的测试，将实际结果和证据追加到本文件的 execution.attempts，交独立 Codex 审核。阻塞或失败时如实报告。",
+  "task_id": "20261127T062718Z-gpt-6-ssh-latest-release-regression",
+  "state": "queued",
+  "created_at_utc": "2026-11-27T06:39:36Z",
+  "creator": {
+    "agent": "codex",
+    "model": "gpt-6",
+    "model_precision": "family_only",
+    "start_timestamp_utc": "2026-11-27T06:27:18Z"
+  },
+  "request": {
+    "title": "最新 SSH 改动的完整 JVM 回归与 release 产物",
+    "goal": "以前一轮终端撤销修改后的工作树重新覆盖完整 Android JVM 测试并构建当前 release，补足旧全量与 APK 不覆盖最新源码的缺口。",
+    "baseline": {
+      "git_head": "d281fb5b6b770d137d44bf8d921e3743e7451691",
+      "dirty_worktree": true,
+      "pinned_files": [
+        {
+          "path": "android/app/src/main/java/im/majo/ctos/SshNativeSession.java",
+          "sha256": "c89a53acec83cd5a975163b6afc4f6e8090fbf627292adca3acc62142624adc7"
+        },
+        {
+          "path": "android/app/src/main/java/im/majo/ctos/SshTerminalSession.java",
+          "sha256": "a7b0e6003423f2dac627f6119ff1fd6a2c319bc2508e1adbac67a4ba5a1e4ffe"
+        },
+        {
+          "path": "android/app/src/main/java/im/majo/ctos/SshSessionOwner.java",
+          "sha256": "fffd8ebd782efa5a607a3300dd033ad0d9d2897e713cedf54d65c0a1b70918a9"
+        },
+        {
+          "path": "android/app/build.gradle",
+          "sha256": "41a2db98eff058b871f39b7a1d0b70dcecffab35526fefd47c7fa54b20280a6f"
+        }
+      ],
+      "capture_policy": "HEAD 和 dirty_worktree 是任务创建时状态，原样提交后可能变化；执行时核对固定文件并记录实际 HEAD、dirty 状态和运行前后全部相关源码、测试及构建输入的 SHA-256 清单。固定输入不符先交由 Codex 更新任务，不得自行改验收。"
+    },
+    "resources": {
+      "read": [
+        {
+          "path": "design/agent-test-handoff.md",
+          "why": "协作流程"
+        },
+        {
+          "path": "design/handoff-ssh-terminal-client.md",
+          "why": "SSH 当前状态、旧证据与限制"
+        },
+        {
+          "path": "design/verification.md",
+          "why": "核对实际历史验证，避免重复或夸大"
+        },
+        {
+          "path": "hako",
+          "why": "项目容器入口"
+        },
+        {
+          "path": "android/gradle/wrapper/gradle-wrapper.properties",
+          "why": "Gradle 版本"
+        },
+        {
+          "path": "android/app/src/main/java/im/majo/ctos/SshNativeSession.java",
+          "why": "最新 native session 变更"
+        },
+        {
+          "path": "android/app/src/main/java/im/majo/ctos/SshTerminalSession.java",
+          "why": "最新 terminal 变更"
+        },
+        {
+          "path": "android/app/src/main/java/im/majo/ctos/SshSessionOwner.java",
+          "why": "owner 调用和预算"
+        },
+        {
+          "path": "android/app/src/test/java/im/majo/ctos/SshTerminalSessionTest.java",
+          "why": "现有相关测试"
+        }
+      ],
+      "environment": [
+        "只使用本机、隔离或回环上的合成测试资源；不访问真实账号、凭据或生产服务。",
+        "测试环境与权限不足时如实阻塞，不安装依赖或扩大网络/设备权限。",
+        "使用已有 hako 和 Gradle 缓存，离线运行；不得联网下载。",
+        "需有足够资源构建 Android release；不连接设备。"
+      ],
+      "allowed_writes": [
+        "build/codex-wont-do/<task_id>/<attempt_id>/ 下的专属报告、输入清单与无秘密日志",
+        "本任务明确列出的构建或测试专用产物；不得清理不属于本次尝试的文件",
+        "现有 Gradle 构建目录 build/ 与容器临时构建缓存；不修改受测源码"
+      ],
+      "exclusive_locks": [
+        "android-release-build",
+        "ssh-test-inputs"
+      ],
+      "secrets_policy": "仅使用合成测试数据；禁止记录真实凭据、私钥、令牌和用户数据。"
+    },
+    "dependencies": [],
+    "preconditions": [
+      "固定输入一致，且完整测试所需的现有离线环境和缓存可用。",
+      "完整旧结果为更早源码；最新定向测试和 lint 已执行，不为凑数量重复运行这些独立检查。"
+    ],
+    "cases": [
+      {
+        "id": "full-jvm",
+        "exercise": "对当前输入重新执行 :app:testReleaseUnitTest，保存全部 XML、测试日志和执行时间。",
+        "pass": "实际完整执行，测试无失败、无错误；报告每个 suite 的数量和跳过。若有无法解释或涉及本次改动的跳过，结果不得标 pass。"
+      },
+      {
+        "id": "release-apk",
+        "exercise": "同一源码快照构建 :app:assembleRelease，保存 APK、构建日志、release classes 清单及哈希。",
+        "pass": "构建成功，产物和 classes 的来源与本次源码对应；可用时记录 APK 签名校验，无法核验签名时如实列为限制。"
+      }
+    ],
+    "commands": [
+      {
+        "cwd": ".",
+        "argv": [
+          "./hako",
+          "bash",
+          "-lc",
+          "cd android && ./gradlew :app:testReleaseUnitTest --rerun :app:assembleRelease --offline --console=plain"
+        ],
+        "purpose": "强制重新执行完整 JVM 测试并生成对应 release；若构建工具不接受命令，记录退出码并阻塞，不通过删除测试或改变断言规避。"
+      }
+    ],
+    "acceptance": [
+      "full-jvm 与 release-apk 均达到各自通过标准，测试前后相关源码和测试输入未漂移。",
+      "实际案例全部有可核对证据；记录失败、错误、跳过和未覆盖部分，缺少必需案例不得标 pass。"
+    ],
+    "stop_conditions": [
+      "环境需下载、无法证明缓存产物来源，或源码在执行时发生未解释变化。",
+      "固定源码不匹配、未经授权的设备/网络/账号、缺少资源或需要修改产品行为时停止并记录原因；不更改验收标准。"
+    ],
+    "codex_review": [
+      "检查 XML 证明全量测试确实执行而非复用旧报告，APK 与 classes 哈希可追溯到同一未提交源码快照。",
+      "对照 template.json 核验独立执行者、当前授权、明确的测试范围和实际 outcome。",
+      "核对执行前后 dirty 状态、相关输入和产物哈希、命令退出码、全部案例、跳过项与可读取证据；不能用 HEAD 代替未提交内容。",
+      "检查允许的测试夹具改动及 diff，区分报告有效与产品测试通过；源码漂移或证据不足时要求补充，且不能更新为当前通过。"
+    ]
+  },
+  "blockers": [],
+  "execution": {
+    "claim": null,
+    "attempts": []
+  },
+  "review": {
+    "status": "pending",
+    "reviewer": null,
+    "reviewed_at_utc": null,
+    "findings": [],
+    "decision_scope": null,
+    "decisions": []
+  },
+  "history": [
+    {
+      "at_utc": "2026-11-27T06:39:36Z",
+      "actor": "codex",
+      "event": "created",
+      "detail": "建立待其他 agent/session 执行的测试请求；未执行测试。"
+    }
+  ]
+}

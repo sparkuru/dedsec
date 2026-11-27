@@ -7,10 +7,20 @@
 #include <pthread.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 
 static unsigned int cases;
+
+#ifdef CTOS_SSH_CALLBACK_TEST_WRAP_UID
+static _Thread_local int spoof_uid;
+uid_t __real_getuid(void);
+uid_t __wrap_getuid(void) {
+    uid_t uid = __real_getuid();
+    return spoof_uid ? uid ^ 1U : uid;
+}
+#endif
 
 static uint64_t deadline_after(unsigned int milliseconds) {
     struct timespec time;
@@ -22,11 +32,15 @@ static uint64_t deadline_after(unsigned int milliseconds) {
 struct fixture {
     ctos_ssh_callback_token callback;
     void *environment;
+    unsigned int expected_hop;
     unsigned int host_calls;
     unsigned int host_evidence_calls;
     unsigned int candidate_calls;
     unsigned int candidate_abort_calls;
     int enable_changed;
+    int enable_provisional;
+    unsigned int provisional_candidate_calls, provisional_review_calls, provisional_kex_calls;
+    int provisional_scope_stage;
     int cancel_changed_candidate;
     int cancel_changed_kex;
     int changed_abort_failures;
@@ -51,11 +65,76 @@ struct fixture {
     int candidate_reenter;
     int candidate_reentry_rejected;
     unsigned int host_delay_millis;
+    int scope_action;
+    const void *scope_owner;
+    ctos_ssh_role_token scope_role;
+    struct fixture *scope_nested;
+    unsigned int scope_checks;
+    int scope_receiver_enabled;
 };
+
+static int scope_checker(const void *owner, ctos_ssh_callback_token callback,
+    ctos_ssh_role_token role, void *environment) {
+    struct fixture *fixture = (struct fixture *)owner;
+    assert(fixture != NULL && owner == fixture->scope_owner && callback == fixture->callback
+        && role == fixture->scope_role && environment == fixture->environment);
+    fixture->scope_checks++;
+    if (fixture->scope_action == 1) {
+        errno = 0;
+        assert(ctos_ssh_callback_client_scope_check(callback, environment,
+            scope_checker) != 0 && errno == EALREADY);
+    }
+    if (fixture->scope_action == 4)
+        assert(ctos_ssh_callback_cancel(callback) == 0);
+    return 0;
+}
+
+static int unexpected_scope_calls;
+static int unexpected_scope_checker(const void *owner, ctos_ssh_callback_token callback,
+    ctos_ssh_role_token role, void *environment) {
+    (void)owner; (void)callback; (void)role; (void)environment;
+    unexpected_scope_calls++;
+    return 0;
+}
+
+/* This standalone adapter test supplies a controlled checker; the real
+ * native-child test separately exercises the production dispatch verifier. */
+__attribute__((visibility("hidden")))
+int ctos_ssh_native_client_provisional_scope_check(ctos_ssh_callback_token callback,
+    void *environment, enum ctos_ssh_provisional_new_stage stage) {
+    struct fixture *fixture = environment;
+    if (fixture == NULL || fixture->environment != environment || fixture->callback != callback
+        || fixture->provisional_scope_stage != (int)stage) { errno = EACCES; return -1; }
+    return ctos_ssh_callback_client_scope_check(callback, environment, scope_checker);
+}
+
+struct scope_thread_attempt {
+    struct fixture *fixture;
+    int result, error;
+};
+
+static void *scope_wrong_thread(void *context) {
+    struct scope_thread_attempt *attempt = context;
+    attempt->result = ctos_ssh_callback_client_scope_check(attempt->fixture->callback,
+        attempt->fixture->environment, scope_checker);
+    attempt->error = errno;
+    return NULL;
+}
 
 static int validate_environment(void *context, void *environment) {
     struct fixture *fixture = context;
     return fixture != NULL && environment == fixture->environment ? 0 : -1;
+}
+
+static int validate_receiver(void *context, void *environment, const void *receiver) {
+    return validate_environment(context, environment) == 0 && receiver == context ? 0 : -1;
+}
+
+static int unexpected_receiver_calls;
+static int unexpected_receiver(void *context, void *environment, const void *receiver) {
+    (void)context; (void)environment; (void)receiver;
+    unexpected_receiver_calls++;
+    return 0;
 }
 
 static int host_key(void *context, void *environment, int classification,
@@ -68,6 +147,83 @@ static int host_key(void *context, void *environment, int classification,
     assert(strcmp(fingerprint, "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA") == 0);
     assert(base_digest != NULL && replacement_digest != NULL);
     fixture->host_calls++;
+    if (fixture->scope_action == 1) {
+        int wrong_environment = 0;
+        pthread_t thread;
+        struct scope_thread_attempt attempt = {.fixture = fixture};
+        assert(ctos_ssh_callback_client_scope_check(fixture->callback, &wrong_environment,
+            scope_checker) != 0 && errno == EPERM);
+        assert(ctos_ssh_callback_client_scope_check(UINT64_MAX, environment,
+            scope_checker) != 0 && errno == ENOENT);
+        assert(ctos_ssh_callback_client_scope_check(fixture->callback, environment,
+            unexpected_scope_checker) != 0 && errno == EACCES);
+        assert(unexpected_scope_calls == 0);
+        assert(pthread_create(&thread, NULL, scope_wrong_thread, &attempt) == 0);
+        assert(pthread_join(thread, NULL) == 0);
+        assert(attempt.result != 0 && attempt.error == EPERM);
+        pid_t child = fork();
+        assert(child >= 0);
+        if (child == 0) {
+            int result = ctos_ssh_callback_client_scope_check(fixture->callback,
+                environment, scope_checker);
+            _exit(result != 0 && errno == ECANCELED ? 0 : 1);
+        }
+        int status;
+        assert(waitpid(child, &status, 0) == child && WIFEXITED(status) && WEXITSTATUS(status) == 0);
+#ifdef CTOS_SSH_CALLBACK_TEST_WRAP_UID
+        spoof_uid = 1;
+        assert(ctos_ssh_callback_client_scope_check(fixture->callback, environment,
+            scope_checker) != 0 && errno == ECANCELED);
+        spoof_uid = 0;
+#endif
+        assert(ctos_ssh_callback_client_close(fixture->callback, environment,
+            fixture->scope_owner) != 0 && errno == EBUSY);
+        assert(ctos_ssh_callback_client_scope_check(fixture->callback, environment,
+            scope_checker) == 0);
+        assert(ctos_ssh_callback_client_scope_check_receiver(fixture->callback, environment,
+            fixture, validate_receiver, scope_checker) == 0);
+        assert(ctos_ssh_callback_client_scope_check_receiver(fixture->callback, environment,
+            &wrong_environment, validate_receiver, scope_checker) != 0 && errno == EACCES);
+        assert(ctos_ssh_callback_client_scope_check_receiver(fixture->callback, environment,
+            fixture, unexpected_receiver, scope_checker) != 0 && errno == EACCES);
+        assert(unexpected_receiver_calls == 0);
+        assert(ctos_ssh_callback_client_scope_check_receiver(fixture->callback, environment,
+            fixture, NULL, scope_checker) != 0 && errno == EINVAL);
+        assert(ctos_ssh_callback_client_scope_check_receiver(fixture->callback, environment,
+            NULL, validate_receiver, scope_checker) != 0 && errno == EINVAL);
+        if (fixture->scope_nested != NULL) {
+            struct fixture *nested = fixture->scope_nested;
+            assert(ctos_ssh_callback_client_scope_check(nested->callback, nested->environment,
+                scope_checker) != 0 && errno == EACCES);
+            assert(ctos_ssh_callback_host_key(nested->callback, nested->environment,
+                classification, key_type, fingerprint, base_digest, replacement_digest) == 0);
+            assert(ctos_ssh_callback_client_scope_check(fixture->callback, environment,
+                scope_checker) == 0);
+        }
+    } else if (fixture->scope_action == 2) {
+        assert(fixture->scope_nested != NULL);
+        assert(ctos_ssh_callback_client_scope_check(fixture->callback, environment,
+            scope_checker) != 0 && errno == EALREADY);
+        assert(ctos_ssh_callback_client_scope_check(fixture->scope_nested->callback,
+            fixture->scope_nested->environment, scope_checker) != 0
+            && errno == EACCES);
+    } else if (fixture->scope_action == 3) {
+        assert(ctos_ssh_callback_client_scope_check(fixture->callback, environment,
+            scope_checker) != 0 && errno == EACCES);
+    } else if (fixture->scope_action == 4) {
+        assert(ctos_ssh_callback_client_scope_check(fixture->callback, environment,
+            scope_checker) != 0 && errno == ECANCELED);
+    } else if (fixture->scope_action == 5) {
+        struct timespec delay = {.tv_sec = 0, .tv_nsec = 150000000L};
+        assert(nanosleep(&delay, NULL) == 0);
+        assert(ctos_ssh_callback_client_scope_check(fixture->callback, environment,
+            scope_checker) != 0 && errno == ETIMEDOUT);
+    } else if (fixture->scope_action == 6) {
+        assert(ctos_ssh_callback_client_scope_check_receiver(fixture->callback, environment,
+            fixture, validate_receiver, scope_checker) != 0 && errno == EACCES);
+        assert(ctos_ssh_callback_client_scope_check(fixture->callback, environment,
+            scope_checker) == 0);
+    }
     if (fixture->reenter_live) {
         fixture->reenter_live = 0;
         errno = 0;
@@ -101,7 +257,7 @@ static int host_evidence(void *context, void *environment,
     struct fixture *fixture = context;
     assert(fixture != NULL && environment == fixture->environment);
     assert(evidence != NULL && result != NULL);
-    assert(evidence->role > 0 && evidence->hop == 0 && evidence->port == 22);
+    assert(evidence->role > 0 && evidence->hop == fixture->expected_hop && evidence->port == 22);
     assert(strcmp(evidence->connection_id, "callback-test") == 0);
     assert(strcmp(evidence->target_identity, "target:user@example.invalid:22") == 0);
     assert(strcmp(evidence->host, "example.invalid") == 0);
@@ -217,6 +373,34 @@ static int changed_host_review(void *context, void *environment,
     return 0;
 }
 
+static int provisional_new_candidate(void *context, void *environment,
+    const struct ctos_ssh_known_hosts_candidate *candidate) {
+    struct fixture *fixture = context;
+    assert(fixture != NULL && environment == fixture->environment && candidate != NULL
+        && candidate->evidence.classification == CTOS_SSH_CALLBACK_HOST_NEW
+        && candidate->evidence.hop == 1U && candidate->replacement_body_length > 0U);
+    fixture->provisional_candidate_calls++;
+    return 0;
+}
+
+static int provisional_new_review(void *context, void *environment,
+    const struct ctos_ssh_host_evidence *evidence) {
+    struct fixture *fixture = context;
+    assert(fixture != NULL && environment == fixture->environment && evidence != NULL
+        && evidence->classification == CTOS_SSH_CALLBACK_HOST_NEW);
+    fixture->provisional_review_calls++;
+    return 0;
+}
+
+static int provisional_new_kex(void *context, void *environment, uint64_t cycle,
+    const unsigned char session_digest[32]) {
+    struct fixture *fixture = context;
+    assert(fixture != NULL && environment == fixture->environment && cycle == 17U
+        && session_digest != NULL && session_digest[0] == 7U);
+    fixture->provisional_kex_calls++;
+    return 0;
+}
+
 static int credential(void *context, void *environment, int kind) {
     struct fixture *fixture = context;
     assert(fixture != NULL && environment == fixture->environment);
@@ -295,6 +479,7 @@ static struct ctos_ssh_callback_target target(struct fixture *fixture) {
     return (struct ctos_ssh_callback_target){
         .context = fixture,
         .validate_environment = validate_environment,
+        .validate_receiver = fixture->scope_receiver_enabled ? validate_receiver : NULL,
         .host_key = host_key,
         .host_evidence = host_evidence,
         .known_hosts_candidate = known_hosts_candidate,
@@ -305,19 +490,22 @@ static struct ctos_ssh_callback_target target(struct fixture *fixture) {
         .credential_bytes = credential_bytes,
         .credential_bytes_selected = fixture->omit_selected ? NULL : credential_bytes_selected,
         .changed_host_candidate = fixture->enable_changed ? changed_host_candidate : NULL,
-        .changed_host_review = fixture->enable_changed ? changed_host_review : NULL
+        .changed_host_review = fixture->enable_changed ? changed_host_review : NULL,
+        .provisional_new_candidate = fixture->enable_provisional ? provisional_new_candidate : NULL,
+        .provisional_new_review = fixture->enable_provisional ? provisional_new_review : NULL,
+        .provisional_new_kex = fixture->enable_provisional ? provisional_new_kex : NULL
     };
 }
 
-static ctos_ssh_role_token role_open(uint64_t deadline) {
+static ctos_ssh_role_token role_open_hop(uint64_t deadline, unsigned int hop) {
     unsigned char nonce[32], connection[32];
-    memset(nonce, 1, sizeof(nonce));
+    memset(nonce, (int)hop + 1, sizeof(nonce));
     memset(connection, 2, sizeof(connection));
     struct ctos_ssh_role_request request = {
         .program = CTOS_SSH_ROLE_CLIENT,
         .owner_pid = getpid(),
         .owner_uid = getuid(),
-        .hop = 0,
+        .hop = hop,
         .port = 22,
         .deadline = deadline,
         .connection_id = "callback-test",
@@ -331,6 +519,7 @@ static ctos_ssh_role_token role_open(uint64_t deadline) {
     assert(ctos_ssh_role_bootstrap_open(&request, &role) == 0 && role != 0);
     return role;
 }
+static ctos_ssh_role_token role_open(uint64_t deadline) { return role_open_hop(deadline, 0); }
 
 static ctos_ssh_callback_token binding(struct fixture *fixture,
     ctos_ssh_role_token role, uint64_t deadline) {
@@ -1072,7 +1261,254 @@ static void test_changed_candidate_contract(void) {
     }
 }
 
+static void test_nine_role_callback_capacity(void) {
+    struct fixture fixtures[CTOS_SSH_ROLE_MAX] = {0};
+    ctos_ssh_role_token roles[CTOS_SSH_ROLE_MAX] = {0};
+    ctos_ssh_callback_token callbacks[CTOS_SSH_ROLE_MAX] = {0};
+    uint64_t deadline = deadline_after(30000);
+    assert(CTOS_SSH_ROLE_MAX == 9U && CTOS_SSH_CALLBACK_MAX == CTOS_SSH_ROLE_MAX);
+    for (unsigned int hop = 0; hop < CTOS_SSH_ROLE_MAX; hop++) {
+        roles[hop] = role_open_hop(deadline, hop);
+        fixtures[hop].expected_hop = hop;
+        callbacks[hop] = binding(&fixtures[hop], roles[hop], deadline);
+    }
+    for (unsigned int hop = 0; hop < CTOS_SSH_ROLE_MAX; hop++)
+        assert(ctos_ssh_callback_check_live(callbacks[hop], fixtures[hop].environment) == 0);
+    unsigned char digest[32] = {1};
+    struct ctos_ssh_host_result result;
+    assert(ctos_ssh_callback_host_evidence(callbacks[8], fixtures[8].environment,
+        CTOS_SSH_CALLBACK_HOST_KNOWN, "ssh-ed25519",
+        "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", digest, digest, &result) == 0);
+    assert(result.role == roles[8] && result.hop == 8 && result.port == 22);
+    struct ctos_ssh_callback_target extra_target = target(&fixtures[0]);
+    ctos_ssh_callback_token extra = 99;
+    errno = 0;
+    assert(ctos_ssh_callback_open(&extra_target, roles[0], (int)getuid(), deadline,
+        fixtures[0].environment, &extra) == -1 && errno == EBUSY && extra == 0);
+    assert(ctos_ssh_callback_close(callbacks[4], fixtures[4].environment) == 0);
+    assert(ctos_ssh_callback_check_live(callbacks[8], fixtures[8].environment) == 0);
+    assert(ctos_ssh_callback_check_live(callbacks[4], fixtures[4].environment) == -1 && errno == ENOENT);
+    callbacks[4] = binding(&fixtures[4], roles[4], deadline);
+    for (unsigned int hop = 0; hop < CTOS_SSH_ROLE_MAX; hop++) {
+        assert(ctos_ssh_callback_close(callbacks[hop], fixtures[hop].environment) == 0);
+        assert(ctos_ssh_role_bootstrap_close(roles[hop]) == 0);
+    }
+    cases++;
+}
+
+static void test_client_scope(void) {
+    struct fixture outer = {.scope_action = 1, .scope_receiver_enabled = 1};
+    struct fixture inner = {.scope_action = 2};
+    unsigned char digest[32] = {1};
+    uint64_t deadline = deadline_after(3000);
+    ctos_ssh_role_token first = role_open_hop(deadline, 0);
+    ctos_ssh_role_token second = role_open_hop(deadline, 1);
+    ctos_ssh_callback_token first_callback = binding(&outer, first, deadline);
+    ctos_ssh_callback_token second_callback = binding(&inner, second, deadline);
+    outer.scope_owner = &outer; outer.scope_role = first; outer.scope_nested = &inner;
+    inner.scope_owner = &inner; inner.scope_role = second; inner.scope_nested = &outer;
+    assert(ctos_ssh_callback_client_claim_scoped(first_callback, outer.environment,
+        first, &outer, scope_checker) == 0);
+    assert(ctos_ssh_callback_client_claim_scoped(second_callback, inner.environment,
+        second, &inner, scope_checker) == 0);
+    assert(ctos_ssh_callback_client_claim_scoped(first_callback, outer.environment,
+        first, &inner, unexpected_scope_checker) != 0 && errno == EBUSY);
+    assert(ctos_ssh_callback_client_scope_check(first_callback, outer.environment,
+        scope_checker) != 0 && errno == EACCES);
+    assert(ctos_ssh_callback_host_key(first_callback, outer.environment,
+        CTOS_SSH_CALLBACK_HOST_KNOWN, "ssh-ed25519",
+        "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", digest, digest) == 0);
+    assert(outer.scope_checks == 3 && inner.scope_checks == 0);
+    assert(ctos_ssh_callback_client_scope_check(first_callback, outer.environment,
+        scope_checker) != 0 && errno == EACCES);
+    assert(ctos_ssh_callback_client_close(second_callback, inner.environment, &inner) == 0);
+    assert(ctos_ssh_callback_client_close(first_callback, outer.environment, &outer) == 0);
+    assert(ctos_ssh_callback_client_scope_check(first_callback, outer.environment,
+        scope_checker) != 0 && errno == ENOENT);
+    struct fixture replacement = {.scope_action = 3};
+    ctos_ssh_callback_token replaced_callback = binding(&replacement, first, deadline);
+    assert(replaced_callback != first_callback);
+    assert(ctos_ssh_callback_client_claim(replaced_callback, replacement.environment,
+        first, &replacement) == 0);
+    assert(ctos_ssh_callback_host_key(replaced_callback, replacement.environment,
+        CTOS_SSH_CALLBACK_HOST_KNOWN, "ssh-ed25519",
+        "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", digest, digest) == 0);
+    assert(replacement.scope_checks == 0);
+    assert(ctos_ssh_callback_client_close(replaced_callback, replacement.environment, &replacement) == 0);
+    assert(ctos_ssh_role_bootstrap_close(second) == 0);
+    assert(ctos_ssh_role_bootstrap_close(first) == 0);
+
+    struct fixture no_receiver = {.scope_action = 6};
+    deadline = deadline_after(3000);
+    first = role_open(deadline);
+    first_callback = binding(&no_receiver, first, deadline);
+    no_receiver.scope_owner = &no_receiver; no_receiver.scope_role = first;
+    assert(ctos_ssh_callback_client_claim_scoped(first_callback, no_receiver.environment,
+        first, &no_receiver, scope_checker) == 0);
+    assert(ctos_ssh_callback_host_key(first_callback, no_receiver.environment,
+        CTOS_SSH_CALLBACK_HOST_KNOWN, "ssh-ed25519",
+        "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", digest, digest) == 0);
+    assert(no_receiver.scope_checks == 1);
+    assert(ctos_ssh_callback_client_close(first_callback, no_receiver.environment, &no_receiver) == 0);
+    assert(ctos_ssh_role_bootstrap_close(first) == 0);
+
+    struct fixture unclaimed = {.scope_action = 3};
+    deadline = deadline_after(3000);
+    first = role_open(deadline);
+    first_callback = binding(&unclaimed, first, deadline);
+    assert(ctos_ssh_callback_host_key(first_callback, unclaimed.environment,
+        CTOS_SSH_CALLBACK_HOST_KNOWN, "ssh-ed25519",
+        "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", digest, digest) == 0);
+    assert(unclaimed.scope_checks == 0);
+    assert(ctos_ssh_callback_close(first_callback, unclaimed.environment) == 0);
+    assert(ctos_ssh_role_bootstrap_close(first) == 0);
+
+    struct fixture cancelled = {.scope_action = 4};
+    deadline = deadline_after(3000);
+    first = role_open(deadline);
+    first_callback = binding(&cancelled, first, deadline);
+    cancelled.scope_owner = &cancelled; cancelled.scope_role = first;
+    assert(ctos_ssh_callback_client_claim_scoped(first_callback, cancelled.environment,
+        first, &cancelled, scope_checker) == 0);
+    assert(ctos_ssh_callback_host_key(first_callback, cancelled.environment,
+        CTOS_SSH_CALLBACK_HOST_KNOWN, "ssh-ed25519",
+        "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", digest, digest) != 0
+        && errno == ECANCELED);
+    assert(cancelled.scope_checks == 1);
+    assert(ctos_ssh_callback_client_close(first_callback, cancelled.environment, &cancelled) == 0);
+    assert(ctos_ssh_role_bootstrap_close(first) == 0);
+
+    struct fixture expired = {.scope_action = 5};
+    deadline = deadline_after(100);
+    first = role_open(deadline);
+    first_callback = binding(&expired, first, deadline);
+    expired.scope_owner = &expired; expired.scope_role = first;
+    assert(ctos_ssh_callback_client_claim_scoped(first_callback, expired.environment,
+        first, &expired, scope_checker) == 0);
+    assert(ctos_ssh_callback_host_key(first_callback, expired.environment,
+        CTOS_SSH_CALLBACK_HOST_KNOWN, "ssh-ed25519",
+        "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", digest, digest) != 0
+        && errno == ECANCELED); /* The scope check already retired the expired role. */
+    assert(expired.scope_checks == 0);
+    assert(ctos_ssh_callback_client_close(first_callback, expired.environment, &expired) == 0);
+    assert(ctos_ssh_role_bootstrap_close(first) != 0 && errno == ENOENT);
+    cases++;
+}
+
+static void test_provisional_new_contract(void) {
+    const char *fingerprint = "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+    unsigned char base[32], replacement[32], digest[32], receipt[32];
+    memset(base, 5, sizeof(base)); memset(replacement, 6, sizeof(replacement));
+    memset(digest, 7, sizeof(digest)); memset(receipt, 8, sizeof(receipt));
+    for (int missing = 0; missing < 4; missing++) {
+        struct fixture fixture = {.enable_provisional = 1};
+        uint64_t deadline = deadline_after(3000);
+        ctos_ssh_role_token role = role_open_hop(deadline, 1);
+        fixture.environment = &fixture;
+        struct ctos_ssh_callback_target hooks = target(&fixture);
+        if (missing == 0) hooks.provisional_new_candidate = NULL;
+        if (missing == 1) hooks.provisional_new_review = NULL;
+        if (missing == 2) hooks.provisional_new_kex = NULL;
+        if (missing == 3) hooks.known_hosts_candidate_abort = NULL;
+        ctos_ssh_callback_token callback = 99;
+        assert(ctos_ssh_callback_open(&hooks, role, (int)getuid(), deadline,
+            fixture.environment, &callback) != 0 && callback == 0);
+        assert(ctos_ssh_role_bootstrap_close(role) == 0);
+        cases++;
+    }
+    for (int mode = 0; mode < 13; mode++) {
+        struct fixture fixture = {.enable_provisional = 1, .expected_hop = 1};
+        uint64_t deadline = deadline_after(3000);
+        ctos_ssh_role_token role = role_open_hop(deadline, 1);
+        ctos_ssh_callback_token callback = binding(&fixture, role, deadline);
+        fixture.scope_owner = &fixture; fixture.scope_role = role;
+        assert(ctos_ssh_callback_client_claim_scoped(callback, fixture.environment,
+            role, &fixture, scope_checker) == 0);
+        assert(ctos_ssh_callback_supports_provisional_new(callback, fixture.environment) == 1);
+        unsigned char body[] = "provisional-candidate", output[64];
+        int handoff_started = 99;
+        fixture.provisional_scope_stage = mode == 0 ? 0 : CTOS_SSH_PROVISIONAL_NEW_CANDIDATE;
+        int accepted = ctos_ssh_callback_provisional_new_candidate(callback, fixture.environment,
+            "candidate-1", "ssh-ed25519", fingerprint, base, replacement, body, sizeof(body) - 1U,
+            &handoff_started);
+        for (size_t i = 0; i < sizeof(body) - 1U; i++) assert(body[i] == 0);
+        if (mode == 0) {
+            assert(accepted != 0 && handoff_started == 0 && fixture.provisional_candidate_calls == 0U
+                && fixture.candidate_abort_calls == 0U);
+        } else {
+            assert(accepted == 0 && handoff_started == 1 && fixture.provisional_candidate_calls == 1U);
+            fixture.provisional_scope_stage = CTOS_SSH_PROVISIONAL_NEW_REVIEW;
+            if (mode == 1) {
+                unsigned char wrong[32]; memcpy(wrong, base, sizeof(wrong)); wrong[0] ^= 1U;
+                assert(ctos_ssh_callback_provisional_new_review(callback, fixture.environment,
+                    "ssh-ed25519", fingerprint, wrong, replacement) != 0);
+                assert(fixture.provisional_review_calls == 0U);
+            } else if (mode == 2) {
+                unsigned char duplicate[] = "duplicate";
+                handoff_started = 99;
+                assert(ctos_ssh_callback_provisional_new_candidate(callback, fixture.environment,
+                    "candidate-1", "ssh-ed25519", fingerprint, base, replacement,
+                    duplicate, sizeof(duplicate) - 1U, &handoff_started) != 0 && handoff_started == 0);
+                for (size_t i = 0; i < sizeof(duplicate) - 1U; i++) assert(duplicate[i] == 0);
+                assert(fixture.provisional_candidate_calls == 1U);
+            } else if (mode == 3) {
+                assert(ctos_ssh_callback_cancel(callback) == 0);
+                assert(ctos_ssh_callback_provisional_new_review(callback, fixture.environment,
+                    "ssh-ed25519", fingerprint, base, replacement) != 0);
+            } else {
+                assert(ctos_ssh_callback_provisional_new_review(callback, fixture.environment,
+                    "ssh-ed25519", fingerprint, base, replacement) == 0);
+                assert(fixture.provisional_review_calls == 1U);
+                fixture.provisional_scope_stage = CTOS_SSH_PROVISIONAL_NEW_KEX;
+                assert(ctos_ssh_callback_provisional_new_kex(callback, fixture.environment, 17U, digest) == 0);
+                assert(fixture.provisional_kex_calls == 1U && fixture.kex_calls == 0U);
+                if (mode == 4) {
+                    assert(ctos_ssh_callback_provisional_new_kex(callback, fixture.environment, 17U, digest) != 0);
+                } else if (mode == 5) {
+                    assert(ctos_ssh_callback_kex_complete(callback, fixture.environment, 17U, digest) != 0);
+                } else if (mode == 6) {
+                    assert(ctos_ssh_callback_credential(callback, fixture.environment,
+                        CTOS_SSH_CALLBACK_CREDENTIAL_PASSWORD) != 0);
+                } else if (mode == 7 || mode == 8) {
+                    size_t length = 99U; memset(output, 0xa5, sizeof(output));
+                    int result = mode == 7 ? ctos_ssh_callback_credential_bytes(callback, fixture.environment,
+                            CTOS_SSH_CALLBACK_CREDENTIAL_PASSWORD, output, sizeof(output), &length)
+                        : ctos_ssh_callback_credential_bytes_selected(callback, fixture.environment,
+                            CTOS_SSH_CALLBACK_CREDENTIAL_PASSWORD, receipt, 17U, digest,
+                            output, sizeof(output), &length);
+                    assert(result != 0 && length == 0U);
+                    for (size_t i = 0; i < sizeof(output); i++) assert(output[i] == 0);
+                } else if (mode == 9) {
+                    struct ctos_ssh_host_result result;
+                    assert(ctos_ssh_callback_host_evidence(callback, fixture.environment,
+                        CTOS_SSH_CALLBACK_HOST_NEW, "ssh-ed25519", fingerprint, base, replacement, &result) != 0);
+                    assert(fixture.host_evidence_calls == 0U);
+                } else if (mode == 10) {
+                    assert(ctos_ssh_callback_host_key(callback, fixture.environment,
+                        CTOS_SSH_CALLBACK_HOST_NEW, "ssh-ed25519", fingerprint, base, replacement) != 0);
+                    assert(fixture.host_calls == 0U);
+                } else if (mode == 11) {
+                    assert(ctos_ssh_callback_promote_transport(callback, fixture.environment, &fixture) != 0);
+                } else {
+                    assert(ctos_ssh_callback_provisional_new_review(callback, fixture.environment,
+                        "ssh-ed25519", fingerprint, base, replacement) != 0);
+                }
+                assert(fixture.credential_calls == 0U && fixture.credential_bytes_calls == 0U
+                    && fixture.selected_calls == 0U && fixture.kex_calls == 0U);
+            }
+            assert(ctos_ssh_callback_known_hosts_candidate_abort(callback, fixture.environment) == 0);
+            assert(fixture.candidate_abort_calls == 1U);
+        }
+        assert(ctos_ssh_callback_client_close(callback, fixture.environment, &fixture) == 0);
+        assert(ctos_ssh_role_bootstrap_close(role) == 0);
+        cases++;
+    }
+}
+
 int main(void) {
+    test_provisional_new_contract();
+    test_client_scope();
+    test_nine_role_callback_capacity();
     test_check_live();
     test_thread_and_reentry();
     test_cancel_deadline_and_cleanup_failure();
@@ -1088,6 +1524,7 @@ int main(void) {
     printf("SSH_CALLBACK_HOST phase=selected_bytes state=pass errno=0 value=11\n");
     printf("SSH_CALLBACK_HOST phase=host_evidence state=pass errno=0 value=4\n");
     printf("SSH_CALLBACK_HOST phase=known_hosts_candidate state=pass errno=0 value=6\n");
+    printf("SSH_CALLBACK_HOST phase=client_scope state=pass errno=0 value=1\n");
     printf("SSH_CALLBACK_HOST phase=gate state=pass errno=0 value=%u\n", cases);
     return 0;
 }

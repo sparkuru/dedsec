@@ -6,6 +6,8 @@
 #include <errno.h>
 #include <limits.h>
 #include <pthread.h>
+#include <sched.h>
+#include <stdatomic.h>
 #include <stdint.h>
 #include <string.h>
 #include <time.h>
@@ -20,6 +22,113 @@ struct role_slot {
 static pthread_mutex_t roles_lock = PTHREAD_MUTEX_INITIALIZER;
 static struct role_slot roles[CTOS_SSH_ROLE_MAX];
 static uint64_t next_token;
+
+/* Bits 63..32 are a never-reused generation, bits 31..16 count invalidators,
+ * and bits 15..0 count bounded effects. Saturation poisons future admission. */
+#define EFFECT_GENERATION_SHIFT 32U
+#define EFFECT_INVALIDATOR_SHIFT 16U
+#define EFFECT_COUNT_MASK UINT64_C(0xffff)
+#define EFFECT_GENERATION_MAX UINT32_MAX
+#define EFFECT_INVALIDATOR_MAX UINT16_MAX
+static _Atomic uint64_t effect_state = UINT64_C(1) << EFFECT_GENERATION_SHIFT;
+static pthread_mutex_t effect_wait_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t effect_wait_changed = PTHREAD_COND_INITIALIZER;
+
+#ifdef CTOS_SSH_NATIVE_TEST_HOOKS
+unsigned int ctos_ssh_effect_test_active(void) {
+    return (unsigned int)(atomic_load_explicit(&effect_state, memory_order_acquire) & EFFECT_COUNT_MASK);
+}
+#endif
+
+int ctos_ssh_effect_snapshot(uint32_t *generation) {
+    uint64_t state = atomic_load_explicit(&effect_state, memory_order_acquire);
+    uint32_t current = (uint32_t)(state >> EFFECT_GENERATION_SHIFT);
+    if (generation == NULL || current == EFFECT_GENERATION_MAX
+        || ((state >> EFFECT_INVALIDATOR_SHIFT) & EFFECT_COUNT_MASK) != 0) {
+        errno = ECANCELED;
+        return -1;
+    }
+    *generation = current;
+    return 0;
+}
+
+int ctos_ssh_effect_acquire(uint32_t generation) {
+    uint64_t current = atomic_load_explicit(&effect_state, memory_order_acquire);
+    for (;;) {
+        if (generation == 0 || generation == EFFECT_GENERATION_MAX
+            || (uint32_t)(current >> EFFECT_GENERATION_SHIFT) != generation
+            || ((current >> EFFECT_INVALIDATOR_SHIFT) & EFFECT_COUNT_MASK) != 0
+            || (current & EFFECT_COUNT_MASK) == EFFECT_COUNT_MASK) {
+            errno = ECANCELED;
+            return -1;
+        }
+        if (atomic_compare_exchange_weak_explicit(&effect_state, &current, current + 1U,
+                memory_order_acq_rel, memory_order_acquire)) return 0;
+    }
+}
+
+void ctos_ssh_effect_release(void) {
+    uint64_t previous = atomic_load_explicit(&effect_state, memory_order_acquire);
+    for (;;) {
+        uint64_t next;
+        if ((previous & EFFECT_COUNT_MASK) == 0) {
+            next = ((uint64_t)EFFECT_GENERATION_MAX << EFFECT_GENERATION_SHIFT)
+                | (previous & UINT32_MAX);
+        } else next = previous - 1U;
+        if (atomic_compare_exchange_weak_explicit(&effect_state, &previous, next,
+                memory_order_acq_rel, memory_order_acquire)) break;
+    }
+    if ((previous & EFFECT_COUNT_MASK) != 1U) return;
+    if (pthread_mutex_lock(&effect_wait_lock) != 0) return;
+    (void)pthread_cond_broadcast(&effect_wait_changed);
+    (void)pthread_mutex_unlock(&effect_wait_lock);
+}
+
+void ctos_ssh_effect_invalidate_begin(void) {
+    uint64_t current = atomic_load_explicit(&effect_state, memory_order_acquire);
+    for (;;) {
+        uint32_t generation = (uint32_t)(current >> EFFECT_GENERATION_SHIFT);
+        uint32_t invalidators = (uint32_t)((current >> EFFECT_INVALIDATOR_SHIFT) & EFFECT_COUNT_MASK);
+        uint64_t next;
+        if (invalidators == EFFECT_INVALIDATOR_MAX) {
+            /* Poison admission permanently rather than wrap a live count. */
+            next = ((uint64_t)EFFECT_GENERATION_MAX << EFFECT_GENERATION_SHIFT)
+                | (current & UINT32_MAX);
+        } else {
+            if (generation < EFFECT_GENERATION_MAX) generation++;
+            next = ((uint64_t)generation << EFFECT_GENERATION_SHIFT)
+                | ((uint64_t)(invalidators + 1U) << EFFECT_INVALIDATOR_SHIFT)
+                | (current & EFFECT_COUNT_MASK);
+        }
+        if (atomic_compare_exchange_weak_explicit(&effect_state, &current, next,
+                memory_order_acq_rel, memory_order_acquire)) break;
+    }
+    if (pthread_mutex_lock(&effect_wait_lock) != 0) {
+        while ((atomic_load_explicit(&effect_state, memory_order_acquire) & EFFECT_COUNT_MASK) != 0)
+            sched_yield();
+        return;
+    }
+    while ((atomic_load_explicit(&effect_state, memory_order_acquire) & EFFECT_COUNT_MASK) != 0) {
+        if (pthread_cond_wait(&effect_wait_changed, &effect_wait_lock) != 0) {
+            (void)pthread_mutex_unlock(&effect_wait_lock);
+            while ((atomic_load_explicit(&effect_state, memory_order_acquire) & EFFECT_COUNT_MASK) != 0)
+                sched_yield();
+            return;
+        }
+    }
+    (void)pthread_mutex_unlock(&effect_wait_lock);
+}
+
+void ctos_ssh_effect_invalidate_end(void) {
+    uint64_t current = atomic_load_explicit(&effect_state, memory_order_acquire);
+    for (;;) {
+        uint32_t invalidators = (uint32_t)((current >> EFFECT_INVALIDATOR_SHIFT) & EFFECT_COUNT_MASK);
+        if (invalidators == 0 || invalidators == EFFECT_INVALIDATOR_MAX) return;
+        if (atomic_compare_exchange_weak_explicit(&effect_state, &current,
+                current - (UINT64_C(1) << EFFECT_INVALIDATOR_SHIFT),
+                memory_order_acq_rel, memory_order_acquire)) return;
+    }
+}
 
 static void wipe(void *memory, size_t length) {
     volatile unsigned char *bytes = memory;
@@ -123,7 +232,11 @@ static struct role_slot *lookup_locked(ctos_ssh_role_token token) {
 static int expire_locked(struct role_slot *slot, uint64_t now) {
     if (slot == NULL || !slot->live) { errno = ENOENT; return -1; }
     if (now >= slot->snapshot.deadline) {
-        if (slot->transports == 0U) wipe(slot, sizeof(*slot));
+        if (slot->transports == 0U) {
+            ctos_ssh_effect_invalidate_begin();
+            wipe(slot, sizeof(*slot));
+            ctos_ssh_effect_invalidate_end();
+        }
         errno = ETIMEDOUT;
         return -1;
     }
@@ -134,7 +247,9 @@ static void reclaim_expired_locked(uint64_t now) {
     for (size_t i = 0; i < CTOS_SSH_ROLE_MAX; i++) {
         if (roles[i].live && roles[i].transports == 0U
             && now >= roles[i].snapshot.deadline) {
+            ctos_ssh_effect_invalidate_begin();
             wipe(&roles[i], sizeof(roles[i]));
+            ctos_ssh_effect_invalidate_end();
         }
     }
 }
@@ -156,6 +271,7 @@ int ctos_ssh_role_bootstrap_open(const struct ctos_ssh_role_request *request,
         || !nonzero(request->role_nonce) || !nonzero(request->connection_binding)
         || identifier(request->connection_id, CTOS_SSH_ROLE_CONNECTION_ID_BYTES) != 0
         || target_identity(request->target_identity) != 0
+        || (request->chain_identity != NULL && target_identity(request->chain_identity) != 0)
         || host(request->host) != 0
         || identifier(request->public_view_id, CTOS_SSH_ROLE_VIEW_ID_BYTES) != 0
         || now_millis(&now) != 0 || bounded_deadline(request->deadline, now) != 0) {
@@ -208,6 +324,11 @@ int ctos_ssh_role_bootstrap_open(const struct ctos_ssh_role_request *request,
     memcpy(slot->snapshot.public_view_id, request->public_view_id, strlen(request->public_view_id) + 1);
     memcpy(slot->snapshot.role_nonce, request->role_nonce, 32);
     memcpy(slot->snapshot.connection_binding, request->connection_binding, 32);
+    slot->snapshot.identity_version = request->chain_identity == NULL
+        ? CTOS_SSH_ROLE_IDENTITY_V1 : CTOS_SSH_ROLE_IDENTITY_V2;
+    const char *chain_identity = request->chain_identity == NULL
+        ? request->target_identity : request->chain_identity;
+    memcpy(slot->snapshot.chain_identity, chain_identity, strlen(chain_identity) + 1);
     slot->live = 1;
     *token = slot->snapshot.token;
     pthread_mutex_unlock(&roles_lock);
@@ -268,7 +389,9 @@ int ctos_ssh_role_bootstrap_close(ctos_ssh_role_token token) {
         errno = error;
         return -1;
     }
+    ctos_ssh_effect_invalidate_begin();
     wipe(slot, sizeof(*slot));
+    ctos_ssh_effect_invalidate_end();
     pthread_mutex_unlock(&roles_lock);
     return 0;
 }
@@ -375,7 +498,8 @@ int ctos_ssh_role_bootstrap_encode(ctos_ssh_role_token token, unsigned char *out
     }
     if (put32(output, capacity, &offset, CTOS_SSH_ROLE_MAGIC) != 0
         || put_bytes(output, capacity, &offset,
-            (const unsigned char[]){1, (unsigned char)snapshot.program, 0, 0}, 4) != 0
+            (const unsigned char[]){(unsigned char)snapshot.identity_version,
+                (unsigned char)snapshot.program, 0, 0}, 4) != 0
         || put64(output, capacity, &offset, snapshot.token) != 0
         || put32(output, capacity, &offset, (uint32_t)snapshot.owner_pid) != 0
         || put32(output, capacity, &offset, (uint32_t)snapshot.owner_uid) != 0
@@ -388,6 +512,8 @@ int ctos_ssh_role_bootstrap_encode(ctos_ssh_role_token token, unsigned char *out
         || put_text(output, capacity, &offset, snapshot.target_identity) != 0
         || put_text(output, capacity, &offset, snapshot.host) != 0
         || put_text(output, capacity, &offset, snapshot.public_view_id) != 0
+        || (snapshot.identity_version == CTOS_SSH_ROLE_IDENTITY_V2
+            && put_text(output, capacity, &offset, snapshot.chain_identity) != 0)
         || offset > CTOS_SSH_ROLE_WIRE_BYTES) {
         wipe(&snapshot, sizeof(snapshot));
         if (errno == 0) errno = ENOSPC;

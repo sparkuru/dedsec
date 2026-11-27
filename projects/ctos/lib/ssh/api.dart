@@ -45,6 +45,7 @@ sealed class SshEvent {
           'binding',
           'host',
           'port',
+          'hop',
           'keyType',
           'fingerprint',
           'remainingMillis',
@@ -54,7 +55,7 @@ sealed class SshEvent {
         final fingerprint = value['fingerprint'];
         final remaining = value['remainingMillis'];
         if (binding is! String ||
-            !RegExp(r'^[a-fA-F0-9]{64}$').hasMatch(binding) ||
+            !RegExp(r'^[a-f0-9]{64}$').hasMatch(binding) ||
             keyType is! String ||
             !RegExp(r'^[A-Za-z0-9@._+\-]{1,96}$').hasMatch(keyType) ||
             fingerprint is! String ||
@@ -70,21 +71,28 @@ sealed class SshEvent {
           binding: binding,
           host: _host(value['host']),
           port: _port(value['port']),
+          hop: _sshPromptHop(value['hop']),
           keyType: keyType,
           fingerprint: fingerprint,
           remainingMillis: remaining,
         );
       case 'hostKeyDismissed':
-        _keys(value, {'type', 'requestId', 'ticketId'});
-        return SshHostKeyDismissed(requestId, _identifier(value['ticketId']));
+        _keys(value, {'type', 'requestId', 'ticketId', 'binding', 'hop'});
+        return SshHostKeyDismissed(
+          requestId,
+          _identifier(value['ticketId']),
+          _sshBinding(value['binding']),
+          _sshPromptHop(value['hop']),
+        );
       case 'hostKeyChanged':
         return SshHostKeyChangedEvent.parse(value);
       case 'hostKeyChangedDismissed':
-        _keys(value, {'type', 'requestId', 'ticketId', 'binding'});
+        _keys(value, {'type', 'requestId', 'ticketId', 'binding', 'hop'});
         return SshHostKeyChangedDismissed(
           requestId,
           _identifier(value['ticketId']),
           _sshBinding(value['binding']),
+          _sshPromptHop(value['hop']),
         );
       case 'keyboardChallenge':
         return SshKeyboardChallenge.parse(value);
@@ -122,11 +130,12 @@ sealed class SshHostReviewEvent extends SshEvent {
     required this.binding,
     required this.host,
     required this.port,
+    required this.hop,
     required this.remainingMillis,
   }) : super(requestId);
 
   final String ticketId, binding, host;
-  final int port, remainingMillis;
+  final int port, hop, remainingMillis;
 }
 
 final class SshHostKeyEvent extends SshHostReviewEvent {
@@ -136,6 +145,7 @@ final class SshHostKeyEvent extends SshHostReviewEvent {
     required super.binding,
     required super.host,
     required super.port,
+    required super.hop,
     required this.keyType,
     required this.fingerprint,
     required super.remainingMillis,
@@ -144,8 +154,14 @@ final class SshHostKeyEvent extends SshHostReviewEvent {
 }
 
 final class SshHostKeyDismissed extends SshEvent {
-  const SshHostKeyDismissed(super.requestId, this.ticketId);
-  final String ticketId;
+  const SshHostKeyDismissed(
+    super.requestId,
+    this.ticketId,
+    this.binding,
+    this.hop,
+  );
+  final String ticketId, binding;
+  final int hop;
 }
 
 final class SshHostKeyChangedRecord {
@@ -173,6 +189,7 @@ final class SshHostKeyChangedEvent extends SshHostReviewEvent {
     required super.binding,
     required super.host,
     required super.port,
+    required super.hop,
     required super.remainingMillis,
     required this.source,
     required this.keyType,
@@ -189,6 +206,7 @@ final class SshHostKeyChangedEvent extends SshHostReviewEvent {
       'binding',
       'host',
       'port',
+      'hop',
       'source',
       'keyType',
       'fingerprint',
@@ -213,6 +231,7 @@ final class SshHostKeyChangedEvent extends SshHostReviewEvent {
       binding: _sshBinding(value['binding']),
       host: _host(value['host']),
       port: _port(value['port']),
+      hop: _sshPromptHop(value['hop']),
       source: _sshTrustSource(value['source']),
       keyType: _sshChangedKeyType(value['keyType'], 64),
       fingerprint: _sshCanonicalFingerprint(value['fingerprint']),
@@ -230,8 +249,10 @@ final class SshHostKeyChangedDismissed extends SshEvent {
     super.requestId,
     this.ticketId,
     this.binding,
+    this.hop,
   );
   final String ticketId, binding;
+  final int hop;
 }
 
 enum SshReconnectMode {
@@ -581,6 +602,15 @@ String sshConnectionError(Object error) {
     'SSH_CREDENTIAL_SAVE' => '无法保存 SSH 凭据。请检查秘密库后重新连接。',
     'VAULT_IO' => '无法完成秘密库操作。请检查秘密库后重新连接。',
     'SSH_PASSWORD_MISSING' => '此连接没有已保存密码，请输入密码后重试。',
+    'SSH_USER_REQUIRED' => '请输入 SSH 用户名后重试。',
+    'SSH_JUMP_USER_REQUIRED' => '跳板缺少用户名，请在 SSH 配置中为跳板指定用户名。',
+    'SSH_JUMP_PASSWORD_MISSING' => '跳板或目标尚未保存密码。当前跳板连接无法输入新密码。',
+    'SSH_JUMP_CHAIN_UNSUPPORTED' => '此配置包含多个跳板，当前版本暂不支持。',
+    'SSH_JUMP_HOST_TRUST_REQUIRED' => '跳板连接暂不支持在连接中核验新主机或已变化的主机指纹，请检查主机信任记录。',
+    'SSH_JUMP_HOST_TRUST_FAILED' => '跳板连接的主机身份未能验证，连接已停止。请检查主机信任配置。',
+    'SSH_JUMP_AUTH_UNSUPPORTED' =>
+      '跳板连接目前支持已保存密码或免认证。若服务器支持密码，请在对应主机的 SSH 配置中设置 PreferredAuthentications password，连接时选择“自动检测”并确保未选择私钥。',
+    'SSH_JUMP_EFFECT_GUARD' => '此跳板连接暂不可用，连接已停止。',
     'SSH_PUBLICKEY_REQUIRED' => '服务器要求公钥登录，请选择对应私钥后重试。',
     'SSH_AUTH_UNSUPPORTED' => '服务器没有提供此配置允许的认证方式，请检查服务器和配置。',
     'SSH_HOSTKEY_CHANGED' ||

@@ -118,9 +118,10 @@ keyboardInteractiveAuthentication；旧v1解码只能取KBI=false，不能据缺
 `ssh.keyboardResponse(requestId,ticketId,binding,answers:[string])`返回`{accepted:bool}`；
 answers为当前轮完整数组，严格UTF8和有界长度，空回答合法；不允许save字段。
 宿主发事件`{type:"keyboardChallenge",requestId,ticketId,binding,round,name,instruction,
-prompts:[{text,echo}],remainingMillis}`；remainingMillis为原期限内0–60000，ticketId/binding
+prompts:[{text,echo}],remainingMillis,host,port,username,hop}`；endpoint 与 hop 取自同一已注册认证选择和 role，所有四项必填，hop 为 0–8。remainingMillis为原期限内0–60000，ticketId/binding
 沿原opaqueID/64hex标准。终态或消费发`{type:"keyboardChallengeDismissed",requestId,ticketId}`。
 独立随机票据绑定原attempt/role/KEX/method/round；迟到事件不发布至不同owner/route。
+Flutter 显示当前事件的实际 endpoint，IPv6 地址加括号；不同 hop 各自从第一轮开始，同 endpoint 不合并不同 hop，旧 hop 迟到事件被拒。现有产品 ProxyJump 门禁并未因该提示协议变化而开放。
 回答到达后由原owner验证并发送，不在MethodChannel主线程调用native。
 
 RAM重连mode增加keyboard/configKeyboard；后者保留alias和公开端点，无keyId或旧binding/

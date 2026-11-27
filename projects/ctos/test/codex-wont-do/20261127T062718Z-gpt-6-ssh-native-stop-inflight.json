@@ -1,0 +1,162 @@
+{
+  "schema_version": "1.0.0",
+  "kind": "test_task",
+  "worker_instructions": "执行方先阅读 test/codex-wont-do/template.json、AGENTS.md 和本任务所列资源；按模板领取并完成符合前置条件的测试，将实际结果和证据追加到本文件的 execution.attempts，交独立 Codex 审核。阻塞或失败时如实报告。",
+  "task_id": "20261127T062718Z-gpt-6-ssh-native-stop-inflight",
+  "state": "queued",
+  "created_at_utc": "2026-11-27T06:39:36Z",
+  "creator": {
+    "agent": "codex",
+    "model": "gpt-6",
+    "model_precision": "family_only",
+    "start_timestamp_utc": "2026-11-27T06:27:18Z"
+  },
+  "request": {
+    "title": "共享 STOP 与在途 native 效果的真实 JNI 顺序",
+    "goal": "补充现有 STOP 先于效果的故障场景，验证真实 Java/JNI root 与 child 中已经准入的效果和 STOP 后新效果的边界。",
+    "baseline": {
+      "git_head": "d281fb5b6b770d137d44bf8d921e3743e7451691",
+      "dirty_worktree": true,
+      "pinned_files": [
+        {
+          "path": "android/app/src/main/java/im/majo/ctos/SshNativeCallbackAdapter.java",
+          "sha256": "3ccdaa7ad41d022ac13823c5a6919398737b1d8a31c01ef6260bc13e29f2c876"
+        },
+        {
+          "path": "android/app/src/main/java/im/majo/ctos/SshPasswordConnector.java",
+          "sha256": "d68aa4cfb06341fcac8ced0d4b9eb5a1c5cde040deb5bb5c18739d95b93b2e5d"
+        },
+        {
+          "path": "android/app/src/main/cpp/ssh_native_client.c",
+          "sha256": "3496b25dede9a9329ec0c85c27d1c5d4d44c7aee5727177771b9e266c20cf6ea"
+        },
+        {
+          "path": "android/app/src/main/cpp/ssh_callback_jni.c",
+          "sha256": "5514871889113af680f773b2937f950a5065d7d6243440f55769ab2ff599c0eb"
+        },
+        {
+          "path": "android/app/src/test/jni-vault-chain/im/majo/ctos/SshFreshVaultRealJniTest.java",
+          "sha256": "adf5173c257250a16f3d225bda6aa3118894aa8e4d5145021da1d3446ce8ca22"
+        },
+        {
+          "path": "android/ssh/host-jni-vault-chain-test.sh",
+          "sha256": "eea66b42b3039c0e620cce22a5588cf88016e8c637b8a800b92d6fae707ce7fd"
+        }
+      ],
+      "capture_policy": "HEAD 和 dirty_worktree 是任务创建时状态，原样提交后可能变化；执行时核对固定文件并记录实际 HEAD、dirty 状态和运行前后全部相关源码、测试及构建输入的 SHA-256 清单。固定输入不符先交由 Codex 更新任务，不得自行改验收。"
+    },
+    "resources": {
+      "read": [
+        {
+          "path": "design/agent-test-handoff.md",
+          "why": "协作流程"
+        },
+        {
+          "path": "design/handoff-ssh-terminal-client.md",
+          "why": "SSH 当前状态、旧证据与限制"
+        },
+        {
+          "path": "design/verification.md",
+          "why": "核对实际历史验证，避免重复或夸大"
+        },
+        {
+          "path": ".trellis/spec/backend/ssh-native-stop-admission.md",
+          "why": "共享 STOP 与 native generation 的效果准入合同"
+        },
+        {
+          "path": ".trellis/tasks/10-08-ssh-terminal/research/ssh-stop-native-permit-window-20261127.md",
+          "why": "已发现窗口的证据边界"
+        },
+        {
+          "path": "android/app/src/main/cpp/ssh_native_client.c",
+          "why": "native 效果与许可"
+        },
+        {
+          "path": "android/app/src/main/cpp/ssh_callback_jni.c",
+          "why": "JNI callback 与许可"
+        },
+        {
+          "path": "android/app/src/test/jni-vault-chain/im/majo/ctos/SshFreshVaultRealJniTest.java",
+          "why": "已有合成链与 STOP 先行场景"
+        },
+        {
+          "path": "android/ssh/host-jni-vault-chain-test.sh",
+          "why": "已有运行器"
+        }
+      ],
+      "environment": [
+        "只使用本机、隔离或回环上的合成测试资源；不访问真实账号、凭据或生产服务。",
+        "测试环境与权限不足时如实阻塞，不安装依赖或扩大网络/设备权限。",
+        "仅用测试 JNI 与本地合成 peer；需用事件屏障证明精确顺序，不依赖 sleep 或统计碰撞。"
+      ],
+      "allowed_writes": [
+        "build/codex-wont-do/<task_id>/<attempt_id>/ 下的专属报告、输入清单与无秘密日志",
+        "本任务明确列出的构建或测试专用产物；不得清理不属于本次尝试的文件",
+        "仅 android/app/src/test/ 下为本测试必要的新测试或测试专用夹具；记录完整 diff，不覆盖他人改动"
+      ],
+      "exclusive_locks": [
+        "android-release-build",
+        "ssh-test-inputs"
+      ],
+      "secrets_policy": "仅使用合成测试数据；禁止记录真实凭据、私钥、令牌和用户数据。"
+    },
+    "dependencies": [],
+    "preconditions": [
+      "测试 JNI、现有 release classes 与受测源码快照匹配。",
+      "若需要修改生产源码或 main/cpp 注入额外 hook，标 blocked 并交 Codex，不能自行修改。"
+    ],
+    "cases": [
+      {
+        "id": "admitted-before-stop",
+        "exercise": "在 root 与 child 分别使一个实际 native 效果取得对应准入并停在确定性屏障，发布共享 STOP，再放行该已准入效果。",
+        "pass": "按合同已准入效果可完成或其安全失败被正确报告；关联计数、序列与结果能证明效果确已先于 STOP 获准。"
+      },
+      {
+        "id": "after-stop-denied",
+        "exercise": "在 STOP 已发布且 native generation 撤销/排空交错时尝试新的真实效果，并在屏障解除后观察后续效果。",
+        "pass": "STOP 后的新效果均被拒绝，不能向真实 peer 产生新凭据复制、包发送或其他所选效果；逐层记录 root/child 与准确效果边界。"
+      },
+      {
+        "id": "drain-owner",
+        "exercise": "释放在途效果并清理，记录许可归还、所有权和合成敏感材料清理；故障未知时保留原 owner。",
+        "pass": "无泄露许可或错误提前释放，能验证的合成材料被擦除；不可观测部分明确列出，不扩展声称。"
+      }
+    ],
+    "commands": [],
+    "acceptance": [
+      "至少在任务声明的 root 与 child 路径完成三类确定性证据；如某路径无法构造，报告 blocked 或 inconclusive。",
+      "实际案例全部有可核对证据；记录失败、错误、跳过和未覆盖部分，缺少必需案例不得标 pass。"
+    ],
+    "stop_conditions": [
+      "只得到 STOP 先于效果的旧场景而无效果先于 STOP 的证据，或需修改生产代码才能观测。",
+      "固定源码不匹配、未经授权的设备/网络/账号、缺少资源或需要修改产品行为时停止并记录原因；不更改验收标准。"
+    ],
+    "codex_review": [
+      "核对 effect-before-STOP 实际事件序列、native generation 排空与共享 STOP 的关联，避免把反射改变状态或合成回执误记为真实对等端行为。",
+      "对照 template.json 核验独立执行者、当前授权、明确的测试范围和实际 outcome。",
+      "核对执行前后 dirty 状态、相关输入和产物哈希、命令退出码、全部案例、跳过项与可读取证据；不能用 HEAD 代替未提交内容。",
+      "检查允许的测试夹具改动及 diff，区分报告有效与产品测试通过；源码漂移或证据不足时要求补充，且不能更新为当前通过。"
+    ]
+  },
+  "blockers": [],
+  "execution": {
+    "claim": null,
+    "attempts": []
+  },
+  "review": {
+    "status": "pending",
+    "reviewer": null,
+    "reviewed_at_utc": null,
+    "findings": [],
+    "decision_scope": null,
+    "decisions": []
+  },
+  "history": [
+    {
+      "at_utc": "2026-11-27T06:39:36Z",
+      "actor": "codex",
+      "event": "created",
+      "detail": "建立待其他 agent/session 执行的测试请求；未执行测试。"
+    }
+  ]
+}

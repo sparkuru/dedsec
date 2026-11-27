@@ -1,3 +1,5 @@
+{"file": ".trellis/spec/backend/ssh-development-workflow.md", "reason": "Honor implementation-first and no-excess-testing rules; user-arranged sessions execute product tests and Codex reviews their evidence."}
+{"file": "design/codex-test-management.md", "reason": "Review user-arranged test reports independently, distinguish valid evidence from product success and preserve source-snapshot limits."}
 {"file": "design/ssh-mfa-authentication.md", "reason": "Historical two-stage manual/config contract and original lifetime; latest user feedback requests automatic detection without a checkbox."}
 {"file": ".trellis/spec/backend/host-bridge.md", "reason": "Strict MethodChannel arguments, original request and owned worker/native boundaries."}
 {"file": ".trellis/spec/backend/ssh-password-connect.md", "reason": "Actual host/KEX first, exact target saved/transient password; preserve atomic save and once-only delivery."}
@@ -22,6 +24,32 @@
 {"file": ".trellis/tasks/10-08-ssh-terminal/research/host-key-recovery-journey-20261113.md", "reason": "Review user decision count, trusted display, precise cancel/lifecycle and config picker behavior."}
 {"file": ".trellis/tasks/10-08-ssh-terminal/research/config-selection-journey-20261113.md", "reason": "Review target-only selection, cancellation, config binding and key drift guards with real widget paths."}
 {"file": ".trellis/tasks/10-08-ssh-terminal/research/mfa-automatic-continuation-20261113.md", "reason": "Review automatic KBI against actual partial/method list/config, legacy strict mode and lifecycle evidence."}
-{"file": ".trellis/tasks/10-08-ssh-terminal/research/ssh-auth-method-discovery-20261113.md", "reason": "Review the exact boundary of automatic KBI and ensure no invented none-discovery or wrong-password retry."}
+{"file": ".trellis/tasks/10-08-ssh-terminal/research/ssh-auth-method-discovery-20261113.md", "reason": "Historical pre-implementation discovery research; validate current behavior against later implemented server-driven authentication."}
 {"file": ".trellis/spec/backend/ssh-server-alive.md", "reason": "Check config plan compatibility, exact owner and lifecycle, encrypted timeout behavior and separation of device evidence."}
 {"file": ".trellis/tasks/10-08-ssh-terminal/research/server-alive-20261116.md", "reason": "Review fixed OpenSSH semantics and cross-layer test scope without inferring real-device behavior."}
+{"file": "design/ssh-proxyjump.md", "reason": "Review actual ProxyJump scope and preserve the product connection gate."}
+{"file": ".trellis/spec/backend/ssh-proxyjump-channel.md", "reason": "Check next-role channel binding, authentication and lifetime."}
+{"file": ".trellis/spec/backend/ssh-proxyjump-relay.md", "reason": "Check relay bounds, half-close behavior and cleanup ownership."}
+{"file": ".trellis/spec/backend/ssh-proxyjump-child.md", "reason": "Check child callback and ancestor bindings, retryable ownership, output guards and remaining cross-layer limits."}
+{"file": ".trellis/spec/backend/ssh-view-borrow-ownership.md", "reason": "Check global live-borrow claims, abort/release races and explicit raw-pointer limitations."}
+{"file": ".trellis/spec/backend/ssh-trust-commit-ack.md", "reason": "Check real trust-store commit receipt versus screen lock, cancellation and native acknowledgement."}
+{"file": ".trellis/tasks/10-08-ssh-terminal/research/proxyjump-java-effects-20261120.md", "reason": "Check source-backed ancestor proof, JNI reentry and trust/secret final-effect boundaries."}
+{"file": ".trellis/spec/backend/ssh-terminal-output-cancellation.md", "reason": "Check real owner cancellation against queued data, snapshot replay, generation and listener timing."}
+{"file": ".trellis/spec/backend/ssh-proxyjump-callback-proof.md", "reason": "Check native-dispatched child and exact JNI receiver/validator identity, sequential ancestors, EOF and no effect grant."}
+{"file": ".trellis/spec/backend/ssh-proxyjump-retained-transport.md", "reason": "Check exact ready descendant suffix, owner and retirement, cancellation, EOF drain, cleanup faults and evidence boundaries."}
+{"file": ".trellis/tasks/10-08-ssh-terminal/research/proxyjump-pending-poll-scheduling-20261123.md", "reason": "Check actual child/parent poll progression, pending input, early EXT_INFO and lock/deadline evidence."}
+{"file": ".trellis/tasks/10-08-ssh-terminal/research/proxyjump-new-write-boundaries-20261123.md", "reason": "Keep signed approval distinct from atomic candidate transfer, trust-write admission, persistence receipt and restart."}
+{"file": ".trellis/tasks/10-08-ssh-terminal/research/proxyjump-candidate-reservation-20261123.md", "reason": "Review actual approval provenance, candidate alias races, lock order and close/revocation limits."}
+{"file": ".trellis/tasks/10-08-ssh-terminal/research/proxyjump-root-new-trust-20261123.md", "reason": "Verify first jump policy and source separately from child fixture and direct NEW."}
+{"file": ".trellis/spec/backend/ssh-proxyjump-fixture-transfer.md", "reason": "Verify candidate ownership transfer, cleanup and limits of its non-authorizing Java checks."}
+{"file": ".trellis/tasks/10-08-ssh-terminal/research/ssh-cancel-invalidation-failure-20261125.md", "reason": "Review the historical cancellation counterexample, remaining owner retention boundaries and evidence limits."}
+{"file": ".trellis/tasks/10-08-ssh-terminal/research/CancelFailurePumpRepro.java", "reason": "Historical host-only counterexample asserts the pre-stop-intent bug; it is not a passing regression for current code."}
+{"file": ".trellis/spec/backend/ssh-terminal-stop-intent.md", "reason": "Review terminal I/O admission, in-flight ordering, native uncertainty and retained owners without overclaiming creation or trust."}
+{"file": ".trellis/spec/backend/ssh-shared-view-cancellation.md", "reason": "Verify unknown invalidation, revoke/close races and lease retention without claiming per-session coverage."}
+{"file": ".trellis/spec/backend/ssh-session-cancellation-ownership.md", "reason": "Verify per-session unknown state, callback-only failure and close/cancel races."}
+{"file": ".trellis/spec/backend/ssh-vault-revocation-ownership.md", "reason": "Verify vault failure ordering, retained native view ownership and store receipt preservation without claiming full cleanup."}
+{"file": ".trellis/spec/backend/ssh-connector-unstarted-retirement.md", "reason": "Review create/retire/STOP ordering, constructor-owned material, owner retention and limits of host bridge tests."}
+{"file": ".trellis/spec/backend/ssh-connection-result-delivery.md", "reason": "Verify owner publication and factory settlement, uncertain receipts, at-most-once reply attempts, failure boundaries and host-only evidence."}
+{"file": ".trellis/tasks/10-08-ssh-terminal/research/ssh-stop-native-permit-window-20261127.md", "reason": "Keep the demonstrated native permit window separate from untested real SSH credential or packet effects."}
+{"file": ".trellis/spec/backend/ssh-started-material-admission.md", "reason": "Review local material-install admission, rejected candidate cleanup and limits on already-admitted work."}
+{"file": ".trellis/spec/backend/ssh-native-stop-admission.md", "reason": "Review connection-specific STOP and native permit ordering, JNI reentry and exact target lifetime; product tests are handed to user-arranged sessions."}

@@ -114,4 +114,47 @@ public final class SshTerminalStateTest {
         assertTrue(remote > local);
         assertTrue(recreatedLocal > remote);
     }
+
+    @Test public void cancelledAdmissionAndStaleGenerationDoNotChangeReplayOrListener() {
+        SshTerminalState state = new SshTerminalState();
+        SshSessionOwner.Cancellation old = new SshSessionOwner.Cancellation();
+        SshSessionOwner.Cancellation current = new SshSessionOwner.Cancellation();
+        List<Map<String, Object>> received = new ArrayList<>();
+        state.begin(1, "ssh", old);
+        state.state(1, "running", null, null);
+        state.data(1, new byte[] {1});
+        state.begin(2, "ssh", current);
+        state.state(2, "running", null, null);
+        state.subscribe(received::add);
+        state.data(1, new byte[] {2});
+        old.cancel();
+        state.data(2, new byte[] {4});
+        assertEquals(2, received.size());
+        assertArrayEquals(new byte[] {4}, (byte[])received.get(1).get("bytes"));
+        current.cancel();
+        state.data(2, new byte[] {3});
+        assertEquals(2, received.size());
+        assertArrayEquals(new byte[0], (byte[])received.get(0).get("bytes"));
+        assertArrayEquals(new byte[0], (byte[])state.snapshot().get("bytes"));
+    }
+
+    @Test public void listenerCanReenterSnapshotAndCancelDuringAdmittedOutput() {
+        SshTerminalState state = new SshTerminalState();
+        SshSessionOwner.Cancellation cancellation = new SshSessionOwner.Cancellation();
+        List<Map<String, Object>> snapshots = new ArrayList<>();
+        state.begin(1, "ssh", cancellation);
+        state.state(1, "running", null, null);
+        state.subscribe(event -> {
+            if ("data".equals(event.get("type"))) {
+                snapshots.add(state.snapshot());
+                cancellation.cancel();
+            }
+        });
+        state.data(1, new byte[] {7});
+        state.data(1, new byte[] {8});
+        assertTrue(cancellation.getAsBoolean());
+        assertEquals(1, snapshots.size());
+        assertArrayEquals(new byte[] {7}, (byte[])snapshots.get(0).get("bytes"));
+        assertArrayEquals(new byte[0], (byte[])state.snapshot().get("bytes"));
+    }
 }

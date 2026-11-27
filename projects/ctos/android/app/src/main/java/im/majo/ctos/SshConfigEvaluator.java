@@ -20,6 +20,7 @@ final class SshConfigEvaluator implements AutoCloseable {
     static final int MAX_AUDIT_BYTES = 82732;
     static final int MAX_RESOURCE_AUDIT_BYTES = 107328;
     static final int MAX_DIRECT_PLAN_BYTES = 72 + 3 * 259 + (256 + 32) * 516;
+    static final int MAX_PROFILE_ROUTE_BYTES = 12 + 9 * (4 + MAX_DIRECT_PLAN_BYTES);
     static final int MAX_DETACHED_BYTES = 8455704;
     static final int MAX_OPENS = 1024, MAX_READ_BYTES = 64 * 1024 * 1024, MAX_LINES = 16384;
     private static final int REQUEST_MAGIC = 0x43534551;
@@ -51,6 +52,9 @@ final class SshConfigEvaluator implements AutoCloseable {
         default long reserveProfileDirect() throws IOException { throw unavailable(); }
         default byte[] directPlan(long handle) throws IOException { throw unavailable(); }
         default byte[] profileDirectPlan(long handle) throws IOException { throw unavailable(); }
+        default long openProfileRoute(long view, byte[] request) throws IOException { throw unavailable(); }
+        default long reserveProfileRoute() throws IOException { throw unavailable(); }
+        default byte[] profileRoute(long handle) throws IOException { throw unavailable(); }
         default void loadDetached(long handle, byte[] source, int root, long deadline,
                 byte[] request) throws IOException { throw unavailable(); }
         default int[] usage(long handle) throws IOException { throw unavailable(); }
@@ -77,6 +81,9 @@ final class SshConfigEvaluator implements AutoCloseable {
         static native long reserveProfileDirect() throws IOException;
         static native byte[] directPlan(long handle) throws IOException;
         static native byte[] profileDirectPlan(long handle) throws IOException;
+        static native long openProfileRoute(long view, byte[] request) throws IOException;
+        static native long reserveProfileRoute() throws IOException;
+        static native byte[] profileRoute(long handle) throws IOException;
         static native void loadDetached(long handle, byte[] source, int root, long deadline,
                 byte[] request) throws IOException;
         static native int[] usage(long handle) throws IOException;
@@ -106,6 +113,11 @@ final class SshConfigEvaluator implements AutoCloseable {
         @Override public long reserveProfileDirect() throws IOException { return Native.reserveProfileDirect(); }
         @Override public byte[] directPlan(long handle) throws IOException { return Native.directPlan(handle); }
         @Override public byte[] profileDirectPlan(long handle) throws IOException { return Native.profileDirectPlan(handle); }
+        @Override public long openProfileRoute(long view, byte[] request) throws IOException {
+            return Native.openProfileRoute(view, request);
+        }
+        @Override public long reserveProfileRoute() throws IOException { return Native.reserveProfileRoute(); }
+        @Override public byte[] profileRoute(long handle) throws IOException { return Native.profileRoute(handle); }
         @Override public void loadDetached(long handle, byte[] source, int root, long deadline,
                 byte[] request) throws IOException {
             Native.loadDetached(handle, source, root, deadline, request);
@@ -316,6 +328,37 @@ final class SshConfigEvaluator implements AutoCloseable {
     /** Product-only identity hints are not managed file paths or read capabilities. */
     static final class ProfilePlan extends DirectPlan {
         private ProfilePlan(byte[] wire) throws IOException { super(wire, true); }
+    }
+
+    /** Strict configuration metadata in travel order, including the final target. */
+    static final class ProfileRoute {
+        final List<ProfilePlan> entries;
+        private ProfileRoute(byte[] wire) throws IOException {
+            if (wire == null || wire.length < 16 || wire.length > MAX_PROFILE_ROUTE_BYTES) throw invalid();
+            ByteBuffer input = ByteBuffer.wrap(wire);
+            if (input.getInt() != 0x43535250 || input.getInt() != 1) throw invalid();
+            int count = input.getInt();
+            if (count < 1 || count > 9) throw invalid();
+            List<ProfilePlan> plans = new ArrayList<>(count);
+            for (int index = 0; index < count; index++) {
+                if (input.remaining() < 4) throw invalid();
+                int size = input.getInt();
+                if (size < 84 || size > MAX_DIRECT_PLAN_BYTES || size > input.remaining()) throw invalid();
+                byte[] item = new byte[size];
+                try {
+                    input.get(item);
+                    if (ByteBuffer.wrap(item).getInt(4) != 5) throw invalid();
+                    ProfilePlan plan = new ProfilePlan(item);
+                    if (!plan.hostname.matches("[A-Za-z0-9.:%\\[\\]-]{1,253}")) throw invalid();
+                    if (index < count - 1 && plan.requestTty != 1) throw invalid();
+                    plans.add(plan);
+                } finally { wipe(item); }
+            }
+            if (input.hasRemaining()) throw invalid();
+            entries = Collections.unmodifiableList(plans);
+        }
+        ProfilePlan target() { return entries.get(entries.size() - 1); }
+        List<ProfilePlan> jumps() { return entries.subList(0, entries.size() - 1); }
     }
 
     static final class Site {
@@ -539,7 +582,7 @@ final class SshConfigEvaluator implements AutoCloseable {
     private final ViewBinding view;
     private final DetachedGuard detachedGuard;
     private final NativeBinding binding;
-    private final boolean catalogMode, auditMode, resourceAuditMode, directMode, profileIdentities;
+    private final boolean catalogMode, auditMode, resourceAuditMode, directMode, profileIdentities, profileRouteMode;
     private volatile long handle;
     private volatile boolean cancelled;
     private boolean inFlight, attempted, ready, nativeClosed;
@@ -547,6 +590,10 @@ final class SshConfigEvaluator implements AutoCloseable {
     private int maxOpens, maxReadBytes, maxLines;
 
     private SshConfigEvaluator(ViewBinding view, NativeBinding binding, boolean catalogMode) {
+        this(view, binding, catalogMode, false);
+    }
+
+    private SshConfigEvaluator(ViewBinding view, NativeBinding binding, boolean catalogMode, boolean profileRouteMode) {
         this.view = view;
         detachedGuard = null;
         this.binding = binding;
@@ -555,6 +602,7 @@ final class SshConfigEvaluator implements AutoCloseable {
         resourceAuditMode = false;
         directMode = false;
         profileIdentities = false;
+        this.profileRouteMode = profileRouteMode;
     }
 
     private SshConfigEvaluator(DetachedGuard guard, NativeBinding binding, boolean catalogMode) {
@@ -577,6 +625,11 @@ final class SshConfigEvaluator implements AutoCloseable {
     }
     private SshConfigEvaluator(DetachedGuard guard, NativeBinding binding, boolean catalogMode,
             boolean auditMode, boolean resourceAuditMode, boolean directMode, boolean profileIdentities) {
+        this(guard, binding, catalogMode, auditMode, resourceAuditMode, directMode, profileIdentities, false);
+    }
+    private SshConfigEvaluator(DetachedGuard guard, NativeBinding binding, boolean catalogMode,
+            boolean auditMode, boolean resourceAuditMode, boolean directMode, boolean profileIdentities,
+            boolean profileRouteMode) {
         view = null;
         detachedGuard = guard;
         this.binding = binding;
@@ -585,6 +638,7 @@ final class SshConfigEvaluator implements AutoCloseable {
         this.resourceAuditMode = resourceAuditMode;
         this.directMode = directMode;
         this.profileIdentities = profileIdentities;
+        this.profileRouteMode = profileRouteMode;
     }
 
     static SshConfigEvaluator prepareDetached(DetachedGuard guard, boolean catalogMode)
@@ -609,6 +663,12 @@ final class SshConfigEvaluator implements AutoCloseable {
     }
     static SshConfigEvaluator prepareProfileDirectDetached(DetachedGuard guard, NativeBinding binding) throws IOException {
         return prepareDetachedMode(guard, binding, false, false, false, true, true);
+    }
+    static SshConfigEvaluator prepareProfileRouteDetached(DetachedGuard guard) throws IOException {
+        return prepareProfileRouteDetached(guard, PRODUCTION);
+    }
+    static SshConfigEvaluator prepareProfileRouteDetached(DetachedGuard guard, NativeBinding binding) throws IOException {
+        return prepareDetachedMode(guard, binding, false, false, false, true, true, true);
     }
     static SshConfigEvaluator prepareDetachedProfileResourceAudit(DetachedGuard guard) throws IOException {
         return prepareDetachedProfileResourceAudit(guard, PRODUCTION);
@@ -651,13 +711,20 @@ final class SshConfigEvaluator implements AutoCloseable {
     private static SshConfigEvaluator prepareDetachedMode(DetachedGuard guard, NativeBinding binding,
             boolean catalogMode, boolean auditMode, boolean resourceAuditMode, boolean directMode,
             boolean profileIdentities) throws IOException {
+        return prepareDetachedMode(guard, binding, catalogMode, auditMode, resourceAuditMode,
+                directMode, profileIdentities, false);
+    }
+    private static SshConfigEvaluator prepareDetachedMode(DetachedGuard guard, NativeBinding binding,
+            boolean catalogMode, boolean auditMode, boolean resourceAuditMode, boolean directMode,
+            boolean profileIdentities, boolean profileRouteMode) throws IOException {
         if (guard == null || binding == null) throw invalid();
         SshConfigEvaluator evaluator = new SshConfigEvaluator(guard, binding, catalogMode, auditMode,
-                resourceAuditMode, directMode, profileIdentities);
+                resourceAuditMode, directMode, profileIdentities, profileRouteMode);
         evaluator.enter();
         try {
             guard.check();
-            long token = profileIdentities ? (directMode ? binding.reserveProfileDirect() : binding.reserveProfileResourceAudit())
+            long token = profileRouteMode ? binding.reserveProfileRoute()
+                    : profileIdentities ? (directMode ? binding.reserveProfileDirect() : binding.reserveProfileResourceAudit())
                     : directMode ? binding.reserveDirect() : resourceAuditMode ? binding.reserveResourceAudit()
                     : auditMode ? binding.reserveAudit() : binding.reserveDetached(catalogMode);
             if (token <= 0) throw unavailable();
@@ -677,6 +744,7 @@ final class SshConfigEvaluator implements AutoCloseable {
             live();
             if (source == null || source.length < 24 || source.length > MAX_DETACHED_BYTES
                     || ((catalogMode || auditMode) ? request != null : request == null)) throw invalid();
+            if (profileRouteMode && !request.remoteCommand.isEmpty()) throw invalid();
             ByteBuffer header = ByteBuffer.wrap(source);
             if (header.getInt() != 0x43534449 || header.getInt() != 1) throw invalid();
             int count = header.getInt();
@@ -736,6 +804,19 @@ final class SshConfigEvaluator implements AutoCloseable {
         return openMode(view, request, binding, false);
     }
 
+    static SshConfigEvaluator openProfileRoute(SshPublicFileLease lease, Request request) throws IOException {
+        if (lease == null) throw invalid();
+        return openProfileRoute(new ViewBinding() {
+            @Override public long token() throws VaultException { return lease.nativeToken(); }
+            @Override public boolean active() { return lease.active(); }
+        }, request, PRODUCTION);
+    }
+    static SshConfigEvaluator openProfileRoute(ViewBinding view, Request request, NativeBinding binding)
+            throws IOException {
+        if (view == null || request == null || binding == null || !request.remoteCommand.isEmpty()) throw invalid();
+        return openMode(view, request, binding, false, true);
+    }
+
     static SshConfigEvaluator openCatalog(SshPublicFileLease lease) throws IOException {
         if (lease == null) throw invalid();
         return openCatalog(new ViewBinding() {
@@ -751,7 +832,11 @@ final class SshConfigEvaluator implements AutoCloseable {
 
     private static SshConfigEvaluator openMode(ViewBinding view, Request request,
             NativeBinding binding, boolean catalogMode) throws IOException {
-        SshConfigEvaluator evaluator = new SshConfigEvaluator(view, binding, catalogMode);
+        return openMode(view, request, binding, catalogMode, false);
+    }
+    private static SshConfigEvaluator openMode(ViewBinding view, Request request,
+            NativeBinding binding, boolean catalogMode, boolean profileRouteMode) throws IOException {
+        SshConfigEvaluator evaluator = new SshConfigEvaluator(view, binding, catalogMode, profileRouteMode);
         byte[] wire = null;
         evaluator.enter();
         try {
@@ -761,7 +846,8 @@ final class SshConfigEvaluator implements AutoCloseable {
             try { viewToken = view.token(); }
             catch (VaultException failure) { throw unavailable(); }
             if (viewToken <= 0) throw unavailable();
-            long token = catalogMode ? binding.openCatalog(viewToken) : binding.open(viewToken, wire);
+            long token = catalogMode ? binding.openCatalog(viewToken)
+                    : profileRouteMode ? binding.openProfileRoute(viewToken, wire) : binding.open(viewToken, wire);
             if (token <= 0) throw unavailable();
             evaluator.handle = token;
             // Do not perform a failing postcheck: a positive token owns cleanup.
@@ -803,7 +889,7 @@ final class SshConfigEvaluator implements AutoCloseable {
         byte[] wire = null;
         try {
             live();
-            if (!ready || catalogMode || auditMode) throw unavailable();
+            if (!ready || catalogMode || auditMode || profileRouteMode) throw unavailable();
             wire = binding.summary(handle);
             Summary summary = new Summary(wire);
             live();
@@ -830,11 +916,25 @@ final class SshConfigEvaluator implements AutoCloseable {
         byte[] wire = null;
         try {
             live();
-            if (!ready || !directMode || !profileIdentities) throw unavailable();
+            if (!ready || !directMode || !profileIdentities || profileRouteMode) throw unavailable();
             wire = binding.profileDirectPlan(handle);
             ProfilePlan plan = new ProfilePlan(wire);
             live();
             return plan;
+        } catch (IOException | LinkageError failure) { throw unavailable(); }
+        finally { wipe(wire); leave(); }
+    }
+
+    ProfileRoute profileRoute() throws IOException {
+        enter();
+        byte[] wire = null;
+        try {
+            live();
+            if (!ready || !profileRouteMode) throw unavailable();
+            wire = binding.profileRoute(handle);
+            ProfileRoute route = new ProfileRoute(wire);
+            live();
+            return route;
         } catch (IOException | LinkageError failure) { throw unavailable(); }
         finally { wipe(wire); leave(); }
     }

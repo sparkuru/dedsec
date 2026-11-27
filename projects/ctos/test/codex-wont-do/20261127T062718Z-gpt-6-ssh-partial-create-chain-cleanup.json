@@ -1,0 +1,152 @@
+{
+  "schema_version": "1.0.0",
+  "kind": "test_task",
+  "worker_instructions": "执行方先阅读 test/codex-wont-do/template.json、AGENTS.md 和本任务所列资源；按模板领取并完成符合前置条件的测试，将实际结果和证据追加到本文件的 execution.attempts，交独立 Codex 审核。阻塞或失败时如实报告。",
+  "task_id": "20261127T062718Z-gpt-6-ssh-partial-create-chain-cleanup",
+  "state": "blocked",
+  "created_at_utc": "2026-11-27T06:44:11Z",
+  "creator": {
+    "agent": "codex",
+    "model": "gpt-6",
+    "model_precision": "family_only",
+    "start_timestamp_utc": "2026-11-27T06:27:18Z"
+  },
+  "request": {
+    "title": "连接创建期局部失败与整链 owner 清理",
+    "goal": "在受控局部创建、attach、STOP 和清理故障下验证内部 session 及跳板链原 owner 与逆序释放。",
+    "baseline": {
+      "git_head": "d281fb5b6b770d137d44bf8d921e3743e7451691",
+      "dirty_worktree": true,
+      "pinned_files": [
+        {
+          "path": "android/app/src/main/java/im/majo/ctos/SshNativeSession.java",
+          "sha256": "c89a53acec83cd5a975163b6afc4f6e8090fbf627292adca3acc62142624adc7"
+        },
+        {
+          "path": "android/app/src/main/java/im/majo/ctos/SshTerminalSession.java",
+          "sha256": "a7b0e6003423f2dac627f6119ff1fd6a2c319bc2508e1adbac67a4ba5a1e4ffe"
+        },
+        {
+          "path": "android/app/src/main/java/im/majo/ctos/SshSessionOwner.java",
+          "sha256": "fffd8ebd782efa5a607a3300dd033ad0d9d2897e713cedf54d65c0a1b70918a9"
+        },
+        {
+          "path": "android/app/src/main/java/im/majo/ctos/SshPasswordConnector.java",
+          "sha256": "d68aa4cfb06341fcac8ced0d4b9eb5a1c5cde040deb5bb5c18739d95b93b2e5d"
+        },
+        {
+          "path": "android/app/src/main/cpp/ssh_native_client.c",
+          "sha256": "3496b25dede9a9329ec0c85c27d1c5d4d44c7aee5727177771b9e266c20cf6ea"
+        }
+      ],
+      "capture_policy": "此快照仅记录任务创建时状态；实现或授权前置条件满足后由 Codex 刷新测试单的固定输入。执行方另记测试前后完整相关输入、dirty 状态和产物清单。"
+    },
+    "resources": {
+      "read": [
+        {
+          "path": "design/agent-test-handoff.md",
+          "why": "协作流程"
+        },
+        {
+          "path": "design/handoff-ssh-terminal-client.md",
+          "why": "SSH 当前状态与限制"
+        },
+        {
+          "path": "design/verification.md",
+          "why": "核对历史验证，避免重复或夸大"
+        },
+        {
+          "path": ".trellis/tasks/10-08-ssh-terminal/implement.md",
+          "why": "父任务剩余实施与验收计划"
+        },
+        {
+          "path": ".trellis/spec/backend/ssh-connector-unstarted-retirement.md",
+          "why": "未启动／已接管材料边界"
+        },
+        {
+          "path": ".trellis/spec/backend/ssh-connection-result-delivery.md",
+          "why": "创建与结果结算"
+        },
+        {
+          "path": "design/ssh-proxyjump.md",
+          "why": "父子链和逐跳清理边界"
+        }
+      ],
+      "environment": [
+        "只使用本机、隔离或回环上的合成测试资源；不访问真实账号、凭据或生产服务。",
+        "测试环境与权限不足时如实阻塞，不安装依赖或扩大网络/设备权限。"
+      ],
+      "allowed_writes": [
+        "build/codex-wont-do/<task_id>/<attempt_id>/ 下的专属报告、输入清单与无秘密日志",
+        "仅经测试单或后续明确授权的测试专用夹具与产物；保留完整 diff，不得修改产品行为或覆盖他人改动"
+      ],
+      "exclusive_locks": [
+        "android-release-build",
+        "ssh-test-inputs"
+      ],
+      "secrets_policy": "仅使用合成测试数据；禁止记录真实凭据、私钥、令牌和用户数据。"
+    },
+    "dependencies": [],
+    "preconditions": [
+      "Codex 先完成并审阅相关合同与产品实现，核对最新设计和可复用的历史覆盖，再细化本任务、更新固定输入并转 queued。"
+    ],
+    "cases": [
+      {
+        "id": "partial-create",
+        "exercise": "分别在原生句柄创建、Java owner 接管和服务发布的边界设置屏障，触发 create 失败或 STOP。",
+        "pass": "每个已创建资源有唯一精确 owner；未接管材料独立擦除，已交接或结果未知的资源不被错误释放。"
+      },
+      {
+        "id": "reverse-close",
+        "exercise": "在实际受管父子合成链的中间跳或最终 session 清理时注入失败，观察逆序清理。",
+        "pass": "按合同保留未确认的原 owner，不提前关闭仍被使用的祖先；仅对明确可重试的对象重试。"
+      },
+      {
+        "id": "result-settlement",
+        "exercise": "交错连接结果、创建结算与取消，记录 future、实际结果投递尝试及 owner。",
+        "pass": "结果不被无关清理异常覆盖，至多一次尝试不被夸大为对端已收到，释放与结果分别有证据。"
+      }
+    ],
+    "commands": [],
+    "acceptance": [
+      "覆盖真实生产编排与测试 JNI 合成链；设备 Service/Looper 另由设备任务验证。",
+      "实际案例全部有可核对证据；记录失败、错误、跳过和未覆盖部分，缺少必需案例不得标 pass。"
+    ],
+    "stop_conditions": [
+      "生产链的创建期或整链清理合同未完成，或者只能使用无法证明真实 owner 的 fake。",
+      "需修改产品代码、未授权设备/外部网络/真实账号、资源缺失或固定源码不匹配时停止并记录原因；不更改验收标准。"
+    ],
+    "codex_review": [
+      "区分工厂未开始、已接管、局部创建和未知结果；检查逆序释放及最终结果未必送达。",
+      "核对执行者独立性、当前授权与范围，源码和测试前后输入、产物哈希、实际命令/退出码、每个案例与跳过项及证据。",
+      "检查测试专用代码和 diff，区分测试报告被接受、实际测试通过和产品任务完成。"
+    ]
+  },
+  "blockers": [
+    {
+      "kind": "implementation_or_contract",
+      "detail": "创建期内部 session、其他显式 operation 和完整父子链释放的所有权尚未统一处理。",
+      "release_condition": "Codex 完成并审阅必要合同／实现及权限，复核既有覆盖、更新断言和固定源码后转 queued。"
+    }
+  ],
+  "execution": {
+    "claim": null,
+    "attempts": []
+  },
+  "review": {
+    "status": "pending",
+    "reviewer": null,
+    "reviewed_at_utc": null,
+    "findings": [],
+    "decision_scope": null,
+    "decisions": []
+  },
+  "history": [
+    {
+      "at_utc": "2026-11-27T06:44:11Z",
+      "actor": "codex",
+      "event": "created",
+      "detail": "父任务仍有对应未完成设计或实现；建立未来测试请求，未执行测试。"
+    }
+  ]
+}

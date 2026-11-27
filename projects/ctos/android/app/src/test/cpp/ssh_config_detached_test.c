@@ -78,6 +78,16 @@ const struct ctos_ssh_view *__wrap_ctos_ssh_view_borrow_view(const struct ctos_s
 int __wrap_ctos_ssh_view_borrow_release(struct ctos_ssh_view_borrow *b) {
     (void)b; capabilities++; errno = EACCES; return -1;
 }
+int __wrap_ctos_ssh_view_borrow_claim(struct ctos_ssh_view_borrow *b, const void *owner,
+    struct ctos_ssh_view_borrow_claim **out) {
+    (void)b; (void)owner; if (out != NULL) *out = NULL; capabilities++; errno = EACCES; return -1;
+}
+void __wrap_ctos_ssh_view_borrow_claim_abort(struct ctos_ssh_view_borrow_claim *claim) {
+    (void)claim; capabilities++;
+}
+int __wrap_ctos_ssh_view_borrow_claim_release(struct ctos_ssh_view_borrow_claim *claim, const void *owner) {
+    (void)claim; (void)owner; capabilities++; errno = EACCES; return -1;
+}
 int __wrap_ctos_ssh_view_handle_create(const unsigned char *p, size_t n, ctos_ssh_view_token *out) {
     (void)p; (void)n; (void)out; capabilities++; errno = EACCES; return -1;
 }

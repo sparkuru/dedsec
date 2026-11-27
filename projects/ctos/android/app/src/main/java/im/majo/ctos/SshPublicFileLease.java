@@ -13,13 +13,19 @@ final class SshPublicFileLease implements AutoCloseable, VaultSession.Revocation
     private static final int MAX_WIRE = VaultEnvelope.MAX_PLAINTEXT;
     private long token;
     private volatile boolean active = true;
+    private boolean revocationConfirmed;
     private boolean cleanupFailed;
+    private Throwable cleanupFailure;
 
     private static final class Native {
         static { System.loadLibrary("ctos_ssh_files"); }
         static native long create(byte[] wire) throws IOException;
         static native long[] summary(long token) throws IOException;
         static native boolean destroy(long token);
+    }
+
+    private static final class DestroyUnconfirmed extends IllegalStateException {
+        DestroyUnconfirmed(Throwable cause) { super("SSH file view revocation is unconfirmed", cause); }
     }
 
     private SshPublicFileLease(long token) { this.token = token; }
@@ -138,30 +144,58 @@ final class SshPublicFileLease implements AutoCloseable, VaultSession.Revocation
 
     @Override public boolean active() { return active; }
 
+    /** A native acknowledgement does not mean outstanding borrows have retired. */
+    @Override public synchronized boolean revocationConfirmed() { return revocationConfirmed; }
+
     /** No AppSecrets/session calls: also safe under the session's lock. */
     @Override public synchronized void revoke() {
-        if (active) active = false;
+        if (cleanupFailed)
+            throw new IllegalStateException("SSH file view revocation is unconfirmed", cleanupFailure);
+        if (active) {
+            try {
+                int result = SshNativeCallbackAdapter.beginJumpCleanupInvalidation();
+                if (result != 0 && result != 1)
+                    throw new IllegalStateException("SSH file view invalidation did not begin");
+                active = false;
+                SshNativeCallbackAdapter.endJumpEffectInvalidation(result == 1);
+            } catch (RuntimeException | Error failure) {
+                active = false;
+                cleanupFailed = true;
+                cleanupFailure = failure;
+                throw failure;
+            }
+        }
         destroyNative();
     }
 
     @Override public void close() throws VaultException {
-        revoke();
+        synchronized (this) { if (cleanupFailed) throw unavailable(); }
+        try { revoke(); }
+        catch (DestroyUnconfirmed failure) { throw unavailable(); }
         synchronized (this) { if (cleanupFailed) throw unavailable(); }
     }
 
-    /** Revoke may only acknowledge a deferred native borrow release. Keep the
-     * token when cleanup is unconfirmed so the owner can retry it. */
+    /** Acknowledged revoke may still defer physical release to outstanding borrows.
+     * Keep the token when the result is unconfirmed; do not repeat an unknown call. */
     private synchronized void destroyNative() {
         if (token <= 0) return;
         try {
             if (Native.destroy(token)) {
                 token = 0;
                 cleanupFailed = false;
+                revocationConfirmed = true;
             } else {
                 cleanupFailed = true;
+                throw new DestroyUnconfirmed(null);
             }
         } catch (LinkageError failure) {
             cleanupFailed = true;
+            cleanupFailure = failure;
+            throw new DestroyUnconfirmed(failure);
+        } catch (RuntimeException | Error failure) {
+            cleanupFailed = true;
+            cleanupFailure = failure;
+            throw failure;
         }
     }
 

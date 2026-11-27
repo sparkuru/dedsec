@@ -255,6 +255,34 @@ final class SshConnectionMaterial {
         if (!root.startsWith(".ssh/") || root.equals(MANUAL)) throw unsupported();
         return (SshConfigEvaluator.ProfilePlan)planMode(manifest, root, alias, user, deadline, guard, limits, true);
     }
+    static SshConfigEvaluator.ProfileRoute profileRoute(VaultManifest manifest, String root, String alias,
+            String user, long deadline, AppSecrets.EffectGuard guard) throws IOException, VaultException {
+        return profileRoute(manifest, root, alias, user, deadline, guard, null);
+    }
+    static SshConfigEvaluator.ProfileRoute profileRoute(VaultManifest manifest, String root, String alias,
+            String user, long deadline, AppSecrets.EffectGuard guard, Limits limits) throws IOException, VaultException {
+        if (!root.startsWith(".ssh/") || root.equals(MANUAL)) throw unsupported();
+        retryCleanup();
+        byte[] source = detached(manifest);
+        SshConfigEvaluator evaluator = null;
+        try {
+            if (limits != null) {
+                if (limits.opens < 1 || limits.bytes < 1 || limits.lines < 1)
+                    throw new VaultException("SSH_CONFIG_LIMIT", "The SSH catalog evaluation budget is exhausted");
+                ByteBuffer.wrap(source).putInt(12, limits.opens).putInt(16, limits.bytes).putInt(20, limits.lines);
+            }
+            String[] local = SshNativeRoleBootstrap.systemIdentity();
+            if (local == null || local.length != 2) throw unsupported();
+            evaluator = SshConfigEvaluator.prepareProfileRouteDetached(() -> check(guard));
+            retain(evaluator);
+            evaluator.loadDetached(source, index(manifest, root), deadline,
+                    new SshConfigEvaluator.Request(alias, user, "", local[0], local[1], "", "", 0, Process.myUid()));
+            evaluator.run();
+            SshConfigEvaluator.ProfileRoute result = evaluator.profileRoute();
+            guard.check();
+            return result;
+        } finally { VaultCodec.wipe(source); if (evaluator != null) closeEvaluator(evaluator); }
+    }
     private static SshConfigEvaluator.DirectPlan planMode(VaultManifest manifest, String root, String alias,
             String user, long deadline, AppSecrets.EffectGuard guard, Limits limits, boolean profile)
             throws IOException, VaultException {

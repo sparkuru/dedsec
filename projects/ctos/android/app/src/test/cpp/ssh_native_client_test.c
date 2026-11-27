@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/ioctl.h>
 #include <sys/resource.h>
 #include <sys/socket.h>
 #include <time.h>
@@ -21,6 +22,7 @@
 #include "packet.h"
 #include "ssh_hostfile_issuer.h"
 #include "ssh_kex_guard.h"
+#include "ssh_config_eval.h"
 #include "ssh_material_inspect.h"
 #include "ssh_role_bootstrap.h"
 #include "ssh2.h"
@@ -40,8 +42,64 @@
 #endif
 
 static unsigned int checks;
+static int child_test_case = -1;
+static int fixture_jump_role;
+static const char *fixture_chain_identity;
+static int fixture_fresh_host_mode;
+static ctos_ssh_role_token fixture_existing_role;
+static struct ctos_ssh_native_client *fixture_jump_parent;
+static struct ctos_ssh_native_jump_relay *fixture_child_relay;
+static int fixture_expect_child_no_relay;
+static int fixture_check_borrow_transaction;
+struct fixture;
+static struct fixture *fixture_parent_context;
+static struct fixture *fixture_root_context;
+
+struct child_wrong_owner_attempt {
+    struct ctos_ssh_native_client *parent, *child;
+    struct ctos_ssh_native_jump_relay *relay;
+    struct ctos_ssh_native_client_config config;
+    int open_result, open_error, step_result, step_error;
+    int close_result, close_error, relay_result, relay_error;
+};
+
+static void *child_wrong_owner(void *opaque) {
+    struct child_wrong_owner_attempt *attempt = opaque;
+    struct ctos_ssh_native_client *child = NULL;
+    struct ctos_ssh_native_jump_relay *relay = NULL;
+    attempt->open_result = ctos_ssh_native_client_open_jump_child(attempt->parent,
+        &attempt->config, &child, &relay);
+    attempt->open_error = errno;
+    if (child != NULL || relay != NULL) attempt->open_result = 0;
+    attempt->step_result = ctos_ssh_native_client_step(attempt->child,
+        &(struct ctos_ssh_native_client_step){0});
+    attempt->step_error = errno;
+    attempt->close_result = ctos_ssh_native_client_close(attempt->child);
+    attempt->close_error = errno;
+    attempt->relay_result = ctos_ssh_native_jump_relay_close(attempt->relay);
+    attempt->relay_error = errno;
+    return NULL;
+}
+
+struct child_retry_owner_attempt {
+    struct ctos_ssh_native_client *child;
+    struct ctos_ssh_native_jump_relay *relay;
+    int close_result, close_error, destroy_result, destroy_error, relay_result, relay_error;
+};
+
+static void *child_retry_wrong_owner(void *opaque) {
+    struct child_retry_owner_attempt *attempt = opaque;
+    attempt->close_result = ctos_ssh_native_client_close(attempt->child);
+    attempt->close_error = errno;
+    attempt->destroy_result = ctos_ssh_native_client_destroy(attempt->child);
+    attempt->destroy_error = errno;
+    attempt->relay_result = ctos_ssh_native_jump_relay_close(attempt->relay);
+    attempt->relay_error = errno;
+    return NULL;
+}
 
 #define TEST_STEP_BUDGET 3U
+static size_t fixture_step_budget = TEST_STEP_BUDGET;
 /* Complete QEMU handshakes before deliberately expiring the original deadline. */
 #define TEST_EXPIRY_PREPARATION_MS 5000U
 #define TEST_EXPIRY_WAIT_ATTEMPTS 6000U
@@ -49,8 +107,8 @@ static unsigned int checks;
 #define CHECK(condition) do { \
     checks++; \
     if (!(condition)) { \
-        fprintf(stderr, "SSH_NATIVE_CLIENT failure line=%u errno=%d\\n", \
-            (unsigned int)__LINE__, errno); \
+        fprintf(stderr, "SSH_NATIVE_CLIENT failure line=%u errno=%d child_case=%d\\n", \
+            (unsigned int)__LINE__, errno, child_test_case); \
         abort(); \
     } \
 } while (0)
@@ -246,7 +304,12 @@ struct callback_fixture {
     unsigned int host_evidence_calls;
     unsigned int candidate_calls;
     unsigned int candidate_abort_calls;
+    unsigned int candidate_abort_failures_remaining;
     int enable_changed;
+    int enable_provisional, fail_provisional_candidate, deny_provisional_review;
+    int cancel_provisional_review, cancel_provisional_kex;
+    int close_provisional_candidate, close_provisional_review, close_provisional_kex;
+    unsigned int provisional_candidate_calls, provisional_review_calls, provisional_kex_calls;
     int deny_changed_review;
     int fail_changed_commit;
     int expire_changed_review;
@@ -264,6 +327,7 @@ struct callback_fixture {
     unsigned int release_calls;
     unsigned int release_failures_remaining;
     unsigned int credential_calls;
+    unsigned int expected_credential_calls;
     unsigned int credential_bytes_calls;
     unsigned int selected_calls;
     int selected_body_override;
@@ -281,6 +345,13 @@ struct callback_fixture {
     size_t caller_capacity;
     int fail_host_evidence;
     int host_action;
+    int scope_probe;
+    ctos_ssh_callback_token scope_token, scope_other;
+    unsigned int scope_host_checks, scope_selected_checks, scope_after_invalidation;
+    unsigned int scope_candidate_checks, scope_review_checks, scope_kex_checks;
+    unsigned int scope_closed_checks;
+    void (*scope_close_parent)(void *);
+    void *scope_close_parent_context;
     ctos_ssh_role_token expected_role;
     unsigned int expected_hop;
     unsigned int expected_port;
@@ -320,6 +391,20 @@ static int validate_environment(void *context, void *environment) {
     return fixture != NULL && fixture->environment == environment ? 0 : -1;
 }
 
+static int validate_receiver(void *context, void *environment, const void *receiver) {
+    return validate_environment(context, environment) == 0 && receiver == context ? 0 : -1;
+}
+
+static void check_receiver_scope(struct callback_fixture *fixture, void *environment) {
+    int other_receiver;
+    CHECK(ctos_ssh_native_client_callback_ancestor_proofs_check_receiver(
+        fixture->scope_token, environment, fixture, validate_receiver) == 0);
+    CHECK(ctos_ssh_native_client_callback_ancestor_proofs_check_receiver(
+        fixture->scope_token, environment, &other_receiver, validate_receiver) != 0 && errno == EACCES);
+    CHECK(ctos_ssh_native_client_callback_ancestor_proofs_check_receiver(
+        fixture->scope_token, environment, NULL, validate_receiver) != 0 && errno == EINVAL);
+}
+
 static int host_evidence(void *context, void *environment,
     const struct ctos_ssh_host_evidence *evidence,
     struct ctos_ssh_host_result *result) {
@@ -338,6 +423,27 @@ static int host_evidence(void *context, void *environment,
     CHECK(strcmp(evidence->host, "example.invalid") == 0);
     CHECK(strcmp(evidence->key_type, fixture->expected_key_type) == 0);
     CHECK(strcmp(evidence->fingerprint, fixture->expected_fingerprint) == 0);
+    if (fixture->scope_probe == 1) {
+        int wrong_environment = 0;
+        CHECK(ctos_ssh_native_client_callback_ancestor_proofs_check(fixture->scope_token, environment) == 0);
+        check_receiver_scope(fixture, environment);
+        CHECK(ctos_ssh_native_client_callback_ancestor_proofs_check(fixture->scope_token,
+            &wrong_environment) != 0 && errno == EPERM);
+        CHECK(ctos_ssh_native_client_callback_ancestor_proofs_check(fixture->scope_other,
+            environment) != 0 && errno == EACCES);
+        fixture->scope_host_checks++;
+        if (fixture->scope_close_parent != NULL) {
+            fixture->scope_close_parent(fixture->scope_close_parent_context);
+            CHECK(ctos_ssh_native_client_callback_ancestor_proofs_check(fixture->scope_token, environment) == 0);
+            fixture->scope_closed_checks++;
+        }
+    } else if (fixture->scope_probe == 3) {
+        CHECK(ctos_ssh_native_client_callback_ancestor_proofs_check(fixture->scope_token, environment) != 0
+            && errno == EACCES);
+        CHECK(ctos_ssh_native_client_callback_ancestor_proofs_check_receiver(
+            fixture->scope_token, environment, fixture, validate_receiver) != 0 && errno == EACCES);
+        fixture->scope_host_checks++;
+    }
     if (evidence->classification == CTOS_SSH_CALLBACK_HOST_NEW) {
         CHECK(fixture->candidate_calls == 1);
         CHECK(fixture->candidate_event_order == fixture->callback_event_order);
@@ -390,6 +496,13 @@ static int host_evidence(void *context, void *environment,
     if (fixture->host_action == 6) fixture->environment = NULL;
     if (fixture->host_action == 7) CHECK(ctos_ssh_role_bootstrap_close(fixture->selected_role) == 0);
     if (fixture->host_action == 8) result->cas_status = CTOS_SSH_CALLBACK_HOST_CAS_NOT_REQUIRED;
+    if (fixture->scope_probe == 1 && (fixture->host_action == 2
+            || fixture->host_action == 3 || fixture->host_action == 7)) {
+        CHECK(ctos_ssh_native_client_callback_ancestor_proofs_check(fixture->scope_token, environment) != 0);
+        CHECK(ctos_ssh_native_client_callback_ancestor_proofs_check_receiver(
+            fixture->scope_token, environment, fixture, validate_receiver) != 0);
+        fixture->scope_after_invalidation++;
+    }
     return 0;
 }
 
@@ -415,6 +528,11 @@ static int known_hosts_candidate(void *context, void *environment,
     CHECK(candidate->replacement_body != NULL
         && candidate->replacement_body_length > 0
         && candidate->replacement_body_length <= CTOS_SSH_CALLBACK_MAX_FILE_BYTES);
+    if (fixture->scope_probe == 1) {
+        CHECK(ctos_ssh_native_client_callback_ancestor_proofs_check(fixture->scope_token, environment) == 0);
+        check_receiver_scope(fixture, environment);
+        fixture->scope_candidate_checks++;
+    }
     CHECK(fixture->candidate_body == NULL);
     fixture->candidate_body = malloc(candidate->replacement_body_length);
     CHECK(fixture->candidate_body != NULL);
@@ -445,8 +563,15 @@ static int known_hosts_candidate_abort(void *context, void *environment) {
 
     CHECK(fixture != NULL && fixture->environment == environment);
     CHECK(fixture->candidate_calls == 1);
-    CHECK(fixture->host_evidence_calls == 1 || fixture->changed_candidate_calls == 1);
+    CHECK(fixture->host_evidence_calls == 1 || fixture->changed_candidate_calls == 1
+        || fixture->provisional_candidate_calls == 1);
     fixture->candidate_abort_calls++;
+    if (fixture->candidate_abort_failures_remaining != 0) {
+        fixture->candidate_abort_failures_remaining--;
+        return EIO;
+    }
+    if (fixture->enable_provisional && fixture->candidate_body != NULL)
+        memset(fixture->candidate_body, 0, fixture->candidate_body_length);
     return 0;
 }
 
@@ -467,6 +592,11 @@ static int changed_host_candidate(void *context, void *environment,
         && read_u32(changed->old_records + 8U) == 0U
         && read_u32(changed->old_records + 12U) == 1U
         && memcmp(changed->old_records + 24U, evidence->base_digest, 32U) == 0);
+    if (fixture->scope_probe == 1) {
+        CHECK(ctos_ssh_native_client_callback_ancestor_proofs_check(fixture->scope_token, environment) == 0);
+        check_receiver_scope(fixture, environment);
+        fixture->scope_candidate_checks++;
+    }
     CHECK(fixture->candidate_body == NULL && fixture->changed_records == NULL);
     fixture->candidate_body = malloc(candidate->replacement_body_length);
     fixture->changed_records = malloc(changed->old_records_length);
@@ -497,6 +627,11 @@ static int changed_host_review(void *context, void *environment,
         && strcmp(evidence->fingerprint, fixture->last_candidate_fingerprint) == 0
         && memcmp(evidence->base_digest, fixture->candidate_base_digest, 32U) == 0
         && memcmp(evidence->replacement_digest, fixture->candidate_replacement_digest, 32U) == 0);
+    if (fixture->scope_probe == 1) {
+        CHECK(ctos_ssh_native_client_callback_ancestor_proofs_check(fixture->scope_token, environment) == 0);
+        check_receiver_scope(fixture, environment);
+        fixture->scope_review_checks++;
+    }
     fixture->changed_review_calls++;
     fixture->host_evidence_event_order = ++fixture->callback_event_order;
     if (fixture->cancel_changed_review)
@@ -507,6 +642,49 @@ static int changed_host_review(void *context, void *environment,
     return fixture->deny_changed_review ? EACCES : 0;
 }
 
+static int provisional_new_candidate(void *context, void *environment,
+    const struct ctos_ssh_known_hosts_candidate *candidate) {
+    struct callback_fixture *fixture = context;
+    CHECK(known_hosts_candidate(context, environment, candidate) == 0);
+    fixture->provisional_candidate_calls++;
+    if (fixture->close_provisional_candidate) fixture->scope_close_parent(fixture->scope_close_parent_context);
+    return fixture->fail_provisional_candidate ? EACCES : 0;
+}
+
+static int provisional_new_review(void *context, void *environment,
+    const struct ctos_ssh_host_evidence *evidence) {
+    struct callback_fixture *fixture = context;
+    CHECK(fixture != NULL && fixture->environment == environment && evidence != NULL
+        && fixture->provisional_candidate_calls == 1 && fixture->provisional_review_calls == 0
+        && evidence->classification == CTOS_SSH_CALLBACK_HOST_NEW
+        && evidence->role == fixture->last_candidate_role && evidence->hop == fixture->last_candidate_hop
+        && strcmp(evidence->fingerprint, fixture->last_candidate_fingerprint) == 0
+        && memcmp(evidence->base_digest, fixture->candidate_base_digest, 32U) == 0
+        && memcmp(evidence->replacement_digest, fixture->candidate_replacement_digest, 32U) == 0);
+    CHECK(ctos_ssh_native_client_callback_ancestor_proofs_check(fixture->scope_token, environment) == 0);
+    check_receiver_scope(fixture, environment);
+    fixture->provisional_review_calls++;
+    if (fixture->close_provisional_review) fixture->scope_close_parent(fixture->scope_close_parent_context);
+    if (fixture->cancel_provisional_review)
+        CHECK(ctos_ssh_callback_cancel(fixture->selected_callback) == 0);
+    return fixture->deny_provisional_review ? EACCES : 0;
+}
+
+static int provisional_new_kex(void *context, void *environment, uint64_t cycle,
+    const unsigned char session_digest[32]) {
+    struct callback_fixture *fixture = context;
+    CHECK(fixture != NULL && fixture->environment == environment && cycle != 0
+        && session_digest != NULL && fixture->provisional_review_calls == 1
+        && fixture->provisional_kex_calls == 0 && fixture->kex_complete_calls == 0);
+    CHECK(ctos_ssh_native_client_callback_ancestor_proofs_check(fixture->scope_token, environment) == 0);
+    check_receiver_scope(fixture, environment);
+    fixture->provisional_kex_calls++;
+    if (fixture->close_provisional_kex) fixture->scope_close_parent(fixture->scope_close_parent_context);
+    if (fixture->cancel_provisional_kex)
+        CHECK(ctos_ssh_callback_cancel(fixture->selected_callback) == 0);
+    return 0;
+}
+
 static int kex_complete(void *context, void *environment, uint64_t cycle,
     const unsigned char session_digest[32]) {
     struct callback_fixture *fixture = context;
@@ -514,6 +692,11 @@ static int kex_complete(void *context, void *environment, uint64_t cycle,
 
     CHECK(fixture != NULL && fixture->environment == environment);
     CHECK(cycle != 0 && session_digest != NULL);
+    if (fixture->scope_probe == 1) {
+        CHECK(ctos_ssh_native_client_callback_ancestor_proofs_check(fixture->scope_token, environment) == 0);
+        check_receiver_scope(fixture, environment);
+        fixture->scope_kex_checks++;
+    }
     if (fixture->changed_candidate_calls != 0) {
         CHECK(fixture->changed_candidate_calls == 1 && fixture->changed_review_calls == 1
             && fixture->selected_calls == 0 && fixture->candidate_event_order == 1U
@@ -551,6 +734,13 @@ static int credential(void *context, void *environment, int kind) {
     CHECK(fixture != NULL && fixture->environment == environment);
     (void)kind;
     fixture->credential_calls++;
+    if (fixture->scope_probe == 2) {
+        CHECK(ctos_ssh_native_client_callback_ancestor_proofs_check(fixture->scope_token, environment) != 0
+            && errno == EACCES);
+        CHECK(ctos_ssh_native_client_callback_ancestor_proofs_check_receiver(
+            fixture->scope_token, environment, fixture, validate_receiver) != 0 && errno == EACCES);
+        fixture->scope_selected_checks++;
+    }
     return EACCES;
 }
 
@@ -583,6 +773,11 @@ static int credential_bytes_selected(void *context, void *environment, int kind,
     CHECK(fixture->kex_complete_calls == 1U
         && (fixture->host_evidence_calls == 1U || fixture->changed_commit_calls == 1U));
     CHECK(output != NULL && output != fixture->caller_output && length != NULL);
+    if (fixture->scope_probe == 1) {
+        CHECK(ctos_ssh_native_client_callback_ancestor_proofs_check(fixture->scope_token, environment) == 0);
+        check_receiver_scope(fixture, environment);
+        fixture->scope_selected_checks++;
+    }
     for (size_t index = 0; index < fixture->caller_capacity; index++)
         CHECK(fixture->caller_output[index] == 0);
     fixture->selected_calls++;
@@ -598,6 +793,12 @@ static int credential_bytes_selected(void *context, void *environment, int kind,
     if (fixture->selected_action == 5)
         wait_until_deadline_attempts(fixture->selected_deadline, TEST_EXPIRY_WAIT_ATTEMPTS);
     if (fixture->selected_action == 6) *length = capacity + 1U;
+    if (fixture->scope_probe == 1 && fixture->selected_action == 3) {
+        CHECK(ctos_ssh_native_client_callback_ancestor_proofs_check(fixture->scope_token, environment) != 0);
+        CHECK(ctos_ssh_native_client_callback_ancestor_proofs_check_receiver(
+            fixture->scope_token, environment, fixture, validate_receiver) != 0);
+        fixture->scope_after_invalidation++;
+    }
     for (size_t index = 0; index < fixture->caller_capacity; index++)
         CHECK(fixture->caller_output[index] == 0);
     return 0;
@@ -622,6 +823,7 @@ static ctos_ssh_callback_token open_callback(struct callback_fixture *fixture,
     struct ctos_ssh_callback_target target = {
         .context = fixture,
         .validate_environment = validate_environment,
+        .validate_receiver = validate_receiver,
         .host_evidence = host_evidence,
         .known_hosts_candidate = known_hosts_candidate,
         .known_hosts_candidate_abort = known_hosts_candidate_abort,
@@ -631,6 +833,9 @@ static ctos_ssh_callback_token open_callback(struct callback_fixture *fixture,
         .credential_bytes_selected = fixture->omit_selected_target ? NULL : credential_bytes_selected,
         .changed_host_candidate = fixture->enable_changed ? changed_host_candidate : NULL,
         .changed_host_review = fixture->enable_changed ? changed_host_review : NULL,
+        .provisional_new_candidate = fixture->enable_provisional ? provisional_new_candidate : NULL,
+        .provisional_new_review = fixture->enable_provisional ? provisional_new_review : NULL,
+        .provisional_new_kex = fixture->enable_provisional ? provisional_new_kex : NULL,
         .release = release
     };
     ctos_ssh_callback_token callback = 0;
@@ -789,8 +994,12 @@ enum password_reply {
 
 struct fixture {
     struct ctos_ssh_native_client *client;
+    int managed_child;
+    int managed_child_fd;
+    size_t step_budget;
     struct ssh *server;
     struct ctos_ssh_view *view;
+    struct ctos_ssh_view *fresh_host_view;
     struct ctos_ssh_view_borrow *view_borrow;
     struct callback_fixture callback;
     struct sshkey *private_key;
@@ -813,6 +1022,7 @@ struct fixture {
     enum service_reply service_reply;
     unsigned int service_requests;
     int suppress_server_ext_info;
+    int force_server_cipher;
     struct wire selection_wire;
     unsigned char selection_receipt[32];
     int password_expected;
@@ -844,6 +1054,7 @@ struct fixture {
     unsigned int keyboard_requests, keyboard_responses, keyboard_prompt_count;
     struct ctos_ssh_slice keyboard_answers[CTOS_SSH_NATIVE_CLIENT_KBI_PROMPTS];
     int shell_expected, shell_stage, shell_reject, shell_early_output_stage, shell_early_close_stage, shell_no_pty;
+    int jump_expected, jump_preconfirm_data, jump_bridge_enabled, jump_bridge_fd;
     int server_alive_expected, server_alive_reply;
     unsigned int server_alive_requests;
     uint32_t shell_window, shell_maxpacket, shell_credit;
@@ -867,6 +1078,13 @@ static void setup_synthetic_server(struct fixture *fixture) {
     CHECK(fixture != NULL && fixture->server == NULL
         && fixture->private_key != NULL && fixture->pair[1] >= 0);
     make_kex_params(&params);
+    if (fixture->force_server_cipher != 0) {
+        /* ssh_init reads only CTOS, then populates both directions. */
+        params.proposal[PROPOSAL_ENC_ALGS_CTOS] = fixture->force_server_cipher == 1
+            ? "aes128-ctr" : fixture->force_server_cipher == 3
+                ? "chacha20-poly1305@openssh.com" : "aes128-gcm@openssh.com";
+        params.proposal[PROPOSAL_MAC_ALGS_CTOS] = "hmac-sha2-256";
+    }
     CHECK(ssh_init(&fixture->server, 1, &params) == 0
         && fixture->server != NULL);
     CHECK(ssh_packet_set_connection(fixture->server, fixture->pair[1],
@@ -1040,7 +1258,11 @@ static void finish_fixture_setup_selected_mode(struct fixture *fixture,
     unsigned char known_hosts_body[16384] = {0};
     size_t known_hosts_length;
 
-    fixture->deadline = deadline_after(lifetime_ms);
+    if (fixture_existing_role != 0) {
+        struct ctos_ssh_role_snapshot existing;
+        CHECK(ctos_ssh_role_bootstrap_snapshot(fixture_existing_role, &existing) == 0);
+        fixture->deadline = existing.deadline;
+    } else fixture->deadline = deadline_after(lifetime_ms);
     CHECK(fixture->host_key != NULL);
     CHECK(expected_fingerprint(fixture->host_key, fixture->fingerprint) == 0);
     known_hosts_length = 0;
@@ -1071,11 +1293,16 @@ static void finish_fixture_setup_selected_mode(struct fixture *fixture,
     CHECK(ctos_ssh_view_borrow_owned_view(fixture->view,
         &fixture->view_borrow) == 0);
     request = role_request(fixture->deadline);
-    CHECK(ctos_ssh_role_bootstrap_open(&request, &fixture->role) == 0);
+    if (fixture_jump_role) request.program = CTOS_SSH_ROLE_JUMP;
+    request.chain_identity = fixture_chain_identity;
+    if (fixture_existing_role != 0) fixture->role = fixture_existing_role;
+    else CHECK(ctos_ssh_role_bootstrap_open(&request, &fixture->role) == 0);
     fixture->callback_token = open_callback(&fixture->callback, fixture->role,
         fixture->deadline);
     fixture->callback.expected_role = fixture->role;
-    fixture->callback.expected_hop = 0;
+    struct ctos_ssh_role_snapshot actual_role;
+    CHECK(ctos_ssh_role_bootstrap_snapshot(fixture->role, &actual_role) == 0);
+    fixture->callback.expected_hop = actual_role.hop;
     fixture->callback.expected_port = 22;
     remember_expected_host_evidence(&fixture->callback, fixture->host_key);
     CHECK(socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0,
@@ -1089,7 +1316,7 @@ static void finish_fixture_setup_selected_mode(struct fixture *fixture,
         .callback = fixture->callback_token,
         .callback_environment = fixture->callback.environment,
         .deadline = fixture->deadline,
-        .step_budget = TEST_STEP_BUDGET,
+        .step_budget = fixture_step_budget,
         .server_host_public_key_blob = fixture->public_blob,
         .server_host_public_key_length = fixture->public_blob_length,
         .expected_host_fingerprint = fixture->fingerprint,
@@ -1098,6 +1325,29 @@ static void finish_fixture_setup_selected_mode(struct fixture *fixture,
         .host = "example.invalid",
         .candidate_id = "native-candidate"
     };
+    if (fixture_fresh_host_mode != 0) {
+        unsigned char fresh_body[4096];
+        size_t fresh_length = 0;
+        CHECK(fixture_jump_parent != NULL && fixture_parent_context != NULL);
+        if (fixture_fresh_host_mode == 1)
+            fresh_length = format_host_key(fixture->host_key, fresh_body, sizeof(fresh_body));
+        else if (fixture_fresh_host_mode == 3)
+            fresh_length = format_host_key(fixture_parent_context->host_key, fresh_body, sizeof(fresh_body));
+        fixture->fresh_host_view = load_view(fresh_body, fresh_length, fixture->deadline);
+        /* Real trust commits advance the epoch and ciphertext digest without
+         * necessarily changing the vault generation. */
+        struct ctos_ssh_view *fresh = fixture->fresh_host_view;
+        size_t binding_offset = (size_t)(fresh->binding.data - fresh->mapping);
+        CHECK(fresh->epoch == 11U && fresh->generation == 91U && binding_offset < fresh->length);
+        fresh->mapping[39] = 12U;
+        fresh->mapping[binding_offset] ^= 0x40U;
+        fresh->valid = 0; fresh->private_count = 0; fresh->public_bytes = 0;
+        memset(fresh->files, 0, sizeof(fresh->files));
+        CHECK(ctos_ssh_view_validate(fresh) == 0 && fresh->epoch == 12U);
+        config.fresh_hostfile_view = fresh;
+        memset(fresh_body, 0, sizeof(fresh_body));
+    }
+    fixture->step_budget = fixture_step_budget;
     if (host_key_mode == CTOS_SSH_HOST_KEY_MANAGED) {
         config.host_key_mode = host_key_mode;
         config.server_host_public_key_blob = NULL;
@@ -1220,7 +1470,180 @@ static void finish_fixture_setup_selected_mode(struct fixture *fixture,
         CHECK(ctos_ssh_role_bootstrap_active(fixture->role));
         /* The same ownership tuple must now retry without a stale KEX slot. */
     }
-    CHECK(ctos_ssh_native_client_open(&config, &fixture->client) == 0);
+    if (fixture_check_borrow_transaction) {
+        int competing_owner = 0;
+        struct ctos_ssh_view_borrow_claim *competing = NULL;
+        struct ctos_ssh_native_client *denied = NULL;
+        struct ctos_ssh_native_jump_relay *denied_relay = NULL;
+        struct ctos_ssh_native_client_config bad = config;
+        if (fixture_jump_parent == NULL) {
+            char invalid_path[514];
+            memset(invalid_path, 'x', sizeof(invalid_path));
+            invalid_path[sizeof(invalid_path) - 1U] = '\0';
+            uint64_t original_deadline = fixture->view->deadline;
+            fixture->view->deadline = 1;
+            bad.socket_fd = -1;
+            errno = 0;
+            CHECK(ctos_ssh_native_client_open(&bad, &denied) != 0 && errno == EINVAL && denied == NULL);
+            bad = config; bad.role = 0;
+            errno = 0;
+            CHECK(ctos_ssh_native_client_open(&bad, &denied) != 0 && errno == EINVAL && denied == NULL);
+            bad = config; bad.known_hosts_path = invalid_path;
+            CHECK(ctos_ssh_native_client_open(&bad, &denied) != 0 && errno == ETIMEDOUT && denied == NULL);
+            fixture->view->valid = 0;
+            CHECK(ctos_ssh_native_client_open(&bad, &denied) != 0 && errno == EACCES && denied == NULL);
+            fixture->view->valid = 1;
+            fixture->view->deadline = original_deadline;
+            struct ctos_ssh_slice original_uuid = fixture->view->uuid;
+            fixture->view->uuid.length = 0;
+            CHECK(ctos_ssh_native_client_open(&bad, &denied) != 0 && errno == EACCES && denied == NULL);
+            fixture->view->uuid = original_uuid;
+            bad = config;
+        }
+        CHECK(ctos_ssh_view_borrow_claim(fixture->view_borrow, &competing_owner, &competing) == 0);
+        if (fixture_jump_parent != NULL) {
+            bad.socket_fd = -1;
+            CHECK(ctos_ssh_native_client_open_jump_child(fixture_jump_parent, &bad,
+                &denied, &denied_relay) != 0 && errno == EBUSY && denied == NULL && denied_relay == NULL);
+        } else CHECK(ctos_ssh_native_client_open(&bad, &denied) != 0 && errno == EBUSY && denied == NULL);
+        CHECK(ctos_ssh_view_borrow_live(fixture->view_borrow) == 0);
+        CHECK(ctos_ssh_view_borrow_release(fixture->view_borrow) != 0 && errno == EBUSY);
+        ctos_ssh_view_borrow_claim_abort(competing);
+        competing = NULL;
+        bad.callback = UINT64_MAX;
+        if (fixture_jump_parent != NULL) {
+            CHECK(ctos_ssh_native_client_open_jump_child(fixture_jump_parent, &bad,
+                &denied, &denied_relay) != 0 && errno == ENOENT && denied == NULL && denied_relay == NULL);
+        } else CHECK(ctos_ssh_native_client_open(&bad, &denied) != 0 && errno == ENOENT && denied == NULL);
+        CHECK(ctos_ssh_view_borrow_claim(fixture->view_borrow, &competing_owner, &competing) == 0);
+        ctos_ssh_view_borrow_claim_abort(competing);
+        CHECK(fcntl(fixture->pair[0], F_GETFD) >= 0 && fixture->callback.release_calls == 0);
+    }
+    if (fixture_jump_parent != NULL) {
+        unsigned char was_open[512] = {0};
+        int new_fds[3] = {-1, -1, -1};
+        size_t new_count = 0;
+        CHECK(ctos_ssh_native_client_open(&config, &fixture->client) != 0
+            && errno == EACCES && fixture->client == NULL);
+        config.socket_fd = -1;
+        fixture->managed_child = 1;
+        fixture_child_relay = NULL;
+        struct ctos_ssh_native_client_config wrong = config;
+        struct ctos_ssh_native_client *wrong_child = NULL;
+        struct ctos_ssh_native_jump_relay *wrong_relay = NULL;
+        wrong.role ^= 1U;
+        CHECK(ctos_ssh_native_client_open_jump_child(fixture_jump_parent, &wrong,
+            &wrong_child, &wrong_relay) != 0 && errno == EACCES
+            && wrong_child == NULL && wrong_relay == NULL);
+        CHECK(fixture_parent_context != NULL);
+        wrong = config;
+        wrong.managed_view_borrow = fixture_parent_context->view_borrow;
+        CHECK(ctos_ssh_native_client_open_jump_child(fixture_jump_parent, &wrong,
+            &wrong_child, &wrong_relay) != 0 && errno == EBUSY
+            && wrong_child == NULL && wrong_relay == NULL);
+        if (fixture_root_context != NULL && fixture_root_context != fixture_parent_context) {
+            wrong.managed_view_borrow = fixture_root_context->view_borrow;
+            CHECK(ctos_ssh_native_client_open_jump_child(fixture_jump_parent, &wrong,
+                &wrong_child, &wrong_relay) != 0 && errno == EBUSY
+                && wrong_child == NULL && wrong_relay == NULL);
+        }
+        wrong = config;
+        wrong.callback = fixture_parent_context->callback_token;
+        wrong.callback_environment = fixture_parent_context->callback.environment;
+        CHECK(ctos_ssh_native_client_open_jump_child(fixture_jump_parent, &wrong,
+            &wrong_child, &wrong_relay) != 0 && errno == EACCES
+            && wrong_child == NULL && wrong_relay == NULL);
+        wrong = config;
+        wrong.callback = UINT64_MAX;
+        CHECK(ctos_ssh_native_client_open_jump_child(fixture_jump_parent, &wrong,
+            &wrong_child, &wrong_relay) != 0 && errno == ENOENT
+            && wrong_child == NULL && wrong_relay == NULL);
+        if (fixture->fresh_host_view != NULL) {
+            struct ctos_ssh_view *fresh = fixture->fresh_host_view;
+            uint64_t saved_epoch = fresh->epoch;
+            size_t uuid_offset = (size_t)(fresh->uuid.data - fresh->mapping);
+            size_t binding_offset = (size_t)(fresh->binding.data - fresh->mapping);
+            size_t root_id_offset = (size_t)(fresh->files[0].id.data - fresh->mapping);
+            CHECK(uuid_offset < fresh->length && binding_offset < fresh->length
+                && root_id_offset < fresh->length);
+            wrong = config;
+            fresh->epoch = fixture->view->epoch;
+            CHECK(ctos_ssh_native_client_open_jump_child(fixture_jump_parent, &wrong,
+                &wrong_child, &wrong_relay) != 0 && errno == EACCES
+                && wrong_child == NULL && wrong_relay == NULL);
+            fresh->epoch = saved_epoch;
+            fresh->mapping[binding_offset] ^= 0x40U;
+            CHECK(ctos_ssh_native_client_open_jump_child(fixture_jump_parent, &wrong,
+                &wrong_child, &wrong_relay) != 0 && errno == EACCES
+                && wrong_child == NULL && wrong_relay == NULL);
+            fresh->mapping[binding_offset] ^= 0x40U;
+            fresh->mapping[uuid_offset] ^= 1U;
+            CHECK(ctos_ssh_native_client_open_jump_child(fixture_jump_parent, &wrong,
+                &wrong_child, &wrong_relay) != 0 && errno == EACCES
+                && wrong_child == NULL && wrong_relay == NULL);
+            fresh->mapping[uuid_offset] ^= 1U;
+            fresh->mapping[root_id_offset] ^= 1U;
+            CHECK(ctos_ssh_native_client_open_jump_child(fixture_jump_parent, &wrong,
+                &wrong_child, &wrong_relay) != 0 && errno == EACCES
+                && wrong_child == NULL && wrong_relay == NULL);
+            fresh->mapping[root_id_offset] ^= 1U;
+        }
+        for (int fd = 0; fd < (int)sizeof(was_open); fd++)
+            was_open[fd] = fcntl(fd, F_GETFD) >= 0;
+        if (fixture_expect_child_no_relay) {
+            CHECK(ctos_ssh_native_client_open_jump_child(fixture_jump_parent, &config,
+                &fixture->client, &fixture_child_relay) != 0 && errno == EALREADY);
+            CHECK(fixture->client != NULL && fixture_child_relay == NULL);
+            CHECK(!ctos_ssh_native_client_complete(fixture->client));
+            CHECK(ctos_ssh_native_client_step(fixture->client,
+                &(struct ctos_ssh_native_client_step){0}) != 0 && errno == EALREADY);
+            CHECK(ctos_ssh_callback_close(fixture->callback_token,
+                fixture->callback.environment) != 0 && errno == EBUSY);
+            fixture->callback.release_failures_remaining = 1;
+            CHECK(ctos_ssh_native_client_close(fixture->client) != 0 && errno == EIO);
+            CHECK(ctos_ssh_callback_close(fixture->callback_token,
+                fixture->callback.environment) != 0 && errno == EBUSY);
+            return;
+        }
+        CHECK(ctos_ssh_native_client_open_jump_child(fixture_jump_parent, &config,
+            &fixture->client, &fixture_child_relay) == 0);
+        CHECK(fixture->client != NULL && fixture_child_relay != NULL);
+        unsigned char pre_kex_receipt[32];
+        CHECK(ctos_ssh_native_client_authentication_selection_receipt(fixture->client,
+            pre_kex_receipt) == 0
+            && memcmp(pre_kex_receipt, fixture->selection_receipt, sizeof(pre_kex_receipt)) == 0);
+        for (int fd = 0; fd < (int)sizeof(was_open); fd++) {
+            if (!was_open[fd] && fcntl(fd, F_GETFD) >= 0) {
+                CHECK(new_count < sizeof(new_fds) / sizeof(new_fds[0]));
+                new_fds[new_count++] = fd;
+            }
+        }
+        CHECK(new_count == 3);
+        fixture->managed_child_fd = new_fds[1];
+        CHECK(ctos_ssh_callback_client_claim(fixture->callback_token,
+            fixture->callback.environment, fixture->role, fixture) != 0 && errno == EBUSY);
+        CHECK(ctos_ssh_callback_close(fixture->callback_token,
+            fixture->callback.environment) != 0 && errno == EBUSY);
+        struct child_wrong_owner_attempt attempt = {
+            .parent = fixture_jump_parent, .child = fixture->client,
+            .relay = fixture_child_relay, .config = config
+        };
+        pthread_t thread;
+        CHECK(pthread_create(&thread, NULL, child_wrong_owner, &attempt) == 0);
+        CHECK(pthread_join(thread, NULL) == 0);
+        CHECK(attempt.open_result != 0 && attempt.open_error == EPERM);
+        CHECK(attempt.step_result != 0 && attempt.step_error == EPERM);
+        CHECK(attempt.close_result != 0 && attempt.close_error == EPERM);
+        CHECK(attempt.relay_result != 0 && attempt.relay_error == EPERM);
+    } else CHECK(ctos_ssh_native_client_open(&config, &fixture->client) == 0);
+    if (fixture_check_borrow_transaction) {
+        int competing_owner = 0;
+        struct ctos_ssh_view_borrow_claim *competing = NULL;
+        CHECK(ctos_ssh_view_borrow_claim(fixture->view_borrow, &competing_owner, &competing) != 0
+            && errno == EBUSY && competing == NULL);
+        CHECK(ctos_ssh_view_borrow_release(fixture->view_borrow) != 0 && errno == EBUSY);
+        CHECK(ctos_ssh_view_borrow_live(fixture->view_borrow) == 0);
+    }
     if (host_key_mode == CTOS_SSH_HOST_KEY_MANAGED) {
         CHECK(ctos_ssh_native_client_verify_host_key(fixture->client,
             fixture->public_blob, fixture->public_blob_length) != 0 && errno == EACCES);
@@ -1304,6 +1727,9 @@ static void setup_revoked_fixture(struct fixture *fixture,
 static void cleanup_fixture(struct fixture *fixture,
     unsigned int expected_release_calls) {
     CHECK(ctos_ssh_native_client_close(fixture->client) == 0);
+    /* The child constructor owns a separate private socketpair; this pair is
+     * retained solely to observe callback release ordering in the fixture. */
+    if (fixture->managed_child) CHECK(close(fixture->pair[0]) == 0);
     enum ctos_ssh_native_host_key_rejection rejection = CTOS_SSH_HOST_REJECTION_CHANGED;
     CHECK(ctos_ssh_native_client_host_key_rejection(fixture->client, &rejection) != 0
         && errno == ENOENT && rejection == CTOS_SSH_HOST_REJECTION_NONE);
@@ -1320,7 +1746,7 @@ static void cleanup_fixture(struct fixture *fixture,
         && errno == ENOENT);
     fixture->view_borrow = NULL;
     CHECK(fixture->callback.release_calls == expected_release_calls);
-    CHECK(fixture->callback.credential_calls == 0
+    CHECK(fixture->callback.credential_calls == fixture->callback.expected_credential_calls
         && fixture->callback.credential_bytes_calls == 0);
     CHECK(fixture->callback.release_saw_fd_open == 1);
     errno = 0;
@@ -1346,6 +1772,7 @@ static void cleanup_fixture(struct fixture *fixture,
     fixture->pair[1] = -1;
     if (fixture->role != 0) CHECK(ctos_ssh_role_bootstrap_close(fixture->role) == 0);
     destroy_view(fixture->view);
+    if (fixture->fresh_host_view != NULL) destroy_view(fixture->fresh_host_view);
     sshkey_free(fixture->public_key);
     sshkey_free(fixture->private_key);
     if (fixture->host_key != fixture->public_key)
@@ -1693,12 +2120,25 @@ static void accept_shell_packet(struct fixture *fixture, int type) {
     if (type == SSH2_MSG_CHANNEL_OPEN) {
         CHECK(fixture->shell_stage == 0);
         CHECK(sshpkt_get_string_direct(ssh, &text, &length) == 0);
-        CHECK(length == 7U && memcmp(text, "session", 7U) == 0);
+        if (fixture->jump_expected)
+            CHECK(length == 12U && memcmp(text, "direct-tcpip", 12U) == 0);
+        else CHECK(length == 7U && memcmp(text, "session", 7U) == 0);
         CHECK(sshpkt_get_u32(ssh, &value) == 0 && value == 0);
         CHECK(sshpkt_get_u32(ssh, &value) == 0 && value == 65536U);
         CHECK(sshpkt_get_u32(ssh, &value) == 0 && value == 32768U);
+        if (fixture->jump_expected) {
+            CHECK(sshpkt_get_string_direct(ssh, &text, &length) == 0);
+            const char *host = fixture->jump_bridge_enabled ? "example.invalid" : "nexthop.example";
+            CHECK(length == strlen(host) && memcmp(text, host, length) == 0);
+            CHECK(sshpkt_get_u32(ssh, &value) == 0 && value == (fixture->jump_bridge_enabled ? 22U : 2222U));
+            CHECK(sshpkt_get_string_direct(ssh, &text, &length) == 0);
+            CHECK(length == 9U && memcmp(text, "127.0.0.1", length) == 0);
+            CHECK(sshpkt_get_u32(ssh, &value) == 0 && value == 65535U);
+        }
         CHECK(sshpkt_get_end(ssh) == 0);
         fixture->shell_stage = 1;
+        if (fixture->jump_preconfirm_data)
+            peer_channel_data(fixture, 0, (const unsigned char *)"early", 5U);
         peer_channel_packet(fixture, fixture->shell_reject == 1
             ? SSH2_MSG_CHANNEL_OPEN_FAILURE : SSH2_MSG_CHANNEL_OPEN_CONFIRMATION);
         if (fixture->shell_reject == 1) {
@@ -1711,6 +2151,7 @@ static void accept_shell_packet(struct fixture *fixture, int type) {
             CHECK(sshpkt_put_u32(ssh, fixture->shell_maxpacket) == 0);
         }
         CHECK(sshpkt_send(ssh) == 0);
+        if (fixture->jump_expected && fixture->shell_reject == 0) fixture->shell_stage = 3;
         return;
     }
     CHECK(sshpkt_get_u32(ssh, &value) == 0 && value == 77);
@@ -1754,9 +2195,17 @@ static void accept_shell_packet(struct fixture *fixture, int type) {
     } else if (type == SSH2_MSG_CHANNEL_DATA) {
         CHECK(fixture->shell_stage == 3);
         CHECK(sshpkt_get_string_direct(ssh, &text, &length) == 0);
-        CHECK(length <= sizeof(fixture->shell_input) - fixture->shell_input_length);
-        memcpy(fixture->shell_input + fixture->shell_input_length, text, length);
-        fixture->shell_input_length += length;
+        if (fixture->jump_bridge_enabled) {
+            CHECK(send(fixture->jump_bridge_fd, text, length, MSG_NOSIGNAL | MSG_DONTWAIT) == (ssize_t)length);
+            if (length != 0) {
+                peer_channel_packet(fixture, SSH2_MSG_CHANNEL_WINDOW_ADJUST);
+                CHECK(sshpkt_put_u32(ssh, (uint32_t)length) == 0 && sshpkt_send(ssh) == 0);
+            }
+        } else {
+            CHECK(length <= sizeof(fixture->shell_input) - fixture->shell_input_length);
+            memcpy(fixture->shell_input + fixture->shell_input_length, text, length);
+            fixture->shell_input_length += length;
+        }
         CHECK(sshpkt_get_end(ssh) == 0);
     } else if (type == SSH2_MSG_CHANNEL_WINDOW_ADJUST) {
         CHECK(sshpkt_get_u32(ssh, &value) == 0 && value != 0);
@@ -2901,6 +3350,23 @@ static void test_verify_new_host_key_candidate_rollback(void) {
     CHECK(fixture.callback.release_calls == 1);
     CHECK(fixture.callback.release_saw_fd_open == 1);
     CHECK(fcntl(fixture.pair[0], F_GETFD) >= 0);
+#ifdef CTOS_SSH_NATIVE_TEST_HOOKS
+    CHECK(ctos_ssh_native_client_test_fail_next_view_release(fixture.client) == 0);
+    CHECK(ctos_ssh_native_client_close(fixture.client) != 0 && errno == EIO);
+    CHECK(fixture.callback.release_calls == 2);
+    CHECK(ctos_ssh_view_borrow_release(fixture.view_borrow) != 0 && errno == EBUSY);
+    int competing_owner = 0;
+    struct ctos_ssh_view_borrow_claim *competing = NULL;
+    CHECK(ctos_ssh_view_borrow_claim(fixture.view_borrow, &competing_owner, &competing) != 0
+        && errno == EBUSY && competing == NULL);
+    struct child_retry_owner_attempt retry = {.child = fixture.client};
+    pthread_t thread;
+    CHECK(pthread_create(&thread, NULL, child_retry_wrong_owner, &retry) == 0);
+    CHECK(pthread_join(thread, NULL) == 0);
+    CHECK(retry.close_result != 0 && retry.close_error == EPERM);
+    CHECK(retry.destroy_result != 0 && retry.destroy_error == EPERM);
+    CHECK(ctos_ssh_view_borrow_live(fixture.view_borrow) == 0);
+#endif
     cleanup_fixture(&fixture, 2);
 }
 
@@ -3932,7 +4398,9 @@ static void test_password_auth_active_liveness(void) {
 static void test_close_retry_order(void) {
     struct fixture fixture;
 
+    fixture_check_borrow_transaction = 1;
     setup_fixture(&fixture, 15000U, NULL);
+    fixture_check_borrow_transaction = 0;
     fixture.callback.release_failures_remaining = 1;
     errno = 0;
     CHECK(ctos_ssh_native_client_close(fixture.client) != 0 && errno == EIO);
@@ -3940,6 +4408,44 @@ static void test_close_retry_order(void) {
     CHECK(fixture.callback.release_saw_fd_open == 1);
     CHECK(fcntl(fixture.pair[0], F_GETFD) >= 0);
     cleanup_fixture(&fixture, 2);
+}
+
+static void test_callback_ancestor_root_and_forged_owner(void) {
+    struct fixture root;
+    setup_fixture(&root, 15000U, NULL);
+    root.callback.scope_probe = 3;
+    root.callback.scope_token = root.callback_token;
+    CHECK(ctos_ssh_native_client_callback_ancestor_proofs_check(root.callback_token,
+        root.callback.environment) != 0 && errno == EACCES);
+#ifdef CTOS_SSH_NATIVE_TEST_HOOKS
+    const int claim_modes = 3;
+#else
+    const int claim_modes = 2;
+#endif
+    for (int claimed = 0; claimed < claim_modes; claimed++) {
+        struct callback_fixture other = {0};
+        const void *fake_owner = (const void *)(uintptr_t)1U;
+        ctos_ssh_callback_token callback = open_callback(&other, root.role, root.deadline);
+        other.scope_probe = 2;
+        other.scope_token = callback;
+        if (claimed == 1)
+            CHECK(ctos_ssh_callback_client_claim(callback, other.environment, root.role, fake_owner) == 0);
+#ifdef CTOS_SSH_NATIVE_TEST_HOOKS
+        if (claimed == 2)
+            CHECK(ctos_ssh_native_client_test_claim_callback_scope(callback,
+                other.environment, root.role, fake_owner) == 0);
+#endif
+        CHECK(ctos_ssh_callback_credential(callback, other.environment,
+            CTOS_SSH_CALLBACK_CREDENTIAL_PASSWORD) != 0 && errno == EACCES);
+        CHECK(other.scope_selected_checks == 1);
+        if (claimed) CHECK(ctos_ssh_callback_client_close(callback, other.environment, fake_owner) == 0);
+        else CHECK(ctos_ssh_callback_close(callback, other.environment) == 0);
+        CHECK(ctos_ssh_native_client_callback_ancestor_proofs_check(callback, other.environment) != 0
+            && errno == ENOENT);
+    }
+    finish_service_fixture(&root, 0, 0);
+    CHECK(root.callback.scope_host_checks == 1);
+    cleanup_fixture(&root, 1);
 }
 
 static void setup_private_fixture_version_mode(struct fixture *fixture, int new_host,
@@ -4332,7 +4838,7 @@ static struct ctos_ssh_native_shell_status shell_status(struct fixture *fixture)
 static int shell_turn(struct fixture *fixture) {
     struct ctos_ssh_native_client_step step = {0};
     int result = ctos_ssh_native_client_step(fixture->client, &step);
-    CHECK(step.bytes_read <= TEST_STEP_BUDGET && step.bytes_written <= TEST_STEP_BUDGET);
+    CHECK(step.bytes_read <= fixture->step_budget && step.bytes_written <= fixture->step_budget);
     CHECK(step.input_appended == step.bytes_read && step.output_consumed == step.bytes_written);
     int saved_errno = errno;
     CHECK(pump_synthetic_server(fixture, 64U, NULL, NULL) == 0);
@@ -4881,6 +5387,2192 @@ static void test_shell_roundtrip(void) {
     }
 }
 
+static ctos_ssh_role_token jump_next_role(const struct fixture *fixture, unsigned int variant) {
+    static const unsigned char nonce[32] = {9};
+    static const unsigned char wrong_binding[32] = {7};
+    struct ctos_ssh_role_request next = role_request(fixture->deadline);
+    next.hop = variant == 1U ? 2U : 1U;
+    next.program = CTOS_SSH_ROLE_CLIENT;
+    next.host = "nexthop.example"; next.port = 2222;
+    if (variant == 6U) { next.host = "example.invalid"; next.port = 22; }
+    if (variant == 7U) {
+        next.program = CTOS_SSH_ROLE_JUMP;
+        next.host = "example.invalid"; next.port = 22;
+    }
+    next.public_view_id = "next-view"; next.role_nonce = nonce;
+    if (variant == 2U) next.connection_id = "other-connection";
+    if (variant == 3U) next.target_identity = "other-target";
+    if (variant == 4U) next.connection_binding = wrong_binding;
+    if (variant == 5U) next.deadline--;
+    ctos_ssh_role_token token = 0;
+    CHECK(ctos_ssh_role_bootstrap_open(&next, &token) == 0 && token != 0);
+    return token;
+}
+
+static void setup_jump_fixture_lifetime(struct fixture *fixture, int jump_role,
+    unsigned int lifetime) {
+    fixture_jump_role = jump_role;
+    setup_password_fixture(fixture, 0, lifetime);
+    fixture_jump_role = 0;
+    fixture->shell_expected = 1;
+    fixture->jump_expected = 1;
+    fixture->shell_window = 16U;
+    fixture->shell_maxpacket = 8U;
+}
+
+static void setup_jump_fixture(struct fixture *fixture, int jump_role) {
+    setup_jump_fixture_lifetime(fixture, jump_role, 60000U);
+}
+
+static struct ctos_ssh_native_jump_status jump_status(struct fixture *fixture) {
+    struct ctos_ssh_native_jump_status status;
+    memset(&status, 0xa5, sizeof(status));
+    CHECK(ctos_ssh_native_client_jump_status(fixture->client, &status) == 0);
+    return status;
+}
+
+static void drive_jump_phase(struct fixture *fixture, enum ctos_ssh_native_jump_phase phase) {
+    for (unsigned int turn = 0; turn < 100000U; turn++) {
+        CHECK(shell_turn(fixture) == 0);
+        if (jump_status(fixture).phase == phase) return;
+    }
+    CHECK(0);
+}
+
+struct jump_owner_attempt {
+    struct ctos_ssh_native_client *client;
+    struct ctos_ssh_native_jump_status status;
+    int status_result, status_errno, write_result, write_errno;
+    size_t accepted;
+};
+static void *jump_wrong_owner(void *opaque) {
+    struct jump_owner_attempt *attempt = opaque;
+    memset(&attempt->status, 0xa5, sizeof(attempt->status));
+    attempt->status_result = ctos_ssh_native_client_jump_status(attempt->client, &attempt->status);
+    attempt->status_errno = errno;
+    attempt->accepted = 99;
+    attempt->write_result = ctos_ssh_native_client_jump_write(attempt->client,
+        (const unsigned char *)"x", 1, &attempt->accepted);
+    attempt->write_errno = errno;
+    return NULL;
+}
+
+struct jump_retain_owner_attempt {
+    struct ctos_ssh_native_client *client;
+    int result, error, auth_result, auth_error;
+};
+
+static void *jump_retain_wrong_owner(void *opaque) {
+    struct jump_retain_owner_attempt *attempt = opaque;
+    attempt->result = ctos_ssh_native_client_retain_jump_transport(attempt->client);
+    attempt->error = errno;
+    attempt->auth_result = ctos_ssh_native_client_begin_auth_discovery(attempt->client);
+    attempt->auth_error = errno;
+    return NULL;
+}
+
+static void test_jump_channel_roundtrip(void) {
+    struct fixture fixture;
+    unsigned char output[64];
+    size_t accepted, length, sent = 0;
+    const unsigned char banner[] = "SSH-2.0-next-client\r\n";
+    setup_jump_fixture(&fixture, 1);
+    ctos_ssh_role_token next = jump_next_role(&fixture, 0);
+    CHECK(ctos_ssh_native_client_begin_jump(fixture.client, next) != 0 && errno == EACCES);
+    CHECK(ctos_ssh_native_client_begin_password_auth(fixture.client) == 0);
+    drive_password(&fixture, CTOS_SSH_PASSWORD_AUTH_SUCCESS, 0);
+    CHECK(ctos_ssh_native_client_begin_shell(fixture.client, 80, 24) != 0 && errno == EACCES);
+    CHECK(ctos_ssh_native_client_begin_jump(fixture.client, next) == 0);
+    CHECK(jump_status(&fixture).phase == CTOS_SSH_JUMP_OPENING);
+    memset(output, 0xa5, sizeof(output)); length = 99;
+    CHECK(ctos_ssh_native_client_jump_read(fixture.client, output, sizeof(output), &length) != 0
+        && errno == EACCES && length == 0);
+    for (size_t i = 0; i < sizeof(output); i++) CHECK(output[i] == 0);
+    struct ctos_ssh_native_shell_status terminal;
+    memset(&terminal, 0xa5, sizeof(terminal));
+    CHECK(ctos_ssh_native_client_shell_status(fixture.client, &terminal) != 0 && errno == EACCES);
+    CHECK(ctos_ssh_native_client_begin_shell(fixture.client, 80, 24) != 0 && errno == EALREADY);
+    drive_jump_phase(&fixture, CTOS_SSH_JUMP_OPEN);
+    CHECK(fixture.shell_stage == 3);
+
+    struct jump_owner_attempt attempt = {.client = fixture.client}; pthread_t thread;
+    CHECK(pthread_create(&thread, NULL, jump_wrong_owner, &attempt) == 0);
+    CHECK(pthread_join(thread, NULL) == 0 && attempt.status_result != 0 && attempt.status_errno == EPERM);
+    CHECK(attempt.status.phase == 0 && attempt.write_result != 0 && attempt.write_errno == EPERM && attempt.accepted == 0);
+    CHECK(ctos_ssh_native_client_shell_write(fixture.client, banner, 1, &accepted) != 0
+        && errno == EACCES && accepted == 0);
+    CHECK(ctos_ssh_native_client_shell_resize(fixture.client, 80, 24) != 0 && errno == EACCES);
+    CHECK(ctos_ssh_native_client_shell_eof(fixture.client) != 0 && errno == EACCES);
+    CHECK(ctos_ssh_native_client_jump_write(fixture.client, banner, sizeof(banner) - 1, &accepted) == 0 && accepted == 8U);
+    sent += accepted;
+    CHECK(ctos_ssh_native_client_jump_write(fixture.client, banner + sent, sizeof(banner) - 1 - sent, &accepted) == 0 && accepted == 8U);
+    sent += accepted;
+    CHECK(ctos_ssh_native_client_jump_write(fixture.client, banner + sent, sizeof(banner) - 1 - sent, &accepted) == 0 && accepted == 0);
+    send_window(&fixture, 32U);
+    for (unsigned int turn = 0; turn < 10000U && sent < sizeof(banner) - 1; turn++) {
+        CHECK(shell_turn(&fixture) == 0);
+        CHECK(ctos_ssh_native_client_jump_write(fixture.client, banner + sent, sizeof(banner) - 1 - sent, &accepted) == 0);
+        sent += accepted;
+    }
+    CHECK(sent == sizeof(banner) - 1);
+    CHECK(ctos_ssh_native_client_jump_eof(fixture.client) == 1);
+    CHECK(ctos_ssh_native_client_jump_eof(fixture.client) != 0 && errno == EACCES);
+    for (unsigned int turn = 0; turn < 10000U && fixture.shell_eof_count == 0; turn++) CHECK(shell_turn(&fixture) == 0);
+    CHECK(fixture.shell_input_length == sizeof(banner) - 1
+        && memcmp(fixture.shell_input, banner, sizeof(banner) - 1) == 0);
+    CHECK(fixture.shell_resize_count == 0 && fixture.shell_eof_count == 1);
+
+    peer_channel_data(&fixture, 0, (const unsigned char *)"SSH-2.0-server\r\n", 16U);
+    peer_channel_packet(&fixture, SSH2_MSG_CHANNEL_EOF); CHECK(sshpkt_send(fixture.server) == 0);
+    peer_channel_packet(&fixture, SSH2_MSG_CHANNEL_CLOSE); CHECK(sshpkt_send(fixture.server) == 0);
+    drive_jump_phase(&fixture, CTOS_SSH_JUMP_CLOSED);
+    struct ctos_ssh_native_jump_status status = jump_status(&fixture);
+    CHECK(status.buffered_bytes == 16U && status.remote_eof && status.local_eof);
+    CHECK(ctos_ssh_native_client_jump_read(fixture.client, output, sizeof(output), &length) == 0 && length == 16U);
+    CHECK(memcmp(output, "SSH-2.0-server\r\n", 16U) == 0);
+    CHECK(ctos_ssh_native_client_jump_read(fixture.client, output, sizeof(output), &length) == 0 && length == 0);
+    fixture.callback.release_failures_remaining = 1;
+    CHECK(ctos_ssh_native_client_close(fixture.client) != 0 && errno == EIO);
+    CHECK(fcntl(fixture.pair[0], F_GETFD) >= 0);
+    cleanup_fixture(&fixture, 2);
+    CHECK(ctos_ssh_role_bootstrap_close(next) == 0);
+}
+
+static void test_jump_channel_admission(void) {
+    struct fixture fixture;
+    setup_jump_fixture(&fixture, 1);
+    CHECK(ctos_ssh_native_client_begin_password_auth(fixture.client) == 0);
+    drive_password(&fixture, CTOS_SSH_PASSWORD_AUTH_SUCCESS, 0);
+    for (unsigned int variant = 1; variant <= 5; variant++) {
+        ctos_ssh_role_token next = jump_next_role(&fixture, variant);
+        CHECK(ctos_ssh_native_client_begin_jump(fixture.client, next) != 0 && errno == EACCES);
+        CHECK(fixture.shell_stage == 0 && fixture.callback.selected_calls == 1);
+        CHECK(ctos_ssh_role_bootstrap_close(next) == 0);
+    }
+    ctos_ssh_role_token next = jump_next_role(&fixture, 0);
+    CHECK(ctos_ssh_native_client_begin_jump(fixture.client, next) == 0);
+    CHECK(ctos_ssh_native_client_begin_jump(fixture.client, next) != 0 && errno == EALREADY);
+    CHECK(ctos_ssh_role_bootstrap_close(next) == 0);
+    CHECK(ctos_ssh_native_client_step(fixture.client, &(struct ctos_ssh_native_client_step){0}) != 0);
+    unsigned char output[8]; size_t length = 99;
+    memset(output, 0xa5, sizeof(output));
+    CHECK(ctos_ssh_native_client_jump_read(fixture.client, output, sizeof(output), &length) != 0 && length == 0);
+    for (size_t i = 0; i < sizeof(output); i++) CHECK(output[i] == 0);
+    CHECK(fixture.shell_stage == 0);
+    cleanup_fixture(&fixture, 1);
+
+    setup_jump_fixture(&fixture, 0);
+    CHECK(ctos_ssh_native_client_begin_password_auth(fixture.client) == 0);
+    drive_password(&fixture, CTOS_SSH_PASSWORD_AUTH_SUCCESS, 0);
+    next = jump_next_role(&fixture, 0);
+    CHECK(ctos_ssh_native_client_begin_jump(fixture.client, next) != 0 && errno == EACCES);
+    CHECK(fixture.shell_stage == 0);
+    cleanup_fixture(&fixture, 1);
+    CHECK(ctos_ssh_role_bootstrap_close(next) == 0);
+
+    for (int reply = PASSWORD_REPLY_REJECTED; reply <= PASSWORD_REPLY_CHANGE; reply++) {
+        setup_jump_fixture(&fixture, 1);
+        fixture.password_reply = (enum password_reply)reply;
+        CHECK(ctos_ssh_native_client_begin_password_auth(fixture.client) == 0);
+        drive_password(&fixture, (enum ctos_ssh_native_client_password_auth_result)(reply + 2), 0);
+        next = jump_next_role(&fixture, 0);
+        CHECK(ctos_ssh_native_client_begin_jump(fixture.client, next) != 0 && errno == EACCES);
+        CHECK(fixture.shell_stage == 0);
+        cleanup_fixture(&fixture, 1);
+        CHECK(ctos_ssh_role_bootstrap_close(next) == 0);
+    }
+}
+
+static void test_jump_chain_identity_admission(void) {
+    static const unsigned char wrong_binding[32] = {7};
+    static const unsigned char next_nonce[32] = {9};
+    struct fixture fixture;
+    fixture_chain_identity = "route-identity";
+    setup_jump_fixture(&fixture, 1);
+    fixture_chain_identity = NULL;
+    CHECK(ctos_ssh_native_client_begin_password_auth(fixture.client) == 0);
+    drive_password(&fixture, CTOS_SSH_PASSWORD_AUTH_SUCCESS, 0);
+
+    for (unsigned int variant = 0; variant < 4; variant++) {
+        struct ctos_ssh_role_request request = role_request(fixture.deadline);
+        request.hop = 1;
+        request.host = "nexthop.example";
+        request.port = 2222;
+        request.role_nonce = next_nonce;
+        request.target_identity = "different-target";
+        request.chain_identity = "route-identity";
+        if (variant == 0) request.chain_identity = "other-route";
+        if (variant == 1) request.connection_id = "other-connection";
+        if (variant == 2) {
+            request.chain_identity = NULL;
+            request.target_identity = "route-identity";
+        }
+        if (variant == 3) request.connection_binding = wrong_binding;
+        ctos_ssh_role_token next = 0;
+        CHECK(ctos_ssh_role_bootstrap_open(&request, &next) == 0);
+        CHECK(ctos_ssh_native_client_begin_jump(fixture.client, next) != 0 && errno == EACCES);
+        CHECK(fixture.shell_stage == 0 && fixture.callback.selected_calls == 1);
+        CHECK(ctos_ssh_role_bootstrap_close(next) == 0);
+    }
+
+    struct ctos_ssh_role_request request = role_request(fixture.deadline);
+    request.hop = 1;
+    request.host = "nexthop.example";
+    request.port = 2222;
+    request.role_nonce = next_nonce;
+    request.target_identity = "different-target";
+    request.chain_identity = "route-identity";
+    ctos_ssh_role_token next = 0;
+    CHECK(ctos_ssh_role_bootstrap_open(&request, &next) == 0);
+    CHECK(ctos_ssh_native_client_begin_jump(fixture.client, next) == 0);
+    cleanup_fixture(&fixture, 1);
+    CHECK(ctos_ssh_role_bootstrap_close(next) == 0);
+
+    /* The reciprocal mixed-version direction also fails. */
+    setup_jump_fixture(&fixture, 1);
+    CHECK(ctos_ssh_native_client_begin_password_auth(fixture.client) == 0);
+    drive_password(&fixture, CTOS_SSH_PASSWORD_AUTH_SUCCESS, 0);
+    request = role_request(fixture.deadline);
+    request.hop = 1;
+    request.role_nonce = next_nonce;
+    request.chain_identity = request.target_identity;
+    next = 0;
+    CHECK(ctos_ssh_role_bootstrap_open(&request, &next) == 0);
+    CHECK(ctos_ssh_native_client_begin_jump(fixture.client, next) != 0 && errno == EACCES);
+    CHECK(fixture.shell_stage == 0);
+    CHECK(ctos_ssh_role_bootstrap_close(next) == 0);
+    cleanup_fixture(&fixture, 1);
+}
+
+static void test_jump_channel_rejection_and_protocol(void) {
+    for (unsigned int mode = 0; mode < 6; mode++) {
+        struct fixture fixture;
+        setup_jump_fixture(&fixture, 1);
+        CHECK(ctos_ssh_native_client_begin_password_auth(fixture.client) == 0);
+        drive_password(&fixture, CTOS_SSH_PASSWORD_AUTH_SUCCESS, 0);
+        ctos_ssh_role_token next = jump_next_role(&fixture, 0);
+        fixture.shell_reject = mode == 0 ? 1 : 0;
+        fixture.jump_preconfirm_data = mode == 1;
+        CHECK(ctos_ssh_native_client_begin_jump(fixture.client, next) == 0);
+        if (mode == 0) {
+            drive_jump_phase(&fixture, CTOS_SSH_JUMP_REJECTED);
+            CHECK(ctos_ssh_native_client_step(fixture.client,
+                &(struct ctos_ssh_native_client_step){0}) != 0 && errno == EALREADY);
+        } else if (mode == 1) {
+            int failed = 0;
+            for (unsigned int turn = 0; turn < 10000U; turn++)
+                if (shell_turn(&fixture) != 0) { CHECK(errno == EPROTO); failed = 1; break; }
+            CHECK(failed);
+        } else {
+            drive_jump_phase(&fixture, CTOS_SSH_JUMP_OPEN);
+            if (mode == 2) peer_channel_data(&fixture, 1, (const unsigned char *)"stderr", 6U);
+            if (mode == 3) {
+                CHECK(sshpkt_start(fixture.server, SSH2_MSG_CHANNEL_DATA) == 0);
+                CHECK(sshpkt_put_u32(fixture.server, 1U) == 0);
+                CHECK(sshpkt_put_string(fixture.server, "wrong", 5U) == 0 && sshpkt_send(fixture.server) == 0);
+            }
+            if (mode == 4) send_window(&fixture, 0);
+            if (mode == 5) {
+                peer_channel_packet(&fixture, SSH2_MSG_CHANNEL_EOF); CHECK(sshpkt_send(fixture.server) == 0);
+                peer_channel_data(&fixture, 0, (const unsigned char *)"after-eof", 9U);
+            }
+            int failed = 0;
+            for (unsigned int turn = 0; turn < 10000U; turn++)
+                if (shell_turn(&fixture) != 0) { CHECK(errno == EPROTO); failed = 1; break; }
+            CHECK(failed);
+        }
+        unsigned char output[16]; size_t length = 99;
+        memset(output, 0xa5, sizeof(output));
+        CHECK(ctos_ssh_native_client_jump_read(fixture.client, output, sizeof(output), &length) != 0 && length == 0);
+        for (size_t i = 0; i < sizeof(output); i++) CHECK(output[i] == 0);
+        cleanup_fixture(&fixture, 1);
+        CHECK(ctos_ssh_role_bootstrap_close(next) == 0);
+    }
+}
+
+static void test_jump_channel_lifetime(void) {
+    for (unsigned int mode = 0; mode < 4; mode++) {
+        struct fixture fixture;
+        setup_jump_fixture(&fixture, 1);
+        CHECK(ctos_ssh_native_client_begin_password_auth(fixture.client) == 0);
+        drive_password(&fixture, CTOS_SSH_PASSWORD_AUTH_SUCCESS, 0);
+        ctos_ssh_role_token next = jump_next_role(&fixture, 0);
+        CHECK(ctos_ssh_native_client_begin_jump(fixture.client, next) == 0);
+        drive_jump_phase(&fixture, CTOS_SSH_JUMP_OPEN);
+        peer_channel_data(&fixture, 0, (const unsigned char *)"pending", 7U);
+        for (unsigned int turn = 0; turn < 10000U && jump_status(&fixture).buffered_bytes == 0; turn++)
+            CHECK(shell_turn(&fixture) == 0);
+        CHECK(jump_status(&fixture).buffered_bytes == 7U);
+        if (mode == 0) { CHECK(ctos_ssh_role_bootstrap_close(next) == 0); next = 0; }
+        if (mode == 1) fixture.view->valid = 0;
+        if (mode == 2) CHECK(ctos_ssh_callback_cancel(fixture.callback_token) == 0);
+        if (mode == 3) CHECK(ctos_ssh_native_client_step(fixture.client,
+            &(struct ctos_ssh_native_client_step){.cancelled = 1}) != 0 && errno == ECANCELED);
+        unsigned char output[32]; size_t length = 99;
+        memset(output, 0xa5, sizeof(output));
+        CHECK(ctos_ssh_native_client_jump_read(fixture.client, output, sizeof(output), &length) != 0 && length == 0);
+        for (size_t i = 0; i < sizeof(output); i++) CHECK(output[i] == 0);
+        struct ctos_ssh_native_jump_status status;
+        memset(&status, 0xa5, sizeof(status));
+        CHECK(ctos_ssh_native_client_jump_status(fixture.client, &status) != 0 && status.phase == 0);
+        fixture.view->valid = 1;
+        cleanup_fixture(&fixture, 1);
+        if (next != 0) CHECK(ctos_ssh_role_bootstrap_close(next) == 0);
+    }
+}
+
+static void test_jump_channel_receive_bound(void) {
+    struct fixture fixture;
+    unsigned char bytes[32768], output[32768]; size_t length = 99;
+    memset(bytes, 'x', sizeof(bytes));
+    setup_jump_fixture(&fixture, 1);
+    CHECK(ctos_ssh_native_client_begin_password_auth(fixture.client) == 0);
+    drive_password(&fixture, CTOS_SSH_PASSWORD_AUTH_SUCCESS, 0);
+    ctos_ssh_role_token next = jump_next_role(&fixture, 0);
+    CHECK(ctos_ssh_native_client_begin_jump(fixture.client, next) == 0);
+    drive_jump_phase(&fixture, CTOS_SSH_JUMP_OPEN);
+    peer_channel_data(&fixture, 0, bytes, sizeof(bytes));
+    peer_channel_data(&fixture, 0, bytes, sizeof(bytes));
+    for (unsigned int turn = 0; turn < 40000U && jump_status(&fixture).buffered_bytes != 65536U; turn++)
+        CHECK(shell_turn(&fixture) == 0);
+    CHECK(jump_status(&fixture).buffered_bytes == 65536U);
+    peer_channel_data(&fixture, 0, bytes, 1U);
+    int failed = 0;
+    for (unsigned int turn = 0; turn < 10000U; turn++)
+        if (shell_turn(&fixture) != 0) { CHECK(errno == EPROTO); failed = 1; break; }
+    CHECK(failed);
+    memset(output, 0xa5, sizeof(output));
+    CHECK(ctos_ssh_native_client_jump_read(fixture.client, output, sizeof(output), &length) != 0 && length == 0);
+    for (size_t i = 0; i < sizeof(output); i++) CHECK(output[i] == 0);
+    cleanup_fixture(&fixture, 1);
+    CHECK(ctos_ssh_role_bootstrap_close(next) == 0);
+}
+
+struct relay_owner_attempt {
+    struct ctos_ssh_native_jump_relay *relay;
+    int pump, pump_errno, close_result, close_errno, destroy, destroy_errno;
+};
+static void *relay_wrong_owner(void *opaque) {
+    struct relay_owner_attempt *attempt = opaque;
+    attempt->pump = ctos_ssh_native_jump_relay_pump(attempt->relay); attempt->pump_errno = errno;
+    attempt->close_result = ctos_ssh_native_jump_relay_close(attempt->relay); attempt->close_errno = errno;
+    attempt->destroy = ctos_ssh_native_jump_relay_destroy(attempt->relay); attempt->destroy_errno = errno;
+    return NULL;
+}
+
+static void test_jump_relay_roundtrip(void) {
+    static const unsigned char outgoing[] = "0123456789abcdefghijklmnop";
+    static const unsigned char incoming[] = "inner-server-bytes";
+    struct fixture fixture;
+    struct ctos_ssh_native_jump_relay *relay = NULL, *other = NULL;
+    int pair[2], unused[2];
+    size_t length, received = 0;
+    unsigned char output[64];
+    setup_jump_fixture(&fixture, 1);
+    ctos_ssh_role_token next = jump_next_role(&fixture, 0);
+    CHECK(socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0, pair) == 0);
+    CHECK(ctos_ssh_native_jump_relay_open(fixture.client, pair[0], &relay) != 0 && relay == NULL);
+    CHECK(fcntl(pair[0], F_GETFD) >= 0);
+    CHECK(ctos_ssh_native_client_begin_password_auth(fixture.client) == 0);
+    drive_password(&fixture, CTOS_SSH_PASSWORD_AUTH_SUCCESS, 0);
+    CHECK(ctos_ssh_native_client_begin_jump(fixture.client, next) == 0);
+    drive_jump_phase(&fixture, CTOS_SSH_JUMP_OPEN);
+    int duplicated_transport = fcntl(fixture.pair[0], F_DUPFD_CLOEXEC, 0);
+    CHECK(duplicated_transport >= 0);
+    CHECK(ctos_ssh_native_jump_relay_open(fixture.client, duplicated_transport, &relay) != 0
+        && errno == EINVAL && relay == NULL && fcntl(duplicated_transport, F_GETFD) >= 0);
+    CHECK(close(duplicated_transport) == 0);
+    int datagram[2];
+    CHECK(socketpair(AF_UNIX, SOCK_DGRAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0, datagram) == 0);
+    CHECK(ctos_ssh_native_jump_relay_open(fixture.client, datagram[0], &relay) != 0
+        && errno == EINVAL && relay == NULL && fcntl(datagram[0], F_GETFD) >= 0);
+    CHECK(close(datagram[0]) == 0 && close(datagram[1]) == 0);
+    CHECK(ctos_ssh_native_jump_relay_open(fixture.client, pair[0], &relay) == 0 && relay != NULL);
+    CHECK(ctos_ssh_native_jump_relay_destroy(relay) != 0 && errno == EBUSY);
+    CHECK(ctos_ssh_native_client_close(fixture.client) != 0 && errno == EBUSY);
+    CHECK(socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0, unused) == 0);
+    CHECK(ctos_ssh_native_jump_relay_open(fixture.client, unused[0], &other) != 0
+        && errno == EALREADY && other == NULL && fcntl(unused[0], F_GETFD) >= 0);
+    CHECK(close(unused[0]) == 0 && close(unused[1]) == 0);
+    length = 99;
+    CHECK(ctos_ssh_native_client_jump_write(fixture.client, outgoing, 1, &length) != 0
+        && errno == EBUSY && length == 0);
+    memset(output, 0xa5, sizeof(output)); length = 99;
+    CHECK(ctos_ssh_native_client_jump_read(fixture.client, output, sizeof(output), &length) != 0
+        && errno == EBUSY && length == 0);
+    for (size_t i = 0; i < sizeof(output); i++) CHECK(output[i] == 0);
+    CHECK(ctos_ssh_native_client_jump_eof(fixture.client) != 0 && errno == EBUSY);
+    struct relay_owner_attempt attempt = {.relay = relay}; pthread_t thread;
+    CHECK(pthread_create(&thread, NULL, relay_wrong_owner, &attempt) == 0);
+    CHECK(pthread_join(thread, NULL) == 0 && attempt.pump != 0 && attempt.pump_errno == EPERM
+        && attempt.close_result != 0 && attempt.close_errno == EPERM
+        && attempt.destroy != 0 && attempt.destroy_errno == EPERM);
+    CHECK(send(pair[1], outgoing, sizeof(outgoing) - 1U, MSG_NOSIGNAL) == (ssize_t)sizeof(outgoing) - 1);
+    for (unsigned int turn = 0; turn < 10000U && fixture.shell_input_length < 16U; turn++) {
+        CHECK(ctos_ssh_native_jump_relay_pump(relay) == 0);
+        CHECK(shell_turn(&fixture) == 0);
+    }
+    CHECK(fixture.shell_input_length == 16U && memcmp(fixture.shell_input, outgoing, 16U) == 0);
+    for (int turn = 0; turn < 5; turn++) CHECK(ctos_ssh_native_jump_relay_pump(relay) == 0);
+    send_window(&fixture, 64U);
+    for (unsigned int turn = 0; turn < 10000U && fixture.shell_input_length < sizeof(outgoing) - 1U; turn++) {
+        CHECK(shell_turn(&fixture) == 0);
+        CHECK(ctos_ssh_native_jump_relay_pump(relay) == 0);
+    }
+    CHECK(fixture.shell_input_length == sizeof(outgoing) - 1U
+        && memcmp(fixture.shell_input, outgoing, sizeof(outgoing) - 1U) == 0);
+    peer_channel_data(&fixture, 0, incoming, sizeof(incoming) - 1U);
+    for (unsigned int turn = 0; turn < 10000U && received < sizeof(incoming) - 1U; turn++) {
+        CHECK(shell_turn(&fixture) == 0);
+        CHECK(ctos_ssh_native_jump_relay_pump(relay) == 0);
+        ssize_t n = recv(pair[1], output + received, sizeof(output) - received, MSG_DONTWAIT);
+        if (n > 0) received += (size_t)n;
+        else CHECK(n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR));
+    }
+    CHECK(received == sizeof(incoming) - 1U && memcmp(output, incoming, received) == 0);
+    CHECK(shutdown(pair[1], SHUT_WR) == 0);
+    for (unsigned int turn = 0; turn < 10000U && fixture.shell_eof_count == 0; turn++) {
+        CHECK(ctos_ssh_native_jump_relay_pump(relay) == 0);
+        CHECK(shell_turn(&fixture) == 0);
+    }
+    CHECK(fixture.shell_eof_count == 1);
+    peer_channel_data(&fixture, 0, (const unsigned char *)"tail", 4U);
+    peer_channel_packet(&fixture, SSH2_MSG_CHANNEL_EOF); CHECK(sshpkt_send(fixture.server) == 0);
+    peer_channel_packet(&fixture, SSH2_MSG_CHANNEL_CLOSE); CHECK(sshpkt_send(fixture.server) == 0);
+    int saw_eof = 0; received = 0;
+    for (unsigned int turn = 0; turn < 10000U && !saw_eof; turn++) {
+        if (jump_status(&fixture).phase != CTOS_SSH_JUMP_CLOSED) CHECK(shell_turn(&fixture) == 0);
+        CHECK(ctos_ssh_native_jump_relay_pump(relay) == 0);
+        ssize_t n = recv(pair[1], output + received, sizeof(output) - received, MSG_DONTWAIT);
+        if (n == 0) saw_eof = 1;
+        else if (n > 0) received += (size_t)n;
+        else CHECK(errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR);
+    }
+    CHECK(saw_eof && received == 4U && memcmp(output, "tail", 4U) == 0);
+    CHECK(ctos_ssh_native_jump_relay_close(relay) == 0);
+    CHECK(fcntl(pair[0], F_GETFD) < 0 && errno == EBADF);
+    CHECK(ctos_ssh_native_jump_relay_close(relay) != 0 && errno == ENOENT);
+    CHECK(ctos_ssh_native_jump_relay_destroy(relay) == 0);
+    CHECK(close(pair[1]) == 0);
+    fixture.callback.release_failures_remaining = 1;
+    CHECK(ctos_ssh_native_client_close(fixture.client) != 0 && errno == EIO);
+    cleanup_fixture(&fixture, 2);
+    CHECK(ctos_ssh_role_bootstrap_close(next) == 0);
+}
+
+static void test_jump_relay_revocation(void) {
+    for (unsigned int mode = 0; mode < 3; mode++) {
+        struct fixture fixture;
+        struct ctos_ssh_native_jump_relay *relay = NULL;
+        int pair[2];
+        setup_jump_fixture(&fixture, 1);
+        CHECK(ctos_ssh_native_client_begin_password_auth(fixture.client) == 0);
+        drive_password(&fixture, CTOS_SSH_PASSWORD_AUTH_SUCCESS, 0);
+        ctos_ssh_role_token next = jump_next_role(&fixture, 0);
+        CHECK(ctos_ssh_native_client_begin_jump(fixture.client, next) == 0);
+        drive_jump_phase(&fixture, CTOS_SSH_JUMP_OPEN);
+        CHECK(socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0, pair) == 0);
+        CHECK(ctos_ssh_native_jump_relay_open(fixture.client, pair[0], &relay) == 0);
+        CHECK(send(pair[1], "queued", 6U, MSG_NOSIGNAL) == 6);
+        if (mode == 0) { CHECK(ctos_ssh_role_bootstrap_close(next) == 0); next = 0; }
+        if (mode == 1) fixture.view->valid = 0;
+        if (mode == 2) CHECK(ctos_ssh_callback_cancel(fixture.callback_token) == 0);
+        CHECK(ctos_ssh_native_jump_relay_pump(relay) != 0);
+        CHECK(ctos_ssh_native_jump_relay_pump(relay) != 0 && errno == EALREADY);
+        CHECK(fixture.shell_input_length == 0);
+        CHECK(ctos_ssh_native_client_close(fixture.client) != 0 && errno == EBUSY);
+        CHECK(ctos_ssh_native_jump_relay_close(relay) == 0);
+        CHECK(ctos_ssh_native_jump_relay_destroy(relay) == 0 && close(pair[1]) == 0);
+        fixture.view->valid = 1;
+        cleanup_fixture(&fixture, 1);
+        if (next != 0) CHECK(ctos_ssh_role_bootstrap_close(next) == 0);
+    }
+}
+
+static void test_jump_relay_peer_backpressure_case(int cancel_before_unblock) {
+    static const unsigned char message[] = "buffered-reply";
+    struct fixture fixture;
+    struct ctos_ssh_native_jump_relay *relay = NULL;
+    unsigned char filler[4096], bytes[4096];
+    size_t filled = 0, drained = 0, received = 0;
+    int pair[2], send_buffer = 4096;
+    memset(filler, 'z', sizeof(filler));
+    setup_jump_fixture(&fixture, 1);
+    CHECK(ctos_ssh_native_client_begin_password_auth(fixture.client) == 0);
+    drive_password(&fixture, CTOS_SSH_PASSWORD_AUTH_SUCCESS, 0);
+    ctos_ssh_role_token next = jump_next_role(&fixture, 0);
+    CHECK(ctos_ssh_native_client_begin_jump(fixture.client, next) == 0);
+    drive_jump_phase(&fixture, CTOS_SSH_JUMP_OPEN);
+    CHECK(socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0, pair) == 0);
+    CHECK(setsockopt(pair[0], SOL_SOCKET, SO_SNDBUF, &send_buffer, sizeof(send_buffer)) == 0);
+    for (;;) {
+        ssize_t n = send(pair[0], filler, sizeof(filler), MSG_DONTWAIT | MSG_NOSIGNAL);
+        if (n < 0) { CHECK(errno == EAGAIN || errno == EWOULDBLOCK); break; }
+        CHECK(n > 0 && filled < 1024U * 1024U); filled += (size_t)n;
+    }
+    CHECK(filled != 0 && ctos_ssh_native_jump_relay_open(fixture.client, pair[0], &relay) == 0);
+    peer_channel_data(&fixture, 0, message, sizeof(message) - 1U);
+    for (unsigned int turn = 0; turn < 10000U && jump_status(&fixture).buffered_bytes == 0; turn++)
+        CHECK(shell_turn(&fixture) == 0);
+    CHECK(jump_status(&fixture).buffered_bytes == sizeof(message) - 1U);
+    CHECK(ctos_ssh_native_jump_relay_pump(relay) == 0);
+    CHECK(jump_status(&fixture).buffered_bytes == 0);
+    for (int turn = 0; turn < 5; turn++) CHECK(ctos_ssh_native_jump_relay_pump(relay) == 0);
+    if (cancel_before_unblock) {
+        CHECK(ctos_ssh_callback_cancel(fixture.callback_token) == 0);
+        CHECK(ctos_ssh_native_jump_relay_pump(relay) != 0);
+    }
+    while (drained < filled) {
+        size_t capacity = filled - drained < sizeof(bytes) ? filled - drained : sizeof(bytes);
+        ssize_t n = recv(pair[1], bytes, capacity, MSG_DONTWAIT);
+        CHECK(n > 0);
+        for (ssize_t i = 0; i < n; i++) CHECK(bytes[i] == 'z');
+        drained += (size_t)n;
+    }
+    if (cancel_before_unblock) {
+        CHECK(recv(pair[1], bytes, sizeof(bytes), MSG_DONTWAIT) < 0
+            && (errno == EAGAIN || errno == EWOULDBLOCK));
+    } else {
+        for (unsigned int turn = 0; turn < 10000U && received < sizeof(message) - 1U; turn++) {
+            CHECK(ctos_ssh_native_jump_relay_pump(relay) == 0);
+            ssize_t n = recv(pair[1], bytes + received, sizeof(bytes) - received, MSG_DONTWAIT);
+            if (n > 0) received += (size_t)n;
+            else CHECK(n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR));
+        }
+        CHECK(received == sizeof(message) - 1U && memcmp(bytes, message, received) == 0);
+    }
+    CHECK(ctos_ssh_native_jump_relay_close(relay) == 0);
+    CHECK(ctos_ssh_native_jump_relay_destroy(relay) == 0 && close(pair[1]) == 0);
+    cleanup_fixture(&fixture, 1);
+    CHECK(ctos_ssh_role_bootstrap_close(next) == 0);
+}
+
+static void test_jump_relay_peer_backpressure(void) {
+    test_jump_relay_peer_backpressure_case(0);
+    test_jump_relay_peer_backpressure_case(1);
+}
+
+static void test_jump_relay_remote_close(void) {
+    for (int queued = 0; queued <= 1; queued++) {
+        struct fixture fixture;
+        struct ctos_ssh_native_jump_relay *relay = NULL;
+        int pair[2]; unsigned char output;
+        setup_jump_fixture(&fixture, 1);
+        CHECK(ctos_ssh_native_client_begin_password_auth(fixture.client) == 0);
+        drive_password(&fixture, CTOS_SSH_PASSWORD_AUTH_SUCCESS, 0);
+        ctos_ssh_role_token next = jump_next_role(&fixture, 0);
+        CHECK(ctos_ssh_native_client_begin_jump(fixture.client, next) == 0);
+        drive_jump_phase(&fixture, CTOS_SSH_JUMP_OPEN);
+        CHECK(socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0, pair) == 0);
+        CHECK(ctos_ssh_native_jump_relay_open(fixture.client, pair[0], &relay) == 0);
+        if (queued) CHECK(send(pair[1], "queued", 6U, MSG_NOSIGNAL) == 6);
+        peer_channel_packet(&fixture, SSH2_MSG_CHANNEL_CLOSE); CHECK(sshpkt_send(fixture.server) == 0);
+        drive_jump_phase(&fixture, CTOS_SSH_JUMP_CLOSED);
+        if (queued) CHECK(ctos_ssh_native_jump_relay_pump(relay) != 0 && errno == EPIPE);
+        else {
+            CHECK(ctos_ssh_native_jump_relay_pump(relay) == 0);
+            CHECK(recv(pair[1], &output, 1U, MSG_DONTWAIT) == 0);
+            CHECK(send(pair[1], "x", 1U, MSG_NOSIGNAL) < 0 && errno == EPIPE);
+        }
+        CHECK(ctos_ssh_native_jump_relay_close(relay) == 0);
+        CHECK(ctos_ssh_native_jump_relay_destroy(relay) == 0 && close(pair[1]) == 0);
+        cleanup_fixture(&fixture, 1);
+        CHECK(ctos_ssh_role_bootstrap_close(next) == 0);
+    }
+}
+
+struct jump_bridge_fixture {
+    int server_fd;
+    struct ctos_ssh_native_jump_relay *relay;
+    size_t forwarded_to_jump;
+};
+
+static void jump_bridge_turn(struct fixture *jump, struct fixture *target,
+    struct jump_bridge_fixture *bridge, int step_target) {
+    unsigned char bytes[32768];
+    if (step_target) CHECK(ctos_ssh_native_client_step(target->client,
+        &(struct ctos_ssh_native_client_step){0}) == 0);
+    CHECK(ctos_ssh_native_jump_relay_pump(bridge->relay) == 0);
+    CHECK(shell_turn(jump) == 0);
+    CHECK(pump_synthetic_server(target, 64U, NULL, NULL) == 0);
+    ssize_t n = recv(bridge->server_fd, bytes, sizeof(bytes), MSG_DONTWAIT);
+    if (n > 0) {
+        bridge->forwarded_to_jump += (size_t)n;
+        peer_channel_data(jump, 0, bytes, (size_t)n);
+    }
+    else CHECK(n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR));
+    CHECK(shell_turn(jump) == 0);
+    CHECK(ctos_ssh_native_jump_relay_pump(bridge->relay) == 0);
+}
+
+static void close_parent_during_child_host(void *context) {
+    struct fixture *jump = context;
+    /* Same-thread C fixture injection, not JNI re-entry: the production JNI
+     * session lock is held across callbacks and cannot be re-entered here. */
+    peer_channel_packet(jump, SSH2_MSG_CHANNEL_EOF);
+    CHECK(sshpkt_send(jump->server) == 0);
+    peer_channel_packet(jump, SSH2_MSG_CHANNEL_CLOSE);
+    CHECK(sshpkt_send(jump->server) == 0);
+    for (unsigned int turn = 0; turn < 200000U; turn++) {
+        CHECK(shell_turn(jump) == 0);
+        if (jump_status(jump).phase == CTOS_SSH_JUMP_CLOSED) return;
+    }
+    CHECK(0);
+}
+
+static void eof_parent_during_child_kex(void *context) {
+    struct fixture *jump = context;
+    peer_channel_packet(jump, SSH2_MSG_CHANNEL_EOF);
+    CHECK(sshpkt_send(jump->server) == 0);
+    for (unsigned int turn = 0; turn < 200000U; turn++) {
+        CHECK(shell_turn(jump) == 0);
+        if (jump_status(jump).remote_eof) return;
+    }
+    CHECK(0);
+}
+
+enum child_case {
+    CHILD_ROUNDTRIP, CHILD_QUEUED_CANCEL, CHILD_HOST_CANCEL, CHILD_HOST_VIEW_REVOKE,
+    CHILD_HOST_ROLE_CLOSE, CHILD_CREDENTIAL_CANCEL, CHILD_OUTPUT_CANCEL, CHILD_OWN_CANCEL,
+    CHILD_DIRECT_CALLBACK, CHILD_DIRECT_HOST_VERIFY, CHILD_HOST_NEW_APPROVED,
+    CHILD_HOST_CHANGED_APPROVED, CHILD_HOST_PARENT_CLOSED,
+    CHILD_HOST_CHANGED, CHILD_HOST_REVOKED, CHILD_LOCAL_EOF, CHILD_REMOTE_CLOSE,
+    CHILD_KEYBOARD_CANCEL, CHILD_OWN_VIEW_REVOKE,
+    CHILD_FRESH_KNOWN, CHILD_FRESH_NEW, CHILD_FRESH_CHANGED, CHILD_FRESH_PARENT_CANCEL,
+    CHILD_PROVISIONAL_NEW, CHILD_PROVISIONAL_CANDIDATE_FAIL, CHILD_PROVISIONAL_REVIEW_DENY,
+    CHILD_PROVISIONAL_REVIEW_CANCEL, CHILD_PROVISIONAL_KEX_CANCEL, CHILD_PROVISIONAL_KNOWN,
+    CHILD_PROVISIONAL_CHANGED, CHILD_PROVISIONAL_REVOKED, CHILD_PROVISIONAL_DIRECT,
+    CHILD_PROVISIONAL_BACKPRESSURE, CHILD_PROVISIONAL_CANCEL_PENDING,
+    CHILD_PROVISIONAL_REMOTE_EOF, CHILD_PROVISIONAL_REMOTE_CLOSE, CHILD_PROVISIONAL_LOCAL_EOF,
+    CHILD_PROVISIONAL_BAD_SIGNATURE, CHILD_PROVISIONAL_CANDIDATE_ABORT_RETRY,
+    CHILD_PROVISIONAL_LOCAL_UNPUMPED_EOF,
+    CHILD_PROVISIONAL_PARENT_CLOSED_CANDIDATE, CHILD_PROVISIONAL_PARENT_CLOSED_REVIEW,
+    CHILD_PROVISIONAL_PARENT_CLOSED_KEX,
+    CHILD_PROVISIONAL_VIEW_REVOKE, CHILD_PROVISIONAL_PARENT_VIEW_REVOKE,
+    CHILD_PROVISIONAL_CALLBACK_CANCEL, CHILD_PROVISIONAL_PREKEX_EOF,
+    CHILD_PROVISIONAL_PREKEX_GUARD_INVALID, CHILD_PROVISIONAL_PREKEX_GUARD_TIMEOUT,
+    CHILD_PROVISIONAL_GUARDED_KEX,
+    CHILD_PROVISIONAL_POLL_IDLE, CHILD_PROVISIONAL_POLL_EXT_INFO,
+    CHILD_PROVISIONAL_POLL_REKEY, CHILD_PROVISIONAL_POLL_USERAUTH_SUCCESS,
+    CHILD_PROVISIONAL_POLL_DISCONNECT, CHILD_PROVISIONAL_POLL_PARTIAL,
+    CHILD_PROVISIONAL_POLL_BUFFERED, CHILD_PROVISIONAL_POLL_FIRST_BLOCK, CHILD_PROVISIONAL_POLL_AEAD_PARTIAL,
+    CHILD_PROVISIONAL_POLL_BACKPRESSURE, CHILD_PROVISIONAL_POLL_PARENT_PENDING, CHILD_PROVISIONAL_POLL_RELAY_PENDING,
+    CHILD_PROVISIONAL_POLL_EOF, CHILD_PROVISIONAL_POLL_PEER_EOF, CHILD_PROVISIONAL_POLL_PARENT_EOF,
+    CHILD_PROVISIONAL_POLL_CHILD_SOCKET_ERROR, CHILD_PROVISIONAL_POLL_PARENT_SOCKET_ERROR,
+    CHILD_PROVISIONAL_POLL_CANCEL,
+    CHILD_PROVISIONAL_POLL_REVOKE, CHILD_PROVISIONAL_POLL_INVALIDATE, CHILD_PROVISIONAL_POLL_TIMEOUT,
+    CHILD_PROVISIONAL_EXT_IDLE, CHILD_PROVISIONAL_EXT_VALID, CHILD_PROVISIONAL_EXT_FRAGMENTED,
+    CHILD_PROVISIONAL_EXT_CHACHA_FRAGMENTED, CHILD_PROVISIONAL_EXT_DUPLICATE,
+    CHILD_PROVISIONAL_EXT_BACKLOG, CHILD_PROVISIONAL_EXT_INVALIDATE_AFTER_READ,
+    CHILD_PROVISIONAL_EXT_INVALIDATE_AFTER_PARSE,
+    CHILD_PROVISIONAL_EXT_TRUNCATED, CHILD_PROVISIONAL_EXT_CTR, CHILD_PROVISIONAL_EXT_CANCEL,
+    CHILD_PROVISIONAL_EXT_REVOKE, CHILD_PROVISIONAL_EXT_INVALIDATE, CHILD_PROVISIONAL_EXT_TIMEOUT,
+    CHILD_PROVISIONAL_EXT_EOF,
+#ifdef CTOS_SSH_NATIVE_TEST_HOOKS
+    CHILD_KEX_AUTH_INVALID, CHILD_KEX_SHELL_INVALID, CHILD_VIEW_CLOSE_FAILURE,
+#endif
+    CHILD_CASE_COUNT
+};
+
+static void keyboard_challenge_packet(struct fixture *, unsigned int, unsigned int);
+
+struct provisional_wrong_thread {
+    struct ctos_ssh_native_client *client;
+    int result, error, ready;
+};
+
+static void *provisional_wrong_owner(void *context) {
+    struct provisional_wrong_thread *attempt = context;
+    attempt->ready = 99;
+    attempt->result = ctos_ssh_native_client_provisional_new_ready(attempt->client, &attempt->ready);
+    attempt->error = errno;
+    return NULL;
+}
+
+static void *provisional_poll_wrong_owner(void *context) {
+    struct provisional_wrong_thread *attempt = context;
+    attempt->ready = 99;
+    attempt->result = ctos_ssh_native_client_provisional_new_poll_idle(attempt->client, &attempt->ready);
+    attempt->error = errno;
+    return NULL;
+}
+
+static void *provisional_ext_wrong_owner(void *context) {
+    struct provisional_wrong_thread *attempt = context;
+    attempt->ready = 99;
+    attempt->result = ctos_ssh_native_client_provisional_new_poll_ext(attempt->client, &attempt->ready);
+    attempt->error = errno;
+    return NULL;
+}
+
+static void test_provisional_poll(enum child_case mode, struct fixture *jump, struct fixture *target,
+    struct jump_bridge_fixture *bridge, uint64_t hop_deadline) {
+    int idle = 0;
+    for (unsigned int turn = 0; turn < 20000U; turn++) {
+        jump_bridge_turn(jump, target, bridge, 0);
+        CHECK(ctos_ssh_native_client_provisional_new_poll_idle(target->client, &idle) == 0);
+        if (idle) break;
+        CHECK(turn + 1U < 20000U);
+    }
+    CHECK(idle && target->callback.credential_calls == 0 && target->callback.credential_bytes_calls == 0
+        && target->callback.selected_calls == 0 && target->service_requests == 0 && target->password_requests == 0);
+
+    if (mode == CHILD_PROVISIONAL_POLL_RELAY_PENDING) {
+#ifdef CTOS_SSH_NATIVE_TEST_HOOKS
+        CHECK(ctos_ssh_native_client_test_provisional_fill_peer(target->client) == 0);
+#else
+        CHECK(0);
+#endif
+    }
+
+    if (mode == CHILD_PROVISIONAL_POLL_IDLE) {
+        struct provisional_wrong_thread wrong = {.client = target->client};
+        pthread_t thread;
+        CHECK(pthread_create(&thread, NULL, provisional_poll_wrong_owner, &wrong) == 0);
+        CHECK(pthread_join(thread, NULL) == 0);
+        CHECK(wrong.result != 0 && wrong.error == EPERM && !wrong.ready);
+        CHECK(ctos_ssh_native_client_provisional_new_poll_idle(NULL, &idle) != 0 && !idle && errno == EINVAL);
+        CHECK(ctos_ssh_native_client_provisional_new_poll_idle(target->client, NULL) != 0 && errno == EINVAL);
+        for (unsigned int turn = 0; turn < 100U; turn++) {
+            jump_bridge_turn(jump, target, bridge, 0);
+            CHECK(ctos_ssh_native_client_provisional_new_poll_idle(target->client, &idle) == 0 && idle);
+        }
+        return;
+    }
+    if (mode == CHILD_PROVISIONAL_POLL_BACKPRESSURE) {
+        unsigned char pending = 0x5a;
+        CHECK(send(target->managed_child_fd, &pending, 1U, MSG_DONTWAIT | MSG_NOSIGNAL) == 1);
+        CHECK(ctos_ssh_native_client_provisional_new_poll_idle(target->client, &idle) == 0 && !idle);
+        return;
+    }
+    if (mode == CHILD_PROVISIONAL_POLL_CANCEL || mode == CHILD_PROVISIONAL_POLL_REVOKE
+            || mode == CHILD_PROVISIONAL_POLL_INVALIDATE
+            || mode == CHILD_PROVISIONAL_POLL_TIMEOUT || mode == CHILD_PROVISIONAL_POLL_EOF
+            || mode == CHILD_PROVISIONAL_POLL_PEER_EOF || mode == CHILD_PROVISIONAL_POLL_PARENT_EOF
+            || mode == CHILD_PROVISIONAL_POLL_CHILD_SOCKET_ERROR || mode == CHILD_PROVISIONAL_POLL_PARENT_SOCKET_ERROR) {
+        if (mode == CHILD_PROVISIONAL_POLL_CANCEL) CHECK(ctos_ssh_callback_cancel(jump->callback_token) == 0);
+        else if (mode == CHILD_PROVISIONAL_POLL_REVOKE) target->view->valid = 0;
+        else if (mode == CHILD_PROVISIONAL_POLL_EOF) CHECK(shutdown(target->managed_child_fd, SHUT_RD) == 0);
+        else if (mode == CHILD_PROVISIONAL_POLL_PEER_EOF) {
+#ifdef CTOS_SSH_NATIVE_TEST_HOOKS
+            CHECK(ctos_ssh_native_client_test_provisional_peer_eof(target->client) == 0);
+#else
+            CHECK(0);
+#endif
+        } else if (mode == CHILD_PROVISIONAL_POLL_PARENT_EOF) CHECK(shutdown(jump->pair[1], SHUT_WR) == 0);
+        else if (mode == CHILD_PROVISIONAL_POLL_CHILD_SOCKET_ERROR || mode == CHILD_PROVISIONAL_POLL_PARENT_SOCKET_ERROR) {
+#ifdef CTOS_SSH_NATIVE_TEST_HOOKS
+            CHECK(ctos_ssh_native_client_test_provisional_fail_peek(
+                mode == CHILD_PROVISIONAL_POLL_CHILD_SOCKET_ERROR ? 1 : 2) == 0);
+#else
+            CHECK(0);
+#endif
+        }
+        else if (mode == CHILD_PROVISIONAL_POLL_INVALIDATE) {
+            ctos_ssh_effect_invalidate_begin();
+            ctos_ssh_effect_invalidate_end();
+        }
+        else wait_until_deadline_attempts(hop_deadline, 12000U);
+        idle = 99;
+        CHECK(ctos_ssh_native_client_provisional_new_poll_idle(target->client, &idle) != 0 && !idle);
+        if (mode == CHILD_PROVISIONAL_POLL_EOF || mode == CHILD_PROVISIONAL_POLL_PEER_EOF
+                || mode == CHILD_PROVISIONAL_POLL_PARENT_EOF) CHECK(errno == EPIPE);
+        if (mode == CHILD_PROVISIONAL_POLL_CHILD_SOCKET_ERROR || mode == CHILD_PROVISIONAL_POLL_PARENT_SOCKET_ERROR)
+            CHECK(errno == ECONNRESET);
+        if (mode == CHILD_PROVISIONAL_POLL_INVALIDATE) CHECK(errno == ECANCELED);
+        if (mode == CHILD_PROVISIONAL_POLL_TIMEOUT) CHECK(errno == ETIMEDOUT);
+        target->view->valid = 1;
+        CHECK(ctos_ssh_native_client_provisional_new_poll_idle(target->client, &idle) != 0 && !idle);
+        return;
+    }
+
+    int type = SSH2_MSG_EXT_INFO;
+    if (mode == CHILD_PROVISIONAL_POLL_REKEY) type = SSH2_MSG_KEXINIT;
+    else if (mode == CHILD_PROVISIONAL_POLL_USERAUTH_SUCCESS) type = SSH2_MSG_USERAUTH_SUCCESS;
+    else if (mode == CHILD_PROVISIONAL_POLL_DISCONNECT) type = SSH2_MSG_DISCONNECT;
+    if (type == SSH2_MSG_KEXINIT) {
+        CHECK(kex_start_rekex(target->server) == 0);
+    } else {
+        CHECK(sshpkt_start(target->server, type) == 0);
+        if (type == SSH2_MSG_EXT_INFO) CHECK(sshpkt_put_u32(target->server, 0) == 0);
+        if (type == SSH2_MSG_DISCONNECT) {
+            CHECK(sshpkt_put_u32(target->server, 11) == 0);
+            CHECK(sshpkt_put_cstring(target->server, "closed") == 0);
+            CHECK(sshpkt_put_cstring(target->server, "") == 0);
+        }
+        CHECK(sshpkt_send(target->server) == 0);
+    }
+    size_t length = 0;
+    const unsigned char *encrypted = ssh_output_ptr(target->server, &length);
+    CHECK(encrypted != NULL && length > 16U);
+    if (mode == CHILD_PROVISIONAL_POLL_BUFFERED || mode == CHILD_PROVISIONAL_POLL_FIRST_BLOCK
+            || mode == CHILD_PROVISIONAL_POLL_AEAD_PARTIAL) {
+#ifdef CTOS_SSH_NATIVE_TEST_HOOKS
+        int parse = mode == CHILD_PROVISIONAL_POLL_FIRST_BLOCK ? 1
+            : mode == CHILD_PROVISIONAL_POLL_AEAD_PARTIAL ? 2 : 0;
+        size_t fragment = parse == 1 ? 16U : parse == 2 ? 8U : 1U;
+        CHECK(ctos_ssh_native_client_test_provisional_input(target->client, encrypted, fragment, parse) == 0);
+#else
+        CHECK(0);
+#endif
+    } else {
+        size_t sent = mode == CHILD_PROVISIONAL_POLL_PARTIAL ? 1U : length;
+        peer_channel_data(jump, 0, encrypted, sent);
+        CHECK(ssh_output_consume(target->server, length) == 0);
+        if (mode == CHILD_PROVISIONAL_POLL_PARENT_PENDING) {
+            int queued = 0;
+            for (unsigned int turn = 0; turn < 20000U && queued == 0; turn++) {
+                CHECK(pump_synthetic_server(jump, 64U, NULL, NULL) == 0);
+                CHECK(ioctl(jump->pair[0], FIONREAD, &queued) == 0);
+            }
+            CHECK(queued > 0);
+            CHECK(ctos_ssh_native_client_provisional_new_poll_idle(target->client, &idle) == 0 && !idle);
+            for (unsigned int turn = 0; turn < 20000U && jump_status(jump).buffered_bytes == 0; turn++)
+                CHECK(shell_turn(jump) == 0);
+            CHECK(jump_status(jump).buffered_bytes != 0);
+        } else if (mode == CHILD_PROVISIONAL_POLL_RELAY_PENDING) {
+#ifdef CTOS_SSH_NATIVE_TEST_HOOKS
+            for (unsigned int turn = 0; turn < 20000U
+                    && ctos_ssh_native_client_test_provisional_peer_buffered(target->client) == 0; turn++) {
+                CHECK(shell_turn(jump) == 0);
+                CHECK(ctos_ssh_native_jump_relay_pump(bridge->relay) == 0);
+            }
+            CHECK(ctos_ssh_native_client_test_provisional_peer_buffered(target->client) > 0);
+            CHECK(jump_status(jump).buffered_bytes == 0);
+            unsigned char discarded[4096];
+            ssize_t count;
+            do {
+                count = recv(target->managed_child_fd, discarded, sizeof(discarded), MSG_DONTWAIT);
+                CHECK(count > 0 || (count < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)));
+            } while (count > 0);
+            int queued = -1;
+            CHECK(ioctl(target->managed_child_fd, FIONREAD, &queued) == 0 && queued == 0);
+#else
+            CHECK(0);
+#endif
+        } else {
+            int queued = 0;
+            for (unsigned int turn = 0; turn < 20000U && queued == 0; turn++) {
+                CHECK(shell_turn(jump) == 0);
+                CHECK(ctos_ssh_native_jump_relay_pump(bridge->relay) == 0);
+                CHECK(ioctl(target->managed_child_fd, FIONREAD, &queued) == 0);
+            }
+            CHECK(queued > 0);
+        }
+    }
+    idle = 99;
+    CHECK(ctos_ssh_native_client_provisional_new_poll_idle(target->client, &idle) != 0
+        && !idle && errno == EPROTO);
+    CHECK(target->callback.candidate_abort_calls == 1 && target->callback.kex_complete_calls == 0
+        && target->callback.selected_calls == 0 && target->callback.credential_calls == 0
+        && target->service_requests == 0 && target->password_requests == 0);
+    CHECK(ctos_ssh_native_client_provisional_new_poll_idle(target->client, &idle) != 0
+        && !idle && errno == EALREADY);
+}
+
+static void deliver_provisional_extension(struct fixture *jump, struct fixture *target,
+    struct jump_bridge_fixture *bridge, const unsigned char *bytes, size_t length) {
+    int queued = 0;
+    CHECK(length > 0 && length <= 32768U);
+    peer_channel_data(jump, 0, bytes, length);
+    for (unsigned int turn = 0; turn < 20000U && (size_t)queued < length; turn++) {
+        CHECK(shell_turn(jump) == 0);
+        CHECK(ctos_ssh_native_jump_relay_pump(bridge->relay) == 0);
+        CHECK(ioctl(target->managed_child_fd, FIONREAD, &queued) == 0 && queued >= 0);
+    }
+    CHECK((size_t)queued >= length);
+}
+
+static void queue_provisional_extension(struct fixture *target) {
+    CHECK(sshpkt_start(target->server, SSH2_MSG_EXT_INFO) == 0);
+    CHECK(sshpkt_put_u32(target->server, 2U) == 0);
+    CHECK(sshpkt_put_cstring(target->server, "server-sig-algs") == 0);
+    CHECK(sshpkt_put_cstring(target->server, "ssh-ed25519,rsa-sha2-512") == 0);
+    CHECK(sshpkt_put_cstring(target->server, "ping@openssh.com") == 0);
+    CHECK(sshpkt_put_cstring(target->server, "0") == 0);
+    CHECK(sshpkt_send(target->server) == 0);
+}
+
+#ifdef CTOS_SSH_NATIVE_TEST_HOOKS
+static void invalidate_provisional_generation(void *context) {
+    unsigned int *fired = context;
+    (*fired)++;
+    ctos_ssh_effect_invalidate_begin();
+    ctos_ssh_effect_invalidate_end();
+}
+#endif
+
+static void test_provisional_ext(enum child_case mode, struct fixture *jump, struct fixture *target,
+    struct jump_bridge_fixture *bridge, uint64_t hop_deadline, uint32_t generation) {
+    int idle = 0;
+    for (unsigned int turn = 0; turn < 20000U; turn++) {
+        jump_bridge_turn(jump, target, bridge, 0);
+        CHECK(ctos_ssh_native_client_provisional_new_poll_idle(target->client, &idle) == 0);
+        if (idle) break;
+        CHECK(turn + 1U < 20000U);
+    }
+    CHECK(idle && target->callback.provisional_kex_calls == 1
+        && target->callback.credential_calls == 0 && target->service_requests == 0);
+
+    if (mode == CHILD_PROVISIONAL_EXT_CANCEL || mode == CHILD_PROVISIONAL_EXT_REVOKE
+        || mode == CHILD_PROVISIONAL_EXT_INVALIDATE || mode == CHILD_PROVISIONAL_EXT_TIMEOUT
+        || mode == CHILD_PROVISIONAL_EXT_EOF || mode == CHILD_PROVISIONAL_EXT_CTR) {
+        if (mode == CHILD_PROVISIONAL_EXT_CANCEL) CHECK(ctos_ssh_callback_cancel(jump->callback_token) == 0);
+        else if (mode == CHILD_PROVISIONAL_EXT_REVOKE) target->view->valid = 0;
+        else if (mode == CHILD_PROVISIONAL_EXT_INVALIDATE) {
+            ctos_ssh_effect_invalidate_begin();
+            ctos_ssh_effect_invalidate_end();
+        } else if (mode == CHILD_PROVISIONAL_EXT_TIMEOUT) wait_until_deadline_attempts(hop_deadline, 12000U);
+        else if (mode == CHILD_PROVISIONAL_EXT_EOF) {
+#ifdef CTOS_SSH_NATIVE_TEST_HOOKS
+            CHECK(ctos_ssh_native_client_test_provisional_peer_eof(target->client) == 0);
+#else
+            CHECK(0);
+#endif
+        }
+        idle = 99;
+        CHECK(ctos_ssh_native_client_provisional_new_poll_ext(target->client, &idle) != 0 && !idle);
+        if (mode == CHILD_PROVISIONAL_EXT_CTR) CHECK(errno == EPROTO);
+        if (mode == CHILD_PROVISIONAL_EXT_EOF) CHECK(errno == EPIPE);
+        if (mode == CHILD_PROVISIONAL_EXT_TIMEOUT) CHECK(errno == ETIMEDOUT);
+        target->view->valid = 1;
+        CHECK(ctos_ssh_native_client_provisional_new_poll_ext(target->client, &idle) != 0 && !idle);
+        return;
+    }
+
+    CHECK(ctos_ssh_native_client_provisional_new_poll_ext(target->client, &idle) == 0 && idle);
+    if (mode == CHILD_PROVISIONAL_EXT_IDLE) {
+        struct provisional_wrong_thread wrong = {.client = target->client};
+        pthread_t thread;
+        CHECK(pthread_create(&thread, NULL, provisional_ext_wrong_owner, &wrong) == 0);
+        CHECK(pthread_join(thread, NULL) == 0);
+        CHECK(wrong.result != 0 && wrong.error == EPERM && !wrong.ready);
+        CHECK(ctos_ssh_native_client_provisional_new_poll_ext(NULL, &idle) != 0 && !idle && errno == EINVAL);
+        CHECK(ctos_ssh_native_client_provisional_new_poll_ext(target->client, NULL) != 0 && errno == EINVAL);
+        return;
+    }
+    queue_provisional_extension(target);
+    size_t first_packet_length = 0;
+    CHECK(ssh_output_ptr(target->server, &first_packet_length) != NULL && first_packet_length > 16U);
+    if (mode == CHILD_PROVISIONAL_EXT_DUPLICATE || mode == CHILD_PROVISIONAL_EXT_BACKLOG)
+        queue_provisional_extension(target);
+    size_t length = 0;
+    const unsigned char *packet = ssh_output_ptr(target->server, &length);
+    CHECK(packet != NULL && length > 16U && length < 32768U);
+    unsigned char *copy = malloc(length);
+    CHECK(copy != NULL);
+    memcpy(copy, packet, length);
+    CHECK(ssh_output_consume(target->server, length) == 0);
+    size_t first = (mode == CHILD_PROVISIONAL_EXT_FRAGMENTED || mode == CHILD_PROVISIONAL_EXT_TRUNCATED
+        || mode == CHILD_PROVISIONAL_EXT_CHACHA_FRAGMENTED || mode == CHILD_PROVISIONAL_EXT_BACKLOG)
+        ? length - 1U : length;
+    if (mode == CHILD_PROVISIONAL_EXT_BACKLOG) CHECK(first > first_packet_length);
+    deliver_provisional_extension(jump, target, bridge, copy, first);
+#ifdef CTOS_SSH_NATIVE_TEST_HOOKS
+    unsigned int invalidation_fired = 0;
+    if (mode == CHILD_PROVISIONAL_EXT_INVALIDATE_AFTER_READ
+        || mode == CHILD_PROVISIONAL_EXT_INVALIDATE_AFTER_PARSE) {
+        CHECK(ctos_ssh_native_client_test_provisional_hook(target->client,
+            mode == CHILD_PROVISIONAL_EXT_INVALIDATE_AFTER_READ ? 1 : 2,
+            invalidate_provisional_generation, &invalidation_fired) == 0);
+        CHECK(ctos_ssh_native_client_provisional_new_poll_ext(target->client, &idle) != 0 && !idle);
+        CHECK(invalidation_fired == 1U && target->callback.credential_calls == 0
+            && target->service_requests == 0 && target->password_requests == 0);
+        free(copy);
+        return;
+    }
+#else
+    CHECK(mode != CHILD_PROVISIONAL_EXT_INVALIDATE_AFTER_READ
+        && mode != CHILD_PROVISIONAL_EXT_INVALIDATE_AFTER_PARSE);
+#endif
+    CHECK(ctos_ssh_native_client_provisional_new_poll_ext(target->client, &idle) == 0);
+    if (mode == CHILD_PROVISIONAL_EXT_DUPLICATE || mode == CHILD_PROVISIONAL_EXT_BACKLOG) {
+        CHECK(!idle);
+        if (mode == CHILD_PROVISIONAL_EXT_BACKLOG) {
+            CHECK(ctos_ssh_native_client_provisional_new_poll_ext(target->client, &idle) == 0 && !idle);
+            deliver_provisional_extension(jump, target, bridge, copy + first, length - first);
+        }
+        CHECK(ctos_ssh_native_client_provisional_new_poll_ext(target->client, &idle) != 0
+            && !idle && errno == EPROTO);
+        CHECK(target->callback.candidate_abort_calls == 1 && target->callback.kex_complete_calls == 0
+            && target->callback.selected_calls == 0 && target->callback.credential_calls == 0
+            && target->service_requests == 0 && target->password_requests == 0);
+        free(copy);
+        return;
+    }
+    if (first != length) {
+        CHECK(!idle);
+        if (mode == CHILD_PROVISIONAL_EXT_FRAGMENTED || mode == CHILD_PROVISIONAL_EXT_CHACHA_FRAGMENTED) {
+            deliver_provisional_extension(jump, target, bridge, copy + first, length - first);
+            CHECK(ctos_ssh_native_client_provisional_new_poll_ext(target->client, &idle) == 0);
+        }
+    }
+    if (mode != CHILD_PROVISIONAL_EXT_TRUNCATED) {
+        for (unsigned int turn = 0; turn < 20000U && !idle; turn++) {
+            jump_bridge_turn(jump, target, bridge, 0);
+            CHECK(ctos_ssh_native_client_provisional_new_poll_ext(target->client, &idle) == 0);
+        }
+        CHECK(idle);
+    } else CHECK(!idle);
+    CHECK(!ctos_ssh_native_client_complete(target->client));
+    CHECK(ctos_ssh_native_client_begin_userauth_service_guarded(target->client, generation) != 0
+        && errno == EACCES);
+    CHECK(target->callback.kex_complete_calls == 0 && target->callback.selected_calls == 0
+        && target->callback.credential_calls == 0 && target->callback.credential_bytes_calls == 0
+        && target->service_requests == 0 && target->password_requests == 0);
+    free(copy);
+}
+
+static void test_jump_nested_ssh(enum child_case mode) {
+    struct fixture jump, target;
+    struct jump_bridge_fixture bridge = {0};
+    const int poll_mode = mode >= CHILD_PROVISIONAL_POLL_IDLE && mode <= CHILD_PROVISIONAL_POLL_TIMEOUT;
+    const int ext_mode = mode >= CHILD_PROVISIONAL_EXT_IDLE && mode <= CHILD_PROVISIONAL_EXT_EOF;
+    const int guarded = mode >= CHILD_PROVISIONAL_PREKEX_GUARD_INVALID
+        && mode <= CHILD_PROVISIONAL_EXT_EOF;
+    uint64_t hop_deadline = 0;
+    uint32_t generation = 0;
+    int server_pair[2];
+    child_test_case = (int)mode;
+    setup_jump_fixture(&jump, 1);
+    CHECK(ctos_ssh_native_client_begin_password_auth(jump.client) == 0);
+    drive_password(&jump, CTOS_SSH_PASSWORD_AUTH_SUCCESS, 0);
+    ctos_ssh_role_token next = jump_next_role(&jump, 6);
+    CHECK(socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0, server_pair) == 0);
+    bridge.server_fd = server_pair[0]; jump.jump_bridge_enabled = 1; jump.jump_bridge_fd = bridge.server_fd;
+    jump.shell_window = 65536U; jump.shell_maxpacket = 32768U;
+    if (guarded) {
+        CHECK(ctos_ssh_effect_snapshot(&generation) == 0 && generation != 0);
+        hop_deadline = deadline_after(10000U);
+        CHECK(hop_deadline < jump.deadline);
+        CHECK(ctos_ssh_native_client_begin_jump_guarded(jump.client, next, hop_deadline, generation) == 0);
+    } else CHECK(ctos_ssh_native_client_begin_jump(jump.client, next) == 0);
+    drive_jump_phase(&jump, CTOS_SSH_JUMP_OPEN);
+
+    memset(&target, 0, sizeof(target));
+    target.pair[0] = target.pair[1] = -1; target.callback.release_fd = -1;
+    target.callback.enable_changed = mode == CHILD_HOST_CHANGED_APPROVED || mode == CHILD_FRESH_CHANGED;
+    target.callback.enable_provisional = mode >= CHILD_PROVISIONAL_NEW && mode <= CHILD_PROVISIONAL_EXT_EOF;
+    target.callback.fail_provisional_candidate = mode == CHILD_PROVISIONAL_CANDIDATE_FAIL
+        || mode == CHILD_PROVISIONAL_CANDIDATE_ABORT_RETRY;
+    target.callback.candidate_abort_failures_remaining = mode == CHILD_PROVISIONAL_CANDIDATE_ABORT_RETRY ? 100U : 0U;
+    target.callback.deny_provisional_review = mode == CHILD_PROVISIONAL_REVIEW_DENY;
+    target.callback.cancel_provisional_review = mode == CHILD_PROVISIONAL_REVIEW_CANCEL;
+    target.callback.cancel_provisional_kex = mode == CHILD_PROVISIONAL_KEX_CANCEL;
+    target.callback.close_provisional_candidate = mode == CHILD_PROVISIONAL_PARENT_CLOSED_CANDIDATE;
+    target.callback.close_provisional_review = mode == CHILD_PROVISIONAL_PARENT_CLOSED_REVIEW;
+    target.callback.close_provisional_kex = mode == CHILD_PROVISIONAL_PARENT_CLOSED_KEX;
+    target.password_expected = mode != CHILD_KEYBOARD_CANCEL;
+    target.keyboard_expected = mode == CHILD_KEYBOARD_CANCEL;
+    target.password_methods = (const unsigned char *)"publickey,password";
+    target.password_methods_length = sizeof("publickey,password") - 1U;
+    target.password_text_length = 3U; target.password_language_length = 2U;
+    CHECK(sshkey_generate(KEY_ED25519, 0, &target.private_key) == 0);
+    CHECK(sshkey_from_private(target.private_key, &target.public_key) == 0);
+    target.host_key = target.public_key;
+    CHECK(!sshkey_equal(jump.public_key, target.public_key));
+    fixture_existing_role = next;
+    fixture_jump_parent = jump.client;
+    fixture_parent_context = &jump;
+    fixture_root_context = &jump;
+    fixture_check_borrow_transaction = mode == CHILD_ROUNDTRIP;
+    fixture_fresh_host_mode = mode == CHILD_FRESH_KNOWN || mode == CHILD_FRESH_PARENT_CANCEL
+            || mode == CHILD_PROVISIONAL_KNOWN ? 1
+        : mode == CHILD_FRESH_NEW || (mode >= CHILD_PROVISIONAL_NEW && mode <= CHILD_PROVISIONAL_KEX_CANCEL)
+            || mode == CHILD_PROVISIONAL_DIRECT || mode == CHILD_PROVISIONAL_BACKPRESSURE
+            || mode == CHILD_PROVISIONAL_CANCEL_PENDING || mode == CHILD_PROVISIONAL_REMOTE_EOF
+            || mode == CHILD_PROVISIONAL_REMOTE_CLOSE || mode == CHILD_PROVISIONAL_LOCAL_EOF
+            || mode == CHILD_PROVISIONAL_BAD_SIGNATURE || mode == CHILD_PROVISIONAL_CANDIDATE_ABORT_RETRY
+            || mode == CHILD_PROVISIONAL_LOCAL_UNPUMPED_EOF
+            || (mode >= CHILD_PROVISIONAL_PARENT_CLOSED_CANDIDATE && mode <= CHILD_PROVISIONAL_EXT_EOF) ? 2
+        : mode == CHILD_FRESH_CHANGED || mode == CHILD_PROVISIONAL_CHANGED ? 3 : 0;
+    if (guarded) fixture_step_budget = 4096U;
+    finish_fixture_setup_selected_mode(&target, 60000U,
+        (mode == CHILD_HOST_CHANGED || mode == CHILD_HOST_CHANGED_APPROVED) ? jump.public_key : NULL,
+        mode == CHILD_HOST_REVOKED || mode == CHILD_PROVISIONAL_REVOKED ? "@revoked " : NULL,
+        mode == CHILD_HOST_NEW_APPROVED || mode == CHILD_FRESH_KNOWN || mode == CHILD_FRESH_PARENT_CANCEL,
+        0, mode == CHILD_KEYBOARD_CANCEL ? 3U : 1U, 0,
+        mode == CHILD_HOST_CHANGED_APPROVED || mode == CHILD_PROVISIONAL_REVOKED || fixture_fresh_host_mode != 0
+            ? CTOS_SSH_HOST_KEY_MANAGED : CTOS_SSH_HOST_KEY_PINNED);
+    if (guarded) fixture_step_budget = TEST_STEP_BUDGET;
+    fixture_fresh_host_mode = 0;
+    fixture_existing_role = 0;
+    fixture_jump_parent = NULL;
+    fixture_check_borrow_transaction = 0;
+    fixture_parent_context = NULL;
+    fixture_root_context = NULL;
+    target.callback.selected_kind = CTOS_SSH_CALLBACK_CREDENTIAL_PASSWORD;
+    memcpy(target.callback.expected_selection_receipt, target.selection_receipt, 32U);
+    target.callback.selected_view = target.view; target.callback.selected_callback = target.callback_token;
+    target.callback.selected_role = target.role; target.callback.selected_deadline = target.deadline;
+    if (mode == CHILD_ROUNDTRIP || mode == CHILD_HOST_CANCEL
+        || mode == CHILD_HOST_VIEW_REVOKE || mode == CHILD_HOST_ROLE_CLOSE
+        || mode == CHILD_CREDENTIAL_CANCEL || mode == CHILD_HOST_NEW_APPROVED
+        || mode == CHILD_HOST_CHANGED_APPROVED || mode == CHILD_HOST_PARENT_CLOSED
+        || mode == CHILD_FRESH_KNOWN || mode == CHILD_FRESH_NEW || mode == CHILD_FRESH_CHANGED
+        || mode == CHILD_FRESH_PARENT_CANCEL || target.callback.enable_provisional) {
+        target.callback.scope_probe = 1;
+        target.callback.scope_token = target.callback_token;
+        target.callback.scope_other = jump.callback_token;
+        CHECK(ctos_ssh_native_client_callback_ancestor_proofs_check(target.callback_token,
+            target.callback.environment) != 0 && errno == EACCES);
+    }
+    bridge.relay = fixture_child_relay;
+    fixture_child_relay = NULL;
+    CHECK(close(target.pair[1]) == 0);
+    target.pair[1] = server_pair[1];
+    target.suppress_server_ext_info = poll_mode || ext_mode;
+    target.force_server_cipher = mode == CHILD_PROVISIONAL_POLL_FIRST_BLOCK ? 1
+        : mode == CHILD_PROVISIONAL_POLL_AEAD_PARTIAL ? 2
+        : mode == CHILD_PROVISIONAL_EXT_CTR ? 1
+        : mode == CHILD_PROVISIONAL_EXT_CHACHA_FRAGMENTED ? 3 : ext_mode ? 2 : 0;
+    setup_synthetic_server(&target);
+    if (mode == CHILD_PROVISIONAL_BAD_SIGNATURE) {
+        original_server_sign = target.server->kex->sign;
+        CHECK(original_server_sign != NULL);
+        target.server->kex->sign = sign_with_invalid_signature;
+    }
+    CHECK(target.callback.expected_hop == 1 && target.callback.selected_calls == 0);
+    CHECK(ctos_ssh_native_jump_relay_close(bridge.relay) != 0 && errno == EBUSY);
+    CHECK(ctos_ssh_native_client_close(jump.client) != 0 && errno == EBUSY);
+    if (mode == CHILD_PROVISIONAL_DIRECT) {
+        unsigned char body[] = "forged candidate", digest[32] = {1};
+        int handoff_started = 99;
+        CHECK(ctos_ssh_callback_provisional_new_candidate(target.callback_token, target.callback.environment,
+            "native-candidate", "ssh-ed25519", target.callback.expected_fingerprint,
+            digest, digest, body, sizeof(body) - 1U, &handoff_started) != 0 && handoff_started == 0);
+        for (size_t i = 0; i < sizeof(body) - 1U; i++) CHECK(body[i] == 0);
+        CHECK(target.callback.provisional_candidate_calls == 0 && target.callback.provisional_review_calls == 0);
+        goto cleanup;
+    }
+    if (mode == CHILD_DIRECT_CALLBACK) {
+        /* A real claimed child token is insufficient without native dispatch. */
+        target.callback.scope_probe = 2;
+        target.callback.scope_token = target.callback_token;
+        target.callback.expected_credential_calls = 1;
+        CHECK(ctos_ssh_callback_credential(target.callback_token, target.callback.environment,
+            CTOS_SSH_CALLBACK_CREDENTIAL_PASSWORD) != 0 && errno == EACCES);
+        CHECK(target.callback.scope_selected_checks == 1);
+        goto cleanup;
+    }
+    if (mode == CHILD_DIRECT_HOST_VERIFY) {
+        /* A matching PINNED key can use the public verifier, but its host
+         * target is not an engine callback and cannot check ancestors. */
+        target.callback.scope_probe = 3;
+        target.callback.scope_token = target.callback_token;
+        CHECK(ctos_ssh_native_client_verify_host_key(target.client,
+            target.public_blob, target.public_blob_length) == 0);
+        CHECK(target.callback.host_evidence_calls == 1 && target.callback.scope_host_checks == 1);
+        goto cleanup;
+    }
+    if (mode == CHILD_QUEUED_CANCEL) {
+        CHECK(ctos_ssh_native_client_step(target.client, &(struct ctos_ssh_native_client_step){0}) == 0);
+        for (unsigned int turn = 0; turn < 200000U && bridge.forwarded_to_jump == 0; turn++)
+            jump_bridge_turn(&jump, &target, &bridge, 0);
+        CHECK(bridge.forwarded_to_jump != 0);
+        for (int turn = 0; turn < 20; turn++) jump_bridge_turn(&jump, &target, &bridge, 0);
+        int queued = 0;
+        CHECK(ioctl(target.managed_child_fd, FIONREAD, &queued) == 0 && queued > 0);
+        CHECK(ctos_ssh_callback_cancel(jump.callback_token) == 0);
+        unsigned char receipt[32]; memset(receipt, 0xff, sizeof(receipt));
+        CHECK(ctos_ssh_native_client_authentication_selection_receipt(target.client, receipt) != 0);
+        for (size_t i = 0; i < sizeof(receipt); i++) CHECK(receipt[i] == 0);
+        struct ctos_ssh_native_client_step denied = {0};
+        CHECK(ctos_ssh_native_client_step(target.client, &denied) != 0);
+        CHECK(denied.bytes_read == 0 && denied.packet_type == 0);
+        CHECK(target.callback.host_evidence_calls == 0 && target.callback.kex_complete_calls == 0
+            && target.callback.selected_calls == 0 && !ctos_ssh_native_client_complete(target.client));
+        goto cleanup;
+    }
+    if (mode == CHILD_HOST_CANCEL || mode == CHILD_FRESH_PARENT_CANCEL) {
+        target.callback.host_action = 2;
+        target.callback.selected_callback = jump.callback_token;
+    }
+    if (mode == CHILD_HOST_VIEW_REVOKE) {
+        target.callback.host_action = 3;
+        target.callback.selected_view = jump.view;
+    }
+    if (mode == CHILD_HOST_ROLE_CLOSE) {
+        target.callback.host_action = 7;
+        target.callback.selected_role = jump.role;
+    }
+    if (mode == CHILD_HOST_PARENT_CLOSED) {
+        target.callback.scope_close_parent = close_parent_during_child_host;
+        target.callback.scope_close_parent_context = &jump;
+    }
+    if (mode >= CHILD_PROVISIONAL_PARENT_CLOSED_CANDIDATE && mode <= CHILD_PROVISIONAL_PARENT_CLOSED_KEX) {
+        target.callback.scope_close_parent = mode == CHILD_PROVISIONAL_PARENT_CLOSED_KEX
+            ? eof_parent_during_child_kex : close_parent_during_child_host;
+        target.callback.scope_close_parent_context = &jump;
+    }
+    if (mode == CHILD_PROVISIONAL_REVIEW_CANCEL || mode == CHILD_PROVISIONAL_KEX_CANCEL)
+        target.callback.selected_callback = jump.callback_token;
+    int ready = 0;
+    for (unsigned int turn = 0; turn < 200000U; turn++) {
+        int complete = ctos_ssh_native_client_complete(target.client);
+        int provisional = 0;
+        if ((mode == CHILD_PROVISIONAL_NEW || mode == CHILD_PROVISIONAL_BACKPRESSURE
+                || mode == CHILD_PROVISIONAL_CANCEL_PENDING || mode == CHILD_PROVISIONAL_REMOTE_EOF
+                || mode == CHILD_PROVISIONAL_REMOTE_CLOSE || mode == CHILD_PROVISIONAL_LOCAL_EOF
+                || mode == CHILD_PROVISIONAL_LOCAL_UNPUMPED_EOF || mode == CHILD_PROVISIONAL_VIEW_REVOKE
+                || mode == CHILD_PROVISIONAL_PARENT_VIEW_REVOKE || mode == CHILD_PROVISIONAL_CALLBACK_CANCEL
+                || mode == CHILD_PROVISIONAL_GUARDED_KEX || poll_mode || ext_mode)
+                && target.callback.provisional_kex_calls == 1) {
+            if (mode == CHILD_PROVISIONAL_BACKPRESSURE) {
+                unsigned char queued = 0xa5;
+                CHECK(send(target.managed_child_fd, &queued, 1, MSG_DONTWAIT | MSG_NOSIGNAL) == 1);
+                CHECK(ctos_ssh_native_client_provisional_new_ready(target.client, &provisional) == 0 && !provisional);
+                ready = 1;
+                break;
+            }
+            CHECK(ctos_ssh_native_client_provisional_new_ready(target.client, &provisional) == 0);
+            if (provisional && target.server->kex->done) { ready = 1; break; }
+            jump_bridge_turn(&jump, &target, &bridge, 0);
+            continue;
+        }
+        if (!complete && ctos_ssh_native_client_step(target.client,
+                &(struct ctos_ssh_native_client_step){0}) != 0) {
+            CHECK(((mode == CHILD_HOST_CANCEL || mode == CHILD_FRESH_PARENT_CANCEL || mode == CHILD_HOST_VIEW_REVOKE
+                    || mode == CHILD_HOST_ROLE_CLOSE)
+                    && target.callback.host_evidence_calls == 1)
+                || ((mode == CHILD_HOST_CHANGED || mode == CHILD_HOST_REVOKED
+                    || mode == CHILD_PROVISIONAL_CHANGED || mode == CHILD_PROVISIONAL_REVOKED)
+                    && target.callback.host_evidence_calls == 0)
+                || (((mode >= CHILD_PROVISIONAL_CANDIDATE_FAIL && mode <= CHILD_PROVISIONAL_KEX_CANCEL)
+                    || mode == CHILD_PROVISIONAL_BAD_SIGNATURE || mode == CHILD_PROVISIONAL_CANDIDATE_ABORT_RETRY
+                    || (mode >= CHILD_PROVISIONAL_PARENT_CLOSED_CANDIDATE && mode <= CHILD_PROVISIONAL_PARENT_CLOSED_KEX))
+                    && target.callback.host_evidence_calls == 0));
+            ready = -1;
+            break;
+        }
+        if (mode == CHILD_PROVISIONAL_PREKEX_EOF && target.callback.provisional_review_calls == 1
+                && target.callback.provisional_kex_calls == 0) {
+            int provisional = 99;
+            CHECK(target.callback.provisional_review_calls == 1 && target.callback.provisional_kex_calls == 0
+                && !ctos_ssh_native_client_complete(target.client));
+            eof_parent_during_child_kex(&jump);
+            CHECK(ctos_ssh_native_client_provisional_new_ready(target.client, &provisional) != 0 && !provisional);
+            CHECK(target.callback.candidate_abort_calls == 1 && target.callback.kex_complete_calls == 0
+                && target.callback.selected_calls == 0);
+            CHECK(target.callback.candidate_body != NULL);
+            for (size_t i = 0; i < target.callback.candidate_body_length; i++)
+                CHECK(target.callback.candidate_body[i] == 0);
+            provisional = 99;
+            CHECK(ctos_ssh_native_client_provisional_new_ready(target.client, &provisional) != 0 && !provisional);
+            ready = 1;
+            break;
+        }
+        if ((mode == CHILD_PROVISIONAL_PREKEX_GUARD_INVALID || mode == CHILD_PROVISIONAL_PREKEX_GUARD_TIMEOUT)
+                && target.callback.provisional_review_calls == 1 && target.callback.provisional_kex_calls == 0) {
+            struct provisional_wrong_thread wrong = {.client = target.client};
+            pthread_t thread;
+            int provisional = 99;
+            CHECK(!ctos_ssh_native_client_complete(target.client));
+            CHECK(pthread_create(&thread, NULL, provisional_wrong_owner, &wrong) == 0);
+            CHECK(pthread_join(thread, NULL) == 0);
+            CHECK(wrong.result != 0 && wrong.error == EPERM && !wrong.ready);
+            CHECK(ctos_ssh_native_client_provisional_new_ready(target.client, &provisional) == 0 && !provisional);
+            CHECK(ctos_ssh_native_client_begin_userauth_service_guarded(target.client, generation) != 0 && errno == EACCES);
+            CHECK(ctos_ssh_native_client_begin_auth_discovery_guarded(target.client, generation) != 0 && errno == EACCES);
+            CHECK(ctos_ssh_native_client_begin_password_auth_guarded(target.client, generation) != 0 && errno == EACCES);
+            CHECK(target.callback.selected_calls == 0 && target.callback.credential_calls == 0
+                && target.callback.credential_bytes_calls == 0 && target.callback.candidate_abort_calls == 0);
+            if (mode == CHILD_PROVISIONAL_PREKEX_GUARD_INVALID) {
+                uint32_t current_generation = 0;
+                ctos_ssh_effect_invalidate_begin();
+                ctos_ssh_effect_invalidate_end();
+                CHECK(ctos_ssh_effect_snapshot(&current_generation) == 0 && current_generation != generation);
+            } else wait_until_deadline_attempts(hop_deadline, 12000U);
+            provisional = 99;
+            CHECK(ctos_ssh_native_client_provisional_new_ready(target.client, &provisional) != 0 && !provisional
+                && errno == (mode == CHILD_PROVISIONAL_PREKEX_GUARD_INVALID ? ECANCELED : ETIMEDOUT));
+            CHECK(target.callback.candidate_abort_calls == 1 && target.callback.kex_complete_calls == 0
+                && target.callback.selected_calls == 0 && target.callback.candidate_body != NULL);
+            for (size_t i = 0; i < target.callback.candidate_body_length; i++)
+                CHECK(target.callback.candidate_body[i] == 0);
+            provisional = 99;
+            CHECK(ctos_ssh_native_client_provisional_new_ready(target.client, &provisional) != 0 && !provisional
+                && errno == EALREADY);
+            CHECK(ctos_ssh_native_client_step(target.client, &(struct ctos_ssh_native_client_step){0}) != 0);
+            ready = 1;
+            break;
+        }
+        if (mode == CHILD_HOST_PARENT_CLOSED && target.callback.scope_closed_checks == 1) {
+            ready = 1;
+            break;
+        }
+        jump_bridge_turn(&jump, &target, &bridge, 0);
+        if (ctos_ssh_native_client_complete(target.client) && target.server->kex->done) { ready = 1; break; }
+    }
+    if (mode == CHILD_PROVISIONAL_PREKEX_EOF || mode == CHILD_PROVISIONAL_PREKEX_GUARD_INVALID
+            || mode == CHILD_PROVISIONAL_PREKEX_GUARD_TIMEOUT) {
+        CHECK(ready == 1 && target.callback.provisional_candidate_calls == 1
+            && target.callback.provisional_review_calls == 1 && target.callback.provisional_kex_calls == 0
+            && !ctos_ssh_native_client_complete(target.client));
+        goto cleanup;
+    }
+    if ((mode >= CHILD_PROVISIONAL_CANDIDATE_FAIL && mode <= CHILD_PROVISIONAL_KEX_CANCEL)
+            || mode == CHILD_PROVISIONAL_BAD_SIGNATURE || mode == CHILD_PROVISIONAL_CANDIDATE_ABORT_RETRY
+            || (mode >= CHILD_PROVISIONAL_PARENT_CLOSED_CANDIDATE && mode <= CHILD_PROVISIONAL_PARENT_CLOSED_KEX)) {
+        CHECK(ready == -1 && target.callback.provisional_candidate_calls == 1
+            && (mode == CHILD_PROVISIONAL_CANDIDATE_ABORT_RETRY
+                ? target.callback.candidate_abort_calls >= 1U : target.callback.candidate_abort_calls == 1U)
+            && target.callback.host_evidence_calls == 0
+            && target.callback.kex_complete_calls == 0 && target.callback.selected_calls == 0
+            && !ctos_ssh_native_client_complete(target.client));
+        if (mode == CHILD_PROVISIONAL_BAD_SIGNATURE)
+            CHECK(target.callback.provisional_review_calls == 1 && target.callback.provisional_kex_calls == 0);
+        if (mode != CHILD_PROVISIONAL_CANDIDATE_ABORT_RETRY) {
+            CHECK(target.callback.candidate_body != NULL);
+            for (size_t i = 0; i < target.callback.candidate_body_length; i++)
+                CHECK(target.callback.candidate_body[i] == 0);
+        }
+        if (mode >= CHILD_PROVISIONAL_PARENT_CLOSED_CANDIDATE && mode <= CHILD_PROVISIONAL_PARENT_CLOSED_KEX) {
+            CHECK(mode == CHILD_PROVISIONAL_PARENT_CLOSED_KEX
+                ? jump_status(&jump).remote_eof : jump_status(&jump).phase == CTOS_SSH_JUMP_CLOSED);
+            CHECK(target.callback.provisional_review_calls == (mode == CHILD_PROVISIONAL_PARENT_CLOSED_CANDIDATE ? 0U : 1U));
+            CHECK(target.callback.provisional_kex_calls == (mode == CHILD_PROVISIONAL_PARENT_CLOSED_KEX ? 1U : 0U));
+        }
+        goto cleanup;
+    }
+    if (mode == CHILD_PROVISIONAL_NEW || mode == CHILD_PROVISIONAL_BACKPRESSURE
+            || mode == CHILD_PROVISIONAL_CANCEL_PENDING || mode == CHILD_PROVISIONAL_REMOTE_EOF
+            || mode == CHILD_PROVISIONAL_REMOTE_CLOSE || mode == CHILD_PROVISIONAL_LOCAL_EOF
+            || mode == CHILD_PROVISIONAL_LOCAL_UNPUMPED_EOF || mode == CHILD_PROVISIONAL_VIEW_REVOKE
+            || mode == CHILD_PROVISIONAL_PARENT_VIEW_REVOKE || mode == CHILD_PROVISIONAL_CALLBACK_CANCEL
+            || mode == CHILD_PROVISIONAL_GUARDED_KEX || poll_mode || ext_mode) {
+        int provisional = 0;
+        CHECK(ready == 1 && (mode == CHILD_PROVISIONAL_BACKPRESSURE || target.server->kex->done)
+            && ctos_ssh_native_client_provisional_new_ready(target.client, &provisional) == 0
+            && provisional == (mode != CHILD_PROVISIONAL_BACKPRESSURE)
+            && target.callback.provisional_candidate_calls == 1 && target.callback.provisional_review_calls == 1
+            && target.callback.provisional_kex_calls == 1 && target.callback.host_evidence_calls == 0
+            && target.callback.kex_complete_calls == 0 && target.callback.selected_calls == 0
+            && !ctos_ssh_native_client_complete(target.client));
+        if (poll_mode) {
+            test_provisional_poll(mode, &jump, &target, &bridge, hop_deadline);
+            goto cleanup;
+        }
+        if (ext_mode) {
+            test_provisional_ext(mode, &jump, &target, &bridge, hop_deadline, generation);
+            goto cleanup;
+        }
+        if (mode == CHILD_PROVISIONAL_CANCEL_PENDING) {
+            CHECK(ctos_ssh_callback_cancel(jump.callback_token) == 0);
+            provisional = 99;
+            CHECK(ctos_ssh_native_client_provisional_new_ready(target.client, &provisional) != 0 && !provisional);
+            goto cleanup;
+        }
+        if (mode == CHILD_PROVISIONAL_VIEW_REVOKE || mode == CHILD_PROVISIONAL_PARENT_VIEW_REVOKE
+                || mode == CHILD_PROVISIONAL_CALLBACK_CANCEL) {
+            if (mode == CHILD_PROVISIONAL_VIEW_REVOKE) target.view->valid = 0;
+            else if (mode == CHILD_PROVISIONAL_PARENT_VIEW_REVOKE) jump.view->valid = 0;
+            else CHECK(ctos_ssh_callback_cancel(target.callback_token) == 0);
+            provisional = 99;
+            CHECK(ctos_ssh_native_client_provisional_new_ready(target.client, &provisional) != 0 && !provisional);
+            target.view->valid = 1; jump.view->valid = 1;
+            provisional = 99;
+            CHECK(ctos_ssh_native_client_provisional_new_ready(target.client, &provisional) != 0 && !provisional);
+            goto cleanup;
+        }
+        if (mode == CHILD_PROVISIONAL_REMOTE_EOF || mode == CHILD_PROVISIONAL_REMOTE_CLOSE) {
+            peer_channel_packet(&jump, mode == CHILD_PROVISIONAL_REMOTE_EOF
+                ? SSH2_MSG_CHANNEL_EOF : SSH2_MSG_CHANNEL_CLOSE);
+            CHECK(sshpkt_send(jump.server) == 0);
+            for (unsigned int turn = 0; turn < 200000U; turn++) {
+                CHECK(shell_turn(&jump) == 0);
+                struct ctos_ssh_native_jump_status status = jump_status(&jump);
+                if (status.remote_eof || status.phase == CTOS_SSH_JUMP_CLOSED) break;
+                CHECK(turn + 1U < 200000U);
+            }
+            provisional = 99;
+            CHECK(ctos_ssh_native_client_provisional_new_ready(target.client, &provisional) != 0 && !provisional);
+            CHECK(ctos_ssh_native_client_step(target.client, &(struct ctos_ssh_native_client_step){0}) != 0);
+            goto cleanup;
+        }
+        if (mode == CHILD_PROVISIONAL_LOCAL_EOF || mode == CHILD_PROVISIONAL_LOCAL_UNPUMPED_EOF) {
+            CHECK(shutdown(target.managed_child_fd, SHUT_WR) == 0);
+            if (mode == CHILD_PROVISIONAL_LOCAL_EOF)
+                CHECK(ctos_ssh_native_jump_relay_pump(bridge.relay) == 0);
+            provisional = 99;
+            CHECK(ctos_ssh_native_client_provisional_new_ready(target.client, &provisional) != 0 && !provisional);
+            CHECK(ctos_ssh_native_client_step(target.client, &(struct ctos_ssh_native_client_step){0}) != 0);
+            goto cleanup;
+        }
+        if (mode == CHILD_PROVISIONAL_NEW) {
+            struct provisional_wrong_thread wrong = {.client = target.client};
+            pthread_t thread;
+            CHECK(pthread_create(&thread, NULL, provisional_wrong_owner, &wrong) == 0);
+            CHECK(pthread_join(thread, NULL) == 0);
+            CHECK(wrong.result != 0 && wrong.error == EPERM && !wrong.ready);
+            CHECK(ctos_ssh_native_client_provisional_new_ready(target.client, &provisional) == 0 && provisional);
+        }
+        if (mode == CHILD_PROVISIONAL_GUARDED_KEX) {
+            CHECK(ctos_ssh_native_client_begin_userauth_service_guarded(target.client, generation) != 0 && errno == EACCES);
+            CHECK(ctos_ssh_native_client_begin_auth_discovery_guarded(target.client, generation) != 0 && errno == EACCES);
+            CHECK(ctos_ssh_native_client_begin_password_auth_guarded(target.client, generation) != 0 && errno == EACCES);
+            CHECK(target.callback.selected_calls == 0 && target.callback.credential_calls == 0
+                && target.callback.credential_bytes_calls == 0 && target.callback.candidate_abort_calls == 0);
+            CHECK(ctos_ssh_native_client_provisional_new_ready(target.client, &provisional) == 0 && provisional);
+        }
+        CHECK(ctos_ssh_native_client_begin_userauth_service(target.client) != 0);
+        CHECK(ctos_ssh_native_client_begin_userauth_service_guarded(target.client, 1U) != 0);
+        CHECK(ctos_ssh_native_client_begin_auth_discovery(target.client) != 0);
+        CHECK(ctos_ssh_native_client_begin_auth_discovery_guarded(target.client, 1U) != 0);
+        CHECK(ctos_ssh_native_client_begin_password_auth(target.client) != 0);
+        CHECK(ctos_ssh_native_client_begin_password_auth_guarded(target.client, 1U) != 0);
+        CHECK(ctos_ssh_native_client_begin_private_key_auth(target.client) != 0);
+        CHECK(ctos_ssh_native_client_begin_keyboard_interactive_auth(target.client) != 0);
+        unsigned char plan[32] = {0}, stage[92], secret[64], response[16] = {0};
+        size_t secret_length = 99U;
+        memset(stage, 0xff, sizeof(stage));
+        CHECK(ctos_ssh_native_client_begin_discovered_password(target.client, plan,
+            (const unsigned char *)"x", 1U, stage) != 0);
+        for (size_t i = 0; i < sizeof(stage); i++) CHECK(stage[i] == 0);
+        CHECK(ctos_ssh_native_client_begin_discovered_keyboard(target.client, plan, stage) != 0);
+        CHECK(ctos_ssh_native_client_continue_keyboard_interactive_auth(target.client, plan, stage) != 0);
+        CHECK(ctos_ssh_native_client_continue_private_key_auth(target.client, plan, stage) != 0);
+        CHECK(ctos_ssh_native_client_respond_keyboard_interactive(target.client, response, sizeof(response)) != 0);
+        CHECK(ctos_ssh_native_client_poll_auth_prompt(target.client, plan, CTOS_SSH_DISCOVERY_PASSWORD) != 0);
+        CHECK(ctos_ssh_native_client_poll_selected_password_prompt(target.client, plan) != 0);
+        memset(secret, 0xa5, sizeof(secret));
+        CHECK(ctos_ssh_native_client_selected_credential_bytes(target.client, secret, sizeof(secret),
+            &secret_length) != 0 && secret_length == 0);
+        for (size_t i = 0; i < sizeof(secret); i++) CHECK(secret[i] == 0);
+        CHECK(ctos_ssh_native_client_begin_shell(target.client, 80, 24) != 0);
+        CHECK(target.callback.selected_calls == 0 && target.callback.credential_calls == 0
+            && target.callback.credential_bytes_calls == 0);
+        goto cleanup;
+    }
+    if (mode == CHILD_HOST_CANCEL || mode == CHILD_FRESH_PARENT_CANCEL
+            || mode == CHILD_HOST_VIEW_REVOKE || mode == CHILD_HOST_ROLE_CLOSE) {
+        CHECK(ready == -1 && target.callback.kex_complete_calls == 0
+            && target.callback.selected_calls == 0 && !ctos_ssh_native_client_complete(target.client));
+        CHECK(target.callback.scope_host_checks == 1 && target.callback.scope_after_invalidation == 1);
+        if (mode == CHILD_HOST_ROLE_CLOSE) jump.role = 0;
+        goto cleanup;
+    }
+    if (mode == CHILD_HOST_CHANGED || mode == CHILD_HOST_REVOKED
+            || mode == CHILD_PROVISIONAL_CHANGED || mode == CHILD_PROVISIONAL_REVOKED) {
+        CHECK(ready == -1 && target.callback.kex_complete_calls == 0);
+        assert_host_rejection(target.client, mode == CHILD_HOST_CHANGED || mode == CHILD_PROVISIONAL_CHANGED
+            ? CTOS_SSH_HOST_REJECTION_CHANGED : CTOS_SSH_HOST_REJECTION_REVOKED);
+        CHECK(ctos_ssh_callback_cancel(jump.callback_token) == 0);
+        enum ctos_ssh_native_host_key_rejection rejection = CTOS_SSH_HOST_REJECTION_CERTIFICATE;
+        CHECK(ctos_ssh_native_client_host_key_rejection(target.client, &rejection) != 0
+            && rejection == CTOS_SSH_HOST_REJECTION_NONE);
+        goto cleanup;
+    }
+    if (mode == CHILD_HOST_PARENT_CLOSED) {
+        CHECK(ready == 1 && jump_status(&jump).phase == CTOS_SSH_JUMP_CLOSED
+            && target.callback.scope_host_checks == 1 && target.callback.scope_closed_checks == 1);
+        goto cleanup;
+    }
+    CHECK(ready && jump.callback.kex_complete_calls == 1 && target.callback.kex_complete_calls == 1);
+    CHECK(jump.callback.host_evidence_calls == 1);
+    if (mode == CHILD_HOST_CHANGED_APPROVED || mode == CHILD_FRESH_CHANGED) {
+        CHECK(target.callback.host_evidence_calls == 0 && target.callback.changed_candidate_calls == 1
+            && target.callback.changed_review_calls == 1 && target.callback.changed_commit_calls == 1
+            && target.callback.scope_candidate_checks == 1 && target.callback.scope_review_checks == 1
+            && target.callback.scope_kex_checks == 1);
+        goto cleanup;
+    }
+    CHECK(target.callback.host_evidence_calls == 1);
+    if (mode == CHILD_HOST_NEW_APPROVED || mode == CHILD_FRESH_NEW) {
+        CHECK(target.callback.last_host_classification == CTOS_SSH_CALLBACK_HOST_NEW
+            && target.callback.candidate_calls == 1 && target.callback.scope_candidate_checks == 1
+            && target.callback.scope_host_checks == 1 && target.callback.scope_kex_checks == 1);
+        goto cleanup;
+    }
+    if (mode == CHILD_FRESH_KNOWN || mode == CHILD_PROVISIONAL_KNOWN) {
+        const struct ctos_ssh_file *fresh = ctos_ssh_view_lookup(target.fresh_host_view,
+            (const unsigned char *)"ssh/known_hosts", sizeof("ssh/known_hosts") - 1U,
+            CTOS_SSH_KNOWN_HOSTS);
+        unsigned char expected[32];
+        CHECK(fresh != NULL && fresh->body.length != 0);
+        managed_known_hosts_digest(target.fresh_host_view, expected);
+        CHECK(target.callback.last_host_classification == CTOS_SSH_CALLBACK_HOST_KNOWN
+            && target.callback.candidate_calls == 0
+            && memcmp(target.callback.last_host_base_digest, expected, sizeof(expected)) == 0);
+        goto cleanup;
+    }
+    CHECK(target.callback.last_host_hop == 1 && target.callback.selected_calls == 0);
+    target.service_expected = 1;
+    CHECK(ctos_ssh_native_client_begin_userauth_service(target.client) == 0);
+    ready = 0;
+    for (unsigned int turn = 0; turn < 200000U; turn++) {
+        jump_bridge_turn(&jump, &target, &bridge, 1);
+        if (ctos_ssh_native_client_userauth_service_ready(target.client)) { ready = 1; break; }
+    }
+    CHECK(ready);
+    if (mode == CHILD_OWN_CANCEL) {
+        CHECK(ctos_ssh_callback_cancel(target.callback_token) == 0);
+        CHECK(!ctos_ssh_native_client_complete(target.client)
+            && !ctos_ssh_native_client_userauth_service_ready(target.client));
+        unsigned char receipt[32]; memset(receipt, 0xff, sizeof(receipt));
+        CHECK(ctos_ssh_native_client_authentication_selection_receipt(target.client, receipt) != 0);
+        for (size_t i = 0; i < sizeof(receipt); i++) CHECK(receipt[i] == 0);
+        goto cleanup;
+    }
+    if (mode == CHILD_OWN_VIEW_REVOKE) {
+        target.view->valid = 0;
+        CHECK(!ctos_ssh_native_client_complete(target.client)
+            && !ctos_ssh_native_client_userauth_service_ready(target.client));
+        unsigned char receipt[32]; memset(receipt, 0xff, sizeof(receipt));
+        CHECK(ctos_ssh_native_client_authentication_selection_receipt(target.client, receipt) != 0);
+        for (size_t i = 0; i < sizeof(receipt); i++) CHECK(receipt[i] == 0);
+        goto cleanup;
+    }
+#ifdef CTOS_SSH_NATIVE_TEST_HOOKS
+    if (mode == CHILD_VIEW_CLOSE_FAILURE) goto cleanup;
+    if (mode == CHILD_KEX_AUTH_INVALID) {
+        CHECK(ctos_ssh_callback_check_live(target.callback_token, target.callback.environment) == 0);
+        CHECK(jump_status(&jump).phase == CTOS_SSH_JUMP_OPEN);
+        CHECK(ctos_ssh_native_client_complete(target.client)
+            && ctos_ssh_native_client_userauth_service_ready(target.client));
+        CHECK(ctos_ssh_native_client_test_invalidate_kex(target.client) == 0);
+        CHECK(ctos_ssh_callback_check_live(target.callback_token, target.callback.environment) == 0);
+        CHECK(jump_status(&jump).phase == CTOS_SSH_JUMP_OPEN);
+        CHECK(!ctos_ssh_native_client_complete(target.client)
+            && !ctos_ssh_native_client_userauth_service_ready(target.client));
+        unsigned char receipt[32]; memset(receipt, 0xff, sizeof(receipt));
+        CHECK(ctos_ssh_native_client_authentication_selection_receipt(target.client, receipt) != 0);
+        for (size_t i = 0; i < sizeof(receipt); i++) CHECK(receipt[i] == 0);
+        goto cleanup;
+    }
+#endif
+    if (mode == CHILD_KEYBOARD_CANCEL) {
+        CHECK(ctos_ssh_native_client_begin_keyboard_interactive_auth(target.client) == 0);
+        for (unsigned int turn = 0; turn < 200000U && target.keyboard_requests == 0; turn++)
+            jump_bridge_turn(&jump, &target, &bridge, 1);
+        CHECK(target.keyboard_requests == 1);
+        keyboard_challenge_packet(&target, 1U, 0U);
+        enum ctos_ssh_native_client_keyboard_interactive_auth_result result = CTOS_SSH_KEYBOARD_AUTH_PENDING;
+        for (unsigned int turn = 0; turn < 200000U && result == CTOS_SSH_KEYBOARD_AUTH_PENDING; turn++) {
+            jump_bridge_turn(&jump, &target, &bridge, 1);
+            CHECK(ctos_ssh_native_client_keyboard_interactive_auth_result(target.client, &result) == 0);
+        }
+        CHECK(result == CTOS_SSH_KEYBOARD_AUTH_CHALLENGE);
+        unsigned char challenge[512]; size_t length = 0;
+        CHECK(ctos_ssh_native_client_keyboard_interactive_challenge(target.client,
+            challenge, sizeof(challenge), &length) == 0 && length > 0);
+        CHECK(ctos_ssh_callback_cancel(target.callback_token) == 0);
+        memset(challenge, 0xff, sizeof(challenge)); length = 9;
+        CHECK(ctos_ssh_native_client_keyboard_interactive_challenge(target.client,
+            challenge, sizeof(challenge), &length) != 0 && length == 0);
+        for (size_t i = 0; i < sizeof(challenge); i++) CHECK(challenge[i] == 0);
+        goto cleanup;
+    }
+    if (mode == CHILD_CREDENTIAL_CANCEL) {
+        target.callback.selected_callback = jump.callback_token;
+        target.callback.selected_action = 3;
+        CHECK(ctos_ssh_native_client_begin_password_auth(target.client) != 0);
+        CHECK(target.callback.selected_calls == 1 && target.password_requests == 0);
+        CHECK(target.callback.scope_host_checks == 1 && target.callback.scope_selected_checks == 1
+            && target.callback.scope_after_invalidation == 1);
+        goto cleanup;
+    }
+    CHECK(ctos_ssh_native_client_begin_password_auth(target.client) == 0);
+    enum ctos_ssh_native_client_password_auth_result auth = CTOS_SSH_PASSWORD_AUTH_PENDING;
+    for (unsigned int turn = 0; turn < 200000U && auth == CTOS_SSH_PASSWORD_AUTH_PENDING; turn++) {
+        jump_bridge_turn(&jump, &target, &bridge, 1);
+        CHECK(ctos_ssh_native_client_password_auth_result(target.client, &auth) == 0);
+    }
+    CHECK(auth == CTOS_SSH_PASSWORD_AUTH_SUCCESS && target.callback.selected_calls == 1);
+    if (mode == CHILD_ROUNDTRIP) {
+        CHECK(target.callback.scope_host_checks == 1 && target.callback.scope_selected_checks == 1);
+        CHECK(ctos_ssh_native_client_callback_ancestor_proofs_check(target.callback_token,
+            target.callback.environment) != 0 && errno == EACCES);
+    }
+    target.shell_expected = 1; target.shell_window = 65536U; target.shell_maxpacket = 32768U;
+    CHECK(ctos_ssh_native_client_begin_shell(target.client, 80, 24) == 0);
+    ready = 0;
+    for (unsigned int turn = 0; turn < 200000U; turn++) {
+        jump_bridge_turn(&jump, &target, &bridge, 1);
+        if (shell_status(&target).phase == CTOS_SSH_SHELL_RUNNING) { ready = 1; break; }
+    }
+    CHECK(ready && target.shell_stage == 3);
+#ifdef CTOS_SSH_NATIVE_TEST_HOOKS
+    if (mode == CHILD_KEX_SHELL_INVALID) {
+        CHECK(ctos_ssh_callback_check_transport(target.callback_token,
+            target.callback.environment, target.client) == 0);
+        CHECK(ctos_ssh_native_client_complete(target.client)
+            && ctos_ssh_native_client_userauth_service_ready(target.client));
+        CHECK(ctos_ssh_native_client_test_invalidate_kex(target.client) == 0);
+        CHECK(ctos_ssh_callback_check_transport(target.callback_token,
+            target.callback.environment, target.client) == 0);
+        CHECK(jump_status(&jump).phase == CTOS_SSH_JUMP_OPEN);
+        CHECK(!ctos_ssh_native_client_complete(target.client)
+            && !ctos_ssh_native_client_userauth_service_ready(target.client));
+        struct ctos_ssh_native_shell_status status;
+        memset(&status, 0xa5, sizeof(status));
+        CHECK(ctos_ssh_native_client_shell_status(target.client, &status) != 0 && status.phase == 0);
+        goto cleanup;
+    }
+#endif
+    size_t accepted = 0;
+    CHECK(ctos_ssh_native_client_shell_write(target.client, (const unsigned char *)"nested", 6U, &accepted) == 0
+        && accepted == 6U);
+    for (unsigned int turn = 0; turn < 200000U && target.shell_input_length != 6U; turn++)
+        jump_bridge_turn(&jump, &target, &bridge, 1);
+    CHECK(target.shell_input_length == 6U && memcmp(target.shell_input, "nested", 6U) == 0);
+    if (mode == CHILD_LOCAL_EOF) {
+        CHECK(shutdown(target.managed_child_fd, SHUT_WR) == 0);
+        for (unsigned int turn = 0; turn < 200000U && !jump_status(&jump).local_eof; turn++)
+            jump_bridge_turn(&jump, &target, &bridge, 0);
+        CHECK(jump_status(&jump).local_eof);
+    }
+    if (mode == CHILD_REMOTE_CLOSE) {
+        int queued = -1, waiting = -1, settled = 0;
+        size_t pending = 0, before = bridge.forwarded_to_jump;
+        CHECK(ioctl(target.managed_child_fd, FIONREAD, &queued) == 0 && queued == 0);
+        peer_channel_data(&target, 0, (const unsigned char *)"reply", 5U);
+        for (unsigned int turn = 0; turn < 200000U; turn++) {
+            jump_bridge_turn(&jump, &target, &bridge, 0);
+            (void)ssh_output_ptr(target.server, &pending);
+            CHECK(ioctl(bridge.server_fd, FIONREAD, &waiting) == 0);
+            CHECK(ioctl(target.managed_child_fd, FIONREAD, &queued) == 0);
+            if (pending == 0 && waiting == 0 && bridge.forwarded_to_jump > before
+                && (size_t)queued == bridge.forwarded_to_jump - before) {
+                settled = 1; break;
+            }
+        }
+        CHECK(settled && queued > 0 && shell_status(&target).buffered_bytes == 0);
+        peer_channel_packet(&jump, SSH2_MSG_CHANNEL_EOF);
+        CHECK(sshpkt_send(jump.server) == 0);
+        peer_channel_packet(&jump, SSH2_MSG_CHANNEL_CLOSE);
+        CHECK(sshpkt_send(jump.server) == 0);
+        for (unsigned int turn = 0; turn < 200000U && jump_status(&jump).phase != CTOS_SSH_JUMP_CLOSED; turn++) {
+            CHECK(shell_turn(&jump) == 0);
+            CHECK(ctos_ssh_native_jump_relay_pump(bridge.relay) == 0);
+        }
+        CHECK(jump_status(&jump).phase == CTOS_SSH_JUMP_CLOSED);
+        CHECK(ioctl(target.managed_child_fd, FIONREAD, &queued) == 0 && queued > 0);
+        for (unsigned int turn = 0; turn < 200000U && shell_status(&target).buffered_bytes != 5U; turn++)
+            CHECK(ctos_ssh_native_client_step(target.client, &(struct ctos_ssh_native_client_step){0}) == 0);
+        unsigned char output[16]; size_t length = 0;
+        CHECK(ctos_ssh_native_client_shell_read(target.client, output, sizeof(output), &length) == 0
+            && length == 5U && memcmp(output, "reply", 5U) == 0);
+        goto cleanup;
+    }
+    peer_channel_data(&target, 0, (const unsigned char *)"reply", 5U);
+    for (unsigned int turn = 0; turn < 200000U && shell_status(&target).buffered_bytes != 5U; turn++)
+        jump_bridge_turn(&jump, &target, &bridge, 1);
+    unsigned char output[16]; size_t length = 0;
+    if (mode == CHILD_OUTPUT_CANCEL) {
+        CHECK(ctos_ssh_callback_cancel(jump.callback_token) == 0);
+        memset(output, 0xff, sizeof(output));
+        CHECK(ctos_ssh_native_client_shell_read(target.client, output, sizeof(output), &length) != 0
+            && length == 0);
+        for (size_t i = 0; i < sizeof(output); i++) CHECK(output[i] == 0);
+        goto cleanup;
+    }
+    CHECK(ctos_ssh_native_client_shell_read(target.client, output, sizeof(output), &length) == 0
+        && length == 5U && memcmp(output, "reply", 5U) == 0);
+cleanup:
+    target.callback.release_failures_remaining = 1;
+    unsigned int abort_before_close = target.callback.candidate_abort_calls;
+    CHECK(ctos_ssh_native_client_close(target.client) != 0 && errno == EIO);
+    if (mode == CHILD_PROVISIONAL_CANDIDATE_ABORT_RETRY) {
+        CHECK(target.callback.candidate_abort_calls == abort_before_close + 1U
+            && target.callback.release_calls == 0U);
+        CHECK(ctos_ssh_native_jump_relay_close(bridge.relay) != 0 && errno == EBUSY);
+        target.callback.candidate_abort_failures_remaining = 0;
+        CHECK(ctos_ssh_native_client_close(target.client) != 0 && errno == EIO);
+        CHECK(target.callback.candidate_abort_calls == abort_before_close + 2U
+            && target.callback.release_calls == 1U);
+        CHECK(target.callback.candidate_body != NULL);
+        for (size_t i = 0; i < target.callback.candidate_body_length; i++)
+            CHECK(target.callback.candidate_body[i] == 0);
+    }
+    CHECK(ctos_ssh_native_jump_relay_close(bridge.relay) != 0 && errno == EBUSY);
+    CHECK(ctos_ssh_native_client_close(jump.client) != 0 && errno == EBUSY);
+#ifdef CTOS_SSH_NATIVE_TEST_HOOKS
+    if (mode == CHILD_VIEW_CLOSE_FAILURE) {
+        CHECK(ctos_ssh_native_client_test_fail_next_view_release(target.client) == 0);
+        CHECK(ctos_ssh_native_client_close(target.client) != 0 && errno == EIO);
+        CHECK(ctos_ssh_view_borrow_release(target.view_borrow) != 0 && errno == EBUSY);
+        CHECK(ctos_ssh_native_jump_relay_close(bridge.relay) != 0 && errno == EBUSY);
+        CHECK(ctos_ssh_native_client_close(jump.client) != 0 && errno == EBUSY);
+        struct child_retry_owner_attempt view_retry = {.child = target.client, .relay = bridge.relay};
+        pthread_t view_thread;
+        CHECK(pthread_create(&view_thread, NULL, child_retry_wrong_owner, &view_retry) == 0);
+        CHECK(pthread_join(view_thread, NULL) == 0);
+        CHECK(view_retry.close_result != 0 && view_retry.close_error == EPERM);
+        CHECK(view_retry.destroy_result != 0 && view_retry.destroy_error == EPERM);
+        CHECK(view_retry.relay_result != 0 && view_retry.relay_error == EPERM);
+    }
+#endif
+    if (mode == CHILD_ROUNDTRIP) {
+        /* A close error after the kernel released the number must not make
+         * retry close a new descriptor that reuses the same number. */
+        CHECK(close(target.managed_child_fd) == 0);
+        CHECK(ctos_ssh_native_client_close(target.client) != 0 && errno == EBADF);
+        CHECK(dup2(bridge.server_fd, target.managed_child_fd) == target.managed_child_fd);
+        struct child_retry_owner_attempt retry = {.child = target.client, .relay = bridge.relay};
+        pthread_t thread;
+        CHECK(pthread_create(&thread, NULL, child_retry_wrong_owner, &retry) == 0);
+        CHECK(pthread_join(thread, NULL) == 0);
+        CHECK(retry.close_result != 0 && retry.close_error == EPERM);
+        CHECK(retry.destroy_result != 0 && retry.destroy_error == EPERM);
+        CHECK(retry.relay_result != 0 && retry.relay_error == EPERM);
+        CHECK(ctos_ssh_native_jump_relay_close(bridge.relay) != 0 && errno == EBUSY);
+    }
+    cleanup_fixture(&target, 2);
+    if (mode == CHILD_ROUNDTRIP) {
+        CHECK(fcntl(target.managed_child_fd, F_GETFD) >= 0);
+        CHECK(close(target.managed_child_fd) == 0);
+    }
+    CHECK(ctos_ssh_native_jump_relay_close(bridge.relay) == 0);
+    CHECK(ctos_ssh_native_jump_relay_destroy(bridge.relay) == 0);
+    CHECK(close(bridge.server_fd) == 0);
+    cleanup_fixture(&jump, 1);
+    child_test_case = -1;
+}
+
+static int fixture_nested_provisional;
+
+static void setup_nested_child(struct fixture *child, struct fixture *parent,
+    struct fixture *root, ctos_ssh_role_token role, int server_fd,
+    struct ctos_ssh_native_jump_relay **relay) {
+    memset(child, 0, sizeof(*child));
+    child->pair[0] = child->pair[1] = -1;
+    child->callback.release_fd = -1;
+    child->callback.enable_provisional = fixture_nested_provisional;
+    child->password_expected = 1;
+    child->password_methods = (const unsigned char *)"publickey,password";
+    child->password_methods_length = sizeof("publickey,password") - 1U;
+    child->password_text_length = 3U;
+    child->password_language_length = 2U;
+    CHECK(sshkey_generate(KEY_ED25519, 0, &child->private_key) == 0);
+    CHECK(sshkey_from_private(child->private_key, &child->public_key) == 0);
+    child->host_key = child->public_key;
+    CHECK(!sshkey_equal(parent->public_key, child->public_key));
+    fixture_existing_role = role;
+    fixture_jump_parent = parent->client;
+    fixture_parent_context = parent;
+    fixture_root_context = root;
+    finish_fixture_setup_selected_mode(child, 60000U, NULL, NULL, fixture_nested_provisional, 0, 1U, 0,
+        fixture_nested_provisional ? CTOS_SSH_HOST_KEY_MANAGED : CTOS_SSH_HOST_KEY_PINNED);
+    fixture_existing_role = 0;
+    fixture_jump_parent = NULL;
+    fixture_parent_context = NULL;
+    fixture_root_context = NULL;
+    *relay = fixture_child_relay;
+    fixture_child_relay = NULL;
+    child->callback.selected_kind = CTOS_SSH_CALLBACK_CREDENTIAL_PASSWORD;
+    memcpy(child->callback.expected_selection_receipt, child->selection_receipt, 32U);
+    child->callback.selected_view = child->view;
+    child->callback.selected_callback = child->callback_token;
+    child->callback.selected_role = child->role;
+    child->callback.selected_deadline = child->deadline;
+    CHECK(close(child->pair[1]) == 0);
+    child->pair[1] = server_fd;
+    setup_synthetic_server(child);
+}
+
+static void test_jump_child_relay_open_failure(void) {
+    struct fixture parent, child;
+    struct ctos_ssh_native_jump_relay *relay = NULL;
+    int pair[2];
+    child_test_case = 101;
+    setup_jump_fixture(&parent, 1);
+    CHECK(ctos_ssh_native_client_begin_password_auth(parent.client) == 0);
+    drive_password(&parent, CTOS_SSH_PASSWORD_AUTH_SUCCESS, 0);
+    ctos_ssh_role_token next = jump_next_role(&parent, 6);
+    parent.jump_bridge_enabled = 1;
+    parent.shell_window = 65536U; parent.shell_maxpacket = 32768U;
+    CHECK(ctos_ssh_native_client_begin_jump(parent.client, next) == 0);
+    drive_jump_phase(&parent, CTOS_SSH_JUMP_OPEN);
+    CHECK(socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0, pair) == 0);
+    CHECK(ctos_ssh_native_jump_relay_open(parent.client, pair[0], &relay) == 0);
+    CHECK(ctos_ssh_native_jump_relay_close(relay) == 0);
+    CHECK(ctos_ssh_native_jump_relay_destroy(relay) == 0);
+    CHECK(close(pair[1]) == 0);
+    memset(&child, 0, sizeof(child));
+    child.pair[0] = child.pair[1] = -1; child.callback.release_fd = -1;
+    child.password_expected = 1;
+    CHECK(sshkey_generate(KEY_ED25519, 0, &child.private_key) == 0);
+    CHECK(sshkey_from_private(child.private_key, &child.public_key) == 0);
+    child.host_key = child.public_key;
+    fixture_existing_role = next;
+    fixture_jump_parent = parent.client;
+    fixture_parent_context = fixture_root_context = &parent;
+    fixture_expect_child_no_relay = 1;
+    finish_fixture_setup_selected_mode(&child, 60000U, NULL, NULL, 0, 0, 1U, 0,
+        CTOS_SSH_HOST_KEY_PINNED);
+    fixture_expect_child_no_relay = 0;
+    fixture_existing_role = 0;
+    fixture_jump_parent = NULL;
+    fixture_parent_context = fixture_root_context = NULL;
+    CHECK(jump_status(&parent).phase == CTOS_SSH_JUMP_OPEN);
+    cleanup_fixture(&child, 2);
+    struct ctos_ssh_native_jump_status status;
+    memset(&status, 0xa5, sizeof(status));
+    CHECK(ctos_ssh_native_client_jump_status(parent.client, &status) != 0
+        && status.phase == 0);
+    cleanup_fixture(&parent, 1);
+    child_test_case = -1;
+}
+
+static void three_hop_turn(struct fixture *root, struct fixture *middle,
+    struct fixture *target, struct jump_bridge_fixture *first,
+    struct jump_bridge_fixture *second, int step_target) {
+    jump_bridge_turn(middle, target, second, step_target);
+    jump_bridge_turn(root, middle, first, 1);
+}
+
+static void probe_retired_authentication(struct ctos_ssh_native_client *client) {
+    unsigned char plan[32] = {0}, stage[92], response[16] = {0};
+    CHECK(ctos_ssh_native_client_begin_userauth_service(client) != 0);
+    CHECK(ctos_ssh_native_client_begin_auth_discovery(client) != 0 && errno == EACCES);
+    CHECK(ctos_ssh_native_client_begin_password_auth(client) != 0 && errno == EACCES);
+    CHECK(ctos_ssh_native_client_begin_private_key_auth(client) != 0 && errno == EACCES);
+    CHECK(ctos_ssh_native_client_begin_keyboard_interactive_auth(client) != 0 && errno == EACCES);
+    memset(stage, 0xff, sizeof(stage));
+    CHECK(ctos_ssh_native_client_begin_discovered_password(client, plan,
+        (const unsigned char *)"x", 1U, stage) != 0 && errno == EACCES);
+    for (size_t index = 0; index < sizeof(stage); index++) CHECK(stage[index] == 0);
+    CHECK(ctos_ssh_native_client_begin_discovered_keyboard(client, plan, stage) != 0 && errno == EACCES);
+    CHECK(ctos_ssh_native_client_continue_keyboard_interactive_auth(client, plan, stage) != 0
+        && errno == EACCES);
+    CHECK(ctos_ssh_native_client_continue_private_key_auth(client, plan, stage) != 0 && errno == EACCES);
+    CHECK(ctos_ssh_native_client_respond_keyboard_interactive(client, response, sizeof(response)) != 0
+        && errno == EACCES);
+    CHECK(ctos_ssh_native_client_poll_auth_prompt(client, plan, CTOS_SSH_DISCOVERY_PASSWORD) != 0
+        && errno == EACCES);
+}
+
+#ifdef CTOS_SSH_NATIVE_TEST_HOOKS
+static void revoke_view_before_promotion_release(void *opaque) {
+    struct fixture *fixture = opaque;
+    fixture->view->valid = 0;
+}
+
+static void expire_role_before_promotion_release(void *opaque) {
+    struct fixture *fixture = opaque;
+    wait_until_deadline_attempts(fixture->deadline, TEST_EXPIRY_WAIT_ATTEMPTS);
+}
+
+static void test_shell_promotion_view_revocation(void) {
+    struct fixture fixture;
+    setup_password_fixture(&fixture, 0, 15000U);
+    CHECK(ctos_ssh_native_client_begin_password_auth(fixture.client) == 0);
+    drive_password(&fixture, CTOS_SSH_PASSWORD_AUTH_SUCCESS, 0);
+    CHECK(ctos_ssh_native_client_test_before_promotion_release(fixture.client,
+        revoke_view_before_promotion_release, &fixture) == 0);
+    CHECK(ctos_ssh_native_client_begin_shell(fixture.client, 80, 24) != 0 && errno == EACCES);
+    CHECK(!fixture.view->valid);
+    CHECK(ctos_ssh_view_borrow_release(fixture.view_borrow) != 0 && errno == EBUSY);
+    CHECK(ctos_ssh_native_client_step(fixture.client,
+        &(struct ctos_ssh_native_client_step){0}) != 0 && errno == EALREADY);
+    cleanup_fixture(&fixture, 1);
+}
+
+static void test_shell_promotion_role_expiry(void) {
+    struct fixture fixture;
+    setup_password_fixture(&fixture, 0, TEST_EXPIRY_PREPARATION_MS);
+    CHECK(ctos_ssh_native_client_begin_password_auth(fixture.client) == 0);
+    drive_password(&fixture, CTOS_SSH_PASSWORD_AUTH_SUCCESS, 0);
+    /* The file view is intentionally longer-lived than the role. */
+    fixture.view->deadline = fixture.deadline + 5000U;
+    CHECK(ctos_ssh_native_client_test_before_promotion_release(fixture.client,
+        expire_role_before_promotion_release, &fixture) == 0);
+    CHECK(ctos_ssh_native_client_begin_shell(fixture.client, 80, 24) != 0 && errno == ETIMEDOUT);
+    fixture.view_borrow = NULL;
+    CHECK(ctos_ssh_native_client_step(fixture.client,
+        &(struct ctos_ssh_native_client_step){0}) != 0 && errno == EALREADY);
+    cleanup_fixture(&fixture, 1);
+}
+#endif
+
+/* 0/1: original cancellation cases; 2: retained expiry; 3/4: retained
+ * middle/target cancellation; 5: retained orderly close; 6/7/8: fault hooks;
+ * 9: descendant EOF; 10: revoke between view preflight and retirement. */
+static void test_jump_three_layer_ancestor_cancel(int mode) {
+    static const unsigned char target_nonce[32] = {10};
+    struct fixture root, middle, target;
+    struct jump_bridge_fixture first = {0}, second = {0};
+    struct ctos_ssh_role_request target_request;
+    ctos_ssh_role_token middle_role, target_role = 0;
+    int first_pair[2], second_pair[2], ready;
+    child_test_case = 100 + mode;
+
+    setup_jump_fixture_lifetime(&root, 1, mode == 2 ? 15000U : 60000U);
+    CHECK(ctos_ssh_native_client_begin_password_auth(root.client) == 0);
+    drive_password(&root, CTOS_SSH_PASSWORD_AUTH_SUCCESS, 0);
+    middle_role = jump_next_role(&root, 7);
+    CHECK(socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0, first_pair) == 0);
+    first.server_fd = first_pair[0];
+    root.jump_bridge_enabled = 1; root.jump_bridge_fd = first.server_fd;
+    root.shell_window = 65536U; root.shell_maxpacket = 32768U;
+    CHECK(ctos_ssh_native_client_begin_jump(root.client, middle_role) == 0);
+    drive_jump_phase(&root, CTOS_SSH_JUMP_OPEN);
+    if (mode >= 2) {
+        struct jump_retain_owner_attempt wrong = {.client = root.client};
+        pthread_t thread;
+        CHECK(ctos_ssh_native_client_retain_jump_transport(root.client) != 0 && errno == EACCES);
+        CHECK(pthread_create(&thread, NULL, jump_retain_wrong_owner, &wrong) == 0);
+        CHECK(pthread_join(thread, NULL) == 0);
+        CHECK(wrong.result != 0 && wrong.error == EPERM);
+        CHECK(wrong.auth_result != 0 && wrong.auth_error == EPERM);
+        CHECK(jump_status(&root).phase == CTOS_SSH_JUMP_OPEN);
+    }
+    fixture_step_budget = 4096U;
+    setup_nested_child(&middle, &root, &root, middle_role, first_pair[1], &first.relay);
+    fixture_step_budget = TEST_STEP_BUDGET;
+    if (mode >= 2)
+        CHECK(ctos_ssh_native_client_retain_jump_transport(root.client) != 0 && errno == EACCES);
+    ready = 0;
+    for (unsigned int turn = 0; turn < 200000U; turn++) {
+        int complete = ctos_ssh_native_client_complete(middle.client);
+        jump_bridge_turn(&root, &middle, &first, !complete);
+        if (ctos_ssh_native_client_complete(middle.client) && middle.server->kex->done) {
+            ready = 1; break;
+        }
+    }
+    CHECK(ready && middle.callback.host_evidence_calls == 1 && middle.callback.last_host_hop == 1);
+    middle.service_expected = 1;
+    CHECK(ctos_ssh_native_client_begin_userauth_service(middle.client) == 0);
+    ready = 0;
+    for (unsigned int turn = 0; turn < 200000U; turn++) {
+        jump_bridge_turn(&root, &middle, &first, 1);
+        if (ctos_ssh_native_client_userauth_service_ready(middle.client)) { ready = 1; break; }
+    }
+    CHECK(ready && ctos_ssh_native_client_begin_password_auth(middle.client) == 0);
+    enum ctos_ssh_native_client_password_auth_result auth = CTOS_SSH_PASSWORD_AUTH_PENDING;
+    for (unsigned int turn = 0; turn < 200000U && auth == CTOS_SSH_PASSWORD_AUTH_PENDING; turn++) {
+        jump_bridge_turn(&root, &middle, &first, 1);
+        CHECK(ctos_ssh_native_client_password_auth_result(middle.client, &auth) == 0);
+    }
+    CHECK(auth == CTOS_SSH_PASSWORD_AUTH_SUCCESS && middle.callback.selected_calls == 1);
+    target_request = role_request(root.deadline);
+    target_request.hop = 2;
+    target_request.role_nonce = target_nonce;
+    target_request.public_view_id = "target-view";
+    CHECK(ctos_ssh_role_bootstrap_open(&target_request, &target_role) == 0);
+    CHECK(socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0, second_pair) == 0);
+    second.server_fd = second_pair[0];
+    middle.shell_expected = middle.jump_expected = middle.jump_bridge_enabled = 1;
+    middle.jump_bridge_fd = second.server_fd;
+    middle.shell_window = 65536U; middle.shell_maxpacket = 32768U;
+    CHECK(ctos_ssh_native_client_begin_jump(middle.client, target_role) == 0);
+    for (unsigned int turn = 0; turn < 200000U && jump_status(&middle).phase != CTOS_SSH_JUMP_OPEN; turn++)
+        jump_bridge_turn(&root, &middle, &first, 1);
+    CHECK(jump_status(&middle).phase == CTOS_SSH_JUMP_OPEN);
+    fixture_step_budget = 4096U;
+    fixture_nested_provisional = mode == 12;
+    setup_nested_child(&target, &middle, &root, target_role, second_pair[1], &second.relay);
+    fixture_nested_provisional = 0;
+    fixture_step_budget = TEST_STEP_BUDGET;
+    if (mode >= 2)
+        CHECK(ctos_ssh_native_client_retain_jump_transport(middle.client) != 0 && errno == EACCES);
+    target.callback.scope_probe = 1;
+    target.callback.scope_token = target.callback_token;
+    target.callback.scope_other = middle.callback_token;
+    CHECK(ctos_ssh_native_client_callback_ancestor_proofs_check(target.callback_token,
+        target.callback.environment) != 0 && errno == EACCES);
+    CHECK(!sshkey_equal(root.public_key, target.public_key));
+    if (mode == 12) {
+        int denied = 0;
+        for (unsigned int turn = 0; turn < 200000U; turn++) {
+            if (ctos_ssh_native_client_step(target.client, &(struct ctos_ssh_native_client_step){0}) != 0) {
+                denied = 1; break;
+            }
+            three_hop_turn(&root, &middle, &target, &first, &second, 0);
+        }
+        CHECK(denied && target.callback.provisional_candidate_calls == 0
+            && target.callback.provisional_review_calls == 0 && target.callback.provisional_kex_calls == 0
+            && target.callback.host_evidence_calls == 0 && target.callback.selected_calls == 0);
+        int provisional = 99;
+        CHECK(ctos_ssh_native_client_provisional_new_ready(target.client, &provisional) != 0 && !provisional);
+        goto cleanup;
+    }
+    ready = 0;
+    for (unsigned int turn = 0; turn < 200000U; turn++) {
+        int complete = ctos_ssh_native_client_complete(target.client);
+        three_hop_turn(&root, &middle, &target, &first, &second, !complete);
+        if (ctos_ssh_native_client_complete(target.client) && target.server->kex->done) {
+            ready = 1; break;
+        }
+    }
+    CHECK(ready && root.callback.host_evidence_calls == 1 && middle.callback.host_evidence_calls == 1
+        && target.callback.host_evidence_calls == 1 && target.callback.last_host_hop == 2);
+    target.service_expected = 1;
+    CHECK(ctos_ssh_native_client_begin_userauth_service(target.client) == 0);
+    ready = 0;
+    for (unsigned int turn = 0; turn < 200000U; turn++) {
+        three_hop_turn(&root, &middle, &target, &first, &second, 1);
+        if (ctos_ssh_native_client_userauth_service_ready(target.client)) { ready = 1; break; }
+    }
+    CHECK(ready && target.callback.scope_host_checks == 1);
+    if (mode == 1) {
+        target.callback.selected_callback = root.callback_token;
+        target.callback.selected_action = 3;
+        CHECK(ctos_ssh_native_client_begin_password_auth(target.client) != 0);
+        CHECK(target.callback.selected_calls == 1 && target.callback.scope_selected_checks == 1
+            && target.callback.scope_after_invalidation == 1 && target.password_requests == 0);
+        goto cleanup;
+    }
+    CHECK(ctos_ssh_native_client_begin_password_auth(target.client) == 0);
+    auth = CTOS_SSH_PASSWORD_AUTH_PENDING;
+    for (unsigned int turn = 0; turn < 200000U && auth == CTOS_SSH_PASSWORD_AUTH_PENDING; turn++) {
+        three_hop_turn(&root, &middle, &target, &first, &second, 1);
+        CHECK(ctos_ssh_native_client_password_auth_result(target.client, &auth) == 0);
+    }
+    CHECK(auth == CTOS_SSH_PASSWORD_AUTH_SUCCESS && target.callback.selected_calls == 1
+        && target.callback.scope_selected_checks == 1);
+    target.shell_expected = 1; target.shell_window = 65536U; target.shell_maxpacket = 32768U;
+    CHECK(ctos_ssh_native_client_begin_shell(target.client, 80, 24) == 0);
+    if (mode >= 2)
+        CHECK(ctos_ssh_native_client_retain_jump_transport(middle.client) != 0 && errno == EACCES);
+    ready = 0;
+    for (unsigned int turn = 0; turn < 200000U; turn++) {
+        three_hop_turn(&root, &middle, &target, &first, &second, 1);
+        if (shell_status(&target).phase == CTOS_SSH_SHELL_RUNNING) { ready = 1; break; }
+    }
+    CHECK(ready);
+    if (mode >= 2) {
+        CHECK(ctos_ssh_native_client_retain_jump_transport(root.client) != 0 && errno == EACCES);
+#ifdef CTOS_SSH_NATIVE_TEST_HOOKS
+        if (mode == 10) {
+            CHECK(ctos_ssh_native_client_test_before_promotion_release(middle.client,
+                revoke_view_before_promotion_release, &middle) == 0);
+            CHECK(ctos_ssh_native_client_retain_jump_transport(middle.client) != 0 && errno == EACCES);
+            CHECK(!middle.view->valid);
+            CHECK(ctos_ssh_view_borrow_release(middle.view_borrow) != 0 && errno == EBUSY);
+            unsigned char denied[8]; size_t denied_length = 99;
+            CHECK(ctos_ssh_native_client_shell_read(target.client, denied, sizeof(denied),
+                &denied_length) != 0 && denied_length == 0);
+            goto cleanup;
+        }
+        if (mode == 6) {
+            CHECK(ctos_ssh_native_client_test_fail_next_view_release(middle.client) == 0);
+            CHECK(ctos_ssh_native_client_retain_jump_transport(middle.client) != 0 && errno == EIO);
+            CHECK(ctos_ssh_view_borrow_release(middle.view_borrow) != 0 && errno == EBUSY);
+            CHECK(ctos_ssh_native_client_retain_jump_transport(middle.client) != 0 && errno == EALREADY);
+            unsigned char denied[8]; size_t denied_length = 99;
+            CHECK(ctos_ssh_native_client_shell_read(target.client, denied, sizeof(denied),
+                &denied_length) != 0 && denied_length == 0);
+            goto cleanup;
+        }
+        if (mode == 7) {
+            CHECK(ctos_ssh_native_client_test_invalidate_kex(target.client) == 0);
+            CHECK(ctos_ssh_native_client_retain_jump_transport(middle.client) != 0);
+            CHECK(ctos_ssh_view_borrow_live(middle.view_borrow) == 0);
+            goto cleanup;
+        }
+#endif
+        CHECK(ctos_ssh_native_client_retain_jump_transport(middle.client) == 0);
+        middle.view_borrow = NULL;
+        CHECK(ctos_ssh_native_client_retain_jump_transport(middle.client) != 0 && errno == EALREADY);
+        if (mode == 9) {
+            peer_channel_packet(&target, SSH2_MSG_CHANNEL_EOF);
+            CHECK(sshpkt_send(target.server) == 0);
+            for (unsigned int turn = 0; turn < 200000U && !shell_status(&target).remote_eof; turn++)
+                three_hop_turn(&root, &middle, &target, &first, &second, 1);
+            CHECK(shell_status(&target).remote_eof);
+            CHECK(ctos_ssh_native_client_retain_jump_transport(root.client) != 0 && errno == EACCES);
+            CHECK(ctos_ssh_view_borrow_live(root.view_borrow) == 0);
+            CHECK(jump_status(&root).phase == CTOS_SSH_JUMP_OPEN);
+            goto cleanup;
+        }
+        CHECK(ctos_ssh_native_client_retain_jump_transport(root.client) == 0);
+        root.view_borrow = NULL;
+        target.view_borrow = NULL;
+        CHECK(ctos_ssh_native_client_retain_jump_transport(root.client) != 0 && errno == EALREADY);
+        struct jump_retain_owner_attempt wrong = {.client = root.client};
+        pthread_t thread;
+        CHECK(pthread_create(&thread, NULL, jump_retain_wrong_owner, &wrong) == 0);
+        CHECK(pthread_join(thread, NULL) == 0);
+        CHECK(wrong.result != 0 && wrong.error == EPERM);
+        CHECK(wrong.auth_result != 0 && wrong.auth_error == EPERM);
+#ifdef CTOS_SSH_NATIVE_TEST_HOOKS
+        if (mode == 8) {
+            CHECK(ctos_ssh_native_client_test_invalidate_kex(target.client) == 0);
+            struct ctos_ssh_native_jump_status denied;
+            CHECK(ctos_ssh_native_client_jump_status(root.client, &denied) != 0);
+            unsigned char output[16]; size_t length = 99;
+            CHECK(ctos_ssh_native_client_shell_read(target.client, output, sizeof(output), &length) != 0
+                && length == 0);
+            goto cleanup;
+        }
+#endif
+        if (mode == 2) {
+            struct ctos_ssh_role_snapshot snapshot;
+            unsigned char receipt[32], secret[8];
+            size_t secret_length = 99, accepted = 0;
+            root.view->valid = middle.view->valid = target.view->valid = 0;
+            wait_until_deadline_attempts(root.deadline, 20000U);
+            CHECK(ctos_ssh_role_bootstrap_snapshot(root.role, &snapshot) != 0 && errno == ETIMEDOUT);
+            CHECK(ctos_ssh_role_bootstrap_snapshot(middle.role, &snapshot) != 0 && errno == ETIMEDOUT);
+            CHECK(ctos_ssh_role_bootstrap_snapshot(target.role, &snapshot) != 0 && errno == ETIMEDOUT);
+            CHECK(ctos_ssh_native_client_authentication_selection_receipt(root.client, receipt) != 0);
+            CHECK(ctos_ssh_native_client_authentication_selection_receipt(middle.client, receipt) != 0);
+            CHECK(ctos_ssh_native_client_selected_credential_bytes(target.client, secret,
+                sizeof(secret), &secret_length) != 0 && secret_length == 0);
+            probe_retired_authentication(root.client);
+            probe_retired_authentication(middle.client);
+            probe_retired_authentication(target.client);
+            CHECK(ctos_ssh_native_client_shell_write(target.client,
+                (const unsigned char *)"after", 5U, &accepted) == 0 && accepted == 5U);
+            for (unsigned int turn = 0; turn < 200000U && target.shell_input_length != 5U; turn++)
+                three_hop_turn(&root, &middle, &target, &first, &second, 1);
+            CHECK(target.shell_input_length == 5U && memcmp(target.shell_input, "after", 5U) == 0);
+        }
+    }
+    peer_channel_data(&target, 0, (const unsigned char *)"three", 5U);
+    for (unsigned int turn = 0; turn < 200000U && shell_status(&target).buffered_bytes != 5U; turn++)
+        three_hop_turn(&root, &middle, &target, &first, &second, 1);
+    CHECK(shell_status(&target).buffered_bytes == 5U);
+    if (mode == 2) {
+        unsigned char output[16]; size_t length = 0;
+        CHECK(ctos_ssh_native_client_shell_read(target.client, output, sizeof(output), &length) == 0
+            && length == 5U && memcmp(output, "three", 5U) == 0);
+        peer_channel_data(&target, 0, (const unsigned char *)"stale", 5U);
+        for (unsigned int turn = 0; turn < 200000U && shell_status(&target).buffered_bytes != 5U; turn++)
+            three_hop_turn(&root, &middle, &target, &first, &second, 1);
+        CHECK(shell_status(&target).buffered_bytes == 5U);
+    }
+    if (mode == 5) {
+        send_channel_exit(&target, 0);
+        peer_channel_packet(&target, SSH2_MSG_CHANNEL_EOF);
+        CHECK(sshpkt_send(target.server) == 0);
+        peer_channel_packet(&target, SSH2_MSG_CHANNEL_CLOSE);
+        CHECK(sshpkt_send(target.server) == 0);
+        for (unsigned int turn = 0; turn < 200000U
+                && shell_status(&target).phase != CTOS_SSH_SHELL_CLOSED; turn++)
+            three_hop_turn(&root, &middle, &target, &first, &second, 1);
+        CHECK(shell_status(&target).phase == CTOS_SSH_SHELL_CLOSED);
+        unsigned char output[16]; size_t length = 0;
+        CHECK(ctos_ssh_native_client_shell_read(target.client, output, sizeof(output), &length) == 0
+            && length == 5U && memcmp(output, "three", 5U) == 0);
+        CHECK(jump_status(&middle).phase == CTOS_SSH_JUMP_OPEN);
+        goto cleanup;
+    }
+    CHECK(ctos_ssh_callback_cancel(mode == 3 ? middle.callback_token
+        : mode == 4 ? target.callback_token : root.callback_token) == 0);
+    unsigned char output[16]; size_t length = 1;
+    memset(output, 0xff, sizeof(output));
+    CHECK(ctos_ssh_native_client_shell_read(target.client, output, sizeof(output), &length) != 0 && length == 0);
+    for (size_t i = 0; i < sizeof(output); i++) CHECK(output[i] == 0);
+    struct ctos_ssh_native_jump_status denied;
+    CHECK(ctos_ssh_native_client_jump_status(middle.client, &denied) != 0);
+    CHECK(ctos_ssh_native_jump_relay_close(second.relay) != 0 && errno == EBUSY);
+    CHECK(ctos_ssh_native_client_close(middle.client) != 0 && errno == EBUSY);
+cleanup:
+    cleanup_fixture(&target, 1);
+    CHECK(ctos_ssh_native_jump_relay_close(second.relay) == 0);
+    CHECK(ctos_ssh_native_jump_relay_destroy(second.relay) == 0);
+    CHECK(close(second.server_fd) == 0);
+    cleanup_fixture(&middle, 1);
+    CHECK(ctos_ssh_native_jump_relay_close(first.relay) == 0);
+    CHECK(ctos_ssh_native_jump_relay_destroy(first.relay) == 0);
+    CHECK(close(first.server_fd) == 0);
+    cleanup_fixture(&root, 1);
+    child_test_case = -1;
+}
+
 static void test_shell_rejection_and_auth_gate(void) {
     for (int reject = 1; reject <= 3; reject++) {
         struct fixture fixture;
@@ -5069,6 +7761,7 @@ static void test_shell_after_auth_expiry(void) {
         && errno == EACCES);
     CHECK(ctos_ssh_native_client_selected_credential_bytes(fixture.client,
         output, sizeof(output), &length) != 0 && length == 0);
+    probe_retired_authentication(fixture.client);
     CHECK(ctos_ssh_native_client_shell_write(fixture.client,
         (const unsigned char *)"x", 1U, &accepted) == 0 && accepted == 1U);
     CHECK(ctos_ssh_native_client_shell_resize(fixture.client, 132, 43) == 1);
@@ -6612,7 +9305,233 @@ static void test_changed_auth_continuation(void) {
     sshkey_free(old_host);
 }
 
+static void test_jump_authentication_methods(void) {
+    struct fixture fixture;
+    struct sshkey *key = NULL; unsigned char *blob = NULL; size_t length = 0;
+    struct sshbuf *file = sshbuf_new();
+    CHECK(file != NULL && sshkey_generate(KEY_ED25519, 0, &key) == 0);
+    CHECK(sshkey_to_blob(key, &blob, &length) == 0);
+    CHECK(sshkey_private_to_fileblob(key, file, "", "jump", SSHKEY_PRIVATE_OPENSSH, NULL, 0) == 0);
+    fixture_jump_role = 1;
+    setup_private_fixture_version_mode(&fixture, 0, key, file, blob, length, NULL, 0, 1, CTOS_SSH_HOST_KEY_PINNED);
+    fixture_jump_role = 0;
+    CHECK(ctos_ssh_native_client_begin_private_key_auth(fixture.client) == 0);
+    drive_private(&fixture, CTOS_SSH_PRIVATE_KEY_AUTH_SUCCESS, 0);
+    sshbuf_free(file); free(blob); sshkey_free(key); fixture.identity = NULL;
+    fixture.shell_expected = 1; fixture.jump_expected = 1;
+    fixture.shell_window = 65536U; fixture.shell_maxpacket = 32768U;
+    ctos_ssh_role_token next = jump_next_role(&fixture, 0);
+    CHECK(ctos_ssh_native_client_begin_jump(fixture.client, next) == 0);
+    drive_jump_phase(&fixture, CTOS_SSH_JUMP_OPEN);
+    CHECK(fixture.callback.selected_calls == 1 && fixture.private_requests == 1);
+    cleanup_fixture(&fixture, 1); CHECK(ctos_ssh_role_bootstrap_close(next) == 0);
+
+    fixture_jump_role = 1;
+    setup_keyboard_fixture(&fixture, 0, CTOS_SSH_HOST_KEY_PINNED);
+    fixture_jump_role = 0;
+    keyboard_finish_packet(&fixture, 2);
+    keyboard_result(&fixture, CTOS_SSH_KEYBOARD_AUTH_SUCCESS, 0);
+    fixture.shell_expected = 1; fixture.jump_expected = 1;
+    fixture.shell_window = 65536U; fixture.shell_maxpacket = 32768U;
+    next = jump_next_role(&fixture, 0);
+    CHECK(ctos_ssh_native_client_begin_jump(fixture.client, next) == 0);
+    drive_jump_phase(&fixture, CTOS_SSH_JUMP_OPEN);
+    CHECK(fixture.keyboard_requests == 1 && fixture.callback.selected_calls == 0);
+    cleanup_fixture(&fixture, 1); CHECK(ctos_ssh_role_bootstrap_close(next) == 0);
+
+    fixture_jump_role = 1;
+    setup_password_fixture_continuation(&fixture, 0, 60000U, CTOS_SSH_HOST_KEY_PINNED, 1);
+    fixture_jump_role = 0;
+    fixture.password_reply = PASSWORD_REPLY_PARTIAL;
+    fixture.password_methods = (const unsigned char *)"keyboard-interactive";
+    fixture.password_methods_length = sizeof("keyboard-interactive") - 1U;
+    CHECK(ctos_ssh_native_client_begin_password_auth(fixture.client) == 0);
+    drive_password(&fixture, CTOS_SSH_PASSWORD_AUTH_PARTIAL, 0);
+    next = jump_next_role(&fixture, 0);
+    CHECK(ctos_ssh_native_client_begin_jump(fixture.client, next) != 0 && errno == EACCES);
+    unsigned char stage[92];
+    CHECK(ctos_ssh_native_client_continue_keyboard_interactive_auth(fixture.client,
+        fixture.selection_receipt, stage) == 0);
+    fixture.password_expected = 0; fixture.keyboard_expected = 1;
+    for (unsigned int turn = 0; turn < 100000U && fixture.keyboard_requests == 0; turn++)
+        CHECK(shell_turn(&fixture) == 0);
+    CHECK(fixture.keyboard_requests == 1);
+    keyboard_finish_packet(&fixture, 2);
+    mfa_keyboard_result(&fixture, CTOS_SSH_KEYBOARD_AUTH_SUCCESS);
+    fixture.shell_expected = 1; fixture.jump_expected = 1;
+    fixture.shell_window = 65536U; fixture.shell_maxpacket = 32768U;
+    CHECK(ctos_ssh_native_client_begin_jump(fixture.client, next) == 0);
+    drive_jump_phase(&fixture, CTOS_SSH_JUMP_OPEN);
+    CHECK(fixture.callback.selected_calls == 1 && fixture.callback.kex_complete_calls == 1);
+    cleanup_fixture(&fixture, 1); CHECK(ctos_ssh_role_bootstrap_close(next) == 0);
+
+    fixture_jump_role = 1;
+    setup_keyboard_fixture_before_auth_mode(&fixture, 0, CTOS_SSH_HOST_KEY_PINNED, 1, 0);
+    fixture_jump_role = 0;
+    fixture.discovery_expected = 1; fixture.discovery_reply = 1;
+    CHECK(ctos_ssh_native_client_begin_auth_discovery(fixture.client) == 0);
+    enum ctos_ssh_native_client_discovery_result result = CTOS_SSH_DISCOVERY_PENDING;
+    unsigned int methods = 99;
+    for (unsigned int turn = 0; turn < 100000U && result == CTOS_SSH_DISCOVERY_PENDING; turn++) {
+        CHECK(shell_turn(&fixture) == 0);
+        CHECK(ctos_ssh_native_client_auth_discovery_result(fixture.client, &result, &methods) == 0);
+    }
+    CHECK(result == CTOS_SSH_DISCOVERY_NONE_SUCCESS && methods == 0 && fixture.callback.selected_calls == 0);
+    fixture.shell_expected = 1; fixture.jump_expected = 1;
+    fixture.shell_window = 65536U; fixture.shell_maxpacket = 32768U;
+    next = jump_next_role(&fixture, 0);
+    CHECK(ctos_ssh_native_client_begin_jump(fixture.client, next) == 0);
+    drive_jump_phase(&fixture, CTOS_SSH_JUMP_OPEN);
+    cleanup_fixture(&fixture, 1); CHECK(ctos_ssh_role_bootstrap_close(next) == 0);
+}
+
+static void test_nine_kex_role_slots(void) {
+    struct ssh *clients[CTOS_SSH_ROLE_MAX] = {0};
+    ctos_ssh_role_token roles[CTOS_SSH_ROLE_MAX] = {0};
+    unsigned char nonces[CTOS_SSH_ROLE_MAX][32];
+    struct kex_params params;
+    char *proposals[PROPOSAL_MAX] = {KEX_CLIENT};
+    uint64_t deadline = deadline_after(30000);
+    memcpy(params.proposal, proposals, sizeof(proposals));
+    CHECK(CTOS_SSH_ROLE_MAX == CTOS_SSH_CONFIG_JUMPS + 1U);
+    CHECK(CTOS_SSH_CALLBACK_MAX == CTOS_SSH_ROLE_MAX);
+    for (unsigned int hop = 0; hop < CTOS_SSH_ROLE_MAX; hop++) {
+        struct ctos_ssh_role_request request = role_request(deadline);
+        memset(nonces[hop], (int)hop + 1, sizeof(nonces[hop]));
+        request.hop = hop; request.role_nonce = nonces[hop];
+        request.program = hop + 1 == CTOS_SSH_ROLE_MAX ? CTOS_SSH_ROLE_CLIENT : CTOS_SSH_ROLE_JUMP;
+        CHECK(ctos_ssh_role_bootstrap_open(&request, &roles[hop]) == 0);
+        CHECK(ssh_init(&clients[hop], 0, &params) == 0 && clients[hop] != NULL);
+        CHECK(ctos_ssh_kex_bind_pending_host(clients[hop], roles[hop]) == 0);
+    }
+    CHECK(ctos_ssh_kex_bind_pending_host(clients[8], roles[8]) != 0);
+    ctos_ssh_kex_unbind(clients[4]);
+    CHECK(ctos_ssh_kex_bind_pending_host(clients[4], roles[4]) == 0);
+    CHECK(ctos_ssh_kex_bind_pending_host(clients[8], roles[8]) != 0);
+    for (unsigned int hop = 0; hop < CTOS_SSH_ROLE_MAX; hop++) {
+        ctos_ssh_kex_unbind(clients[hop]);
+        ssh_free(clients[hop]);
+        CHECK(ctos_ssh_role_bootstrap_close(roles[hop]) == 0);
+    }
+}
+
+static void test_provisional_root_uses_normal_new(void) {
+    struct fixture root = {0};
+    root.pair[0] = root.pair[1] = -1;
+    root.callback.release_fd = -1;
+    root.callback.enable_provisional = 1;
+    CHECK(sshkey_generate(KEY_ED25519, 0, &root.private_key) == 0);
+    CHECK(sshkey_from_private(root.private_key, &root.public_key) == 0);
+    root.host_key = root.public_key;
+    finish_fixture_setup_selected_mode(&root, 60000U, NULL, NULL, 1, 0, 0U, 0,
+        CTOS_SSH_HOST_KEY_MANAGED);
+    finish_service_fixture(&root, 1, 0);
+    CHECK(root.callback.provisional_candidate_calls == 0 && root.callback.provisional_review_calls == 0
+        && root.callback.provisional_kex_calls == 0 && root.callback.host_evidence_calls == 1
+        && root.callback.kex_complete_calls == 1);
+    int provisional = 99;
+    CHECK(ctos_ssh_native_client_provisional_new_ready(root.client, &provisional) != 0 && !provisional);
+    cleanup_fixture(&root, 1);
+}
+
 int main(int argc, char **argv) {
+    if (argc == 2 && strcmp(argv[1], "--provisional-ext-only") == 0) {
+        for (enum child_case mode = CHILD_PROVISIONAL_EXT_IDLE; mode <= CHILD_PROVISIONAL_EXT_EOF; mode++) {
+            fprintf(stderr, "SSH_NATIVE_PROVISIONAL_EXT case=%d start\n", (int)mode);
+            test_jump_nested_ssh(mode);
+            fprintf(stderr, "SSH_NATIVE_PROVISIONAL_EXT case=%d pass\n", (int)mode);
+        }
+        printf("SSH_NATIVE_PROVISIONAL_EXT checks=%u gate=pass runtime=synthetic\n", checks);
+        return 0;
+    }
+    if (argc == 2 && strcmp(argv[1], "--provisional-poll-only") == 0) {
+        for (enum child_case mode = CHILD_PROVISIONAL_POLL_IDLE; mode <= CHILD_PROVISIONAL_POLL_TIMEOUT; mode++) {
+            fprintf(stderr, "SSH_NATIVE_PROVISIONAL_POLL case=%d start\n", (int)mode);
+            test_jump_nested_ssh(mode);
+            fprintf(stderr, "SSH_NATIVE_PROVISIONAL_POLL case=%d pass\n", (int)mode);
+        }
+        printf("SSH_NATIVE_PROVISIONAL_POLL checks=%u gate=pass runtime=synthetic\n", checks);
+        return 0;
+    }
+    if (argc == 3 && strcmp(argv[1], "--provisional-new-case") == 0) {
+        char *end = NULL;
+        long value = strtol(argv[2], &end, 10);
+        CHECK(end != NULL && *end == '\0' && value >= CHILD_PROVISIONAL_NEW
+            && value <= CHILD_PROVISIONAL_POLL_TIMEOUT);
+        fprintf(stderr, "SSH_NATIVE_PROVISIONAL case=%ld start\n", value);
+        test_jump_nested_ssh((enum child_case)value);
+        fprintf(stderr, "SSH_NATIVE_PROVISIONAL case=%ld pass\n", value);
+        return 0;
+    }
+    if (argc == 2 && strcmp(argv[1], "--provisional-new-only") == 0) {
+        fprintf(stderr, "SSH_NATIVE_PROVISIONAL root start\n");
+        test_provisional_root_uses_normal_new();
+        fprintf(stderr, "SSH_NATIVE_PROVISIONAL root pass\n");
+        for (enum child_case mode = CHILD_PROVISIONAL_NEW; mode <= CHILD_PROVISIONAL_POLL_TIMEOUT; mode++) {
+            fprintf(stderr, "SSH_NATIVE_PROVISIONAL case=%d start\n", (int)mode);
+            test_jump_nested_ssh(mode);
+            fprintf(stderr, "SSH_NATIVE_PROVISIONAL case=%d pass\n", (int)mode);
+        }
+        fprintf(stderr, "SSH_NATIVE_PROVISIONAL three-layer start\n");
+        test_jump_three_layer_ancestor_cancel(12);
+        fprintf(stderr, "SSH_NATIVE_PROVISIONAL three-layer pass\n");
+        printf("SSH_NATIVE_PROVISIONAL_NEW checks=%u gate=pass runtime=synthetic\n", checks);
+        return 0;
+    }
+    if (argc == 2 && strcmp(argv[1], "--jump-retain-only") == 0) {
+        for (int mode = 2; mode <= 5; mode++) test_jump_three_layer_ancestor_cancel(mode);
+        test_jump_three_layer_ancestor_cancel(9);
+        test_jump_three_layer_ancestor_cancel(12);
+#ifdef CTOS_SSH_NATIVE_TEST_HOOKS
+        test_shell_promotion_view_revocation();
+        test_shell_promotion_role_expiry();
+        test_jump_three_layer_ancestor_cancel(6);
+        test_jump_three_layer_ancestor_cancel(7);
+        test_jump_three_layer_ancestor_cancel(8);
+        test_jump_three_layer_ancestor_cancel(10);
+#endif
+        printf("SSH_NATIVE_JUMP_RETAIN checks=%u gate=pass runtime=synthetic\n", checks);
+        return 0;
+    }
+    if (argc == 2 && strcmp(argv[1], "--role-capacity-only") == 0) {
+        test_nine_kex_role_slots();
+        printf("SSH_NATIVE_ROLE_CAPACITY checks=%u gate=pass runtime=synthetic\n", checks);
+        return 0;
+    }
+    if (argc == 2 && strcmp(argv[1], "--jump-only") == 0) {
+        test_callback_ancestor_root_and_forged_owner();
+        test_jump_channel_roundtrip();
+        test_jump_channel_admission();
+        test_jump_chain_identity_admission();
+        test_jump_channel_rejection_and_protocol();
+        test_jump_channel_lifetime();
+        test_jump_channel_receive_bound();
+        test_jump_relay_roundtrip();
+        test_jump_relay_revocation();
+        test_jump_relay_peer_backpressure();
+        test_jump_relay_remote_close();
+        for (enum child_case mode = CHILD_ROUNDTRIP; mode < CHILD_CASE_COUNT; mode++) {
+            fprintf(stderr, "SSH_NATIVE_JUMP child=%d start\n", (int)mode);
+            test_jump_nested_ssh(mode);
+            fprintf(stderr, "SSH_NATIVE_JUMP child=%d pass\n", (int)mode);
+        }
+        test_jump_three_layer_ancestor_cancel(0);
+        test_jump_three_layer_ancestor_cancel(1);
+        for (int mode = 2; mode <= 5; mode++) test_jump_three_layer_ancestor_cancel(mode);
+        test_jump_three_layer_ancestor_cancel(9);
+#ifdef CTOS_SSH_NATIVE_TEST_HOOKS
+        test_shell_promotion_view_revocation();
+        test_shell_promotion_role_expiry();
+        test_jump_three_layer_ancestor_cancel(6);
+        test_jump_three_layer_ancestor_cancel(7);
+        test_jump_three_layer_ancestor_cancel(8);
+        test_jump_three_layer_ancestor_cancel(10);
+#endif
+        test_jump_child_relay_open_failure();
+        test_jump_authentication_methods();
+        printf("SSH_NATIVE_JUMP checks=%u gate=pass runtime=synthetic\n", checks);
+        return 0;
+    }
     if (argc == 2 && strcmp(argv[1], "--mfa-only") == 0) {
         test_mfa_continuation();
         printf("SSH_NATIVE_MFA checks=%u gate=pass runtime=synthetic\n", checks);
@@ -6683,6 +9602,35 @@ int main(int argc, char **argv) {
         return 0;
     }
     CHECK(argc == 1);
+    test_callback_ancestor_root_and_forged_owner();
+    test_nine_kex_role_slots();
+    test_jump_channel_roundtrip();
+    test_jump_channel_admission();
+    test_jump_chain_identity_admission();
+    test_jump_channel_rejection_and_protocol();
+    test_jump_channel_lifetime();
+    test_jump_channel_receive_bound();
+    test_jump_relay_roundtrip();
+    test_jump_relay_revocation();
+    test_jump_relay_peer_backpressure();
+    test_jump_relay_remote_close();
+    for (enum child_case mode = CHILD_ROUNDTRIP; mode < CHILD_CASE_COUNT; mode++)
+        test_jump_nested_ssh(mode);
+    test_jump_three_layer_ancestor_cancel(0);
+    test_jump_three_layer_ancestor_cancel(1);
+    for (int mode = 2; mode <= 5; mode++) test_jump_three_layer_ancestor_cancel(mode);
+    test_jump_three_layer_ancestor_cancel(9);
+    test_jump_three_layer_ancestor_cancel(12);
+#ifdef CTOS_SSH_NATIVE_TEST_HOOKS
+    test_shell_promotion_view_revocation();
+    test_shell_promotion_role_expiry();
+    test_jump_three_layer_ancestor_cancel(6);
+    test_jump_three_layer_ancestor_cancel(7);
+    test_jump_three_layer_ancestor_cancel(8);
+    test_jump_three_layer_ancestor_cancel(10);
+#endif
+    test_jump_child_relay_open_failure();
+    test_jump_authentication_methods();
     test_pending_host_guard();
     test_managed_host_denials();
     test_changed_same_connection();

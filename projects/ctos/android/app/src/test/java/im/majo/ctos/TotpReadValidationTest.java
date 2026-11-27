@@ -620,6 +620,7 @@ public final class TotpReadValidationTest {
         CountDownLatch entered = new CountDownLatch(1), release = new CountDownLatch(1);
         vault.session.attachRevocation(operation.epoch, new VaultSession.Revocation() {
             @Override public boolean active() { return true; }
+            @Override public boolean revocationConfirmed() { return revoked.get(); }
             @Override public void revoke() {
                 assertFalse("Lazy cleanup entered original phase", Thread.holdsLock(phase));
                 revoked.set(true); entered.countDown();

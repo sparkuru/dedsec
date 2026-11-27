@@ -11,6 +11,22 @@
 #include <sys/resource.h>
 #include <sys/wait.h>
 
+#ifdef CTOS_CONFIG_TEST_DIRECT_KEYWORD_WRAP
+static int bypass_jump_keyword, bypassed_jump_keywords;
+static char bypassed_jump_raw[256];
+int __real_ctos_config_direct_keyword(const char *, int, int, char **, const char *);
+int __wrap_ctos_config_direct_keyword(const char *keyword, int active, int count,
+    char **args, const char *raw) {
+    if (bypass_jump_keyword && active && strcmp(keyword, "proxyjump") == 0) {
+        bypassed_jump_keywords++;
+        CHECK(raw != NULL && strlen(raw) < sizeof(bypassed_jump_raw));
+        memcpy(bypassed_jump_raw, raw, strlen(raw) + 1);
+        return 0;
+    }
+    return __real_ctos_config_direct_keyword(keyword, active, count, args, raw);
+}
+#endif
+
 static unsigned int protected_regions, locked_regions;
 static ctos_ssh_config_token cancel_during_lock;
 static void *cancel_token(void *p) {
@@ -352,20 +368,115 @@ static void profile_plans(void) {
         finish_handle(token); drop(&source); drop(&request);
     }
     const char *extras[] = {"", "IdentityFile none\n", "IdentityFile relative/key\nIdentityFile ${KEY}/%h\n",
-        "PubkeyAuthentication no\n", "Include missing\n", "UserKnownHostsFile /home/source/known\n",
-        "StrictHostKeyChecking no\n", "LocalCommand echo forbidden\n", "ProxyJump jump.invalid\n", NULL};
+        "PubkeyAuthentication no\n", "ProxyJump none\n", "Include missing\n", "UserKnownHostsFile /home/source/known\n",
+        "StrictHostKeyChecking no\n", "LocalCommand echo forbidden\n", "ProxyJump jump.invalid\n",
+        "ProxyJump user@none\n", "ProxyJump none:2222\n", "ProxyJump other,none\n", NULL};
     for (unsigned int i = 0; extras[i]; i++) {
         snprintf(body, sizeof(body), "Host target\n HostName server.example\n User remote\n%sUserKnownHostsFile ~/.ssh/known_hosts\n", extras[i]);
         struct source_wire source = one(body), request = direct_request("target", "");
         ctos_ssh_config_token token = 0; CHECK(ctos_ssh_config_handle_reserve_profile_direct(&token) == 0);
         CHECK(load(token, &source, 0, &request, NULL) == 0); int32_t outcome[5];
         CHECK(ctos_ssh_config_handle_run(token, outcome) == 0);
-        if (i < 4) {
+        if (i < 5) {
             CHECK(outcome[0] == 0 && ctos_ssh_config_handle_profile_direct_plan(token, out, &n) == 0);
             CHECK(value(out + 64) == (i == 2 ? 2 : 0));
             if (i == 3) CHECK(value(out + 16) == 0);
         } else CHECK(outcome[0] != 0 && ctos_ssh_config_handle_profile_direct_plan(token, out, &n) == -1 && n == 0);
         finish_handle(token); drop(&source); drop(&request);
+    }
+}
+static void profile_encoding_limit(void) {
+    struct ctos_ssh_config_direct_plan *plan = calloc(1, sizeof(*plan)); CHECK(plan != NULL);
+    memset(plan->summary.alias, 'a', 255); memset(plan->summary.hostname, 'b', 255);
+    memset(plan->summary.user, 'c', 255);
+    plan->identity_hint_count = CTOS_SSH_CONFIG_LIST;
+    plan->hostfile_count = CTOS_SSH_CONFIG_HOSTFILES;
+    for (unsigned int i = 0; i < plan->identity_hint_count; i++)
+        memset(plan->identity_hints[i], 'i', 512);
+    for (unsigned int i = 0; i < plan->hostfile_count; i++)
+        memset(plan->user_hostfiles[i], 'h', 512);
+    unsigned char *buffer = malloc(CTOS_SSH_CONFIG_DIRECT_BYTES + 2U); CHECK(buffer != NULL);
+    memset(buffer, 0xa5, CTOS_SSH_CONFIG_DIRECT_BYTES + 2U);
+    size_t size = 0;
+    CHECK(ctos_ssh_config_handle_test_profile_encode(plan, buffer + 1, &size) == 0);
+    CHECK(size == CTOS_SSH_CONFIG_DIRECT_BYTES && buffer[0] == 0xa5 && buffer[size + 1U] == 0xa5);
+    CHECK(value(buffer + 1) == 0x43535050U && value(buffer + 5) == 5);
+    plan->identity_hint_count++;
+    size = 42; CHECK(ctos_ssh_config_handle_test_profile_encode(plan, buffer + 1, &size) == -1 && size == 0);
+    CHECK(buffer[0] == 0xa5 && buffer[CTOS_SSH_CONFIG_DIRECT_BYTES + 1U] == 0xa5);
+    free(buffer); free(plan);
+}
+static void profile_routes(void) {
+    const char *body = "Host target\n HostName target.example\n User targetuser\n ProxyJump alice@one:2201,two\n"
+        "Host one\n HostName first.example\n IdentityFile /source/first\n PasswordAuthentication no\n"
+        "Host two\n HostName second.example\n User bob\n Port 2202\n IdentityFile /source/second\n"
+        "Host *\n UserKnownHostsFile ~/.ssh/known_hosts\n";
+    struct source_wire source = wire_new(2, 1024, CTOS_SSH_IO_READ_BYTES, CTOS_SSH_CONFIG_LINES);
+    record(&source, CTOS_SSH_CONFIG, ".ssh/config", body);
+    record(&source, CTOS_SSH_KNOWN_HOSTS, ".ssh/known_hosts", NULL);
+    struct source_wire request = direct_request("target", "");
+    ctos_ssh_config_token token = 0;
+    CHECK(ctos_ssh_config_handle_reserve_profile_route(&token) == 0 && token != 0);
+    CHECK(load(token, &source, 0, &request, NULL) == 0);
+    int32_t outcome[5]; CHECK(ctos_ssh_config_handle_run(token, outcome) == 0 && outcome[0] == 0);
+    unsigned char *out = calloc(CTOS_SSH_CONFIG_ROUTE_BYTES, 1); CHECK(out != NULL);
+    size_t n = 0; CHECK(ctos_ssh_config_handle_profile_route(token, out, &n) == 0);
+    CHECK(value(out) == 0x43535250U && value(out + 4) == 1 && value(out + 8) == 3);
+    const unsigned char *cursor = out + 12;
+    const char *aliases[] = {"one", "two", "target"};
+    const char *hosts[] = {"first.example", "second.example", "target.example"};
+    const char *users[] = {"alice", "bob", "targetuser"};
+    const char *hints[] = {"/source/first", "/source/second"};
+    unsigned int ports[] = {2201, 2202, 22};
+    for (unsigned int i = 0; i < 3; i++) {
+        unsigned int bytes = value(cursor); cursor += 4;
+        CHECK(bytes >= 72 && bytes <= CTOS_SSH_CONFIG_DIRECT_BYTES);
+        const unsigned char *entry = cursor;
+        CHECK(value(entry) == 0x43535050U && value(entry + 4) == 5 && value(entry + 8) == ports[i]);
+        CHECK(value(entry + 52) == (i < 2 ? 1U : 0U));
+        CHECK(value(entry + 64) == (i < 2 ? 1U : 0U) && value(entry + 68) == 1);
+        if (i == 0) CHECK(value(entry + 20) == 0);
+        cursor += 72; direct_text(&cursor, aliases[i]); direct_text(&cursor, hosts[i]); direct_text(&cursor, users[i]);
+        if (i < 2) direct_text(&cursor, hints[i]);
+        direct_text(&cursor, ".ssh/known_hosts");
+        CHECK((size_t)(cursor - entry) == bytes);
+    }
+    CHECK((size_t)(cursor - out) == n);
+    unsigned char direct[CTOS_SSH_CONFIG_DIRECT_BYTES]; size_t direct_n = 1;
+    CHECK(ctos_ssh_config_handle_profile_direct_plan(token, direct, &direct_n) == -1 && direct_n == 0);
+    CHECK(ctos_ssh_config_handle_cancel(token) == 0);
+    CHECK(ctos_ssh_config_handle_profile_route(token, out, &n) == -1 && n == 0);
+    zeroed(out, CTOS_SSH_CONFIG_ROUTE_BYTES);
+    fail_unmap = 1; CHECK(ctos_ssh_config_handle_close(token) == -1 && errno == EIO);
+    CHECK(ctos_ssh_config_handle_destroy(token) == -1 && errno == EBUSY);
+    finish_handle(token); free(out); drop(&source); drop(&request);
+
+    const char *bad = "Host target\n ProxyJump one\nHost one\n LocalForward 3300 example:22\nHost *\n UserKnownHostsFile ~/.ssh/known_hosts\n";
+    source = one(bad); request = direct_request("target", ""); token = 0;
+    CHECK(ctos_ssh_config_handle_reserve_profile_route(&token) == 0);
+    CHECK(load(token, &source, 0, &request, NULL) == 0);
+    CHECK(ctos_ssh_config_handle_run(token, outcome) == 0 && outcome[0] != 0);
+    out = calloc(CTOS_SSH_CONFIG_ROUTE_BYTES, 1); CHECK(out != NULL); n = 1;
+    CHECK(ctos_ssh_config_handle_profile_route(token, out, &n) == -1 && n == 0);
+    finish_handle(token); free(out); drop(&source); drop(&request);
+
+    const char *none_spellings[] = {"none", "none # comment"};
+    for (unsigned int i = 0; i < 2; i++) {
+        char text[1024]; snprintf(text, sizeof(text), "Host target\n HostName target.example\n User remote\n"
+            " ProxyJump %s\nHost none\n HostName jump.example\n User hop\n"
+            "Host *\n UserKnownHostsFile ~/.ssh/known_hosts\n", none_spellings[i]);
+        source = one(text); request = direct_request("target", ""); token = 0;
+        CHECK(ctos_ssh_config_handle_reserve_profile_route(&token) == 0);
+        CHECK(load(token, &source, 0, &request, NULL) == 0);
+        CHECK(ctos_ssh_config_handle_run(token, outcome) == 0 && outcome[0] == 0);
+        out = calloc(CTOS_SSH_CONFIG_ROUTE_BYTES, 1); CHECK(out != NULL); n = 0;
+        CHECK(ctos_ssh_config_handle_profile_route(token, out, &n) == 0);
+        CHECK(value(out + 8) == (i == 0 ? 1U : 2U));
+        const unsigned char *entry = out + 16, *item = entry + 72;
+        direct_text(&item, i == 0 ? "target" : "none");
+        direct_text(&item, i == 0 ? "target.example" : "jump.example");
+        direct_text(&item, i == 0 ? "remote" : "hop");
+        finish_handle(token); free(out); drop(&source); drop(&request);
     }
 }
 static void direct_plans(void) {
@@ -408,7 +519,8 @@ static void direct_plans(void) {
     CHECK(ctos_ssh_config_handle_direct_plan(token, plan, &size) == -1 && errno == ECANCELED && size == 0);
     zeroed(plan, CTOS_SSH_CONFIG_DIRECT_BYTES); finish_handle(token); drop(&request); drop(&w);
 
-    const char *refused[] = {"ProxyJump jump.invalid", "RemoteCommand id", "LocalForward 1234 localhost:22",
+    const char *refused[] = {"ProxyJump jump.invalid", "ProxyJump user@none", "ProxyJump none:2222",
+        "ProxyJump other,none", "RemoteCommand id", "LocalForward 1234 localhost:22",
         "Ciphers aes128-ctr", "HostKeyAlias alternate", "PubkeyAuthentication host-bound",
         "IdentityFile relative/key", "IdentityFile /home/owner/key", "IdentityFile ~/.ssh/../escape",
         "IdentityFile ~/.ssh/%Q", "SetEnv TOKEN=value", "ForwardAgent yes", "LocalCommand id"};
@@ -445,6 +557,95 @@ static void direct_plans(void) {
     CHECK(ctos_ssh_config_handle_run(token, outcome) == 0 && outcome[0] == 0);
     CHECK(ctos_ssh_config_handle_direct_plan(token, plan, &size) == -1 && errno == EINVAL && size == 0);
     finish_handle(token); drop(&request); drop(&w); free(plan);
+}
+
+static void direct_proxyjump_none_policy(void) {
+    const struct {
+        const char *fragment, *include_body;
+        int allowed;
+    } cases[] = {
+        {"ProxyJump none\n", "", 1},
+        {"ProxyJump NONE \t\n", "", 1},
+        {"ProxyJump=none\n", "", 1},
+        {"ProxyJump none\n ProxyJump NONE\n", "", 1},
+        {"Include part\n", "ProxyJump none\n", 1},
+        {"Match host target.example\n ProxyJump none\n", "", 1},
+        {"Match final\n ProxyJump none\n", "", 1},
+        {"Host unrelated\n ProxyJump user@none\n", "", 1},
+        {"Match host unrelated\n ProxyJump user@none\n", "", 1},
+        {"ProxyJump user@none\n", "", 0},
+        {"ProxyJump none:22\n", "", 0},
+        {"ProxyJump ssh://none\n", "", 0},
+        {"ProxyJump none,other\n", "", 0},
+        {"ProxyJump other,none\n", "", 0},
+        {"ProxyJump none # comment\n", "", 0},
+        {"ProxyJump \"none\"\n", "", 0},
+        {"ProxyJump 'none'\n", "", 0},
+        {"ProxyJump none other\n", "", 0},
+        {"ProxyJump none\n ProxyJump user@none\n", "", 0},
+        {"ProxyJump user@none\n ProxyJump none\n", "", 0},
+        {"Include part\n", "ProxyJump none # comment\n", 0},
+        {"Match host target.example\n ProxyJump none:22\n", "", 0},
+        {"Match final\n ProxyJump none:22\n", "", 0},
+    };
+    for (unsigned int profile = 0; profile < 2; profile++) {
+        for (unsigned int i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+            case_index = 10000 + profile * 100 + i;
+            char body[2048];
+            snprintf(body, sizeof(body), "Host target\n HostName target.example\n User remote\n"
+                " UserKnownHostsFile ~/.ssh/known_hosts\n %s", cases[i].fragment);
+            struct source_wire source = wire_new(3, 1024, CTOS_SSH_IO_READ_BYTES, CTOS_SSH_CONFIG_LINES);
+            record(&source, CTOS_SSH_CONFIG, ".ssh/config", body);
+            record(&source, CTOS_SSH_CONFIG, ".ssh/part", cases[i].include_body);
+            record(&source, CTOS_SSH_KNOWN_HOSTS, ".ssh/known_hosts", NULL);
+            struct source_wire request = direct_request("target", "");
+            ctos_ssh_config_token token = 0;
+            CHECK((profile ? ctos_ssh_config_handle_reserve_profile_direct(&token)
+                : ctos_ssh_config_handle_reserve_direct(&token)) == 0);
+            CHECK(load(token, &source, 0, &request, NULL) == 0);
+            int32_t outcome[5]; CHECK(ctos_ssh_config_handle_run(token, outcome) == 0);
+            unsigned char plan[CTOS_SSH_CONFIG_DIRECT_BYTES]; size_t n = 123;
+            int result = profile ? ctos_ssh_config_handle_profile_direct_plan(token, plan, &n)
+                : ctos_ssh_config_handle_direct_plan(token, plan, &n);
+            if (cases[i].allowed) {
+                CHECK(outcome[0] == 0 && result == 0 && value(plan + 8) == 22);
+                const unsigned char *cursor = plan + 72;
+                direct_text(&cursor, "target"); direct_text(&cursor, "target.example");
+                direct_text(&cursor, "remote");
+            } else {
+                CHECK(outcome[0] != 0 && result == -1 && n == 0);
+                zeroed(plan, sizeof(plan));
+            }
+            finish_handle(token); drop(&source); drop(&request);
+        }
+    }
+
+#ifdef CTOS_CONFIG_TEST_DIRECT_KEYWORD_WRAP
+    /* A test-only hook bypass demonstrates the independent final Options gate. */
+    const char *raw[] = {"user@none", "none:22", "ssh://none", "none,other", "other,none", "none # comment"};
+    for (unsigned int profile = 0; profile < 2; profile++) {
+        for (unsigned int i = 0; i < sizeof(raw) / sizeof(raw[0]); i++) {
+            case_index = 20000 + profile * 100 + i;
+            char body[1024]; snprintf(body, sizeof(body), "Host target\n HostName target.example\n"
+                " User remote\n UserKnownHostsFile ~/.ssh/known_hosts\n ProxyJump %s\n", raw[i]);
+            struct source_wire source = one(body), request = direct_request("target", "");
+            ctos_ssh_config_token token = 0;
+            CHECK((profile ? ctos_ssh_config_handle_reserve_profile_direct(&token)
+                : ctos_ssh_config_handle_reserve_direct(&token)) == 0);
+            CHECK(load(token, &source, 0, &request, NULL) == 0);
+            bypass_jump_keyword = 1; bypassed_jump_keywords = 0; bypassed_jump_raw[0] = 0;
+            int32_t outcome[5]; CHECK(ctos_ssh_config_handle_run(token, outcome) == 0);
+            bypass_jump_keyword = 0;
+            CHECK(bypassed_jump_keywords >= 1 && strcmp(bypassed_jump_raw, raw[i]) == 0);
+            unsigned char plan[CTOS_SSH_CONFIG_DIRECT_BYTES]; size_t n = 123;
+            int result = profile ? ctos_ssh_config_handle_profile_direct_plan(token, plan, &n)
+                : ctos_ssh_config_handle_direct_plan(token, plan, &n);
+            CHECK(outcome[0] == 1 && outcome[1] == CTOS_CONFIG_UNSUPPORTED && result == -1 && n == 0);
+            zeroed(plan, sizeof(plan));
+            finish_handle(token); drop(&source); drop(&request);
+        }
+    }
+#endif
 }
 
 static void mfa_direct_policy(void) {
@@ -756,7 +957,7 @@ static void reservations(void) {
 int main(void) {
     CHECK(ctos_detached_baseline_main() == 0);
     unsigned int before = fd_count(); observe = 1;
-    basic_registry(); malformed_wire(); request_modes(); budgets(); staged_declarations(); failures_and_cancel(); result_lifetime(); direct_plans(); profile_plans(); keyboard_direct_policy(); mfa_direct_policy(); server_alive_direct_policy(); request_tty_direct_policy(); authentication_order_direct_policy(); low_memlock(); reservations();
+    basic_registry(); malformed_wire(); request_modes(); budgets(); staged_declarations(); failures_and_cancel(); result_lifetime(); direct_plans(); direct_proxyjump_none_policy(); profile_plans(); profile_encoding_limit(); profile_routes(); keyboard_direct_policy(); mfa_direct_policy(); server_alive_direct_policy(); request_tty_direct_policy(); authentication_order_direct_policy(); low_memlock(); reservations();
     CHECK(fd_count() == before && capabilities == 0 && effects == 0 && owned_mapping == NULL);
     for (unsigned int i = 0; i < 256; i++) CHECK(managed[i].p == NULL);
     observe = 0;

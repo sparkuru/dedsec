@@ -18,9 +18,10 @@ struct config_slot {
     pid_t pid;
     uid_t uid;
     struct ctos_ssh_config_eval *eval;
+    struct ctos_ssh_config_route *route;
     struct ctos_ssh_view_borrow *pending_borrow;
     int open_errno, busy, published, closed, cancelled, attempted;
-    int detached, load_attempted, loaded, direct_mode;
+    int detached, load_attempted, loaded, direct_mode, profile_route;
     enum ctos_ssh_config_mode mode;
 };
 static pthread_mutex_t config_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -130,7 +131,7 @@ static int decode(const unsigned char *wire, size_t n, struct decoded_request *r
     return 0;
 }
 static int open_handle(ctos_ssh_view_token view, const unsigned char *wire, size_t length,
-    int catalog_mode, ctos_ssh_config_token *out) {
+    int catalog_mode, int profile_route, ctos_ssh_config_token *out) {
     struct decoded_request r = {0};
     struct config_slot *s = NULL;
     struct ctos_ssh_view_borrow *borrow = NULL;
@@ -144,7 +145,8 @@ static int open_handle(ctos_ssh_view_token view, const unsigned char *wire, size
     if (s == NULL) { pthread_mutex_unlock(&config_lock); failure = EBUSY; goto failed; }
     *s = (struct config_slot){.token = ++next_token, .owner = pthread_self(),
         .pid = getpid(), .uid = getuid(), .busy = 1,
-        .mode = catalog_mode ? CTOS_CONFIG_CATALOG : CTOS_CONFIG_EFFECTIVE};
+        .mode = catalog_mode ? CTOS_CONFIG_CATALOG : CTOS_CONFIG_EFFECTIVE,
+        .profile_route = profile_route};
     pthread_mutex_unlock(&config_lock);
     if (ctos_ssh_view_handle_borrow(view, &borrow) != 0) {
         failure = errno;
@@ -167,9 +169,13 @@ failed:
     return bad(failure);
 }
 int ctos_ssh_config_handle_open(ctos_ssh_view_token view, const unsigned char *wire, size_t length,
-    ctos_ssh_config_token *out) { return open_handle(view, wire, length, 0, out); }
+    ctos_ssh_config_token *out) { return open_handle(view, wire, length, 0, 0, out); }
+int ctos_ssh_config_handle_open_profile_route(ctos_ssh_view_token view,
+    const unsigned char *wire, size_t length, ctos_ssh_config_token *out) {
+    return open_handle(view, wire, length, 0, 1, out);
+}
 int ctos_ssh_config_handle_open_catalog(ctos_ssh_view_token view, ctos_ssh_config_token *out) {
-    return open_handle(view, NULL, 0, 1, out);
+    return open_handle(view, NULL, 0, 1, 0, out);
 }
 static int reserve_mode(enum ctos_ssh_config_mode mode, int direct_mode, ctos_ssh_config_token *out) {
     if (out == NULL) return bad(EINVAL);
@@ -180,7 +186,8 @@ static int reserve_mode(enum ctos_ssh_config_mode mode, int direct_mode, ctos_ss
         if (slots[i].token == 0) { s = &slots[i]; break; }
     if (s == NULL) { pthread_mutex_unlock(&config_lock); return bad(EBUSY); }
     *s = (struct config_slot){.token = ++next_token, .owner = pthread_self(), .pid = getpid(),
-        .uid = getuid(), .published = 1, .detached = 1, .mode = mode, .direct_mode = direct_mode};
+        .uid = getuid(), .published = 1, .detached = 1, .mode = mode, .direct_mode = direct_mode,
+        .profile_route = direct_mode == 3};
     *out = s->token; pthread_mutex_unlock(&config_lock); return 0;
 }
 int ctos_ssh_config_handle_reserve_detached(int catalog_mode, ctos_ssh_config_token *out) {
@@ -192,6 +199,9 @@ int ctos_ssh_config_handle_reserve_direct(ctos_ssh_config_token *out) {
 }
 int ctos_ssh_config_handle_reserve_profile_direct(ctos_ssh_config_token *out) {
     return reserve_mode(CTOS_CONFIG_EFFECTIVE, 2, out);
+}
+int ctos_ssh_config_handle_reserve_profile_route(ctos_ssh_config_token *out) {
+    return reserve_mode(CTOS_CONFIG_EFFECTIVE, 3, out);
 }
 int ctos_ssh_config_handle_reserve_profile_resource_audit(ctos_ssh_config_token *out) {
     return reserve_mode(CTOS_CONFIG_PROFILE_RESOURCE_AUDIT, 0, out);
@@ -263,7 +273,13 @@ int ctos_ssh_config_handle_run(ctos_ssh_config_token token, int32_t out[CTOS_SSH
         s->attempted = 1;
         pthread_mutex_unlock(&config_lock);
     } else {
-        ret = ctos_ssh_config_eval_run(s->eval, &error);
+        if (s->profile_route && s->attempted) { errno = EALREADY; ret = -1; }
+        else if (s->profile_route && ctos_ssh_config_eval_enable_profile_route(s->eval) != 0)
+            ret = -1;
+        else ret = ctos_ssh_config_eval_run(s->eval, &error);
+        if (s->profile_route) s->attempted = 1;
+        if (ret == 0 && s->profile_route)
+            ret = ctos_ssh_config_route_build(s->eval, &s->route, &error);
         failure = ret == 0 ? 0 : errno;
     }
     if (ret != 0) {
@@ -282,6 +298,7 @@ static void put_text(unsigned char **p, const char *s) {
     size_t n = strlen(s); put_u32(p, (uint32_t)n); memcpy(*p, s, n); *p += n;
 }
 static int read_summary(struct config_slot *s, struct ctos_ssh_config_summary *summary) {
+    if (s->profile_route) return bad(EINVAL);
     if (s->closed) return bad(EALREADY);
     if (s->detached && !s->loaded) return bad(s->open_errno ? s->open_errno : EAGAIN);
     if (s->eval == NULL) return bad(s->open_errno);
@@ -364,6 +381,57 @@ static int read_profile_direct_plan(struct config_slot *s, const struct ctos_ssh
     if (!s->loaded || s->eval == NULL) return bad(s->open_errno ? s->open_errno : EAGAIN);
     return ctos_ssh_config_eval_profile_direct_plan(s->eval, plan);
 }
+/* The 72-byte v5 fixed header excludes all three length-prefixed names. */
+static int profile_plan_size(const struct ctos_ssh_config_direct_plan *plan, size_t *size) {
+    if (plan == NULL || size == NULL || plan->identity_hint_count > CTOS_SSH_CONFIG_LIST ||
+        plan->hostfile_count == 0 || plan->hostfile_count > CTOS_SSH_CONFIG_HOSTFILES) return bad(EINVAL);
+    const char *names[] = {plan->summary.alias, plan->summary.hostname, plan->summary.user};
+    size_t total = 72;
+    for (unsigned int i = 0; i < 3; i++) {
+        size_t n = strnlen(names[i], CTOS_SSH_CONFIG_NAME_BYTES + 1U);
+        if (n > CTOS_SSH_CONFIG_NAME_BYTES || (i < 2 && n == 0)) return bad(EINVAL);
+        total += 4U + n;
+    }
+    for (unsigned int i = 0; i < plan->identity_hint_count; i++) {
+        size_t n = strnlen(plan->identity_hints[i], sizeof(plan->identity_hints[i]));
+        if (n == 0 || n > 512U) return bad(EINVAL);
+        total += 4U + n;
+    }
+    for (unsigned int i = 0; i < plan->hostfile_count; i++) {
+        size_t n = strnlen(plan->user_hostfiles[i], sizeof(plan->user_hostfiles[i]));
+        if (n == 0 || n > 512U) return bad(EINVAL);
+        total += 4U + n;
+    }
+    if (total > CTOS_SSH_CONFIG_DIRECT_BYTES) return bad(EOVERFLOW);
+    *size = total;
+    return 0;
+}
+static size_t encode_profile_plan(unsigned char *out, const struct ctos_ssh_config_direct_plan *plan) {
+    unsigned char *p = out;
+    put_u32(&p, 0x43535050U); put_u32(&p, 5);
+    uint32_t values[] = {plan->summary.port, plan->identities_only, plan->pubkey_authentication,
+        plan->password_authentication, plan->keyboard_interactive_authentication,
+        plan->password_then_keyboard_allowed, plan->publickey_then_keyboard_allowed,
+        plan->server_alive_interval, plan->server_alive_count_max, plan->preferred_authentication_order,
+        plan->connect_timeout_millis, (uint32_t)plan->summary.request_tty,
+        plan->strict_host_key_checking, plan->summary.user_required, plan->identity_hint_count, plan->hostfile_count};
+    for (unsigned int i = 0; i < sizeof(values) / sizeof(values[0]); i++) put_u32(&p, values[i]);
+    put_text(&p, plan->summary.alias); put_text(&p, plan->summary.hostname); put_text(&p, plan->summary.user);
+    for (unsigned int i = 0; i < plan->identity_hint_count; i++) put_text(&p, plan->identity_hints[i]);
+    for (unsigned int i = 0; i < plan->hostfile_count; i++) put_text(&p, plan->user_hostfiles[i]);
+    return (size_t)(p - out);
+}
+#ifdef CTOS_CONFIG_HANDLE_TEST
+int ctos_ssh_config_handle_test_profile_encode(const struct ctos_ssh_config_direct_plan *plan,
+    unsigned char out[CTOS_SSH_CONFIG_DIRECT_BYTES], size_t *length) {
+    if (out == NULL || length == NULL) return bad(EINVAL);
+    *length = 0;
+    size_t expected = 0;
+    if (profile_plan_size(plan, &expected) != 0) return -1;
+    *length = encode_profile_plan(out, plan);
+    return *length == expected ? 0 : bad(EIO);
+}
+#endif
 int ctos_ssh_config_handle_profile_direct_plan(ctos_ssh_config_token token,
     unsigned char out[CTOS_SSH_CONFIG_DIRECT_BYTES], size_t *length) {
     if (out == NULL || length == NULL) return bad(EINVAL);
@@ -373,20 +441,13 @@ int ctos_ssh_config_handle_profile_direct_plan(ctos_ssh_config_token token,
     const struct ctos_ssh_config_direct_plan *plan = NULL;
     int ret = read_profile_direct_plan(s, &plan), failure = errno;
     if (ret == 0) {
-        unsigned char *p = out;
-        put_u32(&p, 0x43535050U); put_u32(&p, 5);
-        uint32_t values[] = {plan->summary.port, plan->identities_only, plan->pubkey_authentication,
-            plan->password_authentication, plan->keyboard_interactive_authentication,
-            plan->password_then_keyboard_allowed, plan->publickey_then_keyboard_allowed,
-            plan->server_alive_interval, plan->server_alive_count_max, plan->preferred_authentication_order,
-            plan->connect_timeout_millis, (uint32_t)plan->summary.request_tty,
-            plan->strict_host_key_checking, plan->summary.user_required, plan->identity_hint_count, plan->hostfile_count};
-        for (unsigned int i = 0; i < sizeof(values) / sizeof(values[0]); i++) put_u32(&p, values[i]);
-        put_text(&p, plan->summary.alias); put_text(&p, plan->summary.hostname); put_text(&p, plan->summary.user);
-        for (unsigned int i = 0; i < plan->identity_hint_count; i++) put_text(&p, plan->identity_hints[i]);
-        for (unsigned int i = 0; i < plan->hostfile_count; i++) put_text(&p, plan->user_hostfiles[i]);
-        *length = (size_t)(p - out);
-        ret = read_profile_direct_plan(s, &plan); failure = errno;
+        size_t expected = 0;
+        ret = profile_plan_size(plan, &expected); failure = errno;
+        if (ret == 0) {
+            *length = encode_profile_plan(out, plan);
+            if (*length != expected) { ret = -1; failure = EIO; }
+        }
+        if (ret == 0) { ret = read_profile_direct_plan(s, &plan); failure = errno; }
     }
     unpin(s);
     if (ret != 0) { wipe(out, CTOS_SSH_CONFIG_DIRECT_BYTES); *length = 0; return bad(failure); }
@@ -397,6 +458,60 @@ int ctos_ssh_config_handle_profile_direct_plan_live(ctos_ssh_config_token token)
     if (s == NULL) return -1;
     const struct ctos_ssh_config_direct_plan *plan = NULL;
     int ret = read_profile_direct_plan(s, &plan), failure = errno;
+    unpin(s);
+    return ret == 0 ? 0 : bad(failure);
+}
+static int read_profile_route(struct config_slot *s, unsigned int *count) {
+    if (!s->profile_route || s->closed) return bad(EINVAL);
+    if (s->detached && !s->loaded) return bad(s->open_errno ? s->open_errno : EAGAIN);
+    if (s->route == NULL) return bad(EAGAIN);
+    if (ctos_ssh_config_route_count(s->route, count) != 0) return -1;
+    if (*count > CTOS_SSH_CONFIG_JUMPS) return bad(E2BIG);
+    return 0;
+}
+int ctos_ssh_config_handle_profile_route(ctos_ssh_config_token token,
+    unsigned char out[CTOS_SSH_CONFIG_ROUTE_BYTES], size_t *length) {
+    if (out == NULL || length == NULL) return bad(EINVAL);
+    *length = 0; wipe(out, CTOS_SSH_CONFIG_ROUTE_BYTES);
+    struct config_slot *s = pin(token);
+    if (s == NULL) return -1;
+    unsigned int count = 0;
+    int ret = read_profile_route(s, &count), failure = errno;
+    unsigned char *p = out;
+    if (ret == 0) {
+        put_u32(&p, 0x43535250U); put_u32(&p, 1); put_u32(&p, count + 1U);
+        for (unsigned int i = 0; i <= count; i++) {
+            const struct ctos_ssh_config_direct_plan *plan = NULL;
+            if (ctos_ssh_config_route_profile_plan(s->route, i, &plan) != 0) {
+                ret = -1; failure = errno; break;
+            }
+            size_t bytes = 0;
+            if (profile_plan_size(plan, &bytes) != 0) { ret = -1; failure = errno; break; }
+            if ((size_t)(p - out) > CTOS_SSH_CONFIG_ROUTE_BYTES - 4U - bytes) {
+                ret = -1; failure = EOVERFLOW; break;
+            }
+            unsigned char *size_position = p;
+            p += 4;
+            if (encode_profile_plan(p, plan) != bytes) { ret = -1; failure = EIO; break; }
+            put_u32(&size_position, (uint32_t)bytes);
+            p += bytes;
+        }
+        if (ret == 0) {
+            unsigned int checked_count = 0;
+            ret = read_profile_route(s, &checked_count); failure = errno;
+            if (ret == 0 && checked_count != count) { ret = -1; failure = EIO; }
+        }
+        if (ret == 0) *length = (size_t)(p - out);
+    }
+    unpin(s);
+    if (ret != 0) { wipe(out, CTOS_SSH_CONFIG_ROUTE_BYTES); return bad(failure); }
+    return 0;
+}
+int ctos_ssh_config_handle_profile_route_live(ctos_ssh_config_token token) {
+    struct config_slot *s = pin(token);
+    if (s == NULL) return -1;
+    unsigned int count = 0;
+    int ret = read_profile_route(s, &count), failure = errno;
     unpin(s);
     return ret == 0 ? 0 : bad(failure);
 }
@@ -593,6 +708,16 @@ int ctos_ssh_config_handle_close(ctos_ssh_config_token token) {
     struct config_slot *s = pin(token);
     if (s == NULL) return -1;
     int ret = 0;
+    if (!s->closed && s->route != NULL) {
+        ret = ctos_ssh_config_route_close(s->route);
+        if (ret == 0) ret = ctos_ssh_config_route_destroy(s->route);
+        if (ret == 0) s->route = NULL;
+        else {
+            int failure = errno;
+            unpin(s);
+            return bad(failure);
+        }
+    }
     if (!s->closed && s->eval != NULL) ret = ctos_ssh_config_eval_close(s->eval);
     if (!s->closed && s->pending_borrow != NULL) {
         ret = ctos_ssh_view_borrow_release(s->pending_borrow);

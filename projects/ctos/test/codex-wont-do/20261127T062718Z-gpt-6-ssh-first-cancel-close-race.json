@@ -1,0 +1,146 @@
+{
+  "schema_version": "1.0.0",
+  "kind": "test_task",
+  "worker_instructions": "执行方先阅读 test/codex-wont-do/template.json、AGENTS.md 和本任务所列资源；按模板领取并完成符合前置条件的测试，将实际结果和证据追加到本文件的 execution.attempts，交独立 Codex 审核。阻塞或失败时如实报告。",
+  "task_id": "20261127T062718Z-gpt-6-ssh-first-cancel-close-race",
+  "state": "blocked",
+  "created_at_utc": "2026-11-27T06:39:36Z",
+  "creator": {
+    "agent": "codex",
+    "model": "gpt-6",
+    "model_precision": "family_only",
+    "start_timestamp_utc": "2026-11-27T06:27:18Z"
+  },
+  "request": {
+    "title": "首次 session 取消与已准入 close 竞态",
+    "goal": "待合同与实现完成后，验证首次终端取消遇到先前已准入 close 的接续、未知结果和原 owner 的精确归属。",
+    "baseline": {
+      "git_head": "d281fb5b6b770d137d44bf8d921e3743e7451691",
+      "dirty_worktree": true,
+      "pinned_files": [
+        {
+          "path": "android/app/src/main/java/im/majo/ctos/SshNativeSession.java",
+          "sha256": "c89a53acec83cd5a975163b6afc4f6e8090fbf627292adca3acc62142624adc7"
+        },
+        {
+          "path": "android/app/src/main/java/im/majo/ctos/SshTerminalSession.java",
+          "sha256": "a7b0e6003423f2dac627f6119ff1fd6a2c319bc2508e1adbac67a4ba5a1e4ffe"
+        },
+        {
+          "path": "android/app/src/main/java/im/majo/ctos/SshSessionOwner.java",
+          "sha256": "fffd8ebd782efa5a607a3300dd033ad0d9d2897e713cedf54d65c0a1b70918a9"
+        }
+      ],
+      "capture_policy": "此快照仅记录任务创建时状态；实现或授权前置条件满足后由 Codex 刷新测试单的固定输入。执行方另记测试前后完整相关输入、dirty 状态和产物清单。"
+    },
+    "resources": {
+      "read": [
+        {
+          "path": "design/agent-test-handoff.md",
+          "why": "协作流程"
+        },
+        {
+          "path": "design/handoff-ssh-terminal-client.md",
+          "why": "SSH 当前状态、旧证据与限制"
+        },
+        {
+          "path": "design/verification.md",
+          "why": "核对实际历史验证，避免重复或夸大"
+        },
+        {
+          "path": ".trellis/spec/backend/ssh-session-cancellation-ownership.md",
+          "why": "会话撤销与 close 顺序"
+        },
+        {
+          "path": ".trellis/spec/backend/ssh-terminal-stop-intent.md",
+          "why": "终端 STOP 顺序"
+        },
+        {
+          "path": "android/app/src/main/java/im/majo/ctos/SshNativeSession.java",
+          "why": "当前 session 实现"
+        },
+        {
+          "path": "android/app/src/main/java/im/majo/ctos/SshTerminalSession.java",
+          "why": "当前 terminal 实现"
+        }
+      ],
+      "environment": [
+        "只使用本机、隔离或回环上的合成测试资源；不访问真实账号、凭据或生产服务。",
+        "测试环境与权限不足时如实阻塞，不安装依赖或扩大网络/设备权限。"
+      ],
+      "allowed_writes": [
+        "build/codex-wont-do/<task_id>/<attempt_id>/ 下的专属报告、输入清单与无秘密日志",
+        "本任务明确列出的构建或测试专用产物；不得清理不属于本次尝试的文件",
+        "仅获批准的 android/app/src/test/ 测试夹具及专属证据"
+      ],
+      "exclusive_locks": [
+        "android-release-build",
+        "ssh-test-inputs"
+      ],
+      "secrets_policy": "仅使用合成测试数据；禁止记录真实凭据、私钥、令牌和用户数据。"
+    },
+    "dependencies": [],
+    "preconditions": [
+      "Codex 完成并审阅此竞态的预期合同和必要实现，更新测试单及固定源码快照。",
+      "实现未就绪前不得领取或称该功能已通过。"
+    ],
+    "cases": [
+      {
+        "id": "close-first",
+        "exercise": "用确定性屏障先准入 close，再发布该 terminal 的首次 session 取消。",
+        "pass": "已准入 close 的完成与取消接续符合当时已审阅合同，原 session/owner 在未确认前不被错误释放。"
+      },
+      {
+        "id": "cancel-first",
+        "exercise": "先发布首次取消再尝试 close，比较顺序与 owner。",
+        "pass": "新 close 和取消按已审阅合同结算，无重复或越权释放。"
+      },
+      {
+        "id": "uncertain",
+        "exercise": "对 begin/end 或 close 结果未知注入可区分故障。",
+        "pass": "按合同保留准确 owner 与未知状态，不把未知当作成功或擅自重复不可重试动作。"
+      }
+    ],
+    "commands": [],
+    "acceptance": [
+      "仅在合同、实现和三类竞态都具备可审阅证据后判 pass。",
+      "实际案例全部有可核对证据；记录失败、错误、跳过和未覆盖部分，缺少必需案例不得标 pass。"
+    ],
+    "stop_conditions": [
+      "固定源码不匹配、未经授权的设备/网络/账号、缺少资源或需要修改产品行为时停止并记录原因；不更改验收标准。"
+    ],
+    "codex_review": [
+      "核对断言源自实现后的明确合同，而非把当前保守未知状态重新定义成通过。",
+      "对照 template.json 核验独立执行者、当前授权、明确的测试范围和实际 outcome。",
+      "核对执行前后 dirty 状态、相关输入和产物哈希、命令退出码、全部案例、跳过项与可读取证据；不能用 HEAD 代替未提交内容。",
+      "检查允许的测试夹具改动及 diff，区分报告有效与产品测试通过；源码漂移或证据不足时要求补充，且不能更新为当前通过。"
+    ]
+  },
+  "blockers": [
+    {
+      "kind": "implementation_or_contract",
+      "detail": "当前首次取消遇到已准入 close 时保守保留未知 owner，自动安全接续及其合同尚未完成。",
+      "release_condition": "Codex 完成并审核合同及实现后，刷新基线和具体断言，再转 queued。"
+    }
+  ],
+  "execution": {
+    "claim": null,
+    "attempts": []
+  },
+  "review": {
+    "status": "pending",
+    "reviewer": null,
+    "reviewed_at_utc": null,
+    "findings": [],
+    "decision_scope": null,
+    "decisions": []
+  },
+  "history": [
+    {
+      "at_utc": "2026-11-27T06:39:36Z",
+      "actor": "codex",
+      "event": "created",
+      "detail": "记录尚未满足的前置条件；未执行测试。"
+    }
+  ]
+}

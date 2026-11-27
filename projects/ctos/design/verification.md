@@ -1,5 +1,536 @@
 # Verification
 
+<a id="20261127-ssh-terminal-session-cancel-retry"></a>
+## 2026-11-27 SSH：终端接续明确未开始的会话撤销
+
+终端的 native port 将 checked `-1` 绑定到明确未开始撤销的原 session；仅在共享 STOP 的 native 撤销已确认后，原 owner 才能对这些 session 作有界重试。每轮再次得到 checked `-1` 才计入预算，最多三轮；其他取消／关闭仍在途时等待且不消耗预算。耗尽后保留 owner 并报告清理待完成，后续外部 Stop 可启动新一轮。callback-only 结果允许按原合同独立关闭，begin／end 异常或混合未知结果不重复撤销；逐跳链仍逆序释放。[session 合同](../.trellis/spec/backend/ssh-session-cancellation-ownership.md)／[终端合同](../.trellis/spec/backend/ssh-terminal-stop-intent.md)。
+
+- `./hako bash -lc 'cd android && ./gradlew :app:lintRelease :app:testReleaseUnitTest --tests im.majo.ctos.SshNativeSessionTest --tests im.majo.ctos.SshTerminalSessionTest --tests im.majo.ctos.SshSessionOwnerTest --offline --console=plain'` 通过：**201 项／3 套**，无失败、错误或跳过；lint **0 错误／3 个既有警告**。命令重新编译了 release Java classes，未构建或安装本轮 APK。
+- 以最终 release classes、单独编译的测试 Java overlay 和复用的真实 host 测试 JNI 库运行 **7 个新增具名场景及 7 个既有场景**，均通过 `-Xcheck:jni`。新增场景覆盖单会话恢复、三次重试耗尽及再次请求、重试变未知、逐跳混合未知、其他取消在途等待、owner 内部 `stop()` 不重置预算，以及 checked `-1` 与另一跳 callback-only 混合后的逆序关闭。既有场景覆盖直接／子会话的明确未开始重试、begin／end 异常和 callback 异常；13 场日志及全部输入清单位于 `build/ctos-session-cancel-retry-reviewed-20261127/`，混合 callback-only 场景另行执行并输出 `mode=131 ... reverse-close=pass`。
+- 独立复核发现，`SshSessionOwner.requestStop()` 的首次取消后还会排队调用终端 `stop()`；初版把该内部调用误计为再次外部 Stop，使预算重置。新增场景在修复前确定性失败，修复后通过。测试模拟两次实际调用的顺序，未运行真实 Android Service 或 UI。callback-only 混合场景临时将测试对象的 Java callback token 置零以触发真实 JNI 拒绝，随后恢复原 token；这是故障模拟，不代表生产中观察到该状态。
+- 复用的测试 JNI 库 SHA-256 为 `2caae8692e322649df8fa86d6b5f7690b809519ade89bc89071f68c3dc6c290f`；与其关联的 native 源／头、测试源、OpenSSH 归档与补丁及 JNI 头已核对，测试前后 release classes 清单一致。当前生产 JNI 的 checked begin 实际返回 `1`，明确 `-1` 由测试钩子构造；本次完善已规划的恢复合同，并非已复现生产现场故障。
+
+本切片不处理首次 terminal 取消与已准入 close 的竞争、独立 callback／vault 撤销、信任持久化、创建期或整链清理，也不开放逐跳首次信任与重连。没有连接设备或真实账号，SSH 父任务保持 `in_progress`。
+
+<a id="20261127-ssh-shared-stop-verification"></a>
+## 2026-11-27 SSH：共享 STOP 本地验证
+
+用户本次明确要求“验证”，取代此前暂停测试的要求。本次补齐 JNI 接收器的必需准入回调，并让真实 Java／JNI 合成链的 root 与 child 使用同一连接的 `Cancellation`。此前的实现记录保留当时的未验证状态。
+
+- `./hako bash -lc 'cd android && ./gradlew :app:testReleaseUnitTest :app:lintRelease :app:assembleRelease --offline --console=plain'` 通过：完整 release JVM **1,189 项／70 套**，无失败、错误或跳过；lint **0 错误／3 个既有警告**。新增密码、KBI 和主机指纹审阅测试分别在答复／同意后发布共享 STOP，检查待交付凭据擦除或拒绝信任证明交接。另行执行的 `:app:testSshCallbackAdapterHost` 和 `:app:testSshCallbackJniHost` 均通过。首次完整 JVM 回归为 1,188 通过、1 条新测试断言失败；只修正该断言后完整重跑通过。
+- `bash android/ssh/host-jni-vault-chain-test.sh --output build/ctos-vault-jni-shared-stop-verified-20261127` 通过：真实产品 Java、测试 JNI、内存加密库和合成 SSH 对端的 **93 个默认模式、124 个独立 JVM 场景**；`-Xcheck:jni`、输入及 release classes 前后清单通过。新增四场中，root 先完成认证服务请求，再发布 STOP 并拒绝后续认证发现；child 在 JNI 凭据复制、native 凭据复制和密码建包前三个边界发布 STOP，均在原 native generation 仍可用时拒绝，断言许可数归零、返回数组擦除且目标未收到密码。夹具通过反射调用真正的 STOP 发布步骤，以确定性构造 native 撤销尚未开始的窗口；不将其称为完整的并发或设备验证。
+- 回调作用域 JNI 检查使用两个独立接收器，验证每个 native client 取得对应目标的准入结果；拒绝和 Java 异常均关闭准入。`bash android/ssh/host-jni-multihop-test.sh` 的 18 个合成模式通过，该夹具使用受控接收器，不代替产品 STOP 所有权证明。
+- `bash android/ssh/host-product-jump-test.sh --output build/ctos-product-jump-shared-stop-20261127 --expect-jump-open` 在无外网临时容器的真实双 sshd 上通过已知主机单跳、两次保存密码确认、目标 PTY、直连／`ProxyJump none`、未知／变化主机拒绝、目标确认取消和多跳联网前拒绝；信任写入为零。测试使用合成账号，不运行 Android service／bridge 生命周期。
+- `bash android/ssh/host-auth-open-chain-test.sh --output build/ctos-auth-chain-shared-stop-20261127 --openssh-build build/ctos-vault-jni-shared-stop-final-20261127/openssh-10.6p1` 通过原生合成链的认证发现、KBI challenge、私钥成功签名及祖先断开拒绝；此 native-only 目标无 Java STOP owner，不能证明产品 JNI 准入。复用的 OpenSSH 由本次夹具根据已校验的源码及补丁构建，runner 将外部构建目录标为来源未自行验证。
+- 首轮 scope JNI 因旧测试接收器缺少新方法而失败，已更新夹具并增加目标隔离／异常拒绝断言。完整 JNI 回归中旧断言错误地要求保留仍在连接器字段中的待保存副本，现改为确认该副本清零、已准入密码对象和未确认 owner 保留，完整夹具重跑通过。新增指纹审阅单测首次误把取消后的 `pending()` 当作返回 `false`，已按其取消异常契约更正。
+- `hako` 内运行主机 JNI 夹具因镜像缺少 `zlib.h` 无法配置；沙箱内本机运行在 native session 创建处失败，同一夹具二进制经授权在本机环境运行通过。未安装 APK、连接设备或使用真实账号。
+
+本次 `build/app/outputs/apk/release/app-release.apk` 的 SHA-256 为 `bc8d0286f59c022b594600c22c7f0bbd226e73da1dab59738959c07603b7f9b1`，Android Debug 单签名者、v2 签名验证通过；该构建未安装。完整重建后的 release Java classes 清单与上述真实 JNI 夹具、双 sshd 夹具各自使用的清单完全一致。
+
+这些结果不证明独立 callback／session／vault 撤销、所有在途操作的并发顺序、真实 Android ART／service、信任持久化、创建期和整链释放，或逐跳首次信任与重连。已先准入的动作仍可能在 STOP 后完成；SSH 父任务保持 `in_progress`。
+
+<a id="20261127-ssh-native-stop-effects"></a>
+## 2026-11-27 SSH：native 凭据与传输的共享 STOP 准入（当时未验证）
+
+这是实施当时的检查点；后续实际验证见[本次本地验证](#20261127-ssh-shared-stop-verification)。
+
+源码将原连接的共享 `Cancellation` 绑定到 root 和逐跳 callback。原生 client 领取该 callback 的同一目标，在选定效果前经 JNI 调用只做原子准入的 Java 方法；逐跳原有 native generation／期限许可仍先执行，STOP 准入失败时释放该许可。直连及未处于逐跳 guard 的传输只增加共享 STOP 准入，不声称获得原生 generation 保护。已准入动作可能在 STOP 后物理完成，下一步效果须重新准入。[详细合同](../.trellis/spec/backend/ssh-native-stop-admission.md)。
+
+本轮覆盖选定的保存／临时凭据 Java 最终复制、选中凭据 JNI 与 native 复制、动态密码／KBI 答复的 Java 与 JNI 输入复制、密码及 KBI 建包、私钥口令复制／解码／签名及公钥建包，以及使用 `wire_effect_acquire` 的发送和逐跳中继操作。普通连接认证发现、认证服务和 jump open 同样在各自边界接入 STOP 准入；会话存活及换键信息诊断也读取同一 STOP，以免将已发布的停止误记为无关 native 故障。原生 client 的 callback 成功关闭后清除借用的目标，后续关闭失败保留原 client。
+
+遵照用户停止测试的要求，本轮未运行测试、lint、构建、等价探针或设备验证；上述仅为源码实现与阅读结果，尚不能确认编译、JNI 重入、运行时顺序或设备行为，也不能沿用历史 APK／测试结果。未连接设备、安装应用或访问真实账号。
+
+**仍未完成**：独立 callback／session／vault 撤销、信任持久化和不确定回执、其他临时材料及 operation 的取消、创建期和整链释放仍需处理；已先准入的动作可能晚于 STOP 完成。现有原始代次测试 hook 不经过新的 client／JNI STOP 准入，历史反例不能单独作为本次实现通过或失败证据。产品逐跳首次信任、重连和 SSH 父任务仍为 `in_progress`。
+
+<a id="20261127-ssh-prompt-mutation-stop"></a>
+## 2026-11-27 SSH：凭据提示与保存上下文的 STOP 顺序（当时未验证）
+
+此节保留实施当时状态；选定 native 效果的后续实现及本次本地验证见上方各节。
+
+源码接入密码／私钥口令和 keyboard-interactive 邮箱的共享 STOP 准入，分别排序票据安装、答复接收和向原 owner 转交；被拒绝的候选由当时的持有人擦除。主机指纹审阅也将本地票据、用户决定和交还 owner 分别与共享 STOP 排序；测试专用签名候选的本地 claim 同样受其邮箱取消状态约束，均不授予信任写入许可。配置密码／私钥口令 mutation context 及自动保存 bundle context 的安装也与 STOP 排序，取消线程在同一连接器锁内取得已安装对象的精确快照。自动保存字节的取出单独准入，STOP 先发生时擦除仍在连接器内的排队副本；已转交的副本继续由原 owner 的 `finally` 清理。连接器取消过程抛错时，保留该异常和未确认的 native／operation owner，同时尝试擦除连接器仍独占的排队数组并取消当前提示；清理本身抛错则附加到原异常。[材料合同](../.trellis/spec/backend/ssh-started-material-admission.md)／[指纹审阅合同](../.trellis/spec/backend/ssh-host-trust-management.md#scenario-order-local-host-review-against-stop)。
+
+遵照用户当前明确要求，本轮没有运行测试、测试夹具、等价探针、lint、构建或设备验证；以上为实现和源码阅读结果，不能作为运行时通过结论，也不能沿用旧 APK 或既有测试计数证明本次改动。未安装应用、连接设备或访问真实账号。
+
+**仍未完成**：这只覆盖列出的本地安装及交接；已先准入动作可能稍后完成。host-review 后的信任写入、其他 mutation／operation、创建期 owner 与整链释放仍有独立缺口，Java STOP 和 root／child native 凭据复制、认证建包及发送仍无共同最终效果准入。产品逐跳首次信任／重连和完整 SSH 父任务继续保持 `in_progress`。
+
+<a id="20261127-ssh-started-material-preview"></a>
+## 2026-11-27 SSH：已启动材料、预览清理及锁屏接入（实现中止测试）
+
+此节为上一检查点；凭据邮箱和选定保存 context 的后续本地实现见上一节，最终效果及验证仍开放。
+
+本轮实现将配置产生的临时密码／密钥、自动保存副本和延迟私钥口令的安装，与同一 shared STOP 在各自对象锁内排序；被拒绝候选由安装线程擦除或关闭。SSH 不确定回执触发锁库时按精确对象退役 import preview；在用预览交由原 import 的 `finally` 清理，重入 preview／import 返回 `BUSY`。状态清理在 session 锁内同时判断撤销是否未确认与操作表剔除，未知及明确未开始、仍待重试时保留原 operation。已锁屏的新请求遇到旧 owner 的本次原生撤销未知时，只有后续事件和调度步骤没有额外失败才返回 `SSH_SCREEN_LOCKED`；原 owner 和在途回执继续保留。[材料合同](../.trellis/spec/backend/ssh-started-material-admission.md)／[预览与撤销合同](../.trellis/spec/backend/ssh-vault-revocation-ownership.md)／[结果合同](../.trellis/spec/backend/ssh-connection-result-delivery.md)。
+
+- 用户明确要求停止当前测试并且不再测试，后续没有运行完整 Gradle、Android lint、release 构建或端到端验证。下述仅为停止前已完成的局部结果，**不是最终整体源码的完整验证**；最后补充的 service 组合异常处理和 runner 场景未重跑。
+- 材料宿主定向检查报告 **26 项通过**，覆盖安装先／STOP 先、key close 竞争和原 owner；临时移除准入后对应回归失败。另两场独立宿主 JNI 使用真实共享取消和 connector 安装 helper，分别在原生 effect 排空中及注入 begin 异常后观察到候选被拒绝并擦除；使用旧测试 JNI 库与本轮临时编译的类，不是真实 SSH 会话或设备。首次临时编译因宿主替身类路径次序错误失败，调整次序后两场通过。
+- 预览与 operation 定向检查报告 **14 项通过**，另有原有 VaultSession／Vault／bridge **75 项通过**；测试使用加密内存夹具及 fake invalidator，并包含同线程重入、其他线程在用、预览替换和未确认撤销。它们不证明真实 JNI、Android 或生产存储。service 初稿的 **8 场**隔离宿主 JNI 曾通过，Android Context／Handler／Looper 为替身、在途 trust 回执为合成；其后补充了原生未知同时发生派发失败的处理，按用户要求没有重跑。
+- 本轮在独立宿主实验中控制真实 Java STOP 与 native generation 的先后，观察到 STOP 已发布但 native effect 测试许可仍可获得；未建立 SSH 连接、发送凭据或访问网络。[反例与源码范围](../.trellis/tasks/10-08-ssh-terminal/research/ssh-stop-native-permit-window-20261127.md)。两次子代理调用被工具提示可能涉及网络安全风险而中断；用户随后要求停止测试，未再继续验证。
+- **仍未完成**：mailbox／mutation context 的安装、已先准入材料后续清理、原生 credential／认证效果和整链生命周期仍需处理；上述 permit 窗口尚无修复，不能把本轮局部材料排序当作完整取消保护。预览 in-use／native drain 可令结果同步等待，其他显式 operation 移除路径也未被统一证明。真实 Android service／Handler／设备、生产存储和真实账号未验证。父任务保持 `in_progress`；未安装、提交或归档。
+
+<a id="20261127-ssh-result-delivery"></a>
+## 2026-11-27 SSH：服务 owner 与连接结果结算（此前检查点）
+
+本节为上次完整检查时的状态；后续实现和用户要求停止验证见上一节。
+
+服务在绑定可能同步触发的 connector 取消回调前发布精确 owner；发布后的启动异常返回该 owner 原有 future。已准入的工厂保持创建／结算状态，直到 terminal 在 owner 锁内移交或异常结果在同一锁内固定，避免屏锁／服务拒绝抢先覆盖实际 `VAULT_COMMIT_UNCERTAIN`。bridge 的实际异步完成路径保留已知回执，事件、取消及锁库抛错不会覆盖结果；已确认凭据写入后遭屏锁或服务拒绝映射为不确定结果。`MethodChannel.Result` **最多尝试一次**：发送前抛错或已排队任务未执行时，对端可能收不到；future 完成不等于 native 清理或 owner 释放。[合同](../.trellis/spec/backend/ssh-connection-result-delivery.md)。
+
+- 最终执行 `./hako bash -lc 'cd android && ./gradlew :app:testSshCallbackJniHost :app:testReleaseUnitTest :app:lintRelease :app:assembleRelease --offline --console=plain'` 通过，**1,158 项 JVM／68 套**，0 失败、错误或跳过；callback JNI host scope 通过；lint **0 错误／3 个既有警告**。最终 release APK SHA-256 `6c360418fef0ea03284402b18106f727fee5d5b3bc3921866a2b49a3d22a0d68`，单个 Android Debug 签名者、v2 验签通过，未安装。
+- `SshSessionOwnerTest` **28 项**，含模拟 owner 发布后的同步取消回调、已进入 fake 工厂的信任结果等待、共享 STOP 首因和已跟踪保存时独立的 deferred 结果；实际 service 的发布顺序经源码核对，最终结果不一定等于首个 STOP code。新增受控 post-create handoff 夹具模拟返回后、结果结算前的屏锁与服务失败，并注入合成不确定结果；当前通过，单独在 `/tmp` 副本恢复旧的提前清除 `creating` 后该测试确定性失败。该屏障不是真实 trust store 写入。`SshPasswordConnectBridgeCompletionTest` **12 项**绕过 Android 构造，执行真实 bridge 回调、注入 FIFO 和 fake Result，覆盖完成重复、发送前／后抛错、事件／取消／锁库异常、写入标记与 STOP 状态；fake Result 不发送真实消息，也不证明 Looper 或对端接收。
+- `bash android/ssh/host-jni-vault-chain-test.sh --output build/ctos-vault-jni-result-delivery-20261127` 通过 **89 个默认模式和 111 个独立 JVM 场景**，`-Xcheck:jni` 与输入／release classes 前后清单通过。新增两场使用真实 `SshSessionOwner`、真实测试 JNI、受控 factory 和合成不确定结果：分别在启动失败及同步 callback 期间注入调用线程的 native 撤销 begin 异常，检查 future／首因及未确认 owner 保留。它们没有调用真实 Android service、真实 connector callback 或 trust store；再次布设的线程局部探针只证明重新布设后到最终探测前，调用线程没有消费该探针，不证明其他线程或更早的调用。测试进程退出时关闭测试 executor 不等于产品释放。测试 JNI 库 SHA-256 `2eaa0949434ad387d7a488f7d3a7c162e29d7301dd3c4217579c0b459e938643`。
+- `bash android/ssh/host-product-jump-test.sh --output build/ctos-product-jump-result-delivery-20261127 --expect-jump-open` 在无外网容器双 sshd 中通过受信单跳、两次保存密码确认、目标 PTY、直连／`ProxyJump none`、未知／变化主机拒绝、取消和多跳联网前拒绝；信任写入为零。该夹具未运行 Android service／bridge 生命周期。两套夹具使用的 release Java classes 与最终构建重新核对一致，JNI 夹具源码输入亦一致；JNI runner 通过 `bash -n`、ShellCheck 和 `shfmt -d`。
+- **仍未完成**：已进入 create 后 transient password／key、mailbox 与自动保存的迟到安装尚未与共享 STOP 全部排序。根 session 的认证建包可能缺少共享 STOP 的最终效果准入是源码推断，未通过真实网络复现。已锁屏且已有 service owner 时，旧 owner 撤销异常可能令新请求得到 `SSH_FAILED` 而非 `SSH_SCREEN_LOCKED`；不确定结果路径仅锁 session，未独立退役可能持有明文的 import preview。vault 外层 begin 失败后的独立 lease／role、创建期内部 session、真实 Android service／Handler／receiver、首次信任、重连与整链清理仍须分别处理或验证。未连接设备、安装应用、访问真实账号或提交；父任务保持 `in_progress`。
+
+<a id="20261127-ssh-connector-retirement"></a>
+## 2026-11-27 SSH：未启动连接器的材料退役（此前检查点）
+
+本节保留上一次检查时的状态；服务发布与 bridge 结果的后续修复以上一节为准。
+
+连接器以同一 monitor 排序 `create()` 与未启动材料退役，并以共享 STOP 的非阻塞 CAS 决定连接器自身是否获准进入。STOP 或退役先发生时擦除构造期持有的密码／口令并拒绝后续创建；创建先获准时保留材料给原 owner。共享取消抛错时只退役尚未进入 create 的本地材料并保留原异常；取消与退役并发时先取得稳定的 password/key 引用，再在锁外关闭。bridge 的同步 attach 失败和已知失败完成路径也不再以 `started()` 快照判断能否清理材料。[合同](../.trellis/spec/backend/ssh-connector-unstarted-retirement.md)。
+
+- 最终源码执行 `./hako bash -lc 'cd android && ./gradlew :app:testSshCallbackJniHost :app:testReleaseUnitTest :app:lintRelease :app:assembleRelease --offline --console=plain'` 成功：**1,142 项 JVM／67 套**，无失败、错误或跳过；host callback JNI scope 通过；lint **0 错误／3 个既有警告**。release APK SHA-256 `a129f34dda85f03948f0733142c1ecbbbf22d120f0771470a0436472231d0941`，单签名者、v2 验签通过，未安装。中途定向测试曾因 Android 编译类路径没有 `java.lang.management` 而编译失败，改为仅在 host 测试运行时反射查询线程锁后，最终构建通过。
+- `bash android/ssh/host-jni-vault-chain-test.sh --output build/ctos-vault-jni-connector-retire-20261127` 以最终 release classes 通过 **89 个默认模式与 109 个隔离场景**。新增 3 场使用真实 connector、`SshSessionOwner`、native effect guard 和受控 factory：实际 effect 排空期间 STOP 先于 connector 准入时擦除材料且保留 owner；native legacy begin 在调用实际失效前注入异常时保留未知 owner；connector 已准入后注入同一故障时保留其精确数组与 owner。故障按实际取消线程设置，异常消息确认命中测试 hook；各模式使用独立 JVM，测试结束时关闭测试 executor 不代表产品清理确认。其余 22 场 vault／lease 故障继续通过；`-Xcheck:jni`、源码和 release classes 前后清单一致，测试 JNI 库 SHA-256 `2eaa0949434ad387d7a488f7d3a7c162e29d7301dd3c4217579c0b459e938643`。没有真实 Android service、native SSH session 或网络参与上述 3 场。
+- JVM 测试覆盖四种构造期密码／口令材料、构造器失败时保留原异常、create 与 retire 两方先后、外层 owner 已接管但 connector 未进入、STOP pending 和 cancel／retire 的 monitor 顺序。另以绕过 Android 构造的真实 bridge 对象、fake attacher 和 `MethodChannel.Result` recorder 验证**同步** `LinkageError` 分支只调用一次 error 并擦除该未启动 connector 的材料；不代表真实 Handler、异步结果投递或 Android service 验证。
+- `bash android/ssh/host-product-jump-test.sh --output build/ctos-product-jump-connector-retire-20261127 --expect-jump-open` 使用无外网容器双 sshd、产品 connector／host JNI 和加密库，通过受信单跳、两次保存密码确认、目标 PTY、直连、`ProxyJump none`、未知／变化主机拒绝、取消和多跳联网前拒绝；信任写入为零，输入与 classes 前后清单一致。该夹具不经过 Android service 或 bridge 生命周期。
+- **仍未完成**：已进入 create 后，迟到的 transient password/key、mailbox 和自动保存材料尚未与所有 STOP 路径统一排序；其 native 取消未知时原 owner 可能持续持有材料。服务 owner 发布和构造期 cancellation callback 的归属还需确认。bridge 异步完成回调中 cancel／lock／事件发送异常仍可能跳过或重复最终 MethodChannel 结果；已写凭据后的屏锁／服务拒绝映射也未修复。vault 外层 begin 失败时独立 lease／role 仍可能 active，native 撤销确认不等于借用 backing 已物理释放。首次信任、重连及整链清理仍未开放或完成。未连接设备、安装应用、访问真实账号或提交。
+
+<a id="20261127-ssh-vault-revocation"></a>
+## 2026-11-27 SSH：vault 失效、视图撤销与保存回执（此前检查点）
+
+`VaultSession` 对锁库、进入后台和 trust epoch 更新的原生失效失败执行 Java key 擦除与 epoch 失效，并保留精确 revocation owner；明确未开始的外层操作允许同一 session 显式重试，未知 begin/end 不重复。真实 `SshPublicFileLease` 区分本地不可用和 native 撤销确认，确认查询与正在运行的撤销排序；native destroy 未确认会向 shared owner 抛错并保留 token。保存返回 `VAULT_COMMIT_UNCERTAIN` 时保留该回执及 cleanup 失败，锁库未确认不丢弃 operation registry。[合同](../.trellis/spec/backend/ssh-vault-revocation-ownership.md)。
+
+- 项目 Docker 执行 `./hako bash -lc 'cd android && ./gradlew :app:testSshCallbackJniHost :app:testReleaseUnitTest :app:lintRelease :app:assembleRelease --offline --console=plain'` 成功：**1,134 项 JVM／66 套**，无失败、错误或跳过；host callback JNI scope 通过；lint **0 错误／3 个既有警告**。release APK SHA-256 `530d9cf962b4ac87a3ff600bb57f65b7555505020a730cc93c730f7bbbbeea5f`，单签名者且 v2 验签通过，未安装。
+- `bash android/ssh/host-jni-vault-chain-test.sh --output build/ctos-vault-jni-revocation-20261127` 使用最终 release classes、真实 host JNI、合成 peer 和加密内存库通过 **89 个默认模式与 106 个隔离场景**；其中新增 **22 场**覆盖外层／lease begin、end 在 native 调用前后失败，明确未开始重试，后台失败，在途 effect 排空，以及真实 native handle destroy 返回 false 或抛错的前后状态。shared owner 不把未确认 destroy 当作成功，未知调用不重复，原 token／owner 保留。测试 hook 经链接器包装 host fixture，生产库不启用；部分 vault owner 使用纯内存替身，测试不是 Android ART。`-Xcheck:jni`、输入和 release classes 前后清单通过；测试 JNI 库 SHA-256 `2eaa0949434ad387d7a488f7d3a7c162e29d7301dd3c4217579c0b459e938643`。脚本的 `bash -n`、ShellCheck 和 `shfmt -d` 通过。
+- `bash android/ssh/host-product-jump-test.sh --output build/ctos-product-jump-revocation-20261127 --expect-jump-open` 使用无外网容器双 sshd、产品 connector／host JNI 和加密库，验证受信单跳、两次保存密码确认、目标 PTY、直连、`ProxyJump none`、未知／变化主机拒绝、取消及多跳联网前拒绝；输入与 classes 前后清单一致，信任写入为零。该夹具不经过 Android service 或 bridge 生命周期。
+- `VaultTest` 另以真实加密逻辑和受控内存 Store 模拟已切换后的不确定回执：锁库 revocation 失败和独立 preview 清理失败均不覆盖原回执；确认 key／preview 材料擦除、owner／operation registry 保留及不重复 revoke。它不是 Android AtomicFile 故障或真实 JNI 注入。
+- **仍有限制**：vault 外层 begin 失败时原 lease 可能仍 active，独立 token／role 路径不因此确认撤销；此前已准入的 native 效果可能完成，native 撤销确认也不等于借用和 backing 已物理释放。lease 自身 checked begin 的 `-1` 当前保守禁止重试，该值由测试 hook 注入，现有生产 JNI 不返回它。bridge 的异步取消／锁库异常仍可能跳过最终 MethodChannel 结果，已写凭据的屏锁／服务拒绝映射及 connector 材料与 owner 竞争仍未修复。未连接设备、安装应用、使用真实账号或提交；首次信任和重连仍未开放。
+
+<a id="20261125-ssh-stop-owner-delivery"></a>
+## 2026-11-25 SSH：停止状态、owner 清理与连接结果（历史快照）
+
+共享停止请求和首次原因现在先于 native 撤销可见；外层未附着 owner 的清理与停止、native 失效确认原子排序，结果不明时保留原资源。终端的清理待确认事件去重，连接运行结果及 connector 的最终 handoff 分别与停止排序；已准入操作可稍后物理完成。保存确认已退出后，固定错误与终端清理状态分开处理；普通可重试关闭仍等待原 owner 完成。此增量不构成首次信任写入或整链取消的完整实现。[合同](../.trellis/spec/backend/ssh-terminal-stop-intent.md)。
+
+- 项目 Docker 执行 `./hako bash -lc 'cd android && ./gradlew :app:testSshCallbackJniHost :app:testReleaseUnitTest :app:lintRelease :app:assembleRelease --offline --console=plain'` 成功：JVM **1,124 项／66 套**，无失败、错误或跳过；host callback JNI scope 通过；lint **0 错误／3 警告**。release APK SHA-256 `17fcd201f9e0110ffda22e97e0c1bc319d893b94fea2643ed6dbc5d23b046c6c`，单签名者、v2 验签通过，未安装。中途一次完整 JVM **1,123 项中 1 项失败**：可重试清理时结果被过早完成；保留原断言并区分等待与未知后，最终全量通过。
+- `bash android/ssh/host-jni-vault-chain-test.sh --output build/ctos-vault-jni-first-stop-final-20261125` 通过真实 host JNI、加密内存库和合成 peer 的 **88 个默认模式与 84 个隔离场景**；后者含原 terminal／shared view／session／trust 的 31 场及本轮 creation／terminal 的 53 场。覆盖 begin／end 未知、排空成功或失败、未附着 owner 保留、真实 root session 转交失败、停止先后、保存结果、可重试关闭及 pending 通知顺序。多数新结果场景使用 fake factory 或 fake port；只有明确标注的转交场景使用真实 native session，保存错误为合成 status，不代表实际 vault 提交或 Android ART。`-Xcheck:jni`、输入和 release classes 前后清单通过；测试 JNI 库 SHA-256 `54f46e1412b558f5f3307c5500d5944a0c4646bed39425c53b1feef49de87770`。脚本的 `bash -n`、ShellCheck、`shfmt -d` 通过。
+- `bash android/ssh/host-product-jump-test.sh --output build/ctos-product-jump-first-stop-final-20261125 --expect-jump-open` 使用无外网容器内真实双 sshd、产品 connector／host JNI 和加密库，通过已知主机单跳、逐跳保存密码确认、目标 PTY、直连、`ProxyJump none`、未知／变化主机拒绝、取消和多跳联网前拒绝；输入与类清单前后一致、测试信任写入为零。驱动不经过本轮 terminal controller 或 Android service，不能证明首次信任、真实账号或设备生命周期。
+- 独立只读审查及受控 JVM 时序验证 ordinary／service 先于 screen、保存错误和 `VAULT_COMMIT_UNCERTAIN` 优先级；connector handoff 测试使用真实 Java connector／owner／session 和 fake native，停止先发生时拒绝交接。它不证明真实 JNI 故障后 MethodChannel 已完成投递。
+- **仍有实际缺口**：本机 host JVM 用空 native library 路径注入链接失败，直接调用实际 `VaultSession.lock()`，观察到异常后 `vault_unlocked=true`；这说明 begin 失败可发生在 Java key 擦除之前，不证明 Android 已复现。另一合成 bridge probe 在 `credentialWritten=true`、`trustUncertain=false` 时得到 `SSH_SCREEN_LOCKED`／`SSH_SERVICE_START` 原码，而取消得到 `VAULT_COMMIT_UNCERTAIN`；没有实际凭据写入。源码还显示未启动 connector 的 `cancel()` 或锁库异常可能跳过最终 MethodChannel error；该投递链尚无 Android 实测。曾尝试扩展 bridge 映射，但因锁库失败仍可能保留密钥而撤回；不能将库称为已锁或敏感材料已擦除。
+- `SshNativeSession.openInternal()` 内部部分构造清理、独立 callback／lease、整链释放、信任写入准入及 Android service／Activity 生命周期仍未统一完成；产品首次信任和重连仍未开放。未运行设备、真实账号或安装操作，未修改 Flutter 界面。
+
+<a id="20261125-ssh-trust-stop-order"></a>
+## 2026-11-25 SSH：信任回执与停止请求排序（进行中）
+
+以下为本轮之前的历史快照；当前停止状态、验证与剩余问题见[后续检查](#20261125-ssh-stop-owner-delivery)。
+
+信任回执确认现在与共享停止请求的原子发布排序：停止先发生时，即使 native 失效仍等待已准入 effect，或者 begin 抛错、`getAsBoolean()` 仍为 false，NEW／CHANGED 回执也不能确认；确认先发生时，后续取消不反转既有确认。未确认的可能写入仍按 `VAULT_COMMIT_UNCERTAIN` 处理。此处只排序确认，不授权先前写入或证明 native 撤销完成。[合同](../.trellis/spec/backend/ssh-trust-commit-ack.md)。
+
+- 基于上一检查点的真实 host 测试 JNI、最终 release classes 和合成的 persisted 通知，独立复现 native begin 前异常后 `stopRequested=true`、native 撤销未确认，但信任回执仍被确认；没有实际 vault 写入。随后新增 `trust-failure` 和 `trust-drain` 两场回归，在旧 classes 分别因“停止后仍确认”和“失效等待时仍确认”失败，修复后以最终 release classes 均通过。前者检查 NEW／CHANGED 及确认先发生的对照，后者在真实 native effect permit 排空期间检查确认顺序；均为合成回执，不是实际持久化或 Android 证据。
+- 定向 `SshTrustReceiptsTest`、`SshSessionOwnerTest`、`SshTerminalSessionTest` **64 项／3 套**通过。最终项目 Docker 执行 `./hako bash -lc 'cd android && ./gradlew :app:testSshCallbackJniHost :app:testReleaseUnitTest :app:lintRelease :app:assembleRelease --offline --console=plain'` 成功：完整 JVM **1,115 项／66 套**、0 失败／错误／跳过，host callback JNI scope 通过；lint **0 错误／3 个警告**。release APK SHA-256 `706fe0113740230c2096e2fa7f4c23805508589eb51a1e4d48430ab120db6ac4`，v2 验签通过，未安装。
+- `bash android/ssh/host-jni-vault-chain-test.sh --output /tmp/ctos-vault-jni-trust-stop-final-20261125` 使用最终 release classes、真实测试 JNI、加密内存库和合成 SSH peer，通过默认 **88 场**及独立 JVM 的 **31 场**：terminal 取消 10 场、shared view 8 场、session 11 场及本节信任回执 2 场。session 场景包含真实 native root／child 与原 owner、描述符保留检查；shared view 使用 fake source。drain 场景只验证被测 Java monitor／回执顺序，不证明真实 lease 内部的所有锁序。`-Xcheck:jni`、输入和 release classes 前后清单及独立重验通过；测试 JNI 库 SHA-256 `54f46e1412b558f5f3307c5500d5944a0c4646bed39425c53b1feef49de87770`。
+- `bash android/ssh/host-product-jump-test.sh --output /tmp/ctos-product-jump-trust-stop-final-20261125 --expect-jump-open` 在无外网容器双 sshd 中，以产品 connector、host JNI／native 和加密库通过已知主机单跳、逐跳保存密码确认及目标 PTY、错误／未知目标键、未知首跳、目标确认取消、多跳前置拒绝、直连和 `ProxyJump none`；测试账号只在容器内，各场信任写入为零。输入与 release classes 的前后清单及独立重验通过。驱动直接推进 session／terminal chain，未运行 `SshTerminalSession` 或 Android service，也不验证产品首次信任写入；host product JNI 库 SHA-256 `61243949605bd8d970643cf36b08eb9f42484aa662ddaf99d32976f8f30eda64`。
+- host JNI 脚本的 `bash -n`、ShellCheck、`shfmt -d` 通过。外层 `Cancellation.getAsBoolean()` 在 native begin 抛错时仍可能为 false；信任写入准入、创建期部分 session、独立 callback／lease 撤销、整链释放和 Android service／Activity 生命周期尚未统一完成或验证。terminal 尚未接收 session 的明确未开始类型来自动重试，不明状态可能长期保持 BUSY。产品首次信任和重连仍未开放，未连接设备或真实账号。
+
+<a id="20261125-ssh-session-view-cancel"></a>
+## 2026-11-25 SSH：会话与共享视图取消所有权（跨层取消仍进行中）
+
+以下为信任回执停止顺序修复前的检查点；当前最终构建和验证见[后续检查](#20261125-ssh-trust-stop-order)。
+
+单个 `SshNativeSession` 与 `SshSharedPublicView` 在各自撤销开始前先停止本地新用；明确未开始时由同一 owner 重试，native begin／end 或后续 callback／revoke 的结果不明时，不重复该操作并保留对应 owner。两者分别在锁外等待 native 失效、callback 或 lease revoke，并与自身已准入的 close 排序。单独确认的 callback native 取消失败只允许独立清理，并不表示取消成功；已经准入的关闭或操作仍可能稍后完成。[会话合同](../.trellis/spec/backend/ssh-session-cancellation-ownership.md)／[视图合同](../.trellis/spec/backend/ssh-shared-view-cancellation.md)。
+
+- 会话和视图增加了关闭与取消交错、撤销失败、明确未开始重试、未知结果保留及 callback 失败后禁止 native step 的 JVM 回归。首轮相关定向 **194 项中 1 项失败**：旧测试在模拟结果不明后仍强行清理 fake parent；改为检查 child 独立清理后 parent 仍被保留，随后定向及完整回归通过。
+- 最终项目 Docker 执行 `./hako bash -lc 'cd android && ./gradlew :app:testSshCallbackJniHost :app:testReleaseUnitTest :app:lintRelease :app:assembleRelease --offline --console=plain'` 成功：完整 JVM **1,115 项／66 套**、0 失败／错误／跳过，host callback JNI scope 通过；lint **0 错误／3 个警告**。release APK SHA-256 `6af85c8beb08a96ff92c8c5e18b9eed90fc734fe94faf01c8e125753c1b08190`，v2 验签通过，未安装。
+- `bash android/ssh/host-jni-vault-chain-test.sh --output /tmp/ctos-vault-jni-session-view-final2-20261125` 使用最终 release classes、真实测试 JNI、加密内存库及合成 peer，通过默认 **88 场**和独立 JVM 的 **29 场**：此前 terminal 取消 10 场、shared view 8 场、session 11 场。session 场景含已认证 root 和 4 场真实 native child，检查结果不明确时 descriptor、child／parent 链及 owner 保留，明确未开始时原对象可重试；unknown 场景在隔离 JVM 退出时回收。shared view 以 fake source 检查撤销和关闭；两项 drain 测试以真实 native effect permit 验证等待时各自 Java monitor 仍可访问，不证明真实 lease 内部或独立撤销的所有锁序。`-Xcheck:jni`、输入／release classes 前后清单和独立重验均通过；测试 JNI 库 SHA-256 `54f46e1412b558f5f3307c5500d5944a0c4646bed39425c53b1feef49de87770`。
+- `bash android/ssh/host-product-jump-test.sh --output /tmp/ctos-product-jump-session-view-final2-20261125 --expect-jump-open` 在无外网容器双 sshd 中，以实际产品 connector、host JNI／native 和加密库通过已知主机单跳、逐跳保存密码确认及目标 PTY、错误／未知目标键、未知首跳、目标确认取消、多跳前置拒绝、直连和 `ProxyJump none`；各场信任写入为零，测试账号只存在于容器内。源码与 release classes 的前后清单及独立重验通过。驱动直接推进 session／terminal chain，未调用 `SshTerminalSession` 或 Android service；这不是本轮故障注入、产品首次信任写入、Android 或真实账号的端到端验证。host product JNI 库 SHA-256 `61243949605bd8d970643cf36b08eb9f42484aa662ddaf99d32976f8f30eda64`。
+- 更新后的 host JNI 脚本通过 `bash -n`、ShellCheck 与 `shfmt -d`。任务 context 文件通过 `task.py validate`，三个既有大文件仍提示注入截断。外层 `Cancellation.getAsBoolean()` 在 native begin 抛错时仍可能为 false；信任确认／写入、创建期部分 session、独立 callback／lease 撤销、整链释放和 Android service／Activity 生命周期尚未统一完成或验证。terminal 尚未接收 session 的明确未开始类型来自动重试；不明状态可能长期保持 BUSY。产品首次信任和重连仍未开放。
+
+<a id="20261125-ssh-terminal-stop-intent"></a>
+## 2026-11-25 SSH：终端停止准入（跨层取消仍进行中）
+
+以下为上一检查点；当前 session／shared view 的局部进展以上一节为准。
+
+共享取消先发布不可撤销的本地停止意图；终端 begin／status／write／resize／step／read、输出和 replay 按其准入。一个已准入动作可在停止后物理完成；正在关闭的旧 owner 也可能在停止后完成。共享 native begin／end 结果不明时不重复失效，terminal 停止新用并保留原 owner；一般 port 取消异常同样保留，只有实际 NativePort 全部失败均为 callback native 取消失败且没有其他原因时，才允许独立的 owner close 重试。[合同](../.trellis/spec/backend/ssh-terminal-stop-intent.md)。
+
+- 增加队列输入／resize、已准入写入与后续 step、读取期间停止、port 取消进行中和异常、错误保留，以及多跳 callback 错误和混合 suppressed error 的测试。首轮完整 JVM **1,105 项中 1 项失败**：最初把已有的 callback-native 取消失败也当成不可关闭；按实际 callback／native close 边界区分后，相关 **210 项／5 套**定向重跑通过。
+- 最终项目 Docker 执行 `./hako bash -lc 'cd android && ./gradlew :app:testSshCallbackJniHost :app:testReleaseUnitTest :app:lintRelease :app:assembleRelease --offline --console=plain'` 通过：完整 JVM **1,106 项／66 套**，0 失败／错误／跳过；host callback JNI scope 通过；lint **0 错误／3 警告**。release APK SHA-256 `689df1fd79766446dad59aabbe2808e40c6162215a4640ff439d9238b075f288`，v2 验签通过，未安装。
+- `bash android/ssh/host-jni-vault-chain-test.sh --output /tmp/ctos-vault-jni-stop-intent-final-20261125` 以最终 release classes、真实 host JNI、加密内存库和合成 peer 通过默认 **88 场**及独立 JVM 的 **10 场**取消故障；`-Xcheck:jni`、清理后重建和源码／release classes 前后清单均通过。10 场分别覆盖 shared 取消或 terminal 直接取消的 begin／end、port 内部 begin／end，以及终端失败触发的取消。注入与调用在同线程，使用 fake port／scheduler；检查 replay 不交付、排队输入擦除、不再调用写／step／resize、未知失效不重复以及 terminal owner 不释放。end 前／后使用独立 invalidator 检查不能误结束别人的失效；故障场景不代表真实 SSH 或 Android ART。host JNI 库 SHA-256 `7c2054decb87c36813a88c33242f01698f845421612299af856c10afab3898e3`。
+- `bash android/ssh/host-product-jump-test.sh --output /tmp/ctos-product-jump-stop-intent-20261125 --expect-jump-open` 使用无外网容器内双 sshd、真实产品 connector／host JNI／native 和加密库通过已知主机单跳的逐跳保存密码确认及目标 PTY、错误／未知目标键、未知首跳、目标确认取消、多跳前置拒绝、直连和 `ProxyJump none`；测试账号仅在容器内，相关清理及源码／class 前后清单通过。驱动直接推进 native session／terminal chain，未调用 `SshTerminalSession` 或 Android service；该结果不验证本轮 terminal 取消门禁、首次信任写入或 Android service 生命周期。host product JNI SHA-256 `61243949605bd8d970643cf36b08eb9f42484aa662ddaf99d32976f8f30eda64`。
+- `bash -n`、ShellCheck 和 `shfmt -d` 检查更新后的 host JNI 测试脚本通过。创建期部分 session、信任确认／写入、各 hop 和 shared view 的独立取消，以及真实 service／Activity 生命周期仍未统一修复或验证；未知状态可能长期保持 BUSY，`getAsBoolean()` 在 begin 抛错时仍可能为 false。产品首次信任和重连仍未开放。
+
+<a id="20261125-ssh-jump-candidate-transfer"></a>
+## 2026-11-25 SSH ProxyJump：测试候选转交（进行中）
+
+已批准的真实 Java／JNI 测试 child 可将原候选正文一次性移交给仍受原 provider 管理的对象。该对象没有普通 host proof、候选正文交付接口、凭据或信任写入能力，也未接入产品连接器。[合同](../.trellis/spec/backend/ssh-proxyjump-fixture-transfer.md)。
+
+- 上轮源码基线通过 `bash android/ssh/host-jni-vault-chain-test.sh --output /tmp/ctos-vault-jni-resume-20261125-unsandboxed`：真实 host JNI／加密内存库／合成 SSH 的 78 场完成，源码及 release classes 的前后清单一致；host JNI 库 SHA-256 `7c2054decb87c36813a88c33242f01698f845421612299af856c10afab3898e3`。
+- 候选转交的 provider 和测试类使用独立 javac overlay，复用上述未改变的 native 库和旧 release classes；`-Xcheck:jni` 的完整默认 **84 场**通过，其中 100–105 六场覆盖原数组转移、错误 owner/session、重复转交、候选／审核／provider 关闭及擦除，信任写入为零。相关 provider、callback、审核邮箱和 trust receipt JVM 回归 **99 项**通过；该结果不是完整新 release 构建或 Android ART 验证。
+- 随后在最终测试源码的独立 javac overlay 上，新增 106–109 四场以真实监视器和屏障分别排序候选关闭／审核撤销与转交：转交前撤销时拒绝，正文移出后、返回前撤销时擦除原数组；四场、零目标认证、目标 selected 凭据回调的调用／成功均为零、零写入断言及清理通过。这是独立定向重跑，不把它与之前 84 场冒充同一次最终源码全量运行。
+- 最终 release classes 和最终测试源码重新执行 `bash android/ssh/host-jni-vault-chain-test.sh --output /tmp/ctos-vault-jni-resume-20261125-final`：真实 host JNI、加密内存库和合成 SSH 的默认 **88 场**全部通过，包含 100–109；`-Xcheck:jni`、清理后重建及源码／release classes 的前后输入清单均通过。host JNI 库 SHA-256 `7c2054decb87c36813a88c33242f01698f845421612299af856c10afab3898e3`。
+- 在项目 Docker 环境执行 `./hako bash -lc 'cd android && ./gradlew :app:testSshCallbackJniHost :app:testReleaseUnitTest :app:lintRelease :app:assembleRelease --offline --console=plain'` 通过：完整 JVM **1,099 项／66 套**、0 失败／错误／跳过；lint **0 错误／3 个警告**。release APK SHA-256 `80f31c41749002d16173a3f789657cbfafd1f2edbabe7e62f4fcfba1586f3603`，v2 验签通过，未安装。构建与 host JNI 测试均不代表设备或真实 SSH 验证。
+- 审查使用 `/tmp/ctos-candidate-transfer-review-gen/classes` 的独立测试副本，在转交前仅推进原生 effect generation；转交和后续 `requireHeldFor` 仍成功，写入为零。Java 活性检查因而不能证明原生代次有效；真实写入必须独立绑定原 generation、逐跳期限及撤销顺序，不能以转交成功或重新取得的 generation 代替准入。来源／角色／view 失效后的即时拒绝与既有 owner 后续擦除分开记录。
+- 沙箱内基线因 `getsockopt(SO_TYPE)` 返回 `EPERM` 而无法创建原生会话；上述本机合成测试在允许 socket 类型检查的执行环境中运行。未连接设备或真实账号。产品首次信任、信任写入和重连尚未完成，待审期间远端 EOF、异常报文及扩展广告等历史未测项仍开放。
+
+<a id="20261125-ssh-cancel-invalidation-failure"></a>
+## 2026-11-25 SSH：取消撤销失败的原始复现（历史，跨层仍未修复）
+
+以下是新增[终端停止准入](#20261125-ssh-terminal-stop-intent)之前的结果；旧复现源码故意断言当时缺陷，不再作为当前通过测试。
+
+在 host JVM 中，同一线程用真实测试 JNI 的 `armLegacyEffectInvalidationFailure()` 注入原生失效开始前异常，然后调用真实 `SshTerminalSession.requestCancel()`。异常发生后，共享取消状态仍未置位；继续推进模拟调度器时，一条先前排队的输入到达模拟 `Port.write()`，`Port.step()` 也再次执行。复现程序退出 0 并输出 `REPRODUCED`；主会话使用最终 release classes 和最终测试 JNI 独立重跑结果一致。[复现源码](../.trellis/tasks/10-08-ssh-terminal/research/CancelFailurePumpRepro.java)故意断言当前缺陷，不属于正常通过的回归测试；修复后应改为验证取消阻断新准入的测试。[复现命令与分析](../.trellis/tasks/10-08-ssh-terminal/research/ssh-cancel-invalidation-failure-20261125.md)。
+
+测试只在 host JVM 使用真实测试 JNI 和 fake port／scheduler，既没有运行 Android ART 或真实 SSH 会话，也没有证明排队输入实际到达远端。注入点是 native begin 前的异常；begin／end 前后结果不明确及跨线程、创建期和多跳故障仍须分别验证。现有源码还显示 terminal 的 `NativePort.close()` 先关闭 chain，而 `SshNativeSession.openManaged()` 的失败清理可能发生在外层接管前；不能仅在外层捕获异常后就声称所有原生 owner 已安全保留。
+
+本轮曾实现用户主动重试等待旧 owner 的草案，但审查发现 Android START 未送达及 native 撤销结果不确定时可能提前释放或长期 BUSY；该草案已保存到 `/tmp/ctos-product-retry-review-20261125/` 并撤回，六个受影响生产文件与本轮实施前的 SHA-256 基线一致。未保留草案的产品重试或取消修复，也未做设备、真实账号或安装操作。
+
+<a id="20261123-ssh-jump-candidate-reservation"></a>
+## 2026-11-23 SSH ProxyJump：测试夹具中的候选保留（进行中）
+
+真实 Java／JNI child 的签名票据在模拟明确同意、原逐跳期限内 poll 到 idle 且关闭提示成功后，获得与同一 child、来源、候选和签名证据绑定的一次性保留。候选仍由原 provider 持有；该保留不包含候选正文、host proof、凭据或信任写入授权。它只排序候选消费和本邮箱的完成点，跨链取消、期限、持久化与重连仍需独立设计。[合同](../.trellis/spec/backend/ssh-proxyjump-child.md#scenario-approved-fixture-candidate-reservation)。
+
+- `bash android/ssh/host-jni-vault-chain-test.sh --output /tmp/ctos-vault-jni-candidate-reservation-20261123` 使用最终 release classes、真实 host JNI、加密内存库及合成 SSH peer，在同一 JVM 通过 **78 场**：模式 0–30、33–45、55、60–71、74、79–86、88–99；`-Xcheck:jni` 无警告。源码和 release classes 的前后输入清单一致；host JNI 库 SHA-256 `7c2054decb87c36813a88c33242f01698f845421612299af856c10afab3898e3`。
+- 新增的 12 场检查无审批直调、错误 session／线程、候选先消费或关闭、保留后的别名消费与关闭、provider 关闭、提示 dismiss 失败、邮箱完成点前后取消和用户拒绝。mode 97 在保留安装后用屏障同时放行后台 proposal 与候选别名消费，二者均拒绝；mode 98 用同类后台线程先成功生成 proposal，排除单纯线程门禁的假阳性；mode 99 在最终时间检查处先关闭候选，断言完成点拒绝并撤销保留。目标认证与信任写入均为零；伪造／跨来源 claim 的所有组合未逐一动态注入，依靠私有构造和精确身份检查静态约束。
+- 对最终 fixture 的模式 72、73、75–78 分别在独立 JVM 以 `-Xcheck:jni` 重跑，**6 场通过**；模式 87 以只重命名测试 poll JNI 导出的隔离库和最终类独立重跑，验证展示并批准后仍拒绝缺符号、保留原 owner，清理通过。这些均为主机夹具，不代表 Android ART 或产品首次信任。
+- `bash android/ssh/host-product-jump-test.sh --output /tmp/ctos-product-jump-candidate-reservation-20261123` 在本机 `--network none` 双 sshd 通过已知单跳、逐跳密码确认、目标 PTY、未知跳板／目标、换键与取消拒绝、直连及多跳联网前拒绝；输入和 release classes 前后清单一致，host 生产 JNI 库 SHA-256 `61243949605bd8d970643cf36b08eb9f42484aa662ddaf99d32976f8f30eda64`。这是已知主机产品回归，不证明首次信任已开放。
+- `./hako bash -lc 'cd android && ./gradlew :app:testSshCallbackJniHost :app:testReleaseUnitTest :app:lintRelease :app:assembleRelease --offline --console=plain'` 通过，JVM **1,099 项／66 套**、0 失败／错误／跳过；lint 0 错误／3 条既有警告。APK SHA-256 `aab3e7f702d42b786632686d3d96afbd5adeeaf404f8dbe0c81a4cf49a361dcb`，v2 签名通过，未安装；APK 内 arm64 SSH 库 SHA-256 `1997a32414bec8a005ae9d3afc7331247a817e0ef5c5f4f4aa536ff44bceb437` 与 strip 产物一致。动态表无测试 JNI、测试钩子或受限读取导出；受限原生函数为 local hidden。源码冻结清单和 `git diff --check` 通过。
+- 首跳 NEW 仍由产品拒绝，目标 child 预留也未接入产品。首跳使用单独 JUMP 角色及信任来源，普通直连同步审核／CAS 不能直接代替签名后的非授权待审路径；逐跳期限、revision、自身写入失效和新请求清理仍待处理。[首跳研究](../.trellis/tasks/10-08-ssh-terminal/research/proxyjump-root-new-trust-20261123.md)。上轮 JNI 联合远端 EOF、异常报文和扩展广告负例仍未验证，详见[上一检查点](#20261123-ssh-jump-pending-integrated)。未连接设备、安装应用、使用真实账号或提交。
+
+<a id="20261123-ssh-jump-pending-integrated"></a>
+## 2026-11-23 SSH ProxyJump：测试夹具中的待审调度（进行中）
+
+测试专用的真实 Java／JNI child 已把签名候选票据与父连接、relay 和有界 native 输入 poll 接通。原逐跳期限、角色、视图及来源检查保留；同意后若仍有待处理输入，owner 会在锁外继续有界推进。该结果只代表当时收到用户决定及一次空闲采样，不能授权信任写入、认证或凭据；产品连接器和生产 JNI 尚未接入。[设计](ssh-proxyjump.md#首次主机信任的下一步设计未实现)／[合同](../.trellis/spec/backend/ssh-proxyjump-child.md#scenario-signed-new-fixture-review-and-bounded-extension-input)。
+
+- `bash android/ssh/host-jni-vault-chain-test.sh --output /tmp/ctos-vault-jni-pending-integrated-20261123-final` 使用本轮 release classes、真实 host JNI、加密内存库和合成 SSH peer，在同一 JVM 通过 **66 场**（模式 0–30、33–45、55、60–71、74、79–86）；`-Xcheck:jni` 无警告，源码输入和 release classes 前后清单一致。host JNI 库 SHA-256 `7c2054decb87c36813a88c33242f01698f845421612299af856c10afab3898e3`。
+- mode 79 在真实签名 pending 后分片送入合法 `EXT_INFO`，先提交同意，再经过 57 个有界轮次；首轮明确非 idle，最终 native stage-2 钩子确认该 poll 已验证并消费扩展。mode 86 在不提供测试推进／观察回调的主入口，先确认完整扩展已到 child socket，返回后以只读 native 状态和空 socket 确认实际消费；其日志 `turns=0 status=0` 仅表示没有启用测试 observer。mode 80/81 分别验证邮箱取消及原期限耗尽时不提前批准；82 验证错误 session／callback／线程被拒绝且正确 child 的票据仍可使用；83 和 84 分别为来源关闭和本地 child 关闭，不是远端 EOF。mode 85 在 poll 故障时注入一次 checked 清理失败，验证精确 owner、candidate 和 claim 保留，并由同一 owner 重试关闭；没有单独计数证明 socket 故障的具体 errno，poll 返回的通用错误也不区分清理失败原因。
+- 额外以独立 JVM、`-Xcheck:jni` 对最终 fixture 重跑 72、73、75–78 共 **6 场**不确定清理／并发回滚场景，全部通过。mode 87 以 `/tmp/ctos-pending-integration-missing-verified/libctos_ssh_files.so` 和最终 fixture classes 独立运行：测试库只通过编译宏重命名新增 poll 导出，`nm -D` 核对原 poll 名缺失、readiness 与只读 getter 仍存在；真实票据已展示并提交同意后，入口返回 `SSH_HOST_KEY_REVIEW`、保留候选及 owner，后续清理通过。该库 SHA-256 `71a81390ec91728330fd675806ad00712d0257c4101913b8877c611ec153ee3c`，不是 release 库或产品运行结果。
+- `bash android/ssh/host-product-jump-test.sh --output /tmp/ctos-product-jump-pending-integrated-20261123` 使用正式 Java／JNI 和本机 `--network none` 双 sshd 通过已知单跳两次密码确认与目标 PTY、未知跳板／目标、换键、取消、多跳联网前拒绝、直连及 `ProxyJump none`；输入及 release class 清单前后一致，信任写入为零。该回归不表示产品首次信任已开放。
+- `./hako bash -lc 'cd android && ./gradlew :app:testSshCallbackJniHost :app:testReleaseUnitTest :app:lintRelease :app:assembleRelease --offline --console=plain'` 通过，JVM **1,099 项／66 套**、0 失败／错误／跳过，lint 0 错误／3 条既有警告。APK SHA-256 `2ee9bc591f5431a0344fa20abffa260207f42e27966452406d5e37dccb754396`，v2 签名通过，未安装；APK 内 arm64 SSH 库 SHA-256 `54765ad24212fe2b21a3c30a3086bcbe07b52b5e9640f052f1e60b50ead777df` 与 strip 产物一致。未剥离库中受限 native 读取为 local hidden，动态表不含测试 readiness／poll／只读 getter JNI 或测试 hook。APK 构建后只加强了 host fixture 的 mode 87 断言；生产源码未变，最终 fixture 已重新编译并运行。
+- 普通 OpenSSH 握手可能在进入 pending 前处理 `EXT_INFO`；本轮只对 pending 后送达的合法扩展证明新 poll 的行为。Java／JNI 联合待审期间的真实远端 FIN／EOF、全部 view／generation 竞争以及上轮列出的异常报文和扩展广告负例仍未分别验证。正常合成 channel EOF 的定向实验在代理侧被安全筛查中断，未产生通过结果；不将本地关闭或注入 socket 错误当作远端 EOF。未连接设备、安装应用或使用真实账号。
+
+<a id="20261123-ssh-jump-signed-review-ext"></a>
+## 2026-11-23 SSH ProxyJump：签名审阅夹具与受限入站原语（进行中）
+
+此节记录接线前的历史快照；当前测试夹具的联通结果见[上节](#20261123-ssh-jump-pending-integrated)。
+
+本轮增加一次性、非授权的签名候选测试票据，并为待销毁 child 增加独立的受限 `EXT_INFO` 输入原语。JNI 签名就绪查询不读取入站数据，两者尚未接通，也不授权信任写入、凭据或产品首次确认。[设计](ssh-proxyjump.md#首次主机信任的下一步设计未实现)及[合同](../.trellis/spec/backend/ssh-proxyjump-child.md#scenario-signed-new-fixture-review-and-bounded-extension-input)。
+
+- 隔离构建固定 OpenSSH 与 ARM64/Bionic native 驱动后，`prlimit --memlock=65536:65536 --core=0:0 -- qemu-aarch64 build/ssh-provisional-ext-native-20261123a/test-output/ctos_ssh_native_client_test --provisional-ext-only` 通过 **15 个合成场景**，`checks=302270 gate=pass`；包含 AES-GCM／ChaChaPoly 合法分段、尾部截断、重复扩展、第二包整包或半包、读取和解析后的 generation 失效、CTR 拒绝、取消、view 撤销、期限、EOF 和错误线程。`--provisional-poll-only` 原有空闲检查回归通过 **21 场**，`checks=454816 gate=pass`。检查数包含循环断言，不是独立用例数。隔离归档 SHA-256 `3f50da709415b88bb00a4459ef6d5d2d985e70a6ed70c05a86d214639f289b03`；测试输入清单前后一致，摘要 `4bcf08013732f77e32913ae16cd6f298ca33633727cd4cc6141995de27f552b4`。日志和临时驱动位于 `build/ssh-provisional-ext-native-20261123a/`，该驱动以隔离归档路径编译，不能直接冒充最终 APK 的测试。
+- 随后用第一轮统一构建的 Android 正式归档 `60f5f9914dbf1c437ad136cf915b479f63f186b2dca325e3133c1d86bc4f1793` 构建 `build/ssh-provisional-ext-20261123-final/ctos_ssh_native_client_test`（SHA-256 `6404f6839884d6277ce3236a2025650a8c9df90b8ff165f71d355dfdc1a0e98b`），QEMU 的上述 15 场与原有 21 场分别通过，输出 `checks=302525` 和 `checks=454533`。最终构建使用了后述新归档。
+- 第二轮统一构建的归档 SHA-256 `fe407e6b193b0cde321190fe02ad63f9613f72fe02127c7d3f404f9b27199e9d`，对应 `build/ssh-provisional-ext-20261123-final-b/ctos_ssh_native_client_test` SHA-256 `2b103962aec41703b074a182cc5197ff11c6e02e18d34da1da5ea70f7dc2353e`；QEMU 的 15 场与 21 场分别通过 `checks=302474`、`checks=455042`。此快照早于后续 Java 摘要修复。
+- 摘要修复后的最终 Android 归档 SHA-256 `bb6fe42e2ea93068f9cf5cbed04980adc03adde0faaa95bc1f4c50754aaef985`，对应 `build/ssh-provisional-ext-20261123-final-c/ctos_ssh_native_client_test` SHA-256 `445c1c1e12633862c7f562ba6d9cba2a52a94b40b5ffc939c953b72fb8662364`；QEMU 的 15 场与 21 场分别通过 `checks=302403`、`checks=454884`。
+- 首次真实 JNI 联合运行 `/tmp/ctos-vault-jni-signed-review-20261123/` 在既有模式 0–30、33–45、55 通过后，进入新增 mode 60 的清理断言时失败；独立 mode 76 暴露原始异常，原因是计算票据绑定时调用了会擦除输入的 `SshConnectionMaterial.hex`，误擦票据自己持有的三个摘要。此轮的 mode 72、73、75 分别通过，但该轮不计为完整通过；还需修复后重跑。测试原先的 `finally` 把未创建的摘要当作未擦除并遮盖主异常，也需一并修正。
+- 修复后曾启动 `/tmp/ctos-vault-jni-signed-review-20261123-final/`，构建中发现测试夹具在未确认 child owner 释放时仍可能清理依赖资源，主动中断该轮；此目录不是通过结果。
+- 最终 `bash android/ssh/host-jni-vault-chain-test.sh --output /tmp/ctos-vault-jni-signed-review-20261123-final2` 以最终 release classes、真实 JNI、加密内存库和合成 SSH peer 在同一 JVM 通过模式 0–30、33–45、55、60–71、74，共 **58 场**。新场景涵盖精确来源／候选／签名票据、双重 pump 后同意、取消、候选消费与替换、逐跳期限、错误角色／线程／回调、child 关闭、UI 不等待 vault 锁、展示前后来源失效以及 checked begin 的原 owner 重试；各数组在独立 owner 的关闭时擦除，信任写入为零。release classes 和测试输入的前后清单一致，host JNI SHA-256 `478d5b8b59aa73cb083afa8c56c8b2deaeeaa1da06cdfb19e68f90c77545a7a2`。各场使用 `-Xcheck:jni`，无 JNI 警告；不代表 ART、真实服务中的首次信任或产品界面。
+- 对同一最终 fixture，模式 72、73、75、76、77、78 共 **6 场**分别在独立 JVM 以 `-Xcheck:jni` 通过。它们覆盖 provider begin、callback cancellation begin／end 结果不明确时不重复不确定的失效操作，签发票据后的摘要擦除，以及真实 JNI abort 在精确 handoff monitor 上与另一线程取消交错；owner／claim／fence 的保留均由断言检查。mode 78 中 handoff 自身可能先完成并擦除候选；末尾 Java 复查只排序复查前已记录的不确定状态，与其后的 C 侧标志更新及取消并不原子。附加 `/tmp/ctos-signed-review-verified/diagnostic-*.log` 使用临时测试源码注入主异常、多重清理异常和 child owner 未确认，核验首错及 suppressed 和依赖资源保留；这些注入不在最终源码或产品中。
+- `bash android/ssh/host-product-jump-test.sh --output /tmp/ctos-product-jump-signed-review-20261123-final` 使用最终生产 Java／JNI、加密测试库及本机 `--network none` 双 sshd 通过：两次已保存密码确认后到达目标 PTY，未知跳板、未知目标、目标换键和取消分别在对应认证前停止；多跳在联网前拒绝，直连与 `ProxyJump none` 可运行，信任写入为零。输入和 release class 清单前后一致，host JNI 库 SHA-256 `61243949605bd8d970643cf36b08eb9f42484aa662ddaf99d32976f8f30eda64`。这是已知主机路径回归，不代表首次信任或 Android 设备通过。
+- 摘要修复后执行 `./hako bash -lc 'cd android && ./gradlew :app:testSshCallbackJniHost :app:testReleaseUnitTest :app:lintRelease :app:assembleRelease --offline --console=plain'` 通过，JVM **1,099 项／66 套**、0 失败／错误／跳过；lint 0 错误、3 条既有警告。APK SHA-256 `5ba2dab645d8fa28c65eba7cad2b77e78d0fe0ce5589df1ce69ff6eeb09112bf`，v2 签名通过，未安装；APK 内 arm64 库 SHA-256 `8e2183e4d720876a29606843dc27e8d1bd4d38b7cee1b270e3614eb15b89ee34`，与 strip 产物一致。未剥离正式库中两个新受限读包符号均为 local hidden，动态表未导出它们或测试专用 readiness JNI／poll 注入符号。构建期间仅主机 JNI 测试夹具源码作后续所有权修正，生产源码未变化；最终夹具已按上文另行重跑。
+- 对新解析路径尚未单独动态验证坏 padding、坏认证标签、未知消息、过长声明、启用压缩、未广告或相似 token 的真实协商负例，以及 OpenSSH 在 pending 前已处理扩展的情形；旧空闲检查拒绝原始入站字节不等于这些测试。原实现代理在考虑构造异常加密输入时被安全筛查中断；随后仅使用合法输入和既有故障夹具继续，未引入自定义密码／报文篡改辅助器。
+- 六个涉及的构建／主机夹具脚本 `bash -n` 和 ShellCheck 通过，固定 OpenSSH 补丁以 `--fuzz=0` 干运行通过，`git diff --check` 通过。`shfmt -d` 对现有脚本仍报告大量既存格式差异，本轮没有整文件重排。
+
+<a id="20261123-ssh-jump-pending-wait"></a>
+## 2026-11-23 SSH ProxyJump：首次信任等待的内部原语（进行中）
+
+本轮增加 native-only 的单跳 child 保守空闲快照和 Java 审核邮箱锁外轮询骨架。两者未接通，生产 JNI 未注册首次信任路径；邮箱仍使用普通 `Review`，无法安全代表独立的签名待审候选。产品首次确认、信任写入与重连均未完成。[设计及限制](ssh-proxyjump.md#首次主机信任的下一步设计未实现)。
+
+- `./hako bash android/ssh/android-password-client-build.sh --output /app/build/ssh-provisional-poll-20261123-final --client` 成功构建；随后 `prlimit --memlock=65536:65536 --core=0:0 -- qemu-aarch64 build/ssh-provisional-poll-20261123-final/ctos_ssh_native_client_test --provisional-poll-only` 通过 21 个合成模式，输出 `checks=454940 gate=pass runtime=synthetic`；检查数包含协议循环，不是独立用例数。覆盖空闲、父连接待 pump、输出背压、child 入站／合法 EXT_INFO／KEXINIT／认证成功／断开消息、截断数据、OpenSSH input 与 CTR／AES-GCM 半包、relay 入站积压、对端半关闭、父端半关闭、两处注入 socket 错误、取消、视图撤销、代次及期限。半包状态由测试钩子放入真实 OpenSSH 解析器，不是实际服务器上同一网络时序的证明；socket 错误为注入。驱动 SHA-256 `70119af4cf182192804950924032f0e492878a05c43c3ccd3e0504c4a3e7a39d`，所用 OpenSSH 归档 `85a0f9550dbdd4670e4c6a03e920bf58a27185bed8a16813aa95bca18d51f095` 与本轮最终 Android 构建后归档一致，构建前后输入清单一致。
+- 首轮非 AAD 半包用例未通过：夹具误设服务器方向算法，实际未强制 CTR。按固定 OpenSSH 的双向算法读取方式改用正确参数并排除 ETM MAC 后，保留首块已转入 `incoming_packet`、input 为空的断言；再分别补齐 AEAD、relay 与关闭场景。更早一次完整跳板回归主动终止、退出 143，未记为通过。新 poll 失败后候选 abort 本身再失败的组合尚未专项注入；旧候选 abort 重试测试只提供相关的分层证据。
+- 中间版 `build/ssh-provisional-poll-20261123-d/ctos_ssh_native_client_test --jump-only` 以同样 `prlimit` 和 QEMU 完整通过，输出 `checks=6615243 gate=pass runtime=synthetic`，覆盖原有跳板、child 0–73 与多层链。该驱动 SHA-256 `0340ba47c8ac49ebdc785d37ca92601b1174b7a0e89e98d4831dc633041b8716`，使用归档 `911078a0c5e845639ea4cb7e3e8293cdb19a01ed4ceb0fec52ec3203e512c13e`，与最终 Android 归档不同，不能称为最终归档的完整回归。主会话尝试停止时进程已自然退出，实际退出码为 0。
+- 审核邮箱定向 `:app:testReleaseUnitTest --tests im.majo.ctos.SshHostKeyReviewMailboxTest` 共 **22 项通过**，覆盖锁外轮询、精确票据、即时同意后再次轮询、决定与取消、poll 失败、展示前过期及较短逐跳期限。它们使用现有普通审核对象；结果不证明 signed-only 候选、JNI 或写入接入。
+- `./hako bash -lc 'cd android && ./gradlew :app:testSshCallbackJniHost :app:testReleaseUnitTest :app:lintRelease :app:assembleRelease --offline --console=plain'` 通过，完整 JVM **1,099 项／66 套**，0 失败／错误／跳过；lint 0 错误、3 条既有警告。APK SHA-256 `69abb2fb331318abd11eb03a62ffee4e3fc4a6ae2da48502499a591b5ec2aecf`，v2 签名验证通过，未安装。APK 内 arm64 SSH 库 SHA-256 `50ea6b57729198100e7d07668680a58411b632360e1b5754daa06624d5800e5a`；未剥离正式库中 poll 为 local hidden，测试注入符号未出现，动态符号不导出 poll 或注入钩子。源码冻结清单检查通过。
+- `bash android/ssh/host-product-jump-test.sh --output /tmp/ctos-product-jump-pending-wait-20261123` 使用正式 Java／JNI／native 源码、加密内存库和无网络容器内真实双 sshd：已知单跳的两次保存密码确认和目标 PTY 通过；未知跳板／目标、目标换键及取消在对应认证前拒绝，多跳在 socket 前拒绝，直连、`ProxyJump none` 与清理通过。输入和 release class 清单未变化；host JNI 库 SHA-256 `a7a6e3ba1ff366ce37da86d2638bc6e71a1f6be2666b47f0efd9353f3a5595c2`。这不是 Android、首次信任或实际信任写入测试。
+
+新原生检查仅是顺序采样，不能证明之后没有数据或关闭；合法目标入站消息也会被拒绝。后续须有真实签名候选的非授权 review/ticket、可处理必要协议报文的有界等待、JNI／父链调度、与撤销排序的写入准入及清理后重连。`StrictHostKeyChecking yes` 的拒绝和已有首次信任门禁必须保留。未运行本轮 Android 设备、真实账号、Flutter 端到端或人工体验；本轮没有 Dart 源码变更。
+
+<a id="20261123-ssh-jump-provisional-new"></a>
+## 2026-11-23 SSH ProxyJump：native-only NEW 待确认状态（进行中）
+
+本轮新增单跳 child 的独立 provisional NEW 候选、审核和签名 KEX 状态；它不生成正式 host/KEX proof、不允许认证或 shell，也不写入信任。生产 JNI 未注册这些同步 hooks；应用仍不能在跳板连接中首次确认指纹。[合同](../.trellis/spec/backend/ssh-proxyjump-child.md#scenario-provisional-new-child-key-native-only)。
+
+- `./hako bash android/ssh/android-password-client-build.sh --output /app/build/ssh-provisional-new-20261123-h --client` 构建固定 ARM64 合成测试程序；在允许本机 socket 查询的执行环境运行 `qemu-aarch64 .../ctos_ssh_native_client_test --provisional-new-only`，输出 `checks=2672576 gate=pass runtime=synthetic`。该数字包含协议循环断言，不是独立测试数。实际加密 child 覆盖 NEW、KNOWN、CHANGED、REVOKED、错误签名、候选交付或审核失败、abort 多次失败后同 owner 清理重试、根／三层拒绝、输出背压、EOF、view／callback 撤销、错误线程、真实 guarded generation／逐跳超时及 guarded 认证拒绝。随后同一二进制 `--jump-only` 的原有跳板、多层、relay 及认证回归输出 `checks=6160125 gate=pass runtime=synthetic`；二者退出码为 0，源码输入前后摘要一致。适配器独立 C 测试 **73 项通过**，使用 scope 测试替身。
+- 独立源码复核发现并促成修复：provisional 分类时必须同时将 callback 与 environment 置空；候选交付后 abort 失败必须保留 native 清理所有权；已观察的 EOF／撤销及更短的 guarded hop 期限要在 KEX 前后拒绝并保持 cleanup-only；一跳排空检查不得推断多层祖先已排空。短 wire permit 在进入 abort/callback 锁之前释放。复核未发现新的阻塞问题；该结论仅针对 native-only 范围。
+- 先前 d 版在 KEX 回调期间注入 EOF+CLOSE，父 native step 返回 `EPROTO`；可能与夹具在 CLOSE 后处理在途数据及窗口更新的顺序有关，但尚无 packet trace 证明根因。h 版相同时点的真实 EOF 用例通过，**不能据此声称 CLOSE 竞态已验证**。g 版 case 47 的首次失败是既有服务夹具步长断言，修正后 h 版真实 guarded case 47–49 通过。
+- 同一 h 生产 native 源码以隔离双 sshd 通过现有单跳、未知跳板／目标、错键、取消及多跳拒绝；具体命令、摘要和 JNI/Android 限制见[受限单跳记录](#20261123-ssh-jump-product-open)。Flutter 全量 **511 项**及分析通过；这包含逐跳指纹／密码顺序的模拟 UI 测试，不代表 JNI 或产品首次信任。
+- 真实 Java／JNI 和加密内存库的测试专用交接以 `/tmp/ctos-vault-jni-final-v4-20261123/` 验证：合成 SSH 的模式 0–30、33–42 共 **41 场**分别及同 JVM 顺序运行通过，输入和 release class 清单前后相同。包括目标签名、候选被提前消费或替换、错误 receiver、重放、候选与摘要清理，以及实际 child owner 首次清理遇一次注入的 effect invalidation `UnsatisfiedLinkError` 后保留所有权并重试。模式 31–32 在 `/tmp/ctos-vault-jni-missing-scope-v4-20261123/` 另行隐藏测试 scope JNI 符号，验证反射误调用和真实 dispatch 均拒绝；正式生产 ARM64 动态符号没有 fixture JNI／测试注册符号，通用 native provisional C API 仍存在。Java 的 source/candidate 一致性是时点检查，不是原子 trust admission；直接错误调用的部分 pending 数据在后续 close 才清理。上述测试使用 test hooks，不运行产品 UI／Android ART，不代表已支持首次确认或信任写入。
+- 使用包含该 Java/JNI 改动的未修改正式源码，以 `bash android/ssh/host-product-jump-test.sh --output /tmp/ctos-product-jump-jni-final-20261123` 重跑隔离双 sshd；普通直连、受限单跳目标 PTY、未知跳板及未知目标、错键、取消、多跳拒绝和清理均通过，输入及 class 摘要前后一致。host JNI 库 SHA-256 `5ba43640d45c072df715dfadf0c0a0610bdad49e5be421381e685e5772153551`；这仍不是 Android 或首次确认成功的证据。
+- 嵌套清理改动之前的源码执行 `./hako bash -lc 'cd android && ./gradlew :app:testSshCallbackJniHost :app:testReleaseUnitTest :app:lintRelease :app:assembleRelease --offline --console=plain'` 通过：JVM **1,088 项／66 套**无失败、错误或跳过；lint **0 错误／3 个既有警告**。APK SHA-256 `43ec35eb7963c5873363111eefd1956f4ff308487c6dac56bdec4549c06e1230`，未安装。从 APK 提取的 arm64 生产 JNI 库 SHA-256 `e5b3305a08d72d156c6280a61e9b3d48a6c854589016b8ba9855cf845b6bf9a6`，`llvm-nm -D --defined-only` 未发现 fixture JNI、测试注册或故障注入符号；通用 provisional C API 不包含在此否定结论中。后续源码修改须重新验证。
+- 嵌套清理中间快照的首次 Java 编译因新增 `unavailable()` 布尔方法遮蔽异常工厂而失败，明确限定方法后重编通过；该快照的完整 Android JVM **1,089 项／66 套**、lint **0 错误／3 个既有警告**和 release 构建通过，APK SHA-256 `fe7948ca3d50f6b3e79751d3070a8765773b1a2e97bdb3cc82b430cb613a64ae`，未安装。复核随后确认已 adopted child 的 callback 清理重试仍有缺口，因此此快照不是最终版本。
+- 修复后，`bash android/ssh/host-jni-vault-chain-test.sh --output /tmp/ctos-vault-jni-cleanup-20261123-b` 用真实 Java／JNI、加密内存库及合成 SSH peer，在同一 JVM 顺序通过模式 0–30、33–45、55，共 **45 场**；源码与 release class 清单前后一致。分别以独立 JVM、`-Xcheck:jni` 运行模式 46–54、56–59，共 **13 场**，均通过且无 JNI 警告。这些用例检查 checked begin 确定未开始后的同 owner 重试、begin/end 结果不明时保留 parent／claim／fence、不重复结束另一 invalidator、已销毁 child 经终端链重试，以及先前 request 清理异常时仍尝试擦除候选和提案。模式 54 同时构造 request／candidate／proposal 是故障夹具状态，不代表已观察到的线上竞争。前一轮 `/tmp/ctos-vault-jni-cleanup-20261123-a` 通过 43–54，但早于 adopted 收尾修复和 46/47 的后置断言，仅为中间证据。当前合同仅覆盖 provider／source／receipt 与 callback handoff 的指定清理链；callback 自身 `markCancelled()` 等其他旧 invalidation 调用未获得相同的未知结果重试保证。
+- `bash android/ssh/host-product-jump-test.sh --output /tmp/ctos-product-jump-cleanup-final-20261123` 对最终 Java／JNI／native 及加密内存库运行本机隔离双 sshd：已受信单跳经两次独立已保存密码确认并执行目标 PTY 命令；未知跳板、未知目标、目标换键、目标密码确认时取消均在对应认证前拒绝，多跳在打开 socket 前拒绝；普通直连、`ProxyJump none` 和清理通过，信任写入为零。输入及 class 清单前后一致；host JNI SHA-256 `c777aa4af49a58e5449f189957b042e1941d978d7022226833ee9f4876b83db3`。夹具使用 Android API shim 和预置测试信任／密码，不等于 Android 设备或首次信任成功。
+- 最终源码以 `./hako bash -lc 'cd android && ./gradlew :app:testSshCallbackJniHost :app:testReleaseUnitTest :app:lintRelease :app:assembleRelease --offline --console=plain'` 通过：JVM **1,089 项／66 套**，无失败、错误或跳过；lint **0 错误／3 个既有警告**，release 构建通过。最终 APK SHA-256 `06d6471881d286d3ff6862af476394ad1690e1d6cc2dbb183354bc939a4461aa`，未安装。提取的 arm64 JNI 库 SHA-256 `a6c4988205b209dc19d675843cce14e715d0901ead00671246092795097053a5`：动态符号包含生产 checked cleanup begin，未导出 fixture JNI 或故障注入符号；该结论不表示所有内部符号不存在。Flutter 源码未因后续清理改动变化，沿用前述 **511 项**与分析结果。
+
+<a id="20261123-ssh-jump-product-open"></a>
+## 2026-11-23 SSH ProxyJump：受限单跳产品路径
+
+产品源码开放一条跳板加目标的路线。两个主机均须已有配置所用的受管信任记录；自动认证遵循各跳配置的顺序，对需要密码的主机逐次确认其已保存密码。服务器同时提供 KBI 和密码且配置优先选择 KBI 时会拒绝。多跳、首次／换键信任、输入新密码、私钥和 KBI 尚未实现，首次使用尚无完整准备流程。
+
+下列结果对应该次受限单跳快照；后续首次信任开发若修改源码，须以其重跑结果为准。
+
+- `bash android/ssh/host-product-jump-test.sh --output /tmp/ctos-product-jump-unknown-ask-20261123-f` 使用未叠加的 release Java classes、未启用 test hooks 的生产 native 源码、加密内存库及 `--network none` 容器内两个真实 sshd。生产配置列表测试覆盖普通直连、`ProxyJump none`、单跳、多跳禁用和无效跳板；单跳路径分别延迟约 3.5 秒和 1.2 秒确认不同账号的已保存密码，通过目标 PTY 执行命令。目标密钥首次出现、目标密钥变化和目标密码确认时取消均在目标密码认证前停止；NEW 目标配置 `StrictHostKeyChecking ask`，测试校验实际分类和目标指纹，确认跳板已登录并转发、目标无认证请求及库写入。多跳在 socket 前拒绝；连接清理、shared view 重开和零 vault 写入通过。构建与运行前后的输入及 class 清单一致；host 生产 JNI 库 SHA-256 `e13bfe8792cb3c47493f54b1dcfd2463f11407a067d0c65b24582967e7d0695f`。真实服务测试的服务器关闭 KBI；`none` 成功未在真实 sshd 中覆盖。夹具使用 Android API shim、预置的测试信任和密码，不运行 Flutter／Android 或完整 MethodChannel 生命周期。
+- 随后以 `bash android/ssh/host-product-jump-test.sh --output /tmp/ctos-product-jump-first-hop-baseline-20261123` 增加跳板自身为未知主机、`StrictHostKeyChecking ask` 的真实服务场景：到达跳板 SSH 握手后被拒绝，没有跳板认证、转发、目标连接或库写入；目标未知及其余前述场景也再次通过。此结果是首次核验实现之前的拒绝基线，不代表该功能已实现。
+- Flutter 定向用例 `hop reviews show each endpoint before its own saved password` 用模拟事件依次验证跳板指纹、跳板密码、目标指纹和目标密码分别展示与确认，结果通过；首轮测试在自动连接场景误用直连接口的测试 helper 导致异常，修正 helper 用法后通过。该测试不代表实际跳板已支持首次信任。
+- 新 provisional 原语的早期快照曾运行 `/tmp/ctos-product-jump-provisional-20261123-a`：真实 sshd 所有业务断言通过，但独立复核同时要求修正候选 abort 失败后的所有权，导致源码在测试期间变化，夹具因此以 `source inputs changed during the test` 退出。此轮不计为最终通过；源码冻结后须重建重跑。
+- 后续 h 快照以 `bash android/ssh/host-product-jump-test.sh --output /tmp/ctos-product-jump-provisional-20261123-h` 重跑通过，源码与 release class 输入前后摘要一致；host 生产 JNI 库 SHA-256 `d722eb4b662636b5170b998a5fd4cb7930e4033415997ac2ace3a64910804fa8`。已保存密码单跳、两个未知主机在认证前拒绝、错键、取消及多跳拒绝均通过；该快照尚未注册 provisional JNI hook，不代表首次信任已实现。
+- 最终 Android 回归 `./hako bash -lc 'cd android && ./gradlew :app:testSshCallbackJniHost :app:testReleaseUnitTest :app:lintRelease :app:assembleRelease --offline --console=plain'` 通过：**1,088 项／66 套 JVM 测试，0 失败／错误／跳过**，lint **0 错误／3 个既有警告**。最终 APK SHA-256 `5492ea0673d7e3ffa9eb26b6d29e1f8d3d949e92f1e74c8791ad718b00c7d8f7`，未安装。更新信任及缺失密码提示后，`./hako flutter analyze` 和 Flutter 全量 **510 项**通过。`bash -n`、ShellCheck、shfmt 和 `git diff --check` 通过。
+- 首轮完整 JVM 中 2 项取消回归失败：未注册 native fence 的 fake child 先返回 `SSH_JUMP_EFFECT_GUARD`，遮盖取消。首次修复又使并发测试在 callback 锁内等待；最终对未注册 fence 的拒绝分支保留原锁外角色检查，对已注册路径保留 generation 和真实效果 guard，并在前后检查生命周期。定向测试及上述最终全量回归通过。独立源码复核未发现确定的 guard 绕过；该结论不代替 Android 设备与全部并发条件实测。
+
+既有单一 SSH owner 是当前实现的使用前提；native effect generation 当前为进程级，未来并行 owner 可能相互保守失效。目标认证回复前检查整个上游输出是否排空，无关保活／协议输出在背压时可能导致误拒，该可靠性风险尚未动态复现。此前的设备或真实账号授权不适用于本轮。
+
+<a id="20261123-ssh-jump-product-gated"></a>
+## 2026-11-23 SSH ProxyJump：产品入口的受限接线（进行中）
+
+本节记录当时的关闭门禁快照；当前受限单跳状态见[后续验证](#20261123-ssh-jump-product-open)。当时总门禁在打开 socket 或将密码交给 SSH 认证前拒绝该路线，列表使用严格直连计划。读取配置快照会解密包含秘密的库，不据此宣称拒绝前没有读取过密码。
+
+- 生产 `SshPasswordConnector.create()` 在本机 `--network none` Docker 真实 sshd 夹具中，识别跳板后以 `SSH_JUMP_AUTH_UNSUPPORTED` 返回；夹具记录 socket 和密码认证 prompt 均为零。使用同一产品入口的普通配置直连，以当次输入的合成密码连接目标 sshd，完成 shell 并读到完整测试输出。native view 可重开，vault commit 为零。第一次使用旧 release class 和新 factory class 叠加；其后以 `bash android/ssh/host-product-jump-test.sh --output /tmp/ctos-product-jump-replay-20261123` 用同一冻结源码的真实 release classes 和 native 源码重新构建，未叠加 class、未启用 native test hooks，结果相同，构建及运行前后输入哈希一致。两次都使用宿主 Android API shim、临时内存库和合成账号，不是 Android、Flutter 或成功跳板验证；后续源码若修改，必须重建重跑。[重放步骤](ssh-proxyjump.md#本机隔离-openssh-跳板测试环境)。
+- 单独的诊断实验仅在 `/tmp` 的 connector 源码副本中打开最外层产品门禁，保留子跳效果门禁：本机真实双 sshd 中，第一跳在显式 saved-only 确认后认证成功并打开转发，目标完成握手和确认提示，随后 `SSH_JUMP_EFFECT_GUARD` 拒绝目标认证；目标服务器没有认证请求，vault 写入为零，connector 正常关闭后 socket 关闭、共享 view 可重开。此实验修改了测试副本，不是原样产品通过，也不是成功跳板登录；未对每个 native owner 注入清理故障。`bash /tmp/ctos-product-jump-diagnostic-20261123/run-diagnostic.sh baseline` 为同步确认，`root-short` 和 `target-short` 延迟 3.5 秒响应首跳确认时均复现 `SSH_SESSION_COMPLETE`；临时目录内保存脚本和日志，清理后需重新构造。测试副本与当时正式 connector 的唯一差异为 `jumpProductAvailable()` 的 `false` 改为 `true`；不据此声称产品支持异步确认。
+- 后续一致的中间源码快照用不含 test hooks 的 native、真实加密 vault、Java/JNI 和本机双 sshd，在仅测试副本打开外层门禁的条件下，分别延迟 3.5 秒和 1.2 秒确认不同跳的已保存密码，成功登录目标并执行 shell；错误目标 host key 在目标认证前被拒，当前用户错误仍表现为 `SSH_SESSION_CANCELLED`。连接关闭、TCP fd 关闭和 shared view 重开通过，vault commit 为零。日志位于 `/tmp/ctos-product-jump-diagnostic-20261123/mid19-async-current.log` 和 `mid19-async-wrong-host.log`；该快照早于之后的握手排空修正，不能视为最终源码或已开放产品验证。
+- 逐跳 saved-only 确认协议与 UI 测试覆盖每跳真实 endpoint、逐次明确确认、拒绝 typed／save 输入、重复票据变化取消，以及窄屏／横屏 2 倍字号操作；这些测试不通过产品跳板总门禁。
+- `./hako flutter analyze` 通过；`./hako flutter test --reporter expanded` **510 项通过**，基于本次 Flutter 源码。随后 `./hako bash -lc 'cd android && ./gradlew :app:testReleaseUnitTest :app:lintRelease :app:assembleRelease --offline --console=plain'` 重编生产 native，JVM **1,064 项／62 套通过**、lint **0 错误／3 个既有警告**、APK 构建通过；APK 未安装。后续 native 修正需再次验证，不得将这次构建称为修正后的结果。
+- 对许可清理和返回数组擦除修正后的快照，`./hako bash -lc 'cd android && ./gradlew :app:testSshCallbackJniHost :app:testReleaseUnitTest :app:lintRelease :app:assembleRelease --offline --console=plain'` 再次通过，native 已重编，JVM 测试命中前述完整结果的缓存。callback-scope 夹具补充拒绝型测试替身并以 `--no-undefined` 链接；它不测试实际效果许可。`CTOS_SSH_JNI_EFFECT_ONLY=1 bash android/ssh/host-jni-multihop-test.sh` 在允许本机 socket 查询的执行环境重建并通过模式 11–17，使用合成 peer、测试 receiver 和测试专用 generation；检查错误 receiver、遗漏 end、非空数组异常清零和取消排空，输入源码前后哈希一致。若同线程持许可期间直接失效，仍可能自等待，未被证明不可发生。
+- `bash android/ssh/host-product-jump-test.sh --output /tmp/ctos-product-jump-final-20261123` 在该 native 修正快照下重新构建、通过真实 sshd 的跳板前置拒绝与配置直连；输入及 classes 前后哈希一致，所用 host JNI 库 SHA-256 `61f01b6932c5f0d836e1737abfe50b03c2867970adcc3e9a0c953e5d1cbd6fb1`。该检查仍不含 Android 或产品跳板成功。后续正在接入实际效果的改动不包含在此结果内。
+- 为避免最终配置入口与直连对禁用跳板的解释不一致，固定解析器的 direct/profile 现仅放行其原始参数精确为 `none` 的禁用指令；真实跳板仍由逐行规则及最终 `Options` 双重拒绝。`bash /tmp/ctos-none-policy-final-run.sh` 使用项目 NDK 与 ARM64/QEMU，独立复核后重跑 **16,008 次检查**，包含测试专用 wrapper 绕过首层后对 `other,none` 等真实跳板仍返回 `CTOS_CONFIG_UNSUPPORTED`、不返回 plan；源码输入前后哈希一致。`/tmp` 脚本和输出 `/tmp/ctos-none-final.Xu0NggM0` 仅供本机重放；产品配置列表到真实直连和设备行为仍需另测。
+
+跨跳取消与秘密复制、密码包发送的共同排序尚未完成；首次或变化主机信任、临时密码、密钥、KBI、产品多跳及后台生命周期也未验收。不要开放总门禁或把界面、夹具、原生子构件的结果当成产品跳板成功。
+
+<a id="20261123-ssh-jump-jni-checkpoint"></a>
+## 2026-11-23 SSH ProxyJump：连接前置联合检查（进行中）
+
+这一检查点早于本轮后续产品连接器改动，不代表产品连接已经完成。生产 fresh child 准备要求已认证父会话的精确一次性 admission、父子角色与实际 callback／provider、同一加密库及子跳同次读取的 trust snapshot；复核发现另一 ledger 可冒领 provider，已通过核对 provider 自己实际通知的 observer 身份修复。三套定向 JVM **197 项通过**，使用 fake native；中间三次运行分别因测试夹具重复释放角色而失败，修正后重跑通过。真实信任写入后的 native KEX／确认／认证顺序仍未在同一测试中证明。
+
+- `bash android/ssh/host-jni-vault-chain-test.sh --output /tmp/ctos-vault-jni-final-20261123` 通过。一次测试内贯通生产 Java session／callback、真实加密的内存 Store、生产 JNI／native 和加密合成 SSH peer；入口合成 `none` 认证成功，目标 KNOWN 主机完成 KEX 后认证被门禁拒绝，NEW／CHANGED 候选经 test-only linker wrapper 分别确认实际分类和目标真实指纹后被拒绝；目标认证请求和信任提交均为零。owned fd 关闭和 native view 再次打开通过；严格 C 编译、`-Xcheck:jni` 和输入前后摘要检查通过。peer 非真实 sshd，非 Android 或产品 factory，目标没有完成认证。
+- `bash android/ssh/host-auth-open-chain-test.sh --output /tmp/ctos-auth-open-chain-evidence-20261123 --openssh-build /tmp/ctos-vault-jni.7yzFHtwg/openssh-10.6p1` 通过 **755,609 次检查**，计数包含协议循环；源码及上游输入摘要前后一致。测试覆盖实际合成多层加密链中已观察到的 EOF／关闭、回调后擦除、密码／KBI 不建包、私钥签名前后失效、零窗口背压和已接收数据排空。该轮复用的 OpenSSH 构建只留存哈希，runner 未独立验证其来源；首次沙箱内 `getsockopt(SO_TYPE)` 为 EPERM，重试在允许该调用的本机环境通过。CLOSE-only、某些 relay 中间状态、首次 KBI 与公钥续接未分别动态覆盖。
+
+原生开放状态检查仍是 owner 线程的观察，不是跨线程取消与信任／秘密效果的原子顺序；discovered-password 和 KBI 在 JNI 中的前置复制、实际产品 factory、已认证目标与真实 sshd／Android 仍需另行完成和验证。[设计与当前进度](ssh-proxyjump.md)。
+
+<a id="20261120-ssh-jump-fresh-jni"></a>
+## 2026-11-20 SSH ProxyJump：受管新信任的 Java／JNI 接入（进行中）
+
+生产 Java 子连接已提供 fresh snapshot 入口；当前 fresh 路径在跨跳效果保护完成前拒绝信任写入和认证。产品连接器仍未调用该入口；旧无来源入口只保留供 fake view／fake native 测试，并拒绝受管 lease 和生产 JNI binding。[设计与剩余约束](ssh-proxyjump.md#连接主线与阻塞顺序2026-11-20)。
+
+- `CTOS_SSH_JNI_FRESH_ONLY=1 bash android/ssh/host-jni-multihop-test.sh` 经本机 JVM `-Xcheck:jni`、真实生产 JNI／native 和合成加密 SSH peer，通过 mode 10 **97,065 次检查**，计数包含协议循环。目标实际读取不同于原共享 view 的新 hostfile，完成 KNOWN 分类、KEX、测试密码认证和 PTY；测试确认新视图为锁定的匿名 memfd，晋升后精确 fd 关闭而原 view 仍有效。坏标识与截断 wire 在 child 构造前的 JNI 解析阶段失败；abort 后精确新 fd 已关闭、原 view 能重新借用并读取、父跳板状态仍为 OPEN。测试 Java callback 是替身，不使用本轮生产 Java 的效果门禁或真实 vault；输入摘要前后相同。
+- 生产 Java callback／session 的 JVM 用例使用真实加密 `AppSecrets`、内存 Store 与测试 native binding，检查 receipt／wire 来源、KNOWN／NEW／CHANGED 摘要、错误来源、拒绝未受保护的 trust／认证效果和清理。逐笔 trust 的 JVM 用例在同一加密库顺序写入两笔 NEW，分别检查确认及第二笔写入后取消；角色、host/KEX 和 validator 由测试驱动。不能将以上分层结果相加称为真实 vault／生产 Java／JNI／服务器端到端。
+- 主机审阅票据携带 hop 和 binding，连接页等待每笔决定的响应；排队后已取消／撤销的 NEW 提示在发布前重新检查。该检查和 event 发送之间仍不是原子顺序。完整 Flutter **507 项**和全项目 `flutter analyze --no-pub` 通过，实际设备、trusted route 和产品跳板换键仍待完成。
+- 独立复核发现 fresh 效果门禁可能掩盖先发生的取消／到期／视图撤销，以及部分 callback 在抛出 `Error` 后可能阻止清理；修正后用可控栅栏回归，保留 `VAULT_COMMIT_UNCERTAIN` 优先级并验证缓冲区擦除与可关闭性。`JumpAdmission` 消费时重验祖先活性，但各次检查并非原子效果许可。
+- 收紧旧无来源 child 入口前，以 `./hako bash -lc 'cd android && ./gradlew :app:testReleaseUnitTest :app:lintRelease :app:assembleRelease -x :app:compileSshConfigEvaluator -x :app:compileSshProductionObjects -x :app:compileSshFiles --offline --console=plain'` 运行完整 JVM **1,053 项／62 套，0 失败／错误／跳过**；lint **0 错误／3 个既有警告**；当时 APK SHA-256 `ab49abf16cf5c71799701bdca5263930f1d4e61cac09c5d7b88addae2750e445`，Android Debug 单签名者、v2 验签通过，未安装。该次命令跳过重编译 SSH native，复用此前已构建且生产 `ssh_native_client.c`／`ssh_session_jni.c` 输入未变的库；该库包含 `openJumpChildFresh` JNI 导出。
+- 旧无来源入口后续已限定为 JVM fixture：受管 lease 或生产 JNI binding 被拒绝，现有父会话仍可清理，fake native 的旧测试链仍可运行。`SshNativeSessionTest` 定向 **137 项通过**；受管 lease 对象／生产 binding 身份由 JVM 测试构造，不是实际 JNI 运行。此前任务标签下无遗留 Docker 容器，`git diff --check -- .` 通过。
+- 收紧后用上述相同的 Gradle 任务和显式 native 排除项对最终源码再次检查：完整 JVM **1,055 项／62 套，0 失败／错误／跳过**；Android lint **0 错误／3 个既有警告**；release APK SHA-256 `76fa2af774ada0dcc65027f38f1b1a1ab90c3df4e18059d48b37921c465aa4c3`，Android Debug 单签名者、v2 验签通过，未安装。生产 SSH native 源码摘要未变化，继续复用前述已构建产物。本次任务标签下无遗留测试容器。
+
+<a id="20261120-ssh-jump-fresh-interop"></a>
+## 2026-11-20 SSH ProxyJump：真实 sshd 的新旧信任快照对照
+
+本机无网络 Docker 双 sshd 使用不同临时账号、密码和密钥。ARM64／Bionic 原生驱动让入口 view 只包含跳板主机键，再以同一跳板／目标进行三种对照：旧 view 把目标识别为 NEW 并拒绝，目标服务端没有密码请求；增加目标密钥的 fresh view 令目标识别为 KNOWN，完成目标密码认证和 PTY 命令；fresh view 存放错误目标密钥时识别为 CHANGED，在目标密码请求前拒绝。真实跳板 `direct-tcpip`、清理及既有预置信任／错误密钥回归也通过。
+
+- 驱动构建：`./hako bash android/ssh/android-password-client-build.sh --output /app/build/ssh-jump-fresh-interop-20261120-v2 --jump-interop`；输入前后摘要一致，驱动 SHA-256 `86679f55f66a395dae982fd864f955ae523bb08f62e510238a2916286b87ded2`。
+- 运行：`bash android/ssh/docker-jump-test.sh --driver "$PWD/build/ssh-jump-fresh-interop-20261120-v2/ctos_ssh_jump_interop_test"`；镜像 ID `sha256:30917cc575007b885a8f3fc478e3e2e643a6f52ec82ed33268a1370f7247b382`，最终 gate 通过。入口与目标的受限测试密码只在临时容器中生成和使用。POSIX 语法、ShellCheck、shfmt 通过。
+- 首版测试给候选回调遗漏了必需的 abort 回调，导致创建阶段以 EINVAL 拒绝；修正夹具并重新构建后得到上述结果，该失败不计通过。
+
+fresh view 的版本和 binding 由 C 测试夹具构造，使用测试 callback；驱动在建立连接前已把两个临时密码读入进程，负向断言仅证明目标凭据回调未调用且服务端未收到目标密码请求。这是真实服务器与 native hostfile 的对照，不是 Java／JNI／加密 vault 的联合连接，也不证明信任 CAS、并发取消或 Android 产品路径。产品入口仍关闭。[环境及重放](ssh-proxyjump.md#本机隔离-openssh-跳板测试环境)。
+
+<a id="20261120-ssh-jump-route-role"></a>
+## 2026-11-20 SSH ProxyJump：逐跳路由和账号身份（进行中）
+
+内部严格路由现在可从受保护配置快照经 Java／JNI 解析每跳；v2 原生 role 将整链身份与当前跳账号目标分开。它们尚未被产品连接 factory 联合消费，不能据此开放 `ProxyJump` 入口。[当前设计及剩余条件](ssh-proxyjump.md#连接主线与阻塞顺序2026-11-20)。
+
+- 固定 OpenSSH 10.6p1、Android ARM64／Bionic 构建的 QEMU 定向测试分别通过 evaluator **4,506**、managed-detached **12,198**、live handle **5,299** 次检查，计数包含测试循环；测试涵盖逐跳上下文、原配置限制、完整 v5 帧、最大长度 canary、撤销和清理。前两套在正常 memlock 限额下运行且各自包含 64 KiB 子进程；不能将两套完整测试描述为全局 64 KiB 通过。live handle 全局 64 KiB 通过。
+- `bash android/ssh/host-config-route-jni-test.sh --output build/ssh-route-host-jni-replay-20261120` 经 Linux 主机 JVM `-Xcheck:jni`、生产 Java evaluator／JNI／handle 和固定解析器通过双跳字段、无跳、策略拒绝、线程、取消及清理；另一用例经真实 `VaultManifest` 调用生产 `SshConnectionMaterial.profileRoute()`。输入与现有 release class 编译快照前后 SHA 相同；Android Process、系统身份和 guard 使用主机替身，未运行真实加密库授权或网络连接。
+- `bash android/ssh/host-role-jni-test.sh` 通过 native role 回归 **1,768** 次检查、v1／v2 canonical wire 与真实 JVM→生产 Java／JNI／C role 的篡改及过期拒绝；`-Xcheck:jni` 未报错，输入 SHA 前后一致。真实加密 `AppSecrets` 与内存 Store 的 `SshSavedPasswordTest` 分别保存并读取两个账号，交叉选择被拒；该 JVM 用例的 role、host／KEX 证明由测试构造，不是实际网络链。
+- 使用最终 native 源码执行 `./hako bash android/ssh/android-password-client-build.sh --output /app/build/ssh-jump-v2-final-20261120 --jump-interop`，输入前后 SHA 一致；随后 `bash android/ssh/docker-jump-test.sh --driver "$PWD/build/ssh-jump-v2-final-20261120/ctos_ssh_jump_interop_test"` 在 `--network none` 的本机容器中通过。驱动 SHA-256 `3c26c671e8712e4eb0aa37b5d339e1b1815f491dbb1afad32a53396250f59557`，镜像 ID `sha256:30917cc575007b885a8f3fc478e3e2e643a6f52ec82ed33268a1370f7247b382`。两端 v2 role 共用链身份、分别拥有不同目标身份和测试账号密码；真实跳板转发、目标 PTY 和清理通过。错误目标主机键被拒且服务端没有目标密码请求。驱动使用测试回调和预置信任，不调用真实 Java／JNI／vault，也不测试新增 child 信任刷新。
+- `SshManagedKnownHostsProviderTest` **25 项通过**：真实加密库、内存 Store 和测试 view 验证同一次读取生成 receipt／wire、own trust CAS 后旧 epoch 被拒、错误／撤销 view 拒绝、受阻 validator 期间测试 view 撤销不等待及两线程至多一人取得 wire。它不证明完整链取消或秘密最终复制的原子顺序。
+- 任务授权下在本机无沙箱执行 `bash android/ssh/host-jni-multihop-test.sh`，使用 64 KiB memlock 与 `-Xcheck:jni`。fresh hostfile 的 C 测试经实际解析器／加密合成 peer 覆盖 KNOWN／NEW／CHANGED、父取消、错误 epoch／binding／UUID／CONFIG 与 v2 角色，**448,825** 次检查通过，计数包含协议循环；生产 `openJumpChildFresh` 的 JNI 测试刻意使创建失败，验证 mlock 快照和 borrow 的保留、abort 释放及原 view 存活。旧 JNI 模式 0–9 通过，输入 SHA 前后一致；fresh 成功分类使用 C callback，未经该新 JNI 入口或真实 vault。默认沙箱因 `getsockopt(SO_TYPE)` 返回 EPERM 导致初次尝试 EINVAL，该次不计通过。
+- 认证相关三个 Flutter 测试文件 **143 项通过**，覆盖严格 endpoint／hop、跳板密码／口令／KBI 显示、不同 hop 重置 KBI 轮次和旧 hop 迟到；最后增加 IPv6 括号显示后，相关 API 测试 **4 项通过**。测试使用方法通道替身，不是设备或产品多跳链。
+- 项目 Docker 环境中，固定解析器、生产 native 归档和 JNI 库已实际重编；首次联合构建因新增测试缺少 `AtomicBoolean` 导入失败。修正该测试后，复用刚编成的未改动 native 产物，以 `:app:testReleaseUnitTest :app:lintRelease :app:assembleRelease -x :app:compileSshConfigEvaluator -x :app:compileSshProductionObjects -x :app:compileSshFiles --offline` 通过：完整 JVM **1,015 项／61 套，0 失败／错误／跳过**；Android lint **0 错误／3 个既有警告**。最终 APK SHA-256 `3d4e1acc16927a970b994aab38f5199f15cbe631b1331f7095b61221daab06d3`，一个 Android Debug 签名者，v2 验签通过，未安装。`flutter analyze --no-pub` 和 `flutter test --no-pub --reporter expanded` 全项目通过，Flutter **500 项通过**。
+
+
+<a id="20261120-ssh-jump-terminal-chain"></a>
+## 2026-11-20 SSH ProxyJump：终端调度和快速关闭
+
+实际 `SshTerminalSession.NativePort` 现从目标的精确 Java／JNI child owner 链冻结会话，逐层调度 parent／relay／target；目标报告 RUNNING 后先从内向外保留祖先，再完成 shell confirmation，之后才准入 running。取消尝试整链，关闭按目标到入口逆序，可重试。[设计与剩余边界](ssh-proxyjump.md#java-终端的跳板链调度)。产品连接器仍不创建此链，配置入口继续拒绝 ProxyJump。
+
+- 实际 Java `NativePort` 加 fake native binding 覆盖直连、一跳与两跳的调度顺序、逐跳晋升与 confirmation 先于 running、父取消／晋升失败不发布、全部取消、child 和祖先分别失败后的逆序重试，以及已保留祖先 CLOSED 后子 relay／目标的假缓冲排空。它不证明真实 JNI 或加密协议的 EOF 排空；未发送数据的 `EPIPE` 仍按既有 native 测试记录解释。
+- 独立复核发现既有直连和新增链都可能遇到 OPENING 直接到 CLOSED 且 buffered 非零：终端原先既不读取也不结束而持续调度。现在仅在从未确认 RUNNING 且仍有输出时有限失败、取消并清理，不发布未确认字节；实际 NativePort 的直连首轮和一跳 step 后场景均有 JVM 回归。
+- `./hako bash -lc 'cd android && ./gradlew :app:testReleaseUnitTest :app:lintRelease :app:assembleRelease -x :app:compileSshFiles -x :app:compileSshProductionObjects -x :app:compileSshConfigEvaluator --offline --console=plain'` 成功，**61 套／996 项、0 失败／错误／跳过**，其中 `SshNativeSessionTest` 126 项、`SshTerminalSessionTest` 17 项。lint 报告 **0 错误／3 个既有警告**，本轮完整命令命中 lint 分析缓存；之前修改后的定向命令和 lint 已运行。一次将 `--tests` 错置在 lint 参数后的尝试被 Gradle 拒绝、未运行测试，随后更正并通过。
+- Release APK `build/app/outputs/apk/release/app-release.apk` SHA-256 `f5294c9f95c42fd565ecb0247cda7fb6c269835e8f19cfd5f216d01bb3998f4d`，`apksigner verify --verbose` 验证 v2 且 1 个签名者。未安装或发布。构建明确跳过三个未修改的 native 编译任务，复用既有原生输入；本轮没有重跑整套 ARM64 合成矩阵。原生真实 OpenSSH 结果单列于[本机 Docker 验证](#20261120-ssh-jump-docker-interop)。
+
+测试使用 fake native binding；实际 Java／JNI／真实 vault 的一跳联合、祖先撤销与凭据／信任效果的共同顺序、后台及 Android 设备仍未验证。未来产品 factory 必须在 NativePort 创建失败时仍持有所有祖先，以供逆序清理和重试。当前状态不能开放产品 ProxyJump。
+
+<a id="20261120-ssh-jump-docker-interop"></a>
+## 2026-11-20 SSH ProxyJump：本机 Docker 和真实 OpenSSH 单跳互通
+
+用户授权自行建立本机 Docker 测试环境，并将这一工作方式记录到[项目规范](../.trellis/spec/trellis-plus/index.md#docker-development-entry-point)。本次从 [Dockerfile](../android/ssh/Dockerfile.openssh-fixture) 构建项目专用镜像 `ctos-ssh-fixture:local`，其 ID 为 `sha256:30917cc575007b885a8f3fc478e3e2e643a6f52ec82ed33268a1370f7247b382`，内有 Debian OpenSSH 9.2p1（`1:9.2p1-2+deb12u10`）。基础镜像固定摘要，软件包从当时的软件源安装，之后重建不保证镜像或包版本相同。运行夹具采用 `--network none`，两个 sshd 分别只监听同一临时容器内的回环端口；无宿主端口或项目可写挂载。跳板和目标使用不同的临时账户、随机密码及主机密钥，不代表跨容器网络或真实账户验收。构建及使用方法见[设计](ssh-proxyjump.md#本机隔离-openssh-跳板测试环境)。
+
+- `docker build --pull=false --tag ctos-ssh-fixture:local - < android/ssh/Dockerfile.openssh-fixture` 成功；镜像内预生成的系统主机键已删除。实际运行的 Docker 客户端须能访问本机 daemon；默认沙箱拒绝 socket 后，本轮依据权限机制对任务内命令提权执行。
+- `./hako bash android/ssh/android-password-client-build.sh --output /app/build/ssh-jump-interop-20261120-distinct-users --jump-interop` 编译 ARM64／Bionic 静态测试驱动成功，构建前后列明的输入摘要一致。驱动 SHA-256 `b76bf8d3767ea1f402de21ff17de0aec57dee000d075eb9d60041f6e4532ac63`，源码 SHA-256 `117c1e61aefa77b2be3bffead778437bf6196e3b01c74597603756f698af82bc`。
+- `bash android/ssh/docker-jump-test.sh --driver "$PWD/build/ssh-jump-interop-20261120-distinct-users/ctos_ssh_jump_interop_test"` 退出 0。标准 OpenSSH 经跳板公钥登录目标并执行命令，两端用户名及主机密钥不同；错误目标密钥被拒。QEMU 中 ctOS 原生客户端分别完成跳板和目标的已知主机分类、不同密码认证、`direct-tcpip`、目标 PTY 命令及跳板保留，按 child→relay→parent→view 清理。跳板服务端对原生驱动调用单独记录新增转发，两端服务端分别记录各自账号的密码请求与接受。
+- 原生负面场景将预置信任中的目标公钥替换为另一把测试公钥：驱动在 `target-auth` 阶段退出 1（该阶段先执行 KEX／主机检查，输出 `errno=5`），原生 rejection 接口明确报告主机密钥变化，目标 KEX 完成及测试凭据回调的计数均为零。该次跳板日志仍有新转发，目标日志没有新增密码请求、接受或会话；正向结果验证了该日志匹配规则可用。驱动在建连前已将两段合成密码读入自身内存，不能据此推定真实 vault 的解密时机。另以故意退出 37 的临时 ARM64 驱动验证失败码传播和所属容器清理；该故障测试不代表 native owner 清理故障注入。
+- Bash／POSIX 语法、ShellCheck 和 shfmt 均通过；结束后按 `ctos.scope=ssh-proxyjump-fixture` 查询无剩余容器。项目专用镜像保留供重放。
+
+这是使用当前 native 实现、测试回调及预置测试主机键的真实服务器单跳；两个 native role 的目标身份仍为同一合成常量，不能据此证明产品按逐跳身份绑定 vault 凭据。它不是生产 Java／JNI／vault／Flutter 链路，也不验证首次信任写入、清理失败注入、Android、后台或真实用户服务器。产品 ProxyJump 入口仍关闭。
+
+<a id="20261120-ssh-jump-jni-owner"></a>
+## 2026-11-20 SSH ProxyJump：内部 Java／JNI 父子会话 owner
+
+沿 1008 实现两阶段 Java／JNI 子会话 owner：先预留精确父会话和原线程，再创建 child／relay；异常后保留全部已创建资源并按 child→relay→parent 顺序清理。Java 提供跳板 begin／状态／pump／晋升，并将目标 shell confirmation 推迟到全部祖先晋升。[设计与未完成边界](ssh-proxyjump.md#jni-父子会话内部接入产品编排未实现)、[合同](../.trellis/spec/backend/ssh-proxyjump-child.md#java--jni-child-session-ownership)。这些内部入口没有产品连接器调用方，产品 ProxyJump 继续拒绝。
+
+- `bash android/ssh/host-jni-multihop-test.sh` 在宿主提权运行全部 10 个模式通过，`-Xcheck:jni` 未报告警告，末行 `JNI_MULTIHOP_INPUTS unchanged=pass`。模式 0–9 分别 **100,796／89,652／94,869／72,133／60,113／69,532／96,877／74,892／82,110／72,289 次检查**，数值包含协议循环，不是独立用例数。默认沙箱首次运行在 native socket 初始化处以 `errno=22` 失败；该失败不计通过。后续夹具先后修正测试预占 relay 和 probe borrow 清理的设计错误，再完成上述最终运行。
+- 共享场景经生产 JNI session 表预留并创建真实目标 child、pump relay 和晋升跳板，使用真实 native SSH／callback／共享 view，覆盖父 pin、错误 view／期限／下一角色、跨线程拒绝、无 child 的 abort、真实 child-only 状态 2、成功状态 4，以及 relay 已关闭 fd 后实际 `EBADF` 与描述符复用重试。状态 3 在真实 child 与 relay 创建后由夹具顺序注入失败，仅验证 JNI 围栏及清理，不是并发取消竞态实测。错误下一角色场景先确认 slot 已持有真实有效的 pending borrow，abort 后再通过新句柄创建验证无残留。
+- `./hako bash -lc 'cd android && ./gradlew :app:testReleaseUnitTest :app:lintRelease :app:assembleRelease --offline --console=plain'` 成功，重新编译生产 native 库和 APK；完整 JVM **61 套／987 项通过，0 失败、错误或跳过**，lint 分析执行、报告任务命中缓存，报告 **0 错误／3 个既有警告**。Java 测试使用 fake native binding，覆盖未 OPEN 即调用后重试、state 1–4、查询和清理失败、取消、两层祖先晋升前不执行目标确认，以及原 owner 逆序清理。APK SHA-256 `667c54605bd61c33a215901cc1a2f20fd58b5004432dd718ff521b98da6a4bf6`，单个 Android Debug 签名者，v2 验签通过、未安装；从 APK 提取的 arm64 库包含八个新增 JNI 入口符号。
+- host fixture 的父 session 槽位由测试手工登记，Java 回调接收者和 SSH 对端是测试实现；Java 状态机测试与真实 JNI 合成链是分层证据，尚未组成生产 Java 连接器／真实加密库／JNI 的完整链，也未证明跨跳信任、秘密效果或最终输出与取消原子排序。未执行 ARM64 全量合成协议回归、Android ART／设备或真实服务器测试。测试后当前生产 JNI 源码 SHA-256 `9ba794f19098f5ee3ae42f44311a05d06b92e4ae9426f7d4c25ec983ba1fdfa9`，host 夹具 `aadfce58ce2e2be48978734844926375c79aae15551bf934938d0ebdbec91763`；脚本没有持久化测试时逐文件摘要，上述值是测试后核对值。
+
+<a id="20261120-ssh-shared-java-view"></a>
+## 2026-11-20 SSH ProxyJump：Java 共享视图的内部会话接入
+
+沿 1008 新增持有精确 `SshPublicFileLease` 的内部共享 owner 与 `SshNativeSession.openManaged` 重载。产品连接器尚未调用新入口，产品 ProxyJump 仍拒绝；逐跳 JNI／信任效果及完整链清理仍未完成。[设计与后续顺序](ssh-proxyjump.md#连接主线与阻塞顺序2026-11-20)。
+
+- 首轮以 `./hako bash -lc 'cd android && ./gradlew :app:testReleaseUnitTest --tests im.majo.ctos.SshNativeSessionTest --tests im.majo.ctos.SshSessionOwnerTest --tests im.majo.ctos.VaultSessionTest --tests im.majo.ctos.SshPublicReadValidationTest --tests im.majo.ctos.SshPublicFileLeaseTest -x :app:compileSshConfigEvaluator -x :app:compileSshFiles --offline --console=plain'` 运行定向 JVM，**5 套／158 项通过**。独立复核随后发现测试构造入口可能混用角色 view 与 token 来源，已收紧为生产入口只接受真实 lease、测试构造要求同一对象，并增加覆盖；此首轮结果早于修正，不代表最终源码。
+- 最终执行 `./hako bash -lc 'cd android && ./gradlew :app:testReleaseUnitTest :app:lintRelease -x :app:compileSshConfigEvaluator -x :app:compileSshFiles --offline --console=plain'` 成功。完整 JVM **61 套／979 项通过，0 失败、错误或跳过**；release 与测试代码 lint 分析执行、报告任务命中缓存，报告 **0 错误／3 个既有警告**。测试覆盖会话各自退役、提前关闭、错误身份、重复／封口后发行、取消、打开失败与清理重试；Java session native binding 和部分 lease 为测试替身。明确跳过原生重新编译；本轮没有执行 APK 构建或 ARM64 完整协议回归。
+- 另以主机 `cc -std=c11 -fPIC -shared -Wall -Wextra -Werror` 编译实际 `ssh_file_jni.c`、`ssh_file_view.c`、`ssh_view_handle.c` 和 `/tmp/ctos-shared-view-jni/shared_probe.c`，通过 `-idirafter` 引入项目 NDK 的 `jni.h`；再以 release 编译得到的 Java class、项目缓存的 Bouncy Castle 和 `java -Xcheck:jni` 运行 `/tmp/ctos-shared-view-jni/SshRealSharedSmoke.java`，输出 `REAL_SHARED_LEASE_JNI pass`。该主机烟测使用真实 Java `SshPublicFileLease`、真实 `VaultSession.lock` 和真实 native 受管句柄的两份独立 borrow：第一份释放后第二份仍活跃，锁库使其失效，释放后可创建新句柄。首次尝试用 `-I` 引入整个 Android NDK sysroot 导致 host libc 头冲突，改用 `-idirafter` 后编译成功；首次失败不是运行通过。
+- 主机烟测的 role／callback 是替身，binding 的 native adoption 由测试手动标记，borrow 由测试 JNI helper 直接管理；没有运行真实 native SSH client、`AppSecrets` 存储、产品链、Android ART 或服务器。临时源码／库位于 `/tmp/ctos-shared-view-jni`，可能被清理；Java 夹具 SHA-256 `c4f4677469741775cd765b360e3763f3e6e0a42595544dc2d6c1011a26cc0af5`，C helper `8b34f94babb0b0810e17ff5115299fbc855c22b1ef8442b16919d854cb6be312`，主机测试库 `b50ca406e4b3008577fe7246af684bb4bfb7b8d9c67357feedbdeebeb5a709a0`。本轮未连接设备、安装 APK、访问真实账号或提交。
+
+<a id="20261120-ssh-shared-view-native"></a>
+## 2026-11-20 SSH ProxyJump：单一原生视图的多跳 JNI 合成验证
+
+继续 1008，以固定 OpenSSH 包和项目补丁构建本地主机夹具；三个实际 native 客户端分别领取同一个受管视图句柄的独立 borrow，并经各自 SSH 会话和中继传输。三把不同的合成主机密钥都记录在同一合成主机名的 known_hosts 中。该轮仅改测试，不新增产品入口或 Java 共享租约。[设计](ssh-proxyjump.md#原生已建立链的传输晋升)、[借用合同](../.trellis/spec/backend/ssh-view-borrow-ownership.md)。
+
+- `./hako bash -lc 'cd android && ./gradlew :app:testSshViewHandleHost --offline --console=plain'` 通过。真实受管句柄的三个 borrow 独立 claim，错误 owner 和重复 claim 被拒绝；逐个释放不影响剩余借用。目标 borrow 释放后撤销句柄会令其余 borrow 失效，原 owner 仍可依序清理。相同测试源码以 ASan／UBSan 通过，`ASAN_OPTIONS=detect_leaks=0`，不是泄漏检测。
+- `bash android/ssh/host-jni-multihop-test.sh` 使用 OpenJDK 21、系统 OpenSSL 和固定 OpenSSH 10.6p1，以 `-Xcheck:jni` 通过全部十种合成场景；构建前后源码输入摘要一致。原有六种单跳／两跳及 callback 取消场景分别 **100,796／89,652／94,869／72,133／60,113／69,532 次检查**；新增场景 6–9 分别 **81,668／72,288／79,506／69,685 次检查**，数字含协议循环，不是独立测试数。
+- 场景 6 通过生产 JNI 对已认证目标执行 `beginShell`，确认入口和中间借用仍活跃；测试再按内到外调用原生跳板晋升并撤销句柄，目标经 JNI 读写成功。入口 callback 取消后，已缓冲的目标输出经 JNI 读取返回异常和空结果。场景 7 在目标晋升前撤销句柄，目标 `beginShell` 和上游借用被拒绝；场景 8 在目标 shell 已运行但跳板尚未晋升时撤销，JNI 不返回已缓冲输出且跳板晋升失败。
+- 场景 9 在目标选中凭据的同步 Java 测试回调中撤销共享句柄，随后的真实 native 祖先时点检查失败，JNI 认证调用报错，测试 Java 返回的凭据数组被擦除。撤销是回调线程顺序注入，不证明并发取消与真实秘密复制或 trust CAS 的原子顺序，也不据此推断服务器从未接收请求。每次共享场景在逆序关闭 child／relay／父连接后重新创建并销毁新句柄，确认旧句柄未被借用继续占用；单独调用幂等 destroy 成功本身不足以证明释放完成。
+- 实际目标 child 由测试代码手工登记生产 JNI session 表，祖先由 C 夹具驱动，Java receiver、信任结果和服务端均为测试实现；`SshPublicFileLease`、产品 Java chain owner、真实加密库 trust CAS、Android ART／设备及真实 SSH 服务器均未参与。此次未运行设备或安装 APK，未重跑 ARM64 完整客户端；上一轮的独立结果见[原生晋升验证](#20261120-ssh-jump-retain)。最终 C 联合夹具 SHA-256 `645ced61503f63575b7698b097b9c2029b858219de539ecfeb4795349e071e76`，隔离 Java 接收者 `2dfde0ade20f6cbf16b087a7861c31efac3c18df111c95d174f491eab5ac88ab`，句柄测试 `ee17006259f1766e16e1dd9ae3f8a1c82f1122af28df6d512f168413661ea8f7`；临时构建可被清理。
+
+<a id="20261120-ssh-jump-retain"></a>
+## 2026-11-20 SSH ProxyJump：原生已建立链的传输晋升
+
+沿 1008 增加内部原生 JUMP 晋升：最终目标及下游已认证／建立后，原 owner 在原期限内逐跳向入口晋升；成功后保留精确传输和全链证明，退役本跳认证视图及选择。重复认证请求被拒绝而不误终止有效传输。产品入口仍拒绝 ProxyJump，真实效果排序和 Java 全链 owner 尚未实现。[设计](ssh-proxyjump.md#原生已建立链的传输晋升)、[合同](../.trellis/spec/backend/ssh-proxyjump-retained-transport.md)。
+
+- ARM64／QEMU 执行同源码 `build/ssh-jump-retire-lock-20261120/ctos_ssh_native_client_test --jump-retain-only`，**734,130 次检查通过**，计数含协议循环。三层真实原生加密引擎配合合成对端覆盖：无子端、子端未建立／仍在 opening、父先于中间跳板、任一后代 EOF 和错误线程均拒绝晋升；更深 EOF 时入口原 borrow 保持可用。目标及两跳逐一晋升后，三个原角色期限真实到期且测试视图标记无效，目标双向数据仍通过两层中继；认证服务、发现、密码、私钥、KBI、续接、挑战响应、提示轮询和选中秘密读取继续拒绝，后续 I/O 仍可用。
+- 同一专项覆盖入口／中间／目标 callback 各自取消后阻断缓存输出、目标 KEX 在晋升前及晋升后失效、原生 view claim 释放注入 `EIO` 后维持 cleanup-only 所有权，以及正常 EOF／CLOSED 后接收数据排空。测试钩子在直连 shell 和跳板晋升的原有 view 活性检查之后、借用释放之前标记 caller-owned fixture view 无效，均拒绝晋升并保留清理所有权；另一用例令测试视图期限长于角色，在晋升中等待角色真实过期，验证即使借用已释放仍不得发布传输。钩子是顺序注入；取消不是并发效果原子性测试。每跳 view 为测试自有对象，不能代表产品只有一个 active lease 的管理方式；数据路径和对端为本地合成，本轮晋升最多验证两跳，也不能代表八跳性能、真实服务器或 Android 后台。
+- `./hako bash -lc 'cd android && ./gradlew :app:testSshViewHandleHost --offline --console=plain'` 通过。真实 native 受管句柄覆盖活性预检后撤销再释放、视图真实到期后释放（均拒绝并保留 claim）、释放后撤销，以及 **64 次撤销／受保护释放并发竞争**；两个确定的先后顺序分别验证，竞争测试检查每次实际结果并按原 owner 清理，未统计两种结果各出现多少次。`-Wl,--wrap=munmap` 的真实销毁失败变体、ASan／UBSan 变体均通过；ASan 使用 `detect_leaks=0`，不代表泄漏检测。视图临界区只排序受管句柄撤销和借用释放，不等于将 Java 效果或全链撤销原子化。
+- 最终源码重新运行 `bash android/ssh/host-jni-multihop-test.sh`，一跳／两跳及 host／凭据回调内直接或更深祖先取消的六种场景分别 **100,796／89,652／94,869／72,133／60,113／69,532 次检查通过**，输入前后摘要一致。该现有夹具未调用新增晋升 API；Java receiver 与信任结果为测试实现，child 手工登记 session 表，不证明产品 Java 或真实库写入。
+- 新增 `VaultTest.trustCommitInvalidatesPriorRequestAndStaleBaseCannotOverwriteIt`，使用真实 `AppSecrets` 加密／解密、内存 Store、测试 validator 和旧的测试兼容 trust 入口：第一份提案提交后 epoch 改变，先前签发的第二个请求返回 `VAULT_OPERATION`；第二次在新 epoch 签发请求后，以旧摘要写入返回 `VAULT_CHANGED`，密文与解密后的第一份信任内容保持不变。这验证基础 CAS／epoch 行为，不是实际多跳或产品 role-bound provider／共享租约的测试。
+- `./hako bash -lc 'cd android && ./gradlew :app:testReleaseUnitTest :app:lintRelease :app:assembleRelease --offline --console=plain'` 成功，重新编译原生生产归档；该次 JVM 与 lint 使用缓存。之后只新增上述 Java 测试，以 `:app:testReleaseUnitTest -x :app:compileSshConfigEvaluator -x :app:compileSshFiles` 实际重新运行完整 JVM，**973 项／61 套通过，0 失败／错误／跳过**；同样跳过原生编译重跑 `:app:lintRelease` 成功，单元测试 lint 重新分析，其余分析及报告使用缓存，报告 **0 错误／3 个既有警告**。原生回归另记下方。最终 APK SHA-256 `6ee27adb21bbde7bac22cffc536f5ae01912300cf57ebf20df93518f353c1d7d`，单个 Android Debug 签名者，v2 验签通过；没有安装或连接设备。
+- 最终 `--client` ARM64 测试驱动构建成功、构建本身 `runtime=not-run`；随后执行 `prlimit --memlock=65536:65536 --core=0:0 -- qemu-aarch64 build/ssh-jump-retire-lock-20261120-final/ctos_ssh_native_client_test`，完整原生合成回归 **6,327,328 次检查通过**，计数含协议循环。其输入生产归档 SHA-256 `a8e71ce600365e0b71c9d5571212f1f985eff118629eab5bbabcbf5538c39959` 与最终 APK 构建归档相同，构建前后输入摘要一致。驱动 SHA-256 `4127523b5d1b6c0ff06d49b1fd02e7fc87fba507abca28bd8b5223990583a805`，另编译了测试钩子；release 未剥离 arm64 库的符号检查含晋升接口、不含三个测试故障钩子。发现期限／撤销竞态前的两次旧版完整运行由本轮主动停止，不计为通过。
+
+<a id="20261120-ssh-callback-jni-multihop"></a>
+## 2026-11-20 SSH ProxyJump：主机 JVM 与真实多跳原生回调
+
+沿 1008 补充上轮分离的 JNI／多跳证据：使用真实 native child、祖先、中继、JNI callback 和 JNI session 表，在同一主机 JVM 中运行一跳及两跳加密合成链。[设计](ssh-proxyjump.md)、[合同](../.trellis/spec/backend/ssh-proxyjump-callback-proof.md)。本轮只添加测试夹具与脚本，没有改变产品连接门禁。
+
+- `bash android/ssh/host-jni-multihop-test.sh` 在 Linux x86_64、OpenJDK 21.0.13.1 和系统 OpenSSL 3.5.7 下通过。脚本校验固定 OpenSSH 10.6p1 源码包及三份项目补丁的 SHA-256，在 `/tmp` 构建主机测试库并以 `-Xcheck:jni` 运行；测试前后的源码、测试、头文件、JNI 头和脚本摘要一致。该脚本依赖主机 C／OpenSSL／zlib 开发环境、JDK、项目 NDK JNI 头和已准备的固定源码包，不安装依赖或连接设备。
+- 测试代码将真实 child 手工登记到生产 `ssh_session_jni.c` 的 session 表，调用真实 JNI `step` 和 `beginPasswordAuth`；Java 回调通过同一 session mutex 的 `trylock` 确认锁已持有，再调用真实的 receiver-bound JNI 祖先检查。KNOWN host evidence、KEX 和选中密码回调均验证正确 receiver 与 token 可用，错误 receiver／祖先 token、错误线程、回调前后重放被拒绝；进程在 120 秒超时内完成，未报告 JVM JNI 检查警告。
+- 六个场景依次为一跳正常、直接父节点在 host 回调取消、直接父节点在选中凭据回调取消、两跳正常、更深祖先在 host 回调取消、更深祖先在选中凭据回调取消。最终分别 **100,796／89,652／94,869／72,133／60,113／69,532 次检查通过**；这些数字包含协议循环，不是独立用例数。正常场景的合成目标完成密码认证；凭据回调返回的 Java 测试字节数组在正常和取消路径均观察到被清零。取消由同一回调线程主动调用祖先 callback cancel，非并发竞态；取消路径未继续驱动中继，不能据服务器尚未收到请求断言效果原子性。
+- Java receiver 和 KNOWN 信任响应由测试提供，祖先由 C 夹具驱动；既没有调用产品 Java `SshNativeSession` 子连接构造，也没有访问真实加密秘密库或执行 NEW／CHANGED CAS。该主机 JNI／glibc／OpenSSL 测试不代表 Android ART、APK 产品链、设备或真实服务器通过，单次检查仍不授予跨跳信任／凭据效果权限。
+- 初版夹具将 root 的步长调大，触发现有 root 驱动的三字节预算断言；恢复原预算后通过。`bash -n`、ShellCheck、`shfmt -d`、帮助及非法参数检查通过；最终源码脚本 SHA-256 `db46e3aa16f7421be643fe7db4dacb94609aa314b40fbeb64e73f0410ca1fe27`。既有 release 原生库不含此次 fixture JNI 符号；本轮未重新构建 APK、未运行设备测试、未提交。
+
+<a id="20261120-ssh-callback-jni"></a>
+## 2026-11-20 SSH ProxyJump：绑定接收者的回调 JNI 检查
+
+继续 1008：私有 JNI 实例方法在 child 的真实 native 分派回调内检查注册的精确 Java receiver、JNI 验证函数、callback、线程和环境，再顺序检查实际祖先。该时点原语没有产品调用方，不提供信任写入／秘密复制与祖先撤销的原子顺序；产品 `ProxyJump` 仍拒绝。[设计](ssh-proxyjump.md)、[合同](../.trellis/spec/backend/ssh-proxyjump-callback-proof.md)。
+
+- `./hako bash -lc 'cd android && ./gradlew :app:testSshCallbackJniHost :app:testSshCallbackAdapterHost --offline --console=plain'` 通过。新增主机 JVM 夹具使用真实 JNI 调用和生产 callback adapter，在 Java→JNI→C→Java 的同步回调中验证精确／错误 receiver、无效／其他 token、错误线程、嵌套回调、作用域结束后重放、checker 失效及检查期间取消；`-Xcheck:jni` 未报告错误。该夹具的 Java receiver 是隔离测试类，祖先 checker 是受控替身，并未运行真实多跳 native client 或 Android ART。
+- callback 主机测试 **56 项通过**，另以 UID 包装及 ASan／UBSan（`ASAN_OPTIONS=detect_leaks=0`，不代表泄漏检测）各运行 **56 项通过**。新增断言覆盖缺失、错误或替代的 receiver 验证器；替代函数未被调用，随后原作用域检查仍可用。测试计数含既有用例。
+- `./hako bash android/ssh/android-password-client-build.sh --output /app/build/ssh-jni-scope-20261120-v2 --client` 构建静态 ARM64 夹具，构建本身为 `runtime=not-run`。随后执行 `prlimit --memlock=65536:65536 --core=0:0 -- qemu-aarch64 build/ssh-jni-scope-20261120-v2/ctos_ssh_native_client_test`，完整合成客户端 **5,592,828 次检查通过**，计数包含协议循环。测试在真实二／三层加密合成链的 NEW／CHANGED、KEX 和选中凭据回调内执行 receiver 入口及实际 native 祖先 checker，另验证 root／伪回调和取消后拒绝；receiver 在此驱动中是 C 测试对象，不是 Java／JNI。
+- 最终 ARM64 驱动 SHA-256 `24c45260d34eb5fca3794a735a614f695f770ce9c391880f793d2d225314dbca`，其输入归档 `4a5448239c594e97aca872738637a42c46fa90c7a3db36a04331f2f27c19b3dd` 与最终 release 归档一致；驱动另编译测试钩子，不是 APK 或设备运行。较早版本的跳板专项以同一 QEMU 限制运行 **2,374,080 次检查通过**，但该版本早于验证器身份收紧，不替代最终完整结果。
+- `./hako bash -lc 'cd android && ./gradlew :app:testSshCallbackJniHost :app:testSshCallbackAdapterHost :app:testReleaseUnitTest :app:lintRelease :app:assembleRelease --offline --console=plain'` 成功。JVM 实际执行 **972 项／61 套，0 失败、0 错误、0 跳过**；最终 native 收紧后的构建复用该 JVM 结果和 lint 报告，lint **0 错误／3 个既有警告**。APK SHA-256 `fe6356f1b765fd1bf1f3f6d9620fce1ffff07ae20a9966b2d80ba58dfae19639`，Android Debug 单签名者，v2 验签通过，未安装。APK 提取的 arm64 库包含新增 JNI 符号，未发现本次检查的 native client／view 测试钩子。
+- 初次主机 JNI 编译将 NDK 系统头目录作为普通 `-I`，与主机 libc 头冲突；改用 `-idirafter` 后通过。首版 JNI 夹具的两个角色使用同一 hop，被既有 role 唯一性检查拒绝；改为不同 hop 后通过。较早 ARM64 夹具在默认沙箱且未设置既有 memlock 限额时于客户端创建处返回 errno 22；原因未单独证实，随后按上述受限宿主 socketpair 与 memlock 命令通过。
+
+主机 JNI 替身和真实多跳 native 驱动是分离证据；尚未在同一实际 JNI 多跳链中验证回调重入，未验证 Android 设备或真实服务器，也未实现跨跳效果许可、共同取消顺序、逐跳产品编排或后台链生命周期。
+
+<a id="20261120-ssh-callback-output"></a>
+## 2026-11-20 SSH ProxyJump：回调祖先检查与输出取消顺序
+
+继续 1008：在原生子客户端的实际分派回调内，按原 owner、callback 和上游 relay／证明进行顺序检查；在现有 Java 终端数据与 replay 快照上，把输出准入和本次 owner 的取消排序。[原生合同](../.trellis/spec/backend/ssh-proxyjump-callback-proof.md)、[输出合同](../.trellis/spec/backend/ssh-terminal-output-cancellation.md)与[设计](ssh-proxyjump.md)。这两个内部增量均不构成 Java 跨跳效果的原子 guard，产品 `ProxyJump` 仍拒绝。
+
+- 运行 `./hako bash -lc 'cd android && ./gradlew :app:testReleaseUnitTest -x :app:compileSshConfigEvaluator -x :app:compileSshFiles --offline --console=plain'`，完整 JVM **972 项／61 套，0 失败、0 错误、0 跳过**；该调用明确跳过正在修改的 native 编译，后续原生运行及 APK 构建分别记录。此前五组定向回归 **185 项通过**；复核后又分别运行实际 owner 的锁屏／Stop 快照与 listener 内同步 Stop 用例，各 1 项通过。
+- Java 夹具以真实 `SshSessionOwner`、排队 dispatcher 和假 native session 控制先后：早期活性检查通过后、state 准入前取消时，不增加 replay 或发送新 data；已有 replay 在锁屏或 Stop 后、failed／closed runnable 执行前被新订阅时输出空 bytes，但仍报告当时实际的 running 状态。还覆盖先准入再取消、listener 重入、旧代次、内存缓冲擦除、ack 和原 owner 清理。已准入的事件或快照的 listener 可能在取消返回后物理完成；既有 state monitor 内同步 listener 的锁序没有改变，独立 role／view／祖先失效也未与此 CAS 原子排序。
+- `./hako bash -lc 'cd android && ./gradlew :app:testSshCallbackAdapterHost :app:testSshNativeClientHost --offline --console=plain'` 成功：回调主机 **56 项通过**；native client 任务仅构建并报告 `runtime=not-run`。同一回调源码的主机 UID 包装版本及 ASan／UBSan 版本各 **56 项通过**；ASan 设置 `detect_leaks=0`，不是泄漏检测。独立复核发现 PINNED 手动验证也能进入共同 host callback，已收窄为仅真实 packet step 可取得 host 回调作用域，并补充直接调用测试。
+- 两种主机变体均以 `cc -std=c11 -Wall -Wextra -Werror -pthread -Iandroid/app/src/main/cpp` 编译 `ssh_role_bootstrap.c`、`ssh_callback_adapter.c` 及 `ssh_callback_adapter_test.c`。ASan／UBSan 另加 `-g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer`，运行时设置 `ASAN_OPTIONS=detect_leaks=0`；UID 变体另加 `-DCTOS_SSH_CALLBACK_TEST_WRAP_UID=1 -Wl,--wrap=getuid`。两者的原始输出分别在 `/tmp/ctos-callback-scope-asan.log` 和 `/tmp/ctos-callback-scope-uid.log`，临时文件后续可能被清理。
+- `./hako bash android/ssh/android-password-client-build.sh --output /app/build/ssh-callback-proof-20261120-v1 --client` 构建静态 ARM64 合成驱动，构建本身为 `runtime=not-run`。随后使用 `prlimit --memlock=65536:65536 --core=0:0 -- qemu-aarch64 build/ssh-callback-proof-20261120-v1/ctos_ssh_native_client_test --jump-only` 实际通过 **2,374,014 次检查，runtime=synthetic**；计数包含协议循环。驱动 SHA-256 `92e4b19b916b41f6c895533eba0517de78ad1df609d55d350021615179720313`，输入原生归档 `5fcf91bc3405052ea0355a30f1d578538ada43896a5c92724592c8c2c80f1ffa`。
+- 专项在真实二／三层加密合成链的 NEW candidate／host／KEX、CHANGED candidate／review／KEX 和 selected-credential 回调内检查祖先，覆盖 root、非调用期、伪 owner、错误 token／环境、直接 wrapper、PINNED 直接验证、祖先 callback／view／role 失效及更深祖先取消。EOF／CLOSED 用例在 child callback 中由同线程 C 测试代码驱动 parent 关闭后验证顺序证明；它不证明当前 JNI 可重入，也不表示通道仍可写。回调 adapter 的嵌套／递归、错误 PID／UID／线程另由主机夹具检查，不将其冒充多层 JNI 结果。
+- 最终 release 构建重生成原生归档后，运行 `./hako bash android/ssh/android-password-client-build.sh --output /app/build/ssh-callback-proof-20261120-v2 --client`，再执行 `prlimit --memlock=65536:65536 --core=0:0 -- qemu-aarch64 build/ssh-callback-proof-20261120-v2/ctos_ssh_native_client_test`；完整原生客户端实际通过 **5,593,886 次检查，runtime=synthetic**，计数包含协议循环。驱动 SHA-256 为 `05353907ad878f394302ad1b4d0e5d4e4d5ea1a823b6cce95f2c96cd1b3c59ed`，输入原生归档 `91ada413892ed506677850daf291d26634ebead5d36fa5e8b44ca30c1c98846d` 与最终 APK 构建归档一致。该驱动另外编译开启测试钩子的原生源码，不是 APK 二进制，不能把两次检查计数相加。
+- 最终执行 `./hako bash -lc 'cd android && ./gradlew :app:testReleaseUnitTest :app:lintRelease :app:assembleRelease --offline --console=plain'` 成功，并重新编译 release 原生归档；JVM 测试命中上述完整运行的缓存，保留结果仍为 **972 项／61 套通过**。lint 分析执行、报告命中缓存，报告 **0 错误／3 个既有警告**。APK SHA-256 为 `294a366562d1fb39d83fa46bb16de5328398ad1e76a372b9fe179e844d702814`，单一 Android Debug 签名者，APK v2 验签通过；未安装或连接设备。
+- 最终 APK 的 arm64 动态符号及生成的未剥离库符号均不含 `ctos_ssh_native_client_test_claim_callback_scope`、`ctos_ssh_native_client_test_invalidate_kex`、`ctos_ssh_native_client_test_fail_next_view_release`、`ctos_ssh_view_borrow_test_fail_next_release`；合成测试驱动的符号表含上述四项。检查不替代设备运行。
+
+<a id="20261118-ssh-borrow-trust"></a>
+## 2026-11-18 SSH ProxyJump：借用所有权与信任回执
+
+沿现有 1008 处理原生客户端／实时配置求值器对同一 borrow 的竞争，并检查现有直接连接的主机信任提交与取消时序。[借用合同](../.trellis/spec/backend/ssh-view-borrow-ownership.md)。这仍是内部前置工作，不开放产品 ProxyJump。
+
+- 主机以 `cc -std=c11 -Wall -Wextra -Werror -pthread` 编译并运行 `ssh_file_view.c`、`ssh_view_handle.c` 和 `ssh_view_handle_test.c`，输出 `claim=pass race=pass`；竞态覆盖竞争 claim、claim 与普通 release、构造回滚与 release。分别重编译启用 `--wrap=munmap` 故障注入以及 `-fsanitize=address,undefined`，两版均通过；ASan 设置 `detect_leaks=0`，不构成泄漏检测。真实 `munmap` 故障后的 view 按现有语义保持 poisoned／EIO，不能称为重试必定恢复。测试的 raw pointer 无地址复用，不证明 ABA 安全。
+- `./hako bash -lc 'cd android && ./gradlew :app:testSshViewHandleHost :app:testSshConfigEvaluatorStaticHost :app:testSshConfigHandleStaticHost :app:testSshConfigDetachedStaticHost :app:testSshConfigManagedDetachedStaticHost :app:testSshConfigAuditStaticHost :app:testSshConfigResourceStaticHost :app:testSshNativeClientHost --offline --console=plain'` 成功。view 主机测试实际运行；其他列出的原生静态任务只编译并报告 `runtime=not-run`。
+- 随后在主机以 `prlimit --core=0:0 -- qemu-aarch64` 顺序实际运行构建出的固定 ARM64 测试：CONFIG 求值器 **4,430**、handle **5,201**、detached **1,261**、managed-detached **12,023**、audit **13,290**、resource **4,872** 次检查均通过，effects=0；后四类分别报告 capabilities=0。求值器的 detached 多跳 memlock 子进程未纳入该副作用计数，不据此声称其外部效果已被计数。部分套件含重叠基线，计数不应相加。求值器覆盖两实时求值器竞争、失效借用与非法参数优先级；live 客户端及 live 求值器各自通过共同 claim API 验证竞争，但未在同一个驱动进程中直接将两种 owner 交叉竞争。`bash -n`、ShellCheck 和 `shfmt -d` 均通过改动的 CONFIG 构建脚本。
+- `./hako bash android/ssh/android-password-client-build.sh --output /app/build/ssh-borrow-20261118-v1 --client` 编译完整 ARM64 合成 SSH 驱动，构建本身为 `runtime=not-run`；随后执行 `prlimit --memlock=65536:65536 --core=0:0 -- qemu-aarch64 build/ssh-borrow-20261118-v1/ctos_ssh_native_client_test`，实际通过 **5,040,851 次检查**，输出 `runtime=synthetic`。驱动 SHA-256 `40efb06eb241e52bc8cf735fe5ecbc120348a1cc6e907ac9f0a5be7a1b8ba1e0`，其构建输入原生归档为 `47f50892a1096eacdecd7cc774e44e9fb4f12003f2213fcb35eb25ae24d31b01`；驱动和 APK 是不同二进制。该计数包含循环，不是独立用例数。
+- APK 构建重生成原生归档后，使用 `./hako bash android/ssh/android-password-client-build.sh --output /app/build/ssh-borrow-20261118-v2 --client` 重建驱动，并以相同 `prlimit`／QEMU 命令完整运行，**5,037,284 次检查通过，runtime=synthetic**。驱动 SHA-256 `bf647bfe054163b4453650f8ae541ce6ff3ef1fe71afa5ff8b21279298ddd62e`；其输入归档 `9175f9aa7c47eb560107189cb6e579677ed0dca035eb56c8c3281a5c631ba1cb` 与最终 APK 构建后的归档一致。`v1` 与 `v2` 的产品 C 源码和测试源码摘要一致，循环次数可变，不把两次计数相加；测试驱动和 APK 仍是不同二进制。
+- 独立只读复核确认 view 只在 claim 后取得，失败关闭保留私有 claim；原生构造在真实 OOM 同时存在非法非空 view 字段／路径时，可能因必须先分配 owner 而比旧版更早返回 `ENOMEM`。已释放 raw borrow、泄露或重放私有 claim、提前销毁 caller-owned view 均不在内部线性所有权合同内。
+- 修复前用 `AppSecrets` 加密库测试在 NEW 信任写入成功后、结果发布前取消；定向 JVM 回归实际失败，期望 `VAULT_COMMIT_UNCERTAIN`，原结果却为 `SSH_CALLBACK_CANCELLED`。修复后同一测试所属的早期 `SshChangedHostFlowTest` 版本 **33 项通过**；这份早期结果不替代随后屏锁、确认与视图撤销顺序修正的最终回归。测试运行真实加密和受管写入逻辑，但底层使用内存 Store，native 侧为测试 binding，不是实际 AtomicFile 或 Android JNI 实测。
+- 最终执行 `./hako bash -lc 'cd android && ./gradlew :app:testSshCallbackAdapterHost :app:testReleaseUnitTest :app:lintRelease :app:assembleRelease --offline --console=plain'` 成功：callback 主机检查 **55** 项通过；完整 JVM **964 项／61 套，0 失败、0 错误、0 跳过**。其中 `SshChangedHostFlowTest` 42、`SshSessionOwnerTest` 17、`SshNativeSessionTest` 99 项。release lint 分析执行、报告任务命中缓存，结果 **0 错误／3 个既有警告**。
+- JVM 使用加密 `AppSecrets` 的内存 Store，在 NEW 写入完成但 provider 尚未记账时阻塞，真实 session owner 接收屏锁，验证最终结果等待写入退出并经 bridge 的 `completionFailure` 辅助函数报告不确定、锁库。还覆盖 NEW／CHANGED 确认前取消、已撤销 view、确认时持精确 view 锁、CHANGED 失效后不可确认、正常确认后取消、没有写入时的普通错误，以及屏锁／服务失败顺序、保存状态快照和工厂返回非空 session 后 native close 失败重试。native binding 和 view 为测试替身，bridge 没有实际调用 MethodChannel／main loop；未单独用 CHANGED 在途写入重复 NEW 屏锁夹具。
+- 新候选 `build/app/outputs/apk/release/app-release.apk` SHA-256 `698bbfad88a99fc28d57494f8361b59817c8887e3a6e6caa542c3311c2e116d7`；`apksigner` 显示单一 Android Debug 签名者、APK v2 验签通过。APK 内 arm64 动态符号和生成的未剥离库符号不含 `ctos_ssh_native_client_test_invalidate_kex`、`ctos_ssh_view_borrow_test_fail_next_release`，测试驱动符号表则含两者。未安装 APK，也未连接设备。
+- 收尾期间 `/tmp` 临时耗尽，额外检查进程未能启动；移除本轮已完成符号检查的 APK 库临时副本后检查恢复，原 APK 和生成库保留。之后临时空间恢复，Trellis 上下文校验、源码摘要核对及 `git diff --check` 通过；没有把受阻的进程记作已执行的检查。
+
+<a id="20261118-ssh-proxyjump-child"></a>
+## 2026-11-18 SSH ProxyJump：原生受管子连接和递归证明
+
+沿 1008 继续原生前置能力：内部构造器从已认证跳板及其精确下一角色创建 socketpair、中继和子客户端；子端 KEX、认证与输出复查祖先，自身 callback 独占绑定角色，子客户端／中继／父客户端按所有权顺序可重试回收。[设计](ssh-proxyjump.md)、[原生合同](../.trellis/spec/backend/ssh-proxyjump-child.md)。这是本地合成验证，产品连接仍拒绝 ProxyJump。
+
+- `./hako bash android/ssh/android-password-client-build.sh --output /app/build/ssh-jump-child-20261118-v5 --client` 构建 ARM64 静态驱动，构建结果为 `runtime=not-run`。随后在主机执行 `prlimit --memlock=65536:65536 --core=0:0 -- qemu-aarch64 build/ssh-jump-child-20261118-v5/ctos_ssh_native_client_test --jump-only`，**1,724,863 次检查通过**。完整客户端以同产品源码的 `v6` 执行相同 `prlimit`／QEMU 命令且不带 `--jump-only`，**4,945,902 次检查通过**；`v6` 测试仅比 `v5` 多两处 KEX 解绑前的正向状态断言。计数包含循环，不等于独立测试数。
+- APK 构建重生成原生 OpenSSH 归档后，以 `./hako bash android/ssh/android-password-client-build.sh --output /app/build/ssh-jump-child-20261118-v7 --client` 重建驱动；输入归档 SHA-256 为 `15f02c000e1e8d99a4e11783a7f91cf19dc6c2356191a8528bd8e41464b5f8dd`，与 APK 构建后的归档一致。随后以 `prlimit --memlock=65536:65536 --core=0:0 -- qemu-aarch64 build/ssh-jump-child-20261118-v7/ctos_ssh_native_client_test` 执行完整客户端，**4,946,706 次检查通过**。驱动 SHA-256 为 `fe76532c376799abf0c33ca980c1e6d47eaa963c6c30752eddfca252f2df5e31`；它与 APK 是不同二进制，驱动额外编入测试钩子，不能视为 Android JNI 运行。
+- 合成对端以真实加密包泵验证双层和三层 SSH 的独立主机证明、逐跳认证、目标 shell 和根跳取消传播；覆盖排队在子 socket 的密文、祖先／子端取消、正常 EOF 后解密排空、错误角色／callback／祖先 borrow、child 自身视图失效、主机拒绝诊断、认证期及建立后自身 KEX 解绑、错误线程、callback 首次释放失败、仅供清理的失败 child，以及 `EBADF` 后 fd 编号复用。EOF 时仍滞留在父通道／中继缓冲中的密文未由该专项单独证明；并未注入真实 `EINTR` 或 `EIO` fd 关闭错误，也没有确定性注入复制秘密或 KBI 挑战的那一瞬间的取消。
+- `./hako bash -lc 'cd android && ./gradlew :app:testSshCallbackAdapterHost :app:testSshNativeClientHost :app:testReleaseUnitTest :app:lintRelease :app:assembleRelease --offline --console=plain'` 成功。callback 主机检查 **55 项通过**；原生 Gradle 测试任务只编译并报告 `runtime=not-run`。JVM 的 Gradle 任务 `UP-TO-DATE`，保留结果为 **939 项／61 套、0 失败／错误／跳过**；lint 分析／报告为缓存结果，**0 错误、3 个既有警告**。
+- 新候选 `build/app/outputs/apk/release/app-release.apk` SHA-256 为 `176c4e3adbbd14599eeab94e4ab4e4cc6acc94dabb084ca780cfc5bb0ca951ee`；单一 Android Debug 签名者，APK v2 验签通过。ARM64 包内 `libctos_ssh_files.so` 的动态符号以及构建生成的未剥离库符号表均不含仅 `--client` 测试驱动启用的 `ctos_ssh_native_client_test_invalidate_kex`，测试驱动符号表则含此钩子。没有安装 APK 或访问设备。
+- 旧 `v5` 中继基线在默认沙箱运行时以 errno 22 失败，在允许本机 socketpair 的宿主环境重跑 **454,605 次检查通过**。本增量 `v2` 专项并行和串行分别以 errno 110 超时，具体模式当时未记录；`v3` 在新增清理用例中于下一角色关闭后错误期待父状态仍为 OPEN，修正断言后 `v4`、`v5` 专项分别通过 **1,521,961／1,724,863 次检查**。三层专用夹具提高合法的步长，原角色 60 秒期限及既有 3 字节碎片回归保持不变。
+- 构建脚本的 `bash -n`、ShellCheck 和 `shfmt -d` 通过；独立只读复核发现的 callback 错配、祖先 borrow 别名、部分清理的线程／fd 复用及状态证明问题均已修正并纳入上述测试。
+
+当时尚未实现跨无关会话的 borrow 全局独占，后续见[本轮验证](#20261118-ssh-borrow-trust)。Java 信任 CAS／秘密读取的跨跳 effect guard、异步终端最终发布、整体后台生命周期、JNI／Flutter 产品连接和真实服务器互通仍需分别完成或验证；native 回调前后检查不能撤销回调内已发生的效果。配置语法循环检查也不证明实际端点无循环。1008 保持进行中。
+
+<a id="20261118-ssh-proxyjump-relay"></a>
+## 2026-11-18 SSH ProxyJump：原生有界字节中继
+
+新增仅供原生内部调用的跳板字节中继；它不创建、认证或拥有下一跳 SSH 会话，也不解除产品 `ProxyJump` 拒绝。中继采用已连接本地流、每方向 32 KiB 上限、原父角色与下一角色的存活证明，以及中继先于父会话关闭的所有权顺序。[设计](ssh-proxyjump.md)与[合同](../.trellis/spec/backend/ssh-proxyjump-relay.md)。
+
+- `./hako bash android/ssh/android-password-client-build.sh --output /app/build/ssh-jump-relay-20261118-v5 --client` 构建 ARM64 静态驱动；构建输出明确为 `runtime=not-run`。之后以 `prlimit --memlock=65536:65536 --core=0:0 -- qemu-aarch64 build/ssh-jump-relay-20261118-v5/ctos_ssh_native_client_test --jump-only` 执行，**454,605 次检查通过**。检查数包含协议驱动循环，不等于互不重复的测试用例数。
+- 跳板专项覆盖真实加密合成对端、双向有序字节、通道窗口及 Unix socket 双向背压、阻塞时取消、EOF、远端关闭及未送出数据、错误线程、无效或重复父描述符、下一角色关闭／视图撤销／回调取消、独占中继和关闭顺序。双层测试使用新增原生中继连接目标原生客户端；目标仍独立进行主机证明、密码认证和 PTY shell，远端跳板与目标服务之间由测试代码转送。它不证明子会话的递归上游检查或真实服务器互通。
+- 完整原生客户端以最终产品源码编译的前一版 `ssh-jump-relay-20261118-v4` 执行，同样在 64 KiB memlock 下通过 **3,675,299 次检查**。v4 使用当时的原生归档；v5 使用最终 APK 构建生成的归档 `9ae453b147d018ca3f7c3ed4d5b7529bccdd19a6c5f9f3918448c71746d4b38c`，并重跑跳板及 `--shell-only` 专项，后者 **581,612 次检查通过**。两版均直接编译相同的 `ssh_native_client.c`，SHA-256 `3787a0f13b7b93d3d0c84f1554b123ab774468df53845ddde48609158b9eda36`；驱动和 APK 是不同二进制。
+- `./hako bash -lc 'cd android && ./gradlew :app:testReleaseUnitTest :app:lintRelease :app:assembleRelease --offline --console=plain'` 成功；JVM 任务为 Gradle 的 `UP-TO-DATE`，保留的结果为 **939 项／61 套、无失败**；lint **0 错误、3 个既有警告**。`build/app/outputs/apk/release/app-release.apk` SHA-256 `23079b984ba03bba3207382f79713067753239c5a78f01bdc6966df651cddfd0`，单一 Android Debug 签名者，v2 验签通过；未安装。
+- 初次构建在默认沙箱被 Docker socket 权限拒绝，未运行构建；之后通过项目容器完成构建与测试。复核时发现远端直接关闭后本地写端未立即关闭，已补充未送出数据的失败处理与关闭传播，并由最终专项验证。
+
+当时只有中继字节传输和父端存活门禁：已经排入子端 socket 的字节不能由中继撤回。原生子会话递归检查后续见上节；逐跳角色编排、全链路取消与清理、后台延续、JNI、指定板和实际跳板服务器仍未完成或未验证。1008 保持进行中。
+
+<a id="20261118-ssh-proxyjump-channel"></a>
+## 2026-11-18 SSH ProxyJump：原生通道和双层合成链路
+
+沿[设计](ssh-proxyjump.md)实现仅供内部使用的 `direct-tcpip` 通道：跳板角色必须先完成主机证明及认证，目标来自同一连接的下一跳角色，沿原期限和来源有效性工作。角色、回调和 KEX 容量调整为八跳加目标共九个。[合同与未完成的生产边界](../.trellis/spec/backend/ssh-proxyjump-channel.md)。
+
+- `./hako bash -lc 'cd android && ./gradlew :app:testSshRoleBootstrapHost :app:testSshCallbackAdapterHost :app:compileSshProductionObjects :app:testReleaseUnitTest --tests im.majo.ctos.SshNativeRoleBootstrapTest --tests im.majo.ctos.SshProductionBridgeTest --offline --console=plain'` 通过。主机 C 测试覆盖九个并存角色／回调、第十个拒绝、索引 8 的主机证据和独立释放；JVM 测试覆盖九个角色的真实 wire 解码及注册。
+- 使用 `./hako bash android/ssh/android-password-client-build.sh --output /app/build/ssh-jump-channel-20261118-v7 --client` 编译 ARM64 静态合成驱动；构建本身报告 `runtime=not-run`。随后在主机以 `prlimit --memlock=65536:65536 --core=0:0 -- qemu-aarch64` 执行 `--jump-only`，**388,929 项检查通过**；前一版 `v4` 分别执行 `--shell-only` 和 `--role-capacity-only`，**581,825、42 项检查通过**。九个 KEX 角色测试验证同时绑定与释放，不声称九路同时完成握手。
+- 跳板专项使用本机 socketpair 和固定 OpenSSH 合成对端，验证密码／私钥／无问题 KBI／密码 PARTIAL 后无问题 KBI／服务器 `none` 成功后的通道，以及认证失败／PARTIAL、错误下一跳角色绑定、拒绝、畸形包、窗口和缓冲上限、EOF、错误线程、取消／视图撤销及可重试关闭。双层用例以测试专属中继连接第二个原生客户端：两端使用不同主机密钥，分别完成 KEX 和各自 host evidence；目标再完成密码认证及 PTY／shell 请求，测试字节在两层加密会话中双向送达。这不是生产中继或真实服务器测试。
+- 完整原生客户端使用同一产品源码、前一版驱动 `ssh-jump-channel-20261118-v3` 通过 **3,585,887 项检查**；`v4`／`v7` 驱动链接随后 APK 构建生成的原生归档 `543c21e6…` 并重跑上述跳板／shell／角色专项。各版驱动和 APK 是不同二进制；不把这些运行结果称为 Android JNI 或设备端验证。
+- 默认沙箱中较早的 shell-only 驱动在客户端创建处失败，行 1224、errno 22；在允许访问本机 socketpair 的宿主环境重跑通过。该失败未证明具体底层原因，原结果保留，不覆盖后续分层结论。
+- 新增多因素用例的 `v6` 首次运行在测试辅助函数断言处失败：该辅助函数只适用于未先读取密码的独立 KBI，错误地要求凭据读取计数为零；改用既有多因素辅助函数后 `v7` 完整跳板专项通过。原失败保留，不将其归因为产品认证失败。
+- `./hako bash -lc 'cd android && ./gradlew :app:testReleaseUnitTest :app:lintRelease :app:assembleRelease --offline --console=plain'` 成功：JVM **939 项／61 套通过**，lint **0 错误、3 个既有警告**。候选 `build/app/outputs/apk/release/app-release.apk` SHA-256 为 `6504db74f7cee71665d0ab0b57b0ef30ebad44f5f90e4be12405ac98c2005303`，Android Debug 单签名者、APK v2 验签通过；未安装。
+
+该通道增量当时没有原生字节中继、递归上游失效传播、后台链路延续、JNI 跳板入口或真实跳板服务器互通；后续中继见上节。测试在两次握手期间依赖原认证期限，不能把它视为完整 1008 产品验收。
+
+<a id="20261118-ssh-proxyjump-route"></a>
+## 2026-11-18 SSH ProxyJump：原生逐跳配置链
+
+在固定 OpenSSH 10.6p1 解析器上实现内部配置链：显式与嵌套跳板逐级使用同一受保护快照、原期限／取消和累计资源预算，全部解析成功后才提供按实际经过顺序排列的配置；清理未完成时保留只能重试清理的 owner。[设计](ssh-proxyjump.md)与[原生合同](../.trellis/spec/backend/ssh-proxyjump-route.md)。
+
+- `./hako bash -lc 'cd android && ./gradlew :app:testSshConfigEvaluatorStaticHost :app:testSshConfigManagedDetachedStaticHost --offline --console=plain'` 成功；任务输出 `runtime=not-run`，以下 ARM64 运行使用主机 `prlimit --core=0:0 -- qemu-aarch64` 单独执行。
+- `sshConfigEvaluatorStaticHost/ctos_ssh_config_eval_test` 为 **4,399 项通过，effects=0**。覆盖逐跳 Host 配置、显式／嵌套前缀、用户端口优先级、IPv6／URI／`none`、`-W` 配置、八跳及语法循环限制、opens／bytes／lines 分别耗尽、重试不续预算、取消／超时／撤销、错误 owner、来源复制隔离及清理失败重试。独立子进程以 64 KiB memlock 完成 detached 两跳及清理，父进程限制不变。
+- `sshConfigManagedDetachedStaticHost/ctos_ssh_config_managed_detached_test` 为 **12,023 项通过，effects=0、capabilities=0**，含既有 detached 基线及 direct/profile 对跳板的拒绝。另行编译并以 QEMU 执行 handle **5,201**、catalog **71,923**、detached **1,261**、audit **13,290**、resource **4,872** 项，均报告通过且 effects=0；各套中的基线计数有重叠，不相加为独立用例数。
+- 同一离线 Gradle 调用的 `:app:lintRelease` 和 `:app:assembleRelease` 均成功；lint 报告 **0 错误、3 个既有警告**。候选 `build/app/outputs/apk/release/app-release.apk` SHA-256 为 `81f92b2e57d9881adb957aa45bc1dcddb6e21f49907e48b40ab334de42f91dce`，`apksigner` 确认 v2 签名通过、单一 Android Debug 签名者；这只证明构建和验签，未安装。
+- 主机 OpenSSH 10.0p2 的 `ssh -G -F /dev/null -W final.example:2222 -J alice@one:2201 -l bob -p 2202 two` 独立显示预期用户、端口、跳板、无 TTY／无会话及清理转发默认值；这是本地配置展开，不是连接，也不替代固定 10.6p1 的原生解析回归。
+
+本轮只验证原生配置及 Android 构建，没有 JNI 逐跳入口、设备运行或真实跳板服务器互通。端点级循环、逐跳通道、认证与主机信任、连接取消及全链路清理均仍需实现和验证；1008 保持进行中。
+
+<a id="20261118-ssh-proxyjump-declaration"></a>
+## 2026-11-18 SSH ProxyJump：原生有序声明
+
+在固定 OpenSSH 10.6p1 的真实受管配置解析器上新增只读有序声明，记录显式主机、可选用户与可选端口，不构成逐跳配置或连接计划。[设计](ssh-proxyjump.md)与[原生合同](../.trellis/spec/backend/ssh-proxyjump-declaration.md)。
+
+- `./hako bash -lc 'cd android && ./gradlew :app:testSshConfigEvaluatorStaticHost :app:testSshConfigManagedDetachedStaticHost --offline --console=plain'` 构建成功；两个任务均报告 `runtime=not-run`，运行证据如下。
+- 主机分别以 `prlimit --core=0:0 -- qemu-aarch64` 执行 `build/app/verification/sshConfigEvaluatorStaticHost/ctos_ssh_config_eval_test` 和 `build/app/verification/sshConfigManagedDetachedStaticHost/ctos_ssh_config_managed_detached_test`。最终配置求值器 **3,929 项检查通过，effects=0**，覆盖空／单跳／多跳／八跳、顺序、IPv6、URI、用户名和端口、`none` 消歧、User／Include 展开以及关闭、取消、超时、撤销、错误 owner、错误模式、解析器占用与输出清零。
+- managed-detached **12,023 项检查通过，effects=0、capabilities=0**，其中既有 detached 基线 1,262 项通过、64 KiB memlock 子进程通过；direct/profile 对普通跳板、`ProxyJump none` 和名为 `none` 的跳板均拒绝。严格关键词门禁本来就拒绝这些配置，后置判断的消歧是额外防线，而非修复已证实的产品直连绕过。
+- 初次测试将 IPv6 地址放在不被解析器接受的 SSH URI 中，随后改为 OpenSSH 接受的 `bob@[2001:db8::1]:22`；另一断言错误期待 strict direct/profile 接受 `ProxyJump none`，确认原有门禁后改为验证拒绝。两项重跑后通过。
+- `./hako bash -lc 'cd android && ./gradlew :app:assembleRelease --offline --console=plain'` 构建成功，包含本轮原生源码及 release lint-vital；`build/app/outputs/apk/release/app-release.apk` 的 SHA-256 为 `2e4f50408a6dbe02d70b707b771754168137e45f4c1fbc3f7a5044d3efb4eba6`。这是构建证据，不代表设备运行或已安装。
+- 为下一步逐跳求值，临时配置用主机 OpenSSH 10.0p2 的 `ssh -G -F` 核对：单独求值 `second` 使用其 Host 的 `configured-user`、2202 和 `configured-hop`；加 `-J first@first:2201` 后保留该跳用户和端口，但跳板改为显式前缀；加 `-l outer-user -p 2233` 后相应覆盖用户和端口。这只是本地配置展开，不涉及连接；临时配置已删除。固定 10.6p1 源码对构造子调用的参数规则也已核对。
+
+声明阶段没有 JNI 逐跳 API 或产品跳板连接，也没有在 Android 设备或实际跳板服务器上测试。当时逐跳独立有效配置、嵌套优先级／循环／预算、通道、认证、主机信任和失败清理均未完成；后续逐跳配置结果见上节，1008 保持进行中。
+
 <a id="20261118-ssh-openssh-android-ui"></a>
 ## 2026-11-18 SSH 自动认证：指定板与隔离 OpenSSH 端到端
 

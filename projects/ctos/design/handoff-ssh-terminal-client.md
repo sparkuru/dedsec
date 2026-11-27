@@ -1,5 +1,279 @@
 # SSH 终端客户端接管档案
 
+SSH 后续工作遵循[优先实现、禁止过度测试](../.trellis/spec/backend/ssh-development-workflow.md)。用户最新安排其他 agent／session 执行产品测试，Codex 负责任务单、独立审核和项目管理；[测试交接设计](agent-test-handoff.md)及 [具体测试单](../test/codex-wont-do/)为当前入口。
+
+## 接管摘要：2026-11-27 测试交接（父任务进行中）
+
+- **待执行**：最新 release 的完整 JVM 与 APK、匹配 classes 的 host JNI 矩阵，以及 owner Stop 预算和 native 在途效果两个具体缺口已列入测试单；JNI 全量项须先取得可追溯的匹配 classes。
+- **阻塞**：首次取消与在途 close 的竞态、信任写入及独立撤销／创建期链清理等待合同与实现；ProxyJump 首次信任、其他认证及多跳、TCP 转发和 config 安全验收需先完成对应实现或核定合同；Android Service 场景等待本轮设备授权。历史设备授权与旧全量结果不自动覆盖当前任务或最新源码。
+- **职责**：测试由用户安排的执行方按模板记录实际证据，独立 Codex 再审核；本次仅建立交接文件，未执行新增产品测试或改变 SSH 父任务的 `in_progress` 状态。
+
+## 接管摘要：2026-11-27 终端 session 撤销重试（父任务进行中）
+
+- **实现**：terminal 接续原 session 的 checked 未开始结果，原 owner 最多执行三轮失败重试；等待另一操作不消耗预算，耗尽后可由再次 Stop 请求新一轮。未知或混合未知不重试，callback-only 保留独立关闭路线，内部 `stop()` 不将同一次 Stop 误作新请求。
+- **验证**：201 项相关 JVM、lint 和 14 个真实 host JNI 合成场景通过，其中反射故障注入仅模拟另一跳 callback JNI 拒绝。当前生产 JNI 不产生测试钩子的 checked `-1`；真实 Android Service／设备及首次取消恰遇已准入 close 的自动接续未验证或未完成。[详细记录](verification.md#20261127-ssh-terminal-session-cancel-retry)。
+- **下一步**：处理 host-review 后的信任写入与不确定回执、独立 callback／session／vault 撤销和创建期／整链清理，再继续逐跳首次信任和重连。父任务保持 `in_progress`。
+
+## 接管摘要：2026-11-27 共享 STOP 本地验证（父任务进行中）
+
+- **验证**：完整 JVM 1,189 项／70 套通过；真实产品 Java／测试 JNI 合成链的 root 与 child 使用同一 STOP，默认 93 模式、124 个独立 JVM 场景通过，包含 STOP 先于 native 撤销时的认证发现、JNI／native 凭据复制和密码建包。独立回调 JNI、多跳合成接收器、native 认证链及无外网双 sshd 的产品直连／单跳路径也已分别检查。[实际结果和限制](verification.md#20261127-ssh-shared-stop-verification)。
+- **后续**：独立 callback／session／vault 撤销、信任持久化、不确定回执、其他 operation、创建期／整链 owner、逐跳首次信任和重连仍未完成；真实 Android 生命周期和设备未验证。父任务保持 `in_progress`。
+
+## 历史接管摘要：2026-11-27 native 效果共享 STOP 准入（当时未验证）
+
+以下保留实施时状态，本次验证以最上方摘要为准。
+
+- **实现**：root 和 hop callback 持有原连接共享 STOP；选定的 Java／JNI 凭据复制、密码／KBI 建包、私钥解码／签名及原有 wire／relay 效果在最终边界接入该原子准入。逐跳路径继续执行原 native generation／期限许可；native callback 关闭后不再保留其借用目标。[合同](../.trellis/spec/backend/ssh-native-stop-admission.md)／[实现与范围](verification.md#20261127-ssh-native-stop-effects)。
+- **验证状态**：按用户明确要求，本轮未运行测试、lint、构建、探针或设备操作；本次源码编译、JNI 重入及运行时行为均未验证，不能引用旧测试计数。
+- **下一步**：继续处理独立 callback／session／vault 撤销与共享 STOP 以外的效果、host-review 后的信任写入及不确定结果、其他 operation 与创建期／整链 owner；逐跳首次信任和重连仍未完成。不擅自恢复测试。
+
+## 历史接管摘要：2026-11-27 凭据提示与保存上下文 STOP 顺序（当时未验证）
+
+此节为实施时检查点；后续源码和本地验证以最上方摘要为准。
+
+- **实现**：密码／私钥口令、KBI 和主机指纹审阅邮箱的票据、答复和原 owner 交接分别与共享 STOP 排序；保存 context 安装和自动保存字节接管使用同一 STOP，拒绝后的候选或尚未转交的排队字节在各自持有方清理。连接器取消异常时尝试取消当前提示并擦除连接器仍独占的排队数组，原异常及未确认 native／operation owner 保留。[合同](../.trellis/spec/backend/ssh-started-material-admission.md)／[实现与限制](verification.md#20261127-ssh-prompt-mutation-stop)。
+- **验证状态**：依用户“停止测试，实现后直接汇报”要求，本轮没有测试、lint、构建、探针或设备操作；不能把历史通过结果用于这些最新变更。
+- **下一步**：继续解决 Java STOP 与 root／child native 凭据复制、认证建包及发送的共同有效准入，注意 JNI 重入及已在途 owner；再处理 host-review 后的信任写入、其他 mutation／operation、创建期和整链释放。首次信任和重连尚未完成；不擅自恢复测试。
+
+## 历史接管摘要：2026-11-27 已启动材料与预览所有权（当时停止测试）
+
+此节为上一检查点，后续本地邮箱与保存 context 实现以上节为准。
+
+- **实现**：选定的配置临时密码／key、延迟 key phrase 与自动保存安装在对象锁内与共享 STOP 排序，候选被拒绝时由安装线程擦除／关闭。SSH 不确定结果锁库按精确 preview 退役，import 正在使用时由原 owner 清理；同线程嵌套 preview／import 返回 `BUSY`。状态清理在同一 session 顺序下保留撤销未知或明确未开始待重试的 operation。已锁屏新请求对旧 owner 精确的撤销未知保留 `SSH_SCREEN_LOCKED`，附加派发／调度错误不被当作该撤销错误吞掉。[材料合同](../.trellis/spec/backend/ssh-started-material-admission.md)／[详细结果](verification.md#20261127-ssh-started-material-preview)。
+- **验证状态**：用户明确要求停止当前测试且不再测试。停止前的局部材料、预览和初版 service 宿主检查有通过结果；最终 service 的组合异常修改、最新 runner 和整体源码没有重跑或完成 Android lint／release 构建，不应据此前 APK 或日志声称最终版本通过。两次子代理调用被工具以可能涉及网络安全风险为由中断。
+- **下一步与限制**：独立 host JNI 许可实验已观察到 Java STOP 先发布而 native effect 仍可准入，未执行实际 SSH 认证或网络发送；需要设计并实现同一有效顺序点，覆盖 root／child 的精确效果、JNI 重入和在途 owner。[研究](../.trellis/tasks/10-08-ssh-terminal/research/ssh-stop-native-permit-window-20261127.md)。mailbox、mutation context、已接纳材料后续清理、显式 operation 移除及整链仍开放。未经用户改变当前指令，不运行测试；本轮未操作设备或真实账号。
+
+## 历史接管摘要：2026-11-27 连接结果与服务 owner（进行中）
+
+- **实现**：服务在可能同步执行的 connector 取消回调之前发布精确 owner；已发布后启动失败返回该 owner 的 future。工厂已准入时，`creating` 延续到 terminal 移交或异常结果在同一 owner 锁内结算，屏锁／服务拒绝不能在其间覆盖真实不确定回执。bridge 从实际完成回调固定结果，状态事件、取消及锁库抛错不覆盖它；凭据确认已写入后遭屏锁或服务拒绝时报告不确定结果。Result 调用最多尝试一次，发送前抛错或 Looper 接受任务后退出均可能无法送达，不能盲目重试或把 future 完成当作 owner 已释放。[合同](../.trellis/spec/backend/ssh-connection-result-delivery.md)／[验证与限制](verification.md#20261127-ssh-result-delivery)。
+- **继续处理**：已进入 create 后的 transient password／key、mailbox 和自动保存安装与共享 STOP 尚无统一排序。源码还显示根 session 的密码建包可能绕过共享 STOP 的最终效果准入；这是源码推断，尚未以真实连接复现。已锁屏且存在旧 service owner 时，其同步撤销异常可能让新请求收到 `SSH_FAILED` 而非 `SSH_SCREEN_LOCKED`；不确定结果路径只锁 session，可能遗留独立 import preview 的明文，修复须保留未确认 native operation owner。vault 外层 begin 失败仍可能留下独立 active lease／role；受理的 Result 也不证明对端收到。
+- **范围**：父任务仍为 `in_progress`。真实 Android service／Handler、真实 trust store 写入、设备和真实账号未由本轮宿主夹具验证；首次信任、重连及整链清理仍需完成。
+
+## 历史接管摘要：2026-11-27 未启动连接器材料退役（进行中）
+
+- **实现**：`retireIfUnstarted()` 与 connector `create()` 同锁排序，并与共享 STOP 的非阻塞准入顺序衔接；退役获胜时擦除构造期密码／口令，create 获胜时交原 owner。共享取消异常保留原异常并仅退役未启动材料；同步 attach 失败和已知失败完成路径不再以 `started()` 快照决定材料处理。constructor 检查失败也不再先进入 JNI。取消与退役并发时稳定取得同一 password/key 引用。[合同](../.trellis/spec/backend/ssh-connector-unstarted-retirement.md)。
+- **验证**：最终 Android JVM **1,142 项／67 套**、lint 0 错误／3 既有警告、release 和 APK v2 验签通过；host JNI **89 个默认模式／109 个隔离场景**及无外网双 sshd 通过。新增 3 个 JNI 场景使用真实 connector／owner 和受控 factory，分别检查原生 effect 排空、begin 抛错以及 create 已准入后抛错的精确材料／owner；不是 Android service 或真实 native SSH session。bridge 只验证了绕过 Android 构造的**同步**失败分支。[证据与限制](verification.md#20261127-ssh-connector-retirement)。
+- **接下来**：已进入 create 后的 transient password/key、mailbox、mutation context 和自动保存仍可能在 STOP 后安装；须将安装与所有停止源下的材料退役排序，同时保留已交给 owner 的副本及未知 native 资源。服务 owner 发布、构造期 cancellation callback 和已接管后异常仍需明确 receipt。bridge 异步完成时 cancel／lock／事件发送异常可能跳过或重复最终 MethodChannel 结果；已写凭据的屏锁／服务拒绝仍未映射为不确定结果，须在真实 bridge／store 屏障下与信任及保存回执统一验证。vault 外层 begin 失败时独立 lease／role 仍可能 active；整链清理、首次信任和重连仍未完成。
+- **范围**：原任务仍 in_progress；本轮没有连接设备、安装 APK、操作真实账号或提交。
+
+## 历史接管摘要：2026-11-27 vault 失效与视图撤销（进行中）
+
+- **实现**：`VaultSession` 的锁库、后台和 trust epoch 失效异常会擦除 Java key、推进 epoch 并保留精确 revocation；外层明确未开始可由原 session 重试，begin/end 未知不重复。真实 lease 区分本地 inactive、正在撤销与 native 确认；destroy 失败向 shared owner 抛错并保留 token。`VAULT_COMMIT_UNCERTAIN` 不再被锁库或 preview 清理异常覆盖，锁库未确认时保留 operation registry。[合同](../.trellis/spec/backend/ssh-vault-revocation-ownership.md)。
+- **验证**：Android 完整 JVM **1,134 项／66 套通过**，lint 0 错误／3 既有警告，release 构建及 v2 验签通过；真实 host JNI **89 个默认模式、106 个隔离场景**，其中新增 22 场锁库／视图故障，及无外网双 sshd 已知主机回归通过。[命令、实际范围与限制](verification.md#20261127-ssh-vault-revocation)。
+- **紧接的缺口**：vault 外层 begin 失败后原 lease 可能仍 active，独立 token／role 路径不能当作已撤销；已准入 native 效果可能完成。lease 自身 checked begin 的 `-1` 目前保守记作不可重试（现有生产 JNI 不返回此状态，测试 hook 可触发）。bridge 异步完成时 cancel／lock 抛错仍可能跳过 MethodChannel 结果，已写凭据后的屏锁／服务拒绝仍未按不确定结果映射。`SshPasswordConnector.cancel()` 首先调用 native 失效，异常会跳过本地标志、材料擦除和邮箱唤醒；构造期内部 clone 也有同类风险。
+- **下一步**：为 connector 的 factory create 与未启动 retire 建立原子准入；区分未接管与已接管的精确 owner、已转出材料和迟到安装，分别处理可独立擦除的 Java 秘密与未知 native／operation 清理。实际 bridge 的最终投递须保留原请求、写入状态和 trust receipt，并以真实 bridge／store 屏障和独立 JNI 故障验证；不能仅按 `started()` 快照或吞异常认定清理完成。创建期内部 session、独立 callback／lease 与整链释放仍待统一；首次信任和重连保持关闭。
+- **范围**：原任务仍 in_progress；本轮没有连接设备、安装 APK、操作真实账号或提交。
+
+## 历史接管摘要：2026-11-25 停止状态与 owner 结果顺序（进行中）
+
+- **实现**：共享取消先发布停止及首因，分别跟踪 native 撤销等待、确认和未知；未附着清理与停止排序并在未知时保留 owner。终端去重 pending 状态，连接 future 和 connector handoff 分别在交付前检查停止；同步保存回调结束后的错误与原 owner 清理分开处理，普通可重试关闭仍等待。[合同](../.trellis/spec/backend/ssh-terminal-stop-intent.md)。
+- **验证**：最终 1,124 项 JVM、88 个 host JNI 合成模式及 84 个隔离场景、无外网双 sshd 已知主机回归、lint／release 与 APK v2 验签通过；各场假件及覆盖边界见[验证](verification.md#20261125-ssh-stop-owner-delivery)。未操作设备或真实账号。
+- **紧接的缺口**：`VaultSession.lock()` 在 native begin 异常时可能尚未擦除 key；bridge 的取消／锁库异常可使 MethodChannel 结果未送达，已写凭据后的屏锁／服务拒绝也未按不确定结果映射。本机合成 probe 验证了锁库异常和当前映射；结果未送达是源码调用链结论，尚无 Android 实测。不得仅吞异常、声称库已锁，或以 `started()` 的时点值认定工厂所有权。应统一未附着 connector 的材料与原 owner、vault／lease 的逻辑锁定及 native 未确认状态、最终结果投递与保存回执，再用实际 bridge／store 屏障及 JNI 故障分层验证。
+- **其余未完成**：session 内部部分构造清理、独立 callback／lease、整链释放和 Android service 生命周期尚未统一；产品首次信任与重连仍未开放。本任务继续 in_progress，未授权设备安装、真实账号或提交。
+
+## 历史接管摘要：2026-11-25 信任回执与停止顺序（进行中）
+
+以下保留当时状态；共享 `getAsBoolean()` 后续已改为报告本地 STOP，请以上方最新摘要为准。
+
+- **实现**：信任回执确认与停止请求按相同原子状态排序；停止已发布但 native 失效仍在等待或抛错时，NEW／CHANGED 回执不能确认，可能已写入的结果继续不确定。已确认回执不因后续取消被改写。[合同](../.trellis/spec/backend/ssh-trust-commit-ack.md)／[验证](verification.md#20261125-ssh-trust-stop-order)。
+- **验证**：最终 1,115 项 JVM、88 场 host JNI 合成链及 31 场独立故障／等待场景、无外网双 sshd 已知主机路径、lint／release 和 APK v2 验签通过；信任的 JNI 测试使用合成回执，双 sshd 不覆盖首次信任写入或 Android service。
+- **剩余**：此确认顺序不保护此前的 trust 写入，不让 `getAsBoolean()` 在 begin 失败后变 true，也不解决创建期、独立 callback／lease、整链释放或 Android 生命周期。需要继续在原 owner 和原 native generation 上处理这些边界；首次信任和重连保持关闭。
+
+## 历史接管摘要：2026-11-25 会话与共享视图取消（进行中）
+
+- **实现**：单个 session 及 shared view 在各自原生撤销前拒绝本地新用，跟踪明确未开始、进行中、已确认及未知结果；未知时不重复对应操作，也不通过自身关闭路径释放原 owner。锁外执行 native 失效及 view revoke，分别排序取消与先前已准入的关闭。[会话合同](../.trellis/spec/backend/ssh-session-cancellation-ownership.md)／[视图合同](../.trellis/spec/backend/ssh-shared-view-cancellation.md)。
+- **验证**：完整 JVM、host JNI 故障注入与隔离双 sshd 的结果及适用范围见[验证](verification.md#20261125-ssh-session-view-cancel)。
+- **仍需处理**：外层 `Cancellation.getAsBoolean()` 在 begin 抛错后仍可能为 false；创建期部分 session、信任提交、独立调用的 callback／lease、父子链及 Android 生命周期未统一排序。terminal 当前对 port 取消异常保守保留，session 明确未开始时的自动重试尚未接通，可能持续 BUSY。
+- **下一步**：在原 owner 链上处理创建期和 callback／lease 的独立失效及释放确认，补明确可重试结果向 terminal 的传递；再实现首次信任写入与新连接，不以局部标志或单次快照作授权。
+
+## 历史接管摘要：2026-11-25 终端停止准入（跨层取消进行中）
+
+- **实现**：共享取消先记录本地停止意图；终端 begin／status／write／resize／step／read 与输出按此意图准入。原生失效或不明 port 取消结果使 terminal 保留原 owner；仅 callback native 取消失败仍允许独立的 owner 关闭路径重试。已准入动作及更早开始的关闭可能在停止后完成。[合同](../.trellis/spec/backend/ssh-terminal-stop-intent.md)。
+- **验证**：最终 1,106 项 JVM、88 场 host JNI 合成链及 10 场隔离取消故障、无外网双 sshd 产品已知主机路径、lint／release 与 APK v2 验签通过；各场边界见[验证](verification.md#20261125-ssh-terminal-stop-intent)。
+- **未完成**：创建期的部分 session 清理、信任确认／写入、各 hop 和 shared view 的独立撤销、已开始 close 的排序与 Android 生命周期尚无统一确认。`Cancellation.getAsBoolean()` 在 native begin 抛错时仍可为 false，不能把 terminal 门禁当作这些路径的取消证明；未知状态保留 owner 也可能使新连接持续 BUSY。
+- **下一步**：为创建期和各 native owner／view 设计独立的已开始／未确认／已完成状态与原所有者回收，补跨线程故障注入和真实 service 生命周期验证，再继续首次信任写入及新连接。
+
+## 接管摘要：2026-11-25 取消撤销异常（未修复）
+
+此节为最初复现记录；当前终端局部门禁和剩余范围以上一节为准。
+
+- **实际问题**：host JVM 使用真实测试 JNI 注入 native 失效 begin 前异常后，真实 terminal 的取消状态仍未置位，下一轮模拟 pump 仍向 fake port 发送排队输入并调用 step；这不是 Android 或真实远端发送证据。[复现与源码](verification.md#20261125-ssh-cancel-invalidation-failure)。
+- **处置**：本轮用户主动重试草案已撤回，六个产品文件与实施前 SHA-256 完全一致；草案仅保存在 `/tmp/ctos-product-retry-review-20261125/`，不能视为实现。不得继续开放 ProxyJump 首次信任或把现有取消失败说成已修复。
+- **下一步**：先设计共享取消的逻辑 I/O 准入及 native begin/end 确认，明确在途动作与未确认结果；再同时覆盖 terminal chain、单个 session、shared view、创建期部分 owner 和逆序清理。用屏障和实际执行线程的 JNI 故障注入分别验证明确未开始、begin／end 前后不确定、owner 创建竞争、无后续准入及不提前 close/release。Android service／Activity 生命周期另行验证。
+
+## 接管摘要：2026-11-25 候选转交（进行中）
+
+- **状态**：原 `10-08-ssh-terminal` 继续进行。测试专用签名 child 的已批准候选可在原 provider 所有权内一次性转交正文；普通消费、错误所有者、重复转交及相关关闭受到限制。该转交未被产品连接器使用，也未授予信任写入或认证能力。[合同](../.trellis/spec/backend/ssh-proxyjump-fixture-transfer.md)。
+- **验证**：最终源码主机真实 Java／JNI 合成链的 88 场、完整 JVM 1,099 项、lint 和 release 构建通过；独立反例确认 native generation 变化后 Java 持有检查仍可能成功，不能当作写入准入。来源／角色失效后正文仍由原 owner 清理。[结果和限制](verification.md#20261125-ssh-jump-candidate-transfer)。
+- **后续**：完成与原 generation、逐跳期限和祖先撤销有共同顺序的写入准入，处理写入不确定、精确旧链释放、重新读取配置和新请求；首跳 NEW 单独处理。不得根据转交或时点活性检查开放产品首次信任。设备、真实账号、安装及提交未由本轮继续指令授权。
+
+## 接管摘要：2026-11-23 候选保留夹具（进行中）
+
+- **状态**：原 `10-08-ssh-terminal` 仍为 current／in_progress。测试专用签名 child 在模拟同意、受限 poll 空闲和提示关闭成功后，可一次性保留精确候选；provider proposal、候选别名消费与关闭按其各自锁序拒绝或撤销。[合同](../.trellis/spec/backend/ssh-proxyjump-child.md#scenario-approved-fixture-candidate-reservation)。
+- **验证**：最终 host JNI／合成 SSH 默认 78 场、6 场独立清理故障和缺 poll 符号拒绝、本机双 sshd 已知主机回归、1,099 项 JVM、lint／release 及 APK 签名／符号检查通过。[结果与限制](verification.md#20261123-ssh-jump-candidate-reservation)。
+- **下一步**：设计真正的候选转移和信任写入准入，明确跨链取消、逐跳期限、写入不确定与旧链清理／新请求的顺序；另行处理首跳 NEW 与 child 之间的角色、来源和 revision 差异。当前保留不授予持久化或凭据能力，产品首次信任仍未开放；上轮远端 EOF 和协议异常边界仍未验完。
+
+## 接管摘要：2026-11-23 待审调度夹具（进行中）
+
+此节为上一检查点；当前进度以上一节为准。
+
+- **状态**：原 `10-08-ssh-terminal` 仍为 current／in_progress。真实 Java／JNI 测试 child 的签名票据已绑定其 owner，待审时在邮箱锁外有界推进父连接、relay 和受限输入；已同意但非 idle 时继续等待原逐跳期限。[合同](../.trellis/spec/backend/ssh-proxyjump-child.md#scenario-signed-new-fixture-review-and-bounded-extension-input)。
+- **验证**：主机真实 JNI／合成 SSH 默认 66 场、6 场独立清理故障及缺 poll 符号场景通过；本机隔离双 sshd 的已知主机路径、1,099 项 JVM、lint／release 构建及 APK 签名／符号核对通过。[结果与限制](verification.md#20261123-ssh-jump-pending-integrated)。
+- **下一步**：补 JNI 待审中的远端断开、view／generation 竞争及异常报文边界；再设计精确候选的写入准入、取消／期限顺序、持久化不确定回执及旧链清理后的新请求。不能把同意或时点 idle 当作写入许可；正常握手在 pending 前也可能处理扩展。产品首次信任和设备／真实账号验收仍未完成。
+
+## 接管摘要：2026-11-23 签名审阅与受限入站（进行中）
+
+此节为上一检查点；当前进度以上一节为准。
+
+- **状态**：原 `10-08-ssh-terminal` 仍为 current／in_progress。测试专用真实 Java／JNI child 已有绑定实际签名候选、来源、会话和原逐跳期限的一次性非授权审阅票据；原生另有受限的 `EXT_INFO` 输入原语。[合同](../.trellis/spec/backend/ssh-proxyjump-child.md#scenario-signed-new-fixture-review-and-bounded-extension-input)。
+- **边界**：签名就绪 JNI 不读取入站数据；票据、受限输入与父连接／relay pump 尚未接通，生产 JNI 不注册测试回调。审核决定和任何时点采样都不是信任 CAS／凭据许可；新 child 最终须销毁。
+- **下一步**：将可取消的等待、受限输入和逐层 pump 接成完整受限流程，补 parser 异常与广告负例；再设计原子信任写授权与不确定结果、旧链清理和刷新配置后的新请求。保留 `StrictHostKeyChecking yes` 的 NEW 拒绝；产品首次信任、多跳、Android 设备与真实账户仍未验收。[实际验证与限制](verification.md#20261123-ssh-jump-signed-review-ext)。
+
+## 接管摘要：2026-11-23 首次信任等待骨架（进行中）
+
+此节为上一检查点；当前进度以上一节为准。
+
+- **产品状态**：已知主机的受限单跳仍可用；首次／变化指纹确认和写入未开放。本轮未安装设备应用、访问真实账号或提交。
+- **进展**：新增仅限精确 guarded child、签名 KEX 第 1 cycle 的保守空闲快照；观察到 child 入站数据或关闭即拒绝，父链待处理时要求继续 pump。审核邮箱增加锁外轮询、原逐跳期限和审批后复检，但目前只接受普通 `Review`，不是签名待审候选，也尚未接入 JNI 或产品连接器。[合同](../.trellis/spec/backend/ssh-proxyjump-child.md#scenario-provisional-new-idle-snapshot-and-review-waiting)。
+- **验证与边界**：最终 Android 构建归档的 21 场合成加密原生专项、22 项邮箱定向、1,099 项 JVM、lint／release 构建、APK 符号核对及本机隔离双 sshd 均通过，具体范围及中间失败见[验证](verification.md#20261123-ssh-jump-pending-wait)。该空闲检查会拒绝合法 `EXT_INFO`，也不保证之后没有数据或关闭；poll 失败后 abort 本身失败的组合尚未专项注入。
+- **下一步**：建立绑定真实来源、候选和签名周期的独立非授权 review/ticket，解决合法协议报文的有界等待及 JNI／父 relay pump；再设计与取消、角色／视图失效、期限和 vault revision 原子排序的一次性信任写入，区分不确定提交，最后完成旧链清理与新配置重连。不得通过普通 NEW `Proof`、逐次采样或延长逐跳期限绕过这些门槛；`StrictHostKeyChecking yes` 继续拒绝 NEW。
+
+## 接管摘要：2026-11-23 逐跳首次信任（进行中）
+
+- **用户可用状态**：产品源码仅开放已受信主机的一跳路线；首次或变化的指纹仍拒绝，不能通过跳板首次登记目标。主机信任管理不提供新增入口。不要把测试专用回调、模拟界面或原生 pending 当成这一功能已经可用。
+- **本轮进展**：真实 child 的 NEW 候选可在测试路径中临时 pin 并完成同一把密钥的签名 KEX，期间不能认证或打开 shell；Java/JNI 测试还检查候选、接收者和来源绑定。生产 JNI 未启用这条分支。子连接清理现区分可重试前置失败与原生结果不明确，失败时保留精确所有者，阻止新用并继续尝试独立数据擦除。真实双 sshd 已分别检查未知跳板与未知目标在相应认证前拒绝；已受信路径仍能执行目标 PTY。[证据与限制](verification.md#20261123-ssh-jump-provisional-new)。
+- **下一步**：解决用户核验期间的非认证等待、精确候选的信任写入与撤销排序，最后在旧链彻底释放后以新配置重新连接。`StrictHostKeyChecking yes` 必须继续拒绝 NEW。当前清理验证不涵盖所有旧 invalidation 调用。完整步骤见 [实施计划](../.trellis/tasks/10-08-ssh-terminal/implement.md#2026-11-23-接续逐跳首次信任进行中)。
+- **环境与范围**：本项目本机 Docker 测试已授权；本轮没有设备、真实账号或安装授权。父任务继续进行，保留已有工作区改动。
+
+## 接管摘要：2026-11-23 受限单跳开放（进行中）
+
+此节是首次信任开发之前的检查点；当前状态以上一节为准。
+
+- **当前成果**：产品源码支持一条跳板加目标，要求各跳已被配置使用的受管信任文件信任；自动方法发现后逐跳明确确认已保存密码，或接受代码支持的服务端 `none` 成功。多跳、NEW／CHANGED 信任、临时密码、私钥和 KBI 仍拒绝。服务器若把 KBI 排在密码前，可在每个相关 Host 中设置 `PreferredAuthentications password` 并在自动检测中不选私钥。
+- **真实边界**：主机信任管理没有新增记录入口，手动连接和配置可能使用不同信任文件；仅能通过跳板到达的新目标目前无法在此流程首次核验。密码管理也没有独立新增入口，不能把夹具预置视为首次使用已完成。继续优先实现连接中逐跳 NEW 核验和安全的凭据输入／保存，再推进多跳、后台及设备。
+- **证据**：正式 Java／native／JNI 与加密内存库在本机隔离双 sshd 跑通两个已保存密码的独立确认和目标 PTY；改键、取消、多跳拒绝及清理通过。Flutter 510、JVM 1,088／66 套、lint 和 release 构建通过；未运行 Android 设备、真实账号或完整 MethodChannel 端到端。[命令、失败修复和边界](verification.md#20261123-ssh-jump-product-open)。
+- **保持约束**：本机自有 Docker 测试已授权，设备、真实账号和安装须当次授权。保留已有未提交修改，不归档未完成的父任务。
+
+## 接管摘要：2026-11-23 产品连接入口（进行中）
+
+这是开放前的历史检查点；当前状态以上一节为准。
+
+- **用户目标与现状**：继续完成应用里的 SSH ProxyJump；当前仍不可用，总门禁关闭，不能把前置测试报告成跳板登录。用户已授权本项目使用自有本机 Docker 测试夹具，不需要再为每个夹具征求确认；设备、真实账号和安装另需当次授权。
+- **本轮进展**：实际 `SshPasswordConnector.create()` 已有受门禁保护的逐跳组装草案；新增每跳已保存密码的明确确认，不静默授权。逐跳 `ConnectTimeout` 改为从该跳启动时计算并受原总期限截断；仅打开测试副本的外层门禁后，真实 sshd 复测前跳等待不再耗尽下一跳的超时。曾尝试让配置列表读取完整路线，复核发现 `ProxyJump none` 会误显示为可连接，已恢复原严格列表策略。[设计](ssh-proxyjump.md#2026-11-23-产品入口进展)。
+- **实测与边界**：Flutter 全量 **510 项**通过；本机隔离真实 sshd 上，原样生产 connector 在跳板路线联网前拒绝，普通配置直连认证并执行 shell。新复现脚本重新编译生产 native、使用未叠加的 release classes；它不证明产品跳板成功或 Android 行为。[验证与复现](verification.md#20261123-ssh-jump-product-gated)。本轮 Android 完整 JVM／lint／构建结果只覆盖其运行时源码，后续 native 修正需重新验证。
+- **具体下一步**：完成受限 saved-password 路径的效果顺序与证明：把实际原始代次绑定到完整祖先链，将有效期限和所有取消／视图／角色失效接到真实 vault clone、JNI 复制、native scratch 及密码建包，并用可控竞争证明先失效时无后续效果、已准入效果可排空且不会自死锁。当前排空骨架尚未被产品启用，不能当成效果许可。还须先按服务端实际认证方法和配置顺序选择，确保等待用户确认时既不 step 已完成 KEX 的 session，也不漏掉断开。完成后在不修改生产源码或门禁的前提下，使用本机真实 sshd 验证独立逐跳确认、正确主机信任、目标 shell、失败与逆序清理；再处理首次／换键信任、当次密码、私钥、KBI、多跳和后台。
+- **约束**：配置直连现在多一次完整库快照解密和路线求值，资源紧张或接近超时可能受影响，尚无实际失败证据；开放前须消除或实测该回归风险。不要提交或清理无关工作区，测试完成只删除本次精确标记的容器及自有临时目录。
+
+## 接管摘要：2026-11-20 fresh 信任来源与逐跳回执（进行中）
+
+- **进展**：真实加密库同次读取的 child receipt／wire 接入生产 Java／JNI，逐类 host evidence 校验同一来源；逐跳 provider 独占回执、聚合取消，内部下一跳回执须消费绑定已认证父会话的 `JumpAdmission`，产品 factory 尚未接入。审阅事件带实际 hop／binding，各笔确认分别等待；排队失效 NEW 在发布前复查，但与发送并不原子。fresh 入口在真正的跨跳效果 guard 完成前拒绝信任写入与认证；旧无来源入口限定为 fake view／fake native JVM 测试，拒绝受管 lease 和生产 JNI binding。[设计](ssh-proxyjump.md#连接主线与阻塞顺序2026-11-20)。
+- **证据**：本机无网络双 sshd 通过旧／新信任快照和错密钥对照；生产 JNI 搭配测试 Java receiver 与合成加密 peer 完成 fresh 分类、认证、PTY 和畸形 wire 清理；真实加密库用内存 Store 测试两笔 NEW 与提交后取消。三者为分层证据。最终完整 JVM **1,055 项／62 套**、Flutter **507 项**、Dart 分析、lint **0 错误／3 个既有警告**、APK `76fa2af7…` 构建及 v2 验签通过；构建复用未变的 SSH native 产物，APK 未安装。[命令及限制](verification.md#20261120-ssh-jump-fresh-jni)。
+- **下一步**：把实际祖先取消、角色／视图撤销和期限与 trust CAS、最终秘密复制及 `beginDiscoveredPassword` JNI 输入建立共同顺序；保留角色 guard、既有锁序和 `VAULT_COMMIT_UNCERTAIN`，不能将 Java `JumpAdmission` 的顺序采样当成效果许可。再把冻结配置、真实库修订和逐跳角色接入产品 factory，绑定可信路由以处理跳板换键，并实现逐跳密钥选择、own CAS 后新来源及逆序清理。先在同一测试中贯通真实 Java／vault／JNI 与本机 sshd，再验证多跳、后台和 Android；多份完整快照可能超过 memlock，八跳容量未证实。产品 gate 保持关闭。
+- **工作区**：保留已有未提交修改；任务专用测试容器已清理，项目镜像可重用。Docker 自建测试环境的授权见[规范](../.trellis/spec/trellis-plus/index.md#docker-development-entry-point)，不等同当前设备或真实账号授权。
+
+## 接管摘要：2026-11-20 逐跳路由、角色身份及认证提示（进行中）
+
+- **本次结果**：严格路由可从受保护配置生成经 JNI 的不可变逐跳计划；v2 role 分离整链身份与逐跳账号、拒绝混版本；真实库同次读取可准备 child 信任 receipt／wire，native 可独立读取受限 hostfile 视图。密码／私钥口令／KBI 提示绑定 callback 的原始 selection、显示实际 endpoint／hop，跨跳 KBI 分别计算轮次。[设计](ssh-proxyjump.md#连接主线与阻塞顺序2026-11-20)。
+- **实际验证**：真实主机 JVM／生产 JNI role 和配置、加密库双账号、native fresh 分类与 JNI 失败清理、本机隔离双 sshd、完整 JVM 1,015 项、Android lint 与 release 构建均按各自范围通过；[命令及分层边界](verification.md#20261120-ssh-jump-route-role)。APK `3d4e1acc…` v2 验签通过且未安装；未接触设备或真实账号。
+- **下一步**：产品 factory 必须将冻结的 CONFIG、真实 vault revision／epoch、严格路由和 v2 角色绑定；把同一次读取的 receipt 与 native 对 KNOWN／NEW／CHANGED 实际分类的摘要绑定，处理每笔 trust 确认及可能已提交未确认的回执。把祖先撤销与 trust CAS、最终秘密复制及 `beginDiscoveredPassword` JNI 提交共同排序，保留现有锁序和失败清理。然后以真实 Java／vault／JNI 运行单跳，再扩展多跳、后台和 Android；主机换键审阅与逐跳私钥选择仍按最终目标判断，必须修改。多份完整快照可能超出 memlock；八跳容量尚无证明。禁止将当前分层测试相加称为产品端到端，产品 gate 保持关闭。
+- **工作区**：保留既有未提交修改；本机任务 Docker 夹具自动清理临时容器，授权持久约定在[规范](../.trellis/spec/trellis-plus/index.md#docker-development-entry-point)。不得推定历史设备或真实账号授权仍有效。
+
+## 接管摘要：2026-11-20 终端 NativePort 跳板链（进行中）
+
+- **本次结果**：实际终端入口可冻结精确 Java child owner 链，逐层 pump，目标 RUNNING 后由内向外保留祖先并完成目标 confirmation 后才发布 running；取消覆盖整链，目标到入口逆序清理并保留失败重试。修复直连及跳板未确认 RUNNING 就关闭且有缓冲输出时的无限调度。[设计](ssh-proxyjump.md#java-终端的跳板链调度)。
+- **验证与边界**：实际 Java NativePort 配 fake native 的单跳／双跳、EOF 排空、取消、逆序失败重试与直连快速关闭测试通过；完整 JVM 61 套／996 项、lint 0 错误／3 既有警告，release APK `f5294c9f…` 构建并 v2 验签，未安装。[记录](verification.md#20261120-ssh-jump-terminal-chain)。Java 用例不是真实 JNI／vault 联合或设备验收；本机真实双 sshd 的原生单跳在下一节。
+- **下一步**：把逐跳计划、凭据和内部 JNI owner 接到实际产品连接 factory；解决 Java／native 对当前信任来源的共同绑定、祖先撤销与信任／凭据／输出效果的排序，并在 factory 或 NativePort 构造失败时保留所有祖先的可重试逆序清理。随后用真实 Java／vault／JNI 单跳集成，再扩到多跳与后台；产品 gate 保持关闭，不能把已通过的两类分层测试相加冒充端到端。
+- **工作区**：保留既有修改，本次未提交。测试容器按任务标签自动回收，项目专用镜像保留；设备和真实账号操作需要当前任务授权。
+
+## 接管摘要：2026-11-20 本机 Docker 真实单跳（进行中）
+
+- **本次结果**：用户明确授权后续会话自行创建本项目任务专用本机 Docker 测试环境，已记入[项目规范](../.trellis/spec/trellis-plus/index.md#docker-development-entry-point)。新增可重建镜像与无网络双 sshd 夹具；ARM64／Bionic 原生客户端通过真实单跳、不同逐跳账号与密码认证及目标 PTY 命令。[环境和重放](ssh-proxyjump.md#本机隔离-openssh-跳板测试环境)、[实际验证](verification.md#20261120-ssh-jump-docker-interop)。
+- **边界**：这是真实 OpenSSH 服务，但驱动使用测试回调、预置信任和测试账户；不是生产 Java／JNI／vault／Flutter 或设备端到端。继续按[连接主线](ssh-proxyjump.md#连接主线与阻塞顺序2026-11-20)完成产品逐跳 owner 和 pump、当前信任刷新、跨跳信任／凭据／输出顺序、后台和多跳；产品跳板拒绝门禁保持，不能由 native 测试推定可开放。
+- **环境**：`ctos-ssh-fixture:local` 留作重放，单次测试容器自动删除且不发布宿主端口；构建可能需要包源网络。用户授权不代替当前执行环境的 sandbox／Docker 审批，也不覆盖设备或真实账号操作。
+
+## 接管摘要：2026-11-20 ProxyJump Java／JNI 父子会话内部接入（进行中）
+
+- **本次结果**：Java 先创建 child owner，JNI 两阶段预留／创建并持有精确父 session、共享 view、原期限及所有部分资源；提供跳板状态、relay pump、内到外晋升及逆序重试清理。目标 shell confirmation 等待所有祖先晋升；目标 RUNNING 仍不能代表全链可以发布 connected。[合同](../.trellis/spec/backend/ssh-proxyjump-child.md#java--jni-child-session-ownership)。
+- **验证与边界**：真实 host JNI／加密合成链 10 模式通过；父 session 手工登记、Java receiver 与服务器为测试实现，state 3 为顺序注入。完整 JVM **987 项／61 套**，lint **0 错误／3 个既有警告**，APK `667c5460…` 构建并完成 v2 验签；[命令与实际范围](verification.md#20261120-ssh-jump-jni-owner)。未安装、未连接设备或真实服务器。
+- **下一步**：将内部 owner、跳板角色和 pump 接到产品单跳连接器及服务 owner；解决当前信任来源的 Java／native 同步、祖先撤销与 trust CAS／最终秘密复制／输出准入的共同顺序，并处理可能已提交但未确认的回执。先以真实 Java 回调、加密库和 JNI 完成一条单跳联合测试，再扩多跳与后台；产品门禁保持。不要用 Java 时点检查、目标 RUNNING 或测试替身冒充已完成的原子效果／产品互通。
+- **工作区**：既有修改均保留；本轮未提交。开发板及账号须在有可审阅的具体验证步骤时，依据当次用户授权使用。
+
+## 接管摘要：2026-11-20 ProxyJump Java 共享视图内部接入（进行中）
+
+- **本次结果**：新增 `SshSharedPublicView` 和 `SshNativeSession.openManaged` 内部重载，保留原 `SshPublicFileLease` 精确身份，分别跟踪会话 binding 的退役和取消，并保持失败清理可重试。该入口没有产品调用方，也不拥有配置求值器或中继。[合同](../.trellis/spec/backend/ssh-view-borrow-ownership.md#java-shared-view-owner)。
+- **验证与边界**：完整 JVM 61 套／979 项通过，lint 0 错误／3 个既有警告；主机 JNI 烟测还将真实 Java lease、`VaultSession.lock` 与两份真实 native borrow 贯通，但 callback 与会话领用为测试驱动，不是实际多跳 SSH。[命令、失败重试及限制](verification.md#20261120-ssh-shared-java-view)。本轮未运行 APK 构建、设备或真实服务器验证。
+- **下一步**：按[连接主线](ssh-proxyjump.md#连接主线与阻塞顺序2026-11-20)把共享 owner 接到生产父子 JNI 和原 owner 的逆序清理，尤其保证正数 native handle 后的任何异常都保留 socket／session 的清理所有权；再解决 native 分类与 Java CAS 对同一当前信任来源的绑定、祖先撤销与实际效果排序。先贯通单跳，再扩展多跳与后台；产品拒绝门禁保持，不能用 Java binding 计数冒充实际 native claim 已释放。
+- **工作区**：保留既有未提交改动。临时主机烟测位于 `/tmp/ctos-shared-view-jni`，可能被清理；历史设备及账号授权不自动覆盖后续操作。
+
+## 接管摘要：2026-11-20 ProxyJump 共享原生视图联合验证（进行中）
+
+- **本次结果**：本机 JNI 合成夹具用同一真实受管视图句柄给入口、中间跳和目标创建三个独立 borrow，验证目标 JNI shell 晋升、内到外原生晋升、全部借用退役后撤销句柄的双向 I/O，以及提前撤销／凭据回调内撤销和最终句柄释放。独立受管句柄测试也覆盖逐借用退役和统一撤销。[命令、结果与边界](verification.md#20261120-ssh-shared-view-native)。
+- **证据限制**：三把不同测试主机密钥共享一个合成主机名；child 由 C 手工登记 JNI session 表，祖先由 C 驱动，Java receiver 和信任响应是测试实现。测试不使用产品 `SshPublicFileLease`、真实 trust CAS、并发秘密效果、Android 或真实服务器；本轮不改变生产代码或产品 `ProxyJump` 拒绝门禁。
+- **下一步**：设计精确原 lease 对象的 Java 全链 owner 与各 native 借用的退役／逆序清理；现有 `SshRoleContext` 依赖精确 view 身份及其锁，目标 session 不能直接关闭祖先仍使用的 lease。第一跳写入会推进 vault epoch，原 known_hosts 快照又不会更新，后续跳的当前信任来源／操作与原连接证明必须一并解决，再把实际祖先撤销与 trust CAS、凭据最终复制及输出准入排序。保留 `VAULT_COMMIT_UNCERTAIN` 和原锁序，不把 JNI 顺序检查当成效果许可。
+- **工作区**：现有未提交改动均保留；本轮没有连接设备、安装 APK、访问真实账号或提交。构建目录及临时证据可被清理，复用前核对摘要。
+
+## 接管摘要：2026-11-20 ProxyJump 原生跳板传输晋升（进行中）
+
+- **本次实现**：精确子端及其下游已经认证并建立后，原生 JUMP 可在原期限内从目标向入口逐跳晋升。保留每跳原 owner／callback／role／KEX／会话和精确 child／relay 链，释放该跳认证视图借用和选择；后续检查上、下游，普通 EOF 可排空。视图最终活性检查与借用释放和受管句柄撤销由同一把锁排序，发布前再检查角色期限；失败保留 cleanup-only 所有权。认证接口在晋升后拒绝重复请求而不误终止有效传输。[合同](../.trellis/spec/backend/ssh-proxyjump-retained-transport.md)。
+- **本地证据和界限**：ARM64 多层合成链、正常关闭、各层取消、KEX 失效和清理故障、主机 JNI 联合测试及构建结果以[验证记录](verification.md#20261120-ssh-jump-retain)为准；测试视图分别为 owned fixture，不能代表产品共享租约或真实服务器。
+- **下一步**：建立覆盖全部跳板的 Java 链 owner 和单一视图租约，避免目标 shell 晋升提前关闭仍被祖先使用的 lease。基础真实加密库夹具已验证：一次信任提交使旧请求失效，重新签发也不能以旧摘要覆盖；该夹具使用测试兼容入口和内存存储，尚未验证产品多跳共享 view。须为后续跳安全取得当前信任来源、操作和原连接证明，再将祖先撤销与真实信任 CAS、选中／临时秘密最终复制共同排序，保留 `VAULT_COMMIT_UNCERTAIN`，不能把顺序 JNI 检查当原子许可。再完成整链清理、后台服务、JNI 产品编排及独立互通验证；产品仍拒绝 `ProxyJump`。
+- **工作区**：继续保留现有未提交改动；本轮未连接设备、安装 APK、访问真实账号或提交。构建目录可被清理，复用时核对摘要。
+
+## 接管摘要：2026-11-20 ProxyJump 主机 JNI 多跳验证（进行中）
+
+- **本次结果**：新增 [主机联合夹具](../android/ssh/host-jni-multihop-test.sh)，把真实 native child、实际祖先链、生产 JNI callback 与 session mutex 放进同一 JVM；一跳／两跳正常，以及直接／更深祖先在 host 或选中凭据回调内取消的六个场景通过。错误 receiver／token／线程、回调外检查和测试 Java 密码数组擦除也已验证。[命令与实际范围](verification.md#20261120-ssh-callback-jni-multihop)。
+- **边界**：child 由测试代码手工登记 session 表，祖先由 C 夹具驱动，Java receiver 和 KNOWN 信任响应为测试实现；取消由同一回调线程注入。没有真实秘密库 CAS、并发取消、Android ART、产品 Java 子连接或真实服务器证据；产品 `ProxyJump` 继续拒绝。
+- **下一步**：建立实际链 owner／共享租约，把祖先的取消、role／view 撤销和原期限与真实信任 CAS、选中／临时凭据的最终复制按原锁序共同排序；写入可能已提交但 native 尚未确认时保留 `VAULT_COMMIT_UNCERTAIN`。JNI 时点检查不能当成可持久化或可重放的效果许可。再接产品子连接、后台链所有权和独立实测。
+- **工作区**：保留既有 SSH、应用细节与相邻项目改动；本轮未连接设备、安装 APK、访问真实账号或提交。主机测试使用固定 OpenSSH 源码及系统 OpenSSL，临时构建目录退出后清理，后续重跑前确认依赖与源码包存在。
+
+## 接管摘要：2026-11-20 ProxyJump 回调 JNI 接收者（进行中）
+
+- **目标与范围**：继续既有 `10-08-ssh-terminal`；产品 `ProxyJump` 仍拒绝，不得静默直连。本轮只运行本机合成测试及构建，未连接设备、安装 APK、使用真实账号或提交。
+- **新增原语**：私有 JNI 实例方法只在该 child 的真实 native 分派回调内，使用原 callback token、原线程／环境和注册的精确 Java receiver 顺序检查祖先；callback 所登记的接收者验证器必须为 JNI 私有的同一个函数，避免其他 native 目标替代比较。它不重入 `sessions_lock`，没有产品调用方，也不授予跨跳写入或秘密读取的原子权限。[合同](../.trellis/spec/backend/ssh-proxyjump-callback-proof.md)。
+- **当前本地证据**：主机 JVM 实际执行 JNI 调用和回调，但祖先 checker 是测试替身；ARM64 测试在单独的真实多层加密合成链内执行 receiver 入口和实际祖先 checker。最终归档完整原生合成驱动 **5,592,828 次检查**通过，计数含协议循环。JVM 972 项通过；最终 release 构建时 JVM 及 lint 报告命中缓存，lint 0 错误／3 个既有警告。APK `fe6356f1…` 通过 v2 验签且未安装；[检查记录及范围](verification.md#20261120-ssh-callback-jni)。
+- **下一步：真实效果与链所有者**：按[研究](../.trellis/tasks/10-08-ssh-terminal/research/proxyjump-java-effects-20261120.md)建立可撤销的共享祖先链 owner／租约，并将所有祖先取消、view／role 撤销、期限与信任 CAS 和最终秘密复制建立共同顺序；保留 `AppSecrets.SshRoleGuard.withRole`、现有锁序与可能提交但未确认的 `VAULT_COMMIT_UNCERTAIN`。单次 JNI true 不能作为效果许可。仍须将 Java 和实际 child JNI 串到同一多跳夹具，证明不重入 `sessions_lock`，再分别验证 Android、后台和真实服务器。
+- **交接约束**：保留现有 SSH、应用细节与相邻项目改动；历史设备、账号和安装授权不自动覆盖本轮。`build/` 与 `/tmp` 可被清理，复用前核对摘要。
+
+## 接管摘要：2026-11-20 ProxyJump 回调证明与输出取消（进行中）
+
+- **目标与范围**：继续复用 `.trellis/tasks/10-08-ssh-terminal`，1008 保持 `in_progress`，产品 `ProxyJump` 仍拒绝，不得静默直连。本轮没有连接设备、安装 APK、操作真实账号或提交；保留现有 SSH、应用细节及相邻项目改动。
+- **原生增量**：child 的真实同步分派回调可在其专属 callback、原 owner 线程和客户端登记范围内顺序检查各祖先 relay／证明。直接调用 wrapper、PINNED 手动验证、错误身份及嵌套回调不能伪造作用域；这是各祖先的顺序时点采样，不是原子链快照、持续授权或 Java 效果 guard。已接收数据排空时的 EOF／CLOSED 仍可证明，成功不代表通道可写。[合同](../.trellis/spec/backend/ssh-proxyjump-callback-proof.md)。
+- **Java 输出增量**：现有 owner／代次的终端 data 和 replay 快照准入与取消排序。取消先发生时，排队数据不再发布，新订阅在 queued 状态事件之前也不能重放旧字节；状态仍如实报告。先准入的 listener 可以在取消返回之后物理完成，现有同步持 state 锁调用 listener 的锁序未改变，独立 role／view／祖先失效未被该 CAS 覆盖。[合同](../.trellis/spec/backend/ssh-terminal-output-cancellation.md)。
+- **现有证据**：完整 JVM **972 项／61 套通过**，真实加密逻辑使用内存 Store、native binding 为测试替身；原生回调主机 **56 次检查**，多层 ARM64／QEMU 跳板专项 **2,374,014 次检查**，使用最终 APK 原生归档的完整客户端 **5,593,886 次检查**通过，计数含协议循环。最终 release 构建通过，JVM 命中该完整运行缓存，lint **0 错误／3 个既有警告**，APK `294a3665…` v2 验签通过且未安装。测试驱动不是 APK、JNI、设备或真实服务器；详细命令和限制见[验证](verification.md#20261120-ssh-callback-output)。
+- **下一步：效果与能力**：研究[跨跳设计](ssh-proxyjump.md#跨跳回调效果与发布当前研究)及[源码依据](../.trellis/tasks/10-08-ssh-terminal/research/proxyjump-java-effects-20261120.md)。需要为精确 Java receiver 建立只能在真实 native 分派期间使用的祖先能力；当前普通 JNI step 持有非递归 `sessions_lock`，从同步回调重新进入会死锁，不能直接复用。把实际祖先撤销与信任 CAS／秘密最终复制的效果准入建立共同顺序，保留真正的 `AppSecrets.SshRoleGuard.withRole` 和原锁序；写入已开始而结果未确认时保留 `VAULT_COMMIT_UNCERTAIN`，不能用布尔值或顺序证明冒充原子效果 guard。
+- **下一步：全链生命周期**：现有 `VaultSession.attachRevocation` 仅允许一个活跃 public-view lease，目标晋升时关闭 view 可能过早撤销祖先；须建立共享链 owner／租约，覆盖逐跳角色和临时密码／密钥、独立祖先失效、输出最终发布、取消、逆序清理及后台 retained transport。然后完成 JNI／界面和真实服务器互通，分别验证；语法循环检查不证明端点无环。
+- **交接约束**：先核对 `python3 ./.trellis/scripts/task.py current`、`git status --short -- .`、当前源码与上述验证摘要。历史设备或账号授权不自动覆盖本轮；`build/`、`/tmp` 为可清理证据，重用前核对摘要。保留未完成的现有改动。
+
+## 历史接管摘要：2026-11-18 ProxyJump 借用与信任回执（当时进行中）
+
+- **目标与范围**：复用现有 `10-08-ssh-terminal`，1008 仍为 `in_progress`。完整产品目标是受管单／多跳的逐跳配置、独立信任和认证、取消与回收、后台延续、界面和实际互通；未完成前继续拒绝 `ProxyJump`，不能静默直连。本轮只使用项目内构建和本机合成验证，没有连接设备、安装 APK、操作真实账号或提交。
+- **当前实现**：原生 live 客户端与 live 配置求值器共用 borrow claim，不能跨所有者并发占用同一借用；失败构造可归还私有 claim，正式清理失败保留原所有者。[合同](../.trellis/spec/backend/ssh-view-borrow-ownership.md)。现有直连 NEW／CHANGED 信任写入也分别跟踪实际可能提交与 native KEX 确认，按取消和 role／view 撤销排序；同步工厂可能写信任时，屏锁立即撤销但最终连接结果等待写入状态明确。[合同](../.trellis/spec/backend/ssh-trust-commit-ack.md)。这些不提供真实跨跳 Java effect guard。
+- **已验证的边界**：最终源码的主机竞争、实际 `munmap` 故障注入及关闭泄漏检测的 ASan／UBSan 已通过；固定 ARM64 CONFIG 求值器 **4,430** 次检查及其他配置回归通过。最终 APK 原生归档的 ARM64 合成 SSH 完整驱动 **5,037,284** 次检查通过，前一归档、同源码版为 **5,040,851** 次，含协议循环；驱动不是 APK 或设备。最终完整 JVM **964 项／61 套通过**，含真实加密逻辑加内存 Store 的屏锁竞争；lint **0 错误／3 个既有警告**。APK `698bbfad…` 已构建、v2 验签，未安装。具体命令、二进制摘要与 JNI／真实服务器等测试限制见[验证](verification.md#20261118-ssh-borrow-trust)。
+- **未完成／关键限制**：内部 borrow 是线性原始指针，不防止释放后的地址重用；真实 destroy 失败可保持 poisoned／EIO。产品还缺逐跳真实角色编排、信任 CAS 和秘密读取的祖先 effect guard、输出最终发布与取消排序、统一清理、后台 retained transport、JNI／界面及真实服务器互通。配置语法循环检查不证明实际端点无环。
+- **下一步：跨跳 effect guard**：先运行 `python3 ./.trellis/scripts/task.py current` 和 `git status --short -- .`，读[设计](ssh-proxyjump.md)、[子连接合同](../.trellis/spec/backend/ssh-proxyjump-child.md)及上述两个新合同。先在 `SshPasswordConnector`、`SshNativeCallbackAdapter`、`SshManagedKnownHostsProvider`、`SshCredentialBridge` 和 `AppSecrets` 确认可证明的原生祖先能力与所有权，再把它带进真实写入／秘密复制的最终 effect guard；保留 `AppSecrets.SshRoleGuard.withRole` 类型与锁顺序，不能用独立布尔值冒充链证明。用真实加密逻辑、明确标识的内存 Store／假 native binding 和可控取消栅栏验证写入前拒绝、写入后 `VAULT_COMMIT_UNCERTAIN`、凭据不外泄及清理重试，分别记录实际 JNI／设备证据。
+- **下一步：生命周期与输出**：`VaultSession.attachRevocation` 只允许一个活跃 public-view lease，直接为每跳开独立 lease 会得到 `BUSY`；目标 shell 晋升时现有 `SshNativeSession` 会关闭 view，不能在祖先仍需它时直接复用当前顺序。输出经 `SshNativeSession`、`SshTerminalSession`、`SshSessionOwner` 再到 `SshTerminalState`，末次检查与监听器发布尚无共同取消线性化；后者同步持锁调用监听器，不可简单在外层持 owner／fence 锁再调用，以免引入锁序或重入死锁。须先明确发布与取消谁先生效，再以受控竞争、订阅快照和整链失效测试验证。
+- **停止条件**：历史设备／账号授权不自动覆盖本轮；设备安装、真实服务器和提交另按当前授权判断。保留现有 SSH 与应用细节未提交改动，不修改相邻项目；被忽略的 `build/` 和 `/tmp` 证据后续可能被清理，重用前须核对摘要。
+
+## 历史接管摘要：2026-11-18 ProxyJump 原生子连接
+
+- **任务与授权**：用户要求继续并明确复用现有 `10-08-ssh-terminal`，未创建新 Trellis 任务；1008 保持 `in_progress`。本轮只做项目内实现、构建和本机合成验证，未连接开发板、安装 APK、访问真实账号或提交。保留现有 SSH 未提交改动、应用细节任务及相邻项目修改。
+- **当前实现**：在已认证跳板和其精确下一角色上，原生构造器创建私有 socketpair、relay 和子客户端；子端 KEX／认证／输出在 native 侧复查自身与祖先，子端只能经 guarded 构造器使用非零 hop。callback 精确角色独占，拒绝祖先 borrow 别名；子端关闭失败钉住 relay／父端，partial close 按原线程／PID／UID 重试并避免 fd 错误后误关复用编号。[具体合同](../.trellis/spec/backend/ssh-proxyjump-child.md)。
+- **证据与限制**：双／三层真实加密合成链、祖先取消与子 socket 排队密文、独立主机证明与认证、正常 EOF、错误身份、KEX 失效、关闭重试等已验证；`v5` 跳板专项 1,724,863 次检查，同产品源码 `v6` 完整原生回归 4,945,902 次检查，及使用最终 APK 归档的 `v7` 完整回归 4,946,706 次检查通过。JVM 为缓存的 939 项、lint 为缓存分析 0 错误／3 既有警告。APK `176c4e3a…` 已构建、v2 验签，未安装。检查计数包含循环；EOF 时仍在父通道／relay 缓冲中的密文、fd `EINTR`／`EIO` 及复制瞬间取消未单独测试。[实际记录](verification.md#20261118-ssh-proxyjump-child)。
+- **仍须完成**：native 前后复验不能撤销同步回调内部已发生的信任 CAS 或秘密读取；跨无关会话的 borrow 全局独占也尚未强制。Java 的逐跳角色／凭据与 callback effect guard、延迟终端发布、完整失败清理／取消、已认证链后台延续、JNI／界面、真实服务器和实际端点循环仍开放。产品入口继续拒绝 ProxyJump，不可静默直连。
+- **下一步**：先读本摘要、[ProxyJump 设计](ssh-proxyjump.md)、[child 合同](../.trellis/spec/backend/ssh-proxyjump-child.md)和[当前验证](verification.md#20261118-ssh-proxyjump-child)。在 Java 生命周期设计共享链 guard：`SshNativeCallbackAdapter` 的 NEW／CHANGED 信任提交和 selected 凭据回调须把祖先取消及证明传入真正的 `AppSecrets` effect guard；自动凭据与保存同样覆盖。保留 `SshRoleGuard.withRole` 的类型及锁顺序，写入已经发生而证明失效时继续使用 `VAULT_COMMIT_UNCERTAIN`，不能宣称未写入。为 `SshNativeSession.shellOutputPublicationLive`、`SshTerminalSession` 和 `SshSessionOwner` 的延迟发布建立全链 guard，再处理统一 owner、borrow 独占和后台 retained transport；以真实 callback／持久化竞争、取消及失败重试测试验证。当前临时密码／密钥只接受 `CLIENT`、hop 0，逐跳身份须单独设计，不能直接放宽判断。
+- **停止条件**：历史设备或账号授权不自动覆盖本轮。保持产品门禁；设备安装、真实账号与服务器操作按当前明确授权执行。构建目录与 `/tmp` 证据可能被清理，后续先核对实际工件。
+
+## 历史接管摘要：2026-11-18 ProxyJump 字节中继
+
+- **目标与完成判据**：1008 父任务仍为 `in_progress`；受管单／多跳需逐跳配置、独立主机信任及认证、取消与全链路回收、后台会话、界面和实际互通证据均完成后，才能开放产品入口或视为验收。[设计](ssh-proxyjump.md)、[实施计划](../.trellis/tasks/10-08-ssh-terminal/implement.md)。
+- **当前确认**：原生内部已有同快照逐跳配置、最多八跳加最终目标的角色容量、已认证跳板 `direct-tcpip` 通道及有界本地流中继；双层合成 SSH 经该中继完成独立主机证明、目标密码认证及 PTY 字节往返。[实际验证](verification.md#20261118-ssh-proxyjump-relay)。
+- **尚未完成／待验证**：中继只约束父端和下一角色，不创建或授权子客户端；子端 socket 已排队字节不可由父端撤回。逐跳角色编排、子连接递归复查全部上游证明／取消、信任与凭据回调的跨跳时序、可重试全链路清理、后台延续、JNI／界面和真实服务器均待完成。当前配置语法循环检查不证明不同别名解析后没有端点循环。产品仍拒绝 `ProxyJump`，不得静默回退直连。
+- **工作状态**：工作目录为 `projects/ctos`，分支 `antitrust`，本次核对 HEAD `32672eb`；SSH 增量未提交，须保留已有应用细节任务和相邻项目的修改。历史用户对其他增量的提交、安装或设备授权不自动覆盖本轮；未连接设备、未安装当前 APK。
+- **本地证据**：最终 APK 的 SHA-256 为 `23079b984ba03bba3207382f79713067753239c5a78f01bdc6966df651cddfd0`，仅构建和 v2 验签；相同原生归档的 QEMU 跳板／shell 专项分别 454,605／581,612 次检查通过，同源码前版完整原生回归 3,675,299 次检查通过。JVM 为保留的 939 项结果，lint 0 错误／3 个既有警告。驱动检查次数含循环，且与 Android 设备运行不同。[命令与来源](verification.md#20261118-ssh-proxyjump-relay)。
+- **下一步**：先运行 `python3 ./.trellis/scripts/task.py current` 与 `git status --short -- .`，重读本摘要、`design/ssh-proxyjump.md`、[通道](../.trellis/spec/backend/ssh-proxyjump-channel.md)和[中继](../.trellis/spec/backend/ssh-proxyjump-relay.md)合同。然后在 `android/app/src/main/cpp/ssh_native_client.[ch]`、`ssh_callback_adapter.[ch]` 与 Java SSH 会话生命周期中设计并实现真实子连接所有者：父链必须在每个子端 KEX、主机信任回调、凭据调用和输出发布前后可验证，不能仅依赖中继 pump；失败按逆序保留所有未完成清理 owner。完成判据是含已排队数据、回调期间取消、上游失效、错误 owner、关闭失败重试和多跳的实际加密合成测试，再分别验证 Android 与实际服务器；未证明前保持产品门禁。
+- **停止条件**：不要用历史设备地址或账号操作记录当作当前授权；设备安装、真实账号、破坏性操作须按当前明确范围执行。不能在尚未解决递归证明或后台生命周期时把中继暴露为完整跳板连接。
+- **最近更新／验证**：2026-11-18；测试使用项目 `./hako` 和主机 QEMU，命令及完整结果见上方验证记录。后续先重新核对产物和工作区，不假定被忽略的 `build/` 工件仍存在。
+
 ## 2026-11-18 自动凭据保存和复用（已安装，合成账户实测通过）
 
 用户确认开发板上的 `42b15865…` 通过服务器驱动认证的逻辑验收。随后已接续 1008／R10，在自动密码和私钥口令提示接入显式保存与复用。默认仅本次，保存要求相应因素通过以及最终认证和远端 shell 成功。Flutter 498 项、JVM 938 项、release lint 及原生合成回归通过。[验收边界与候选摘要](verification.md#20261118-ssh-automatic-credentials-local)。

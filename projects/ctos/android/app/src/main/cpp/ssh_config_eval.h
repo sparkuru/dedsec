@@ -51,6 +51,17 @@ struct ctos_ssh_config_summary {
      * launch plan. A connector must finalize/validate every retained field. */
     unsigned int has_raw_fields;
 };
+/* Ordered declarations only. A zero port means unspecified; no per-hop
+ * configuration, trust, credential or connection authority is implied. */
+struct ctos_ssh_config_jump_hop {
+    char host[CTOS_SSH_CONFIG_NAME_BYTES + 1];
+    char user[CTOS_SSH_CONFIG_NAME_BYTES + 1];
+    unsigned int user_specified, port;
+};
+struct ctos_ssh_config_jump_declaration {
+    unsigned int count;
+    struct ctos_ssh_config_jump_hop hops[CTOS_SSH_CONFIG_JUMPS];
+};
 #define CTOS_SSH_CONFIG_HOSTFILES 32U
 enum ctos_ssh_config_auth_method {
     CTOS_CONFIG_AUTH_PUBLICKEY = 1,
@@ -141,12 +152,35 @@ int ctos_ssh_config_eval_audit(const struct ctos_ssh_config_eval *, const struct
 int ctos_ssh_config_eval_resource_audit(const struct ctos_ssh_config_eval *, const struct ctos_ssh_config_resource_audit **);
 int ctos_ssh_config_eval_run(struct ctos_ssh_config_eval *, struct ctos_ssh_config_error *);
 int ctos_ssh_config_eval_summary(const struct ctos_ssh_config_eval *, struct ctos_ssh_config_summary *);
+int ctos_ssh_config_eval_jump_declaration(struct ctos_ssh_config_eval *,
+    struct ctos_ssh_config_jump_declaration *);
+/* A successful NULL child means no jump. A non-NULL child borrows its parent's
+ * source and must be closed/destroyed before the parent can be closed. */
+int ctos_ssh_config_eval_open_next_jump(struct ctos_ssh_config_eval *,
+    struct ctos_ssh_config_eval **);
+/* Internal configuration inspection only, not connection authority. A failed
+ * build may return a cleanup-only owner. Close/destroy it before the root.
+ * Completed hops are indexed in travel order. */
+struct ctos_ssh_config_route;
+int ctos_ssh_config_route_build(struct ctos_ssh_config_eval *, struct ctos_ssh_config_route **,
+    struct ctos_ssh_config_error *);
+int ctos_ssh_config_route_count(const struct ctos_ssh_config_route *, unsigned int *);
+int ctos_ssh_config_route_summary(const struct ctos_ssh_config_route *, unsigned int,
+    struct ctos_ssh_config_summary *);
+int ctos_ssh_config_route_close(struct ctos_ssh_config_route *);
+int ctos_ssh_config_route_destroy(struct ctos_ssh_config_route *);
 int ctos_ssh_config_eval_direct_plan(const struct ctos_ssh_config_eval *, const struct ctos_ssh_config_direct_plan **);
 /* Native internal ABI only: include upstream readconf.h before this header to
  * obtain the typed full-Options getter. No pointer may survive close. */
 #ifdef READCONF_H
 int ctos_ssh_config_eval_options(const struct ctos_ssh_config_eval *, const Options **);
+int ctos_ssh_config_route_options(const struct ctos_ssh_config_route *, unsigned int, const Options **);
 #endif
+/* New live-view route mode applies the existing profile connection policy to
+ * every member. Its result is metadata for a future connector, not authority. */
+int ctos_ssh_config_eval_enable_profile_route(struct ctos_ssh_config_eval *);
+int ctos_ssh_config_route_profile_plan(const struct ctos_ssh_config_route *, unsigned int,
+    const struct ctos_ssh_config_direct_plan **);
 void ctos_ssh_config_eval_cancel(struct ctos_ssh_config_eval *);
 int ctos_ssh_config_eval_close(struct ctos_ssh_config_eval *);
 int ctos_ssh_config_eval_destroy(struct ctos_ssh_config_eval *);

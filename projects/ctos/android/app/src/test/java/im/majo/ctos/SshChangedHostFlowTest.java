@@ -10,6 +10,11 @@ import java.util.Arrays;
 import java.util.Base64;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BooleanSupplier;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -35,15 +40,37 @@ public final class SshChangedHostFlowTest {
 
     private static final class Clock implements VaultSession.Clock, SshRoleContext.Clock {
         long value = 1_000;
-        @Override public long now() { return value; }
+        BooleanSupplier committedProviderReturned;
+        Runnable afterCommittedProviderReturn;
+        @Override public long now() {
+            if (afterCommittedProviderReturn != null && committedProviderReturned.getAsBoolean()
+                    && isManagedPostWriterCheck()) {
+                Runnable hook = afterCommittedProviderReturn;
+                afterCommittedProviderReturn = null;
+                hook.run();
+            }
+            return value;
+        }
+
+        private boolean isManagedPostWriterCheck() {
+            boolean inManagedWriteBack = false;
+            for (StackTraceElement frame : Thread.currentThread().getStackTrace()) {
+                if (frame.getClassName().equals(SshManagedKnownHostsProvider.class.getName())
+                        && frame.getMethodName().equals("write")) return false;
+                if (frame.getClassName().equals(SshManagedProvider.class.getName())
+                        && frame.getMethodName().equals("writeBack")) inManagedWriteBack = true;
+            }
+            return inManagedWriteBack;
+        }
     }
     private static final class View implements SshRoleContext.PublicView, VaultSession.Revocation,
             SshNativeSession.ViewBinding {
         boolean active = true;
-        @Override public boolean active() { return active; }
-        @Override public void revoke() { active = false; }
+        @Override public synchronized boolean active() { return active; }
+        @Override public synchronized void revoke() { active = false; }
+        @Override public synchronized boolean revocationConfirmed() { return !active; }
         @Override public long token() { return 902; }
-        @Override public void close() { active = false; }
+        @Override public synchronized void close() { active = false; }
     }
     private static final class Store implements AppSecrets.Store {
         byte[] data;
@@ -61,11 +88,25 @@ public final class SshChangedHostFlowTest {
         }
     }
     private static final class CallbackNative implements SshNativeCallbackAdapter.NativeBinding {
+        int closeFailures;
+        int cancelFailures;
+        int closeCalls;
         @Override public long open(SshNativeCallbackAdapter target, long role, int uid, long deadline) {
             return 901;
         }
-        @Override public void cancel(long handle) { }
-        @Override public void close(long handle) { }
+        @Override public void cancel(long handle) throws IOException {
+            if (cancelFailures > 0) {
+                cancelFailures--;
+                throw new IOException("injected callback cancellation failure");
+            }
+        }
+        @Override public void close(long handle) throws IOException {
+            closeCalls++;
+            if (closeFailures > 0) {
+                closeFailures--;
+                throw new IOException("injected callback close failure");
+            }
+        }
     }
 
     private Store store;
@@ -75,8 +116,13 @@ public final class SshChangedHostFlowTest {
     private SshRoleRegistry registry;
     private SshNativeRoleBootstrap.Issued issued;
     private SshHostKeyAuthority.ChangedReview approval;
+    private SshHostKeyAuthority.Review newApproval;
+    private BooleanSupplier fixtureCancelled = () -> false;
+    private Runnable duringProofConfirmation;
     private SshManagedKnownHostsProvider provider;
+    private SshPasswordConnector.TrustCommitState trustCommit;
     private SshNativeCallbackAdapter callback;
+    private CallbackNative callbackNative;
     private SshAuthenticationSelection selection;
     private long transportDeadline;
     private boolean persisted;
@@ -92,7 +138,17 @@ public final class SshChangedHostFlowTest {
     }
 
     private void initialize(boolean privateKey) throws Exception {
-        approval = null; persisted = false; published = false; strictPolicy = false;
+        initialize(privateKey, false);
+    }
+
+    private void initialize(boolean privateKey, boolean allowNew) throws Exception {
+        initialize(privateKey, allowNew, null);
+    }
+
+    private void initialize(boolean privateKey, boolean allowNew,
+            SshPasswordConnector.TrustCommitState suppliedTrustCommit) throws Exception {
+        approval = null; newApproval = null; persisted = false; published = false; strictPolicy = false;
+        duringProofConfirmation = null;
         cancelDuringReview = false; expireDuringReview = false; revokeDuringReview = false;
         expireWhileWaitingForApproval = false;
         store = new Store();
@@ -109,7 +165,11 @@ public final class SshChangedHostFlowTest {
         registry = new SshRoleRegistry(clock);
         issued = SshNativeRoleBootstrap.issue(roleWire(), registry, view, clock, ignored -> true);
         SshHostKeyAuthority authority = new SshHostKeyAuthority(review -> {
-            throw new VaultException("SSH_HOST_KEY_REVIEW", "NEW approval is unavailable");
+            if (!allowNew || !review.belongsTo(issued.role) || !CONNECTION.equals(review.connectionId)
+                    || !TARGET.equals(review.targetIdentity) || !HOST.equals(review.host)
+                    || review.port != 22 || !KEY.equals(review.keyType)
+                    || !FINGERPRINT.equals(review.fingerprint)) throw denied();
+            newApproval = review;
         }, review -> {
             if (cancelDuringReview) { callback.cancel(); throw denied(); }
             if (expireDuringReview) { clock.value = issued.role.deadline; throw denied(); }
@@ -118,7 +178,26 @@ public final class SshChangedHostFlowTest {
             if (expireWhileWaitingForApproval) {
                 try (SshHostKeyReviewMailbox mailbox = new SshHostKeyReviewMailbox(issued.role, clock,
                         () -> SshPasswordConnector.requireTransportDeadline(clock.now(), transportDeadline),
-                        ticket -> { assertEquals(transportDeadline, ticket.deadline); clock.value = transportDeadline; })) {
+                        ticket -> {
+                            assertEquals(transportDeadline, ticket.deadline);
+                            java.util.Map<String, Object> event = SshPasswordConnectBridge.hostReviewEvent(CONNECTION, ticket, 29_000);
+                            java.util.Map<String, Object> dismissal = SshPasswordConnectBridge.hostReviewDismissal(CONNECTION, ticket);
+                            assertEquals("hostKeyChanged", event.get("type"));
+                            assertEquals(issued.role.hop, event.get("hop"));
+                            assertEquals(issued.role.host, event.get("host"));
+                            assertEquals(issued.role.port, event.get("port"));
+                            assertEquals(ticket.binding, event.get("binding"));
+                            assertEquals("hostKeyChangedDismissed", dismissal.get("type"));
+                            assertEquals(issued.role.hop, dismissal.get("hop"));
+                            assertEquals(ticket.binding, dismissal.get("binding"));
+                            clock.value = transportDeadline;
+                            try {
+                                SshPasswordConnector.hostKeyPending(ticket, null,
+                                        () -> fail("changed review must check the transport deadline"),
+                                        () -> SshPasswordConnector.requireTransportDeadline(clock.now(), transportDeadline));
+                                fail("changed review must expire at the transport deadline");
+                            } catch (VaultException expected) { assertEquals("SSH_TIMED_OUT", expected.code); }
+                        })) {
                     mailbox.requireChangedApproved(review, transportDeadline);
                 }
             }
@@ -126,23 +205,41 @@ public final class SshChangedHostFlowTest {
             approval = review;
         });
         SshVaultAdapter adapter = new SshVaultAdapter(vault,
-                (connection, target) -> { throw denied(); }, proposal -> { throw denied(); },
+                (connection, target) -> {
+                    if (fixtureCancelled.getAsBoolean())
+                        throw new VaultException("SSH_CANCELLED", "The SSH connection was cancelled");
+                    if (!allowNew || newApproval == null || !CONNECTION.equals(connection)
+                            || !TARGET.equals(target)) throw denied();
+                }, proposal -> {
+                    if (!allowNew) throw denied();
+                    requireApprovedNew(proposal);
+                },
                 proposal -> { throw denied(); }, (review, proposal) -> {
                     SshPasswordConnector.requireTransportDeadline(clock.now(), transportDeadline);
                     if (approval != review) throw denied();
                 });
         SshManagedKnownHostsProvider.SnapshotReceipt receipt = SshManagedKnownHostsProvider.snapshotFor(
                 adapter, issued.role, clock, CONFIG, SOURCE, "selected-trust", "selected trust");
+        trustCommit = suppliedTrustCommit == null ? new SshPasswordConnector.TrustCommitState() : suppliedTrustCommit;
         provider = SshManagedKnownHostsProvider.bindForNativeHandoff(adapter, receipt,
-                new SshManagedKnownHostsProvider.ChangedCommitObserver() {
-                    @Override public void persisted() { persisted = true; }
-                    @Override public void proofPublished() { published = true; }
+                new SshManagedKnownHostsProvider.TrustCommitObserver() {
+                    @Override public void persisted() { persisted = true; trustCommit.persisted(); }
+                    @Override public void proofPublished() throws VaultException {
+                        if (duringProofConfirmation != null) duringProofConfirmation.run();
+                        trustCommit.proofPublished(); published = true;
+                    }
+                    @Override public void newPersisted() { trustCommit.newPersisted(); }
+                    @Override public void newProofPublished() throws VaultException {
+                        if (duringProofConfirmation != null) duringProofConfirmation.run();
+                        trustCommit.newProofPublished();
+                    }
                 });
         SshKnownHostsCandidateHandoff handoff = provider.nativeCandidateHandoff();
         SshManagedProvider managed = new SshManagedProvider(new SshCredentialBridge(vault, authority, clock),
                 clock, provider, provider, null);
+        callbackNative = new CallbackNative();
         callback = SshNativeCallbackAdapter.bind(issued, registry, authority, clock,
-                new CallbackNative(), (token, uid) -> { }, managed, handoff);
+                callbackNative, (token, uid) -> { }, managed, handoff);
         selection = privateKey
                 ? SshAuthenticationSelection.privateKey(issued.role, "test", KEY_PATH,
                         "selected key", text("public key fixture"), clock).withKeyboardContinuation(clock)
@@ -153,6 +250,30 @@ public final class SshChangedHostFlowTest {
     private void usePrivateKeyFixture() throws Exception {
         tearDown();
         initialize(true);
+    }
+
+    private void useNewFixture() throws Exception {
+        tearDown();
+        initialize(false, true);
+    }
+
+    private void requireApprovedNew(SshTrustProposal proposal) throws VaultException {
+        if (newApproval == null || !newApproval.belongsTo(issued.role)
+                || !proposal.matchesRole(issued.role)
+                || !proposal.matchesManagedObject(VaultManifest.FileType.KNOWN_HOSTS,
+                        "selected-trust", SOURCE, "selected trust")
+                || !newApproval.keyType.equals(proposal.keyType)
+                || !newApproval.fingerprint.equals(proposal.fingerprint)) throw denied();
+        byte[] approvedBase = newApproval.baseDigest(), approvedReplacement = newApproval.replacementDigest();
+        byte[] actualBase = proposal.baseDigest(), content = proposal.newContent();
+        byte[] actualReplacement = digest(content);
+        try {
+            if (!Arrays.equals(approvedBase, actualBase)
+                    || !Arrays.equals(approvedReplacement, actualReplacement)) throw denied();
+        } finally {
+            VaultCodec.wipe(approvedBase); VaultCodec.wipe(approvedReplacement);
+            VaultCodec.wipe(actualBase); VaultCodec.wipe(content); VaultCodec.wipe(actualReplacement);
+        }
     }
 
     @After public void tearDown() throws Exception {
@@ -189,11 +310,14 @@ public final class SshChangedHostFlowTest {
         assertTrue(callback.hostProof().permitsCredentials());
         assertEquals(13, callback.kexProof().cycle);
         assertArrayEquals(bytes(32, 9), callback.kexProof().sessionIdDigest());
+        duringProofConfirmation = () -> assertTrue("confirmation must hold the exact view lock", Thread.holdsLock(view));
         callback.confirmChangedNativeCompletion();
         assertTrue(published);
+        assertNull(provider.invalidateUnacknowledgedChanged());
         byte[] credential = callback.onNativeCredentialBytes(SshNativeCallbackAdapter.CREDENTIAL_PASSWORD, selection);
         assertArrayEquals(text("fixture password"), credential);
         VaultCodec.wipe(credential);
+        view.revoke();
         callback.cancel();
         assertTrue("ordinary cancellation after native completion leaves the known commit intact",
                 vault.session.unlocked());
@@ -259,8 +383,424 @@ public final class SshChangedHostFlowTest {
         assertEquals("VAULT_COMMIT_UNCERTAIN", callback.lastFailureCode());
         assertEquals("VAULT_COMMIT_UNCERTAIN", SshPasswordConnectBridge.completionFailure(vault, "SSH_CANCELLED",
                 persisted && !published, false));
+        callback.cancel();
+        assertFalse(callback.onNativeCredential(SshNativeCallbackAdapter.CREDENTIAL_PASSWORD));
+        assertEquals("VAULT_COMMIT_UNCERTAIN", callback.lastFailureCode());
+        AtomicReference<Boolean> wrongThreadResult = new AtomicReference<>();
+        Thread wrongThread = new Thread(() -> wrongThreadResult.set(
+                callback.onNativeCredential(SshNativeCallbackAdapter.CREDENTIAL_PASSWORD)));
+        wrongThread.start(); wrongThread.join(5000);
+        assertFalse(wrongThread.isAlive());
+        assertEquals(Boolean.FALSE, wrongThreadResult.get());
+        assertEquals("VAULT_COMMIT_UNCERTAIN", callback.lastFailureCode());
+        try { callback.requireAuthenticationSelectionLive(); fail("uncertain trust is not live"); }
+        catch (VaultException failure) { assertEquals("VAULT_COMMIT_UNCERTAIN", failure.code); }
         assertNull(callback.hostProof());
         assertNull(callback.kexProof());
+    }
+
+    @Test public void newTrustCancellationAfterRealWriterReturnsLocksVaultAndReportsUncertain()
+            throws Exception {
+        useNewFixture();
+        assertTrue(newCandidate());
+        CountDownLatch writerReturned = new CountDownLatch(1);
+        CountDownLatch cancelled = new CountDownLatch(1);
+        AtomicReference<Throwable> cancellationFailure = new AtomicReference<>();
+        Thread cancellingThread = new Thread(() -> {
+            try {
+                if (!writerReturned.await(10, TimeUnit.SECONDS))
+                    throw new AssertionError("the real managed writer did not return");
+                callback.cancel();
+            } catch (Throwable failure) {
+                cancellationFailure.set(failure);
+            } finally {
+                cancelled.countDown();
+            }
+        }, "new-trust-cancel");
+        clock.committedProviderReturned = () -> store.commits == 1;
+        clock.afterCommittedProviderReturn = () -> {
+            writerReturned.countDown();
+            try {
+                if (!cancelled.await(10, TimeUnit.SECONDS))
+                    throw new AssertionError("the cancellation did not complete");
+            } catch (InterruptedException failure) {
+                Thread.currentThread().interrupt();
+                throw new AssertionError(failure);
+            }
+        };
+        cancellingThread.start();
+        byte[] result;
+        try {
+            result = callback.onNativeHostEvidence(TOKEN, 0, 22, CONNECTION, TARGET, HOST,
+                    SshNativeCallbackAdapter.HOST_NEW, KEY, FINGERPRINT, digest(OLD), digest(NEW));
+        } finally {
+            writerReturned.countDown();
+            cancellingThread.join(10_000);
+        }
+        assertFalse("cancellation thread must terminate", cancellingThread.isAlive());
+        assertNull("cancellation must succeed", cancellationFailure.get());
+        assertNull("the post-writer cancellation window must be reached", clock.afterCommittedProviderReturn);
+        assertNull("the pending host result must not be published", result);
+        assertEquals(1, store.commits);
+        assertArrayEquals(NEW, read(SOURCE));
+        assertArrayEquals(OLD, read(OTHER));
+        assertTrue(trustCommit.written());
+        assertTrue(trustCommit.publicationUncertain());
+        assertNull(callback.hostProof());
+        assertNull(callback.kexProof());
+        assertEquals("VAULT_COMMIT_UNCERTAIN", callback.lastFailureCode());
+        assertFalse("a committed but unpublished trust write must lock the vault", vault.session.unlocked());
+        assertEquals("VAULT_COMMIT_UNCERTAIN", SshPasswordConnectBridge.completionFailure(vault,
+                "SSH_CANCELLED", trustCommit.publicationUncertain(), false));
+        assertEquals("VAULT_COMMIT_UNCERTAIN", SshPasswordConnectBridge.completionFailure(vault,
+                "SSH_SESSION_CANCELLED", trustCommit.publicationUncertain(), false));
+    }
+
+    @Test public void newTrustRevokedAfterRealWriterReturnsLocksVault() throws Exception {
+        useNewFixture();
+        assertTrue(newCandidate());
+        clock.committedProviderReturned = () -> store.commits == 1;
+        clock.afterCommittedProviderReturn = view::revoke;
+        assertNull(newEvidence());
+        assertNull(clock.afterCommittedProviderReturn);
+        assertEquals(1, store.commits);
+        assertArrayEquals(NEW, read(SOURCE));
+        assertEquals("VAULT_COMMIT_UNCERTAIN", callback.lastFailureCode());
+        assertFalse(vault.session.unlocked());
+        assertTrue(trustCommit.publicationUncertain());
+        assertNull(callback.hostProof());
+        assertNull(callback.kexProof());
+    }
+
+    @Test public void newTrustNativeAbortBeforeStepAcknowledgementLocksVault() throws Exception {
+        useNewFixture();
+        assertTrue(newCandidate());
+        assertNotNull(newEvidence());
+        assertTrue(callback.onNativeKexComplete(1, bytes(32, 9)));
+        assertTrue(trustCommit.publicationUncertain());
+        callback.abortNativeKnownHostsCandidate();
+        assertEquals("VAULT_COMMIT_UNCERTAIN", callback.lastFailureCode());
+        assertFalse(vault.session.unlocked());
+        assertNull(callback.hostProof());
+        assertNull(callback.kexProof());
+        assertArrayEquals(NEW, read(SOURCE));
+    }
+
+    @Test public void newTrustInvalidKexCannotPublishProofOrHideCommittedWrite() throws Exception {
+        useNewFixture();
+        assertTrue(newCandidate());
+        assertNotNull(newEvidence());
+        assertFalse(callback.onNativeKexComplete(0, bytes(32, 9)));
+        assertEquals("VAULT_COMMIT_UNCERTAIN", callback.lastFailureCode());
+        assertFalse(vault.session.unlocked());
+        assertTrue(trustCommit.publicationUncertain());
+        assertNull(callback.hostProof());
+        assertNull(callback.kexProof());
+    }
+
+    @Test public void newTrustCancellationBeforeOwnerConfirmationRejectsProof() throws Exception {
+        useNewFixture();
+        assertTrue(newCandidate());
+        assertNotNull(newEvidence());
+        assertTrue(callback.onNativeKexComplete(1, bytes(32, 9)));
+        SshPasswordConnector.requireTransportDeadline(clock.now(), transportDeadline);
+        trustCommit.cancellation.cancel();
+        try { callback.confirmNewNativeCompletion(); fail("cancelled trust cannot be confirmed"); }
+        catch (VaultException failure) { assertEquals("VAULT_COMMIT_UNCERTAIN", failure.code); }
+        assertTrue(trustCommit.publicationUncertain());
+        assertFalse(vault.session.unlocked());
+        assertNull(callback.hostProof());
+        assertNull(callback.kexProof());
+    }
+
+    @Test public void changedTrustCancellationBeforeOwnerConfirmationRejectsProof() throws Exception {
+        assertTrue(candidate(records()));
+        assertTrue(review(TOKEN, KEY, FINGERPRINT, digest(OLD), digest(NEW)));
+        assertTrue(callback.onNativeKexComplete(1, bytes(32, 9)));
+        SshPasswordConnector.requireTransportDeadline(clock.now(), transportDeadline);
+        trustCommit.cancellation.cancel();
+        try { callback.confirmChangedNativeCompletion(); fail("cancelled trust cannot be confirmed"); }
+        catch (VaultException failure) { assertEquals("VAULT_COMMIT_UNCERTAIN", failure.code); }
+        assertTrue(trustCommit.publicationUncertain());
+        assertFalse(vault.session.unlocked());
+        assertNull(callback.hostProof());
+        assertNull(callback.kexProof());
+    }
+
+    @Test public void changedTrustRevokedViewBeforeConfirmationRejectsProof() throws Exception {
+        assertTrue(candidate(records()));
+        assertTrue(review(TOKEN, KEY, FINGERPRINT, digest(OLD), digest(NEW)));
+        assertTrue(callback.onNativeKexComplete(1, bytes(32, 9)));
+        view.revoke();
+        try { callback.confirmChangedNativeCompletion(); fail("revoked view cannot confirm trust"); }
+        catch (VaultException failure) { assertEquals("VAULT_COMMIT_UNCERTAIN", failure.code); }
+        assertTrue(trustCommit.publicationUncertain());
+        assertFalse(vault.session.unlocked());
+        assertNull(callback.hostProof());
+        assertNull(callback.kexProof());
+    }
+
+    @Test public void changedTrustInvalidationCannotBeOvertakenByProviderConfirmation() throws Exception {
+        assertTrue(candidate(records()));
+        assertTrue(review(TOKEN, KEY, FINGERPRINT, digest(OLD), digest(NEW)));
+        assertTrue(callback.onNativeKexComplete(1, bytes(32, 9)));
+        assertNotNull(provider.invalidateUnacknowledgedChanged());
+        try { provider.changedProofPublished(); fail("invalidated trust cannot be acknowledged"); }
+        catch (VaultException failure) { assertEquals("SSH_HOST_KEY_CAS", failure.code); }
+        assertTrue(trustCommit.publicationUncertain());
+        callback.abortNativeKnownHostsCandidate();
+        assertFalse(vault.session.unlocked());
+        assertNull(callback.hostProof());
+        assertNull(callback.kexProof());
+    }
+
+    @Test public void newTrustRevokedViewBeforeConfirmationRejectsProof() throws Exception {
+        useNewFixture();
+        assertTrue(newCandidate());
+        assertNotNull(newEvidence());
+        assertTrue(callback.onNativeKexComplete(1, bytes(32, 9)));
+        view.revoke();
+        try { callback.confirmNewNativeCompletion(); fail("revoked view cannot confirm trust"); }
+        catch (VaultException failure) { assertEquals("VAULT_COMMIT_UNCERTAIN", failure.code); }
+        assertTrue(trustCommit.publicationUncertain());
+        assertFalse(vault.session.unlocked());
+        assertNull(callback.hostProof());
+        assertNull(callback.kexProof());
+    }
+
+    @Test public void newTrustCredentialIsUnavailableBeforeNativeAcknowledgement() throws Exception {
+        useNewFixture();
+        assertTrue(newCandidate());
+        assertNotNull(newEvidence());
+        assertTrue(callback.onNativeKexComplete(1, bytes(32, 9)));
+        int readsBefore = store.reads;
+        assertNull(callback.onNativeCredentialBytes(SshNativeCallbackAdapter.CREDENTIAL_PASSWORD, selection));
+        assertEquals(readsBefore, store.reads);
+        assertEquals("SSH_KEX_REQUIRED", callback.lastFailureCode());
+        callback.abortNativeKnownHostsCandidate();
+        assertEquals("VAULT_COMMIT_UNCERTAIN", callback.lastFailureCode());
+        assertFalse(vault.session.unlocked());
+    }
+
+    @Test public void newTrustCloseFailureRetainsUncertaintyAndCanBeRetried() throws Exception {
+        useNewFixture();
+        assertTrue(newCandidate());
+        assertNotNull(newEvidence());
+        callbackNative.closeFailures = 1;
+        try { callback.close(); fail("the first native close must fail"); }
+        catch (VaultException failure) { assertEquals("SSH_CALLBACK_CLEANUP", failure.code); }
+        assertEquals(1, callbackNative.closeCalls);
+        assertEquals("VAULT_COMMIT_UNCERTAIN", callback.lastFailureCode());
+        assertFalse(vault.session.unlocked());
+        assertNull(callback.hostProof());
+        assertNull(callback.kexProof());
+        callback.close();
+        assertEquals(2, callbackNative.closeCalls);
+        assertEquals("VAULT_COMMIT_UNCERTAIN", callback.lastFailureCode());
+        assertTrue(trustCommit.publicationUncertain());
+        assertArrayEquals(NEW, read(SOURCE));
+    }
+
+    @Test public void newTrustCancellationFailureDoesNotHideUncertainty() throws Exception {
+        useNewFixture();
+        assertTrue(newCandidate());
+        assertNotNull(newEvidence());
+        callbackNative.cancelFailures = 1;
+        try { callback.cancel(); fail("native cancellation must fail"); }
+        catch (VaultException failure) { assertEquals("VAULT_COMMIT_UNCERTAIN", failure.code); }
+        assertEquals("VAULT_COMMIT_UNCERTAIN", callback.lastFailureCode());
+        assertFalse(vault.session.unlocked());
+        assertNull(callback.hostProof());
+        assertNull(callback.kexProof());
+        assertTrue(trustCommit.publicationUncertain());
+    }
+
+    @Test public void newTrustConfirmedAfterKexKeepsOrdinaryCancellation() throws Exception {
+        useNewFixture();
+        SshNativeSession.NativeBinding nativeSession = new SshNativeSession.NativeBinding() {
+            @Override public long open(long role, int uid, long cb, long nativeView, int fd,
+                    long deadline, int budget, byte[] hostKey, byte[] fingerprint, String path,
+                    String host, String candidate) throws IOException { throw new IOException("unexpected pinned open"); }
+            @Override public long openManaged(long role, int uid, long cb, long nativeView, int fd,
+                    long deadline, int budget, String path, String host, String candidate,
+                    byte[] selection) { return 903; }
+            @Override public SshNativeSession.StepResult step(long handle, boolean cancelled) {
+                assertTrue(newCandidate());
+                assertNotNull(newEvidence());
+                assertTrue(callback.onNativeKexComplete(1, bytes(32, 9)));
+                assertTrue("the callback alone is not native step acknowledgement",
+                        trustCommit.publicationUncertain());
+                return new SshNativeSession.StepResult(0, 0, 0, 0, false, false, false, true);
+            }
+            @Override public void verifyHostKey(long handle, byte[] key) { throw new AssertionError(); }
+            @Override public void close(long handle) { }
+            @Override public void destroy(long handle) { }
+        };
+        SshNativeSession owner = SshNativeSession.openManaged(callback, view, 41,
+                "new-candidate", 1024, nativeSession);
+        try {
+            assertTrue(SshPasswordConnector.keyExchangeStep(owner, callback, () -> { }, trustCommit::written).complete);
+            assertTrue(trustCommit.publicationUncertain());
+            duringProofConfirmation = () -> assertTrue("confirmation must hold the exact view lock", Thread.holdsLock(view));
+            callback.confirmNewNativeCompletion();
+            assertFalse(trustCommit.publicationUncertain());
+            assertNull(provider.invalidateUnacknowledgedNew());
+            byte[] selectionWire = selection.encode(TOKEN, clock);
+            byte[] receipt = digest(selectionWire);
+            byte[] credential = callback.onNativeSelectedCredentialBytes(
+                    SshNativeCallbackAdapter.CREDENTIAL_PASSWORD, receipt, 1, bytes(32, 9));
+            try { assertArrayEquals(text("fixture password"), credential); }
+            finally { VaultCodec.wipe(selectionWire); VaultCodec.wipe(receipt); VaultCodec.wipe(credential); }
+            view.revoke();
+            trustCommit.cancellation.cancel();
+            owner.cancel();
+            assertTrue(vault.session.unlocked());
+            assertEquals("SSH_CANCELLED", SshPasswordConnectBridge.completionFailure(vault,
+                    "SSH_CANCELLED", trustCommit.publicationUncertain(), false));
+            assertEquals("SSH_SESSION_CANCELLED", SshPasswordConnectBridge.completionFailure(vault,
+                    "SSH_SESSION_CANCELLED", trustCommit.publicationUncertain(), false));
+            assertTrue(vault.session.unlocked());
+            assertArrayEquals(NEW, read(SOURCE));
+        } finally { owner.close(); }
+    }
+
+    @Test public void uncommittedNewAndKnownCancellationDoNotReportUncertain() throws Exception {
+        useNewFixture();
+        assertTrue(newCandidate());
+        callback.cancel();
+        assertNull(newEvidence());
+        assertEquals(0, store.commits);
+        assertFalse(trustCommit.written());
+        assertFalse(trustCommit.publicationUncertain());
+        assertEquals("SSH_CANCELLED", SshPasswordConnectBridge.completionFailure(vault,
+                "SSH_CANCELLED", trustCommit.publicationUncertain(), false));
+        assertTrue(vault.session.unlocked());
+
+        useNewFixture();
+        assertNotNull(callback.onNativeHostEvidence(TOKEN, 0, 22, CONNECTION, TARGET, HOST,
+                SshNativeCallbackAdapter.HOST_KNOWN, KEY, FINGERPRINT, digest(OLD), digest(OLD)));
+        assertTrue(callback.onNativeKexComplete(1, bytes(32, 9)));
+        callback.confirmNewNativeCompletion();
+        callback.cancel();
+        assertEquals(0, store.commits);
+        assertFalse(trustCommit.written());
+        assertFalse(trustCommit.publicationUncertain());
+        assertEquals("SSH_SESSION_CANCELLED", SshPasswordConnectBridge.completionFailure(vault,
+                "SSH_SESSION_CANCELLED", trustCommit.publicationUncertain(), false));
+        assertTrue(vault.session.unlocked());
+    }
+
+    @Test public void newTrustFailureFromSessionStepMapsToUncertainAtBridge() throws Exception {
+        useNewFixture();
+        final SshNativeSession[] owner = new SshNativeSession[1];
+        SshNativeSession.NativeBinding nativeSession = new SshNativeSession.NativeBinding() {
+            @Override public long open(long role, int uid, long cb, long nativeView, int fd,
+                    long deadline, int budget, byte[] hostKey, byte[] fingerprint, String path,
+                    String host, String candidate) throws IOException { throw new IOException("unexpected pinned open"); }
+            @Override public long openManaged(long role, int uid, long cb, long nativeView, int fd,
+                    long deadline, int budget, String path, String host, String candidate,
+                    byte[] selection) { return 903; }
+            @Override public SshNativeSession.StepResult step(long handle, boolean cancelled) throws IOException {
+                assertTrue(newCandidate());
+                assertNotNull(newEvidence());
+                assertTrue(callback.onNativeKexComplete(1, bytes(32, 9)));
+                try { owner[0].cancel(); }
+                catch (VaultException failure) { throw new AssertionError(failure); }
+                throw new IOException("native step did not complete");
+            }
+            @Override public void verifyHostKey(long handle, byte[] key) { throw new AssertionError(); }
+            @Override public void close(long handle) { }
+            @Override public void destroy(long handle) { }
+        };
+        owner[0] = SshNativeSession.openManaged(callback, view, 41, "new-candidate", 1024, nativeSession);
+        try {
+            try {
+                SshPasswordConnector.keyExchangeStep(owner[0], callback, () -> { }, trustCommit::written);
+                fail("a cancelled native step must not complete");
+            } catch (VaultException failure) {
+                assertEquals("SSH_SESSION_CANCELLED", failure.code);
+                assertEquals("VAULT_COMMIT_UNCERTAIN", SshPasswordConnectBridge.completionFailure(vault,
+                        failure.code, trustCommit.publicationUncertain(), false));
+            }
+            assertFalse(vault.session.unlocked());
+            assertNull(callback.hostProof());
+            assertNull(callback.kexProof());
+            assertArrayEquals(NEW, read(SOURCE));
+        } finally { owner[0].close(); }
+    }
+
+    @Test public void screenLockWaitsForRealInFlightNewTrustCommitBeforeBridgeResult() throws Exception {
+        tearDown();
+        callback = null; provider = null; registry = null;
+        CountDownLatch storeCommitted = new CountDownLatch(1), allowStoreReturn = new CountDownLatch(1);
+        CountDownLatch released = new CountDownLatch(1), mapped = new CountDownLatch(1);
+        SshPasswordConnector.TrustCommitState state = new SshPasswordConnector.TrustCommitState();
+        AtomicReference<String> callbackFailure = new AtomicReference<>(), bridgeResult = new AtomicReference<>();
+        SshSessionOwner.Factory factory = new SshSessionOwner.Factory() {
+            @Override public boolean mayWriteTrust() { return true; }
+            @Override public SshSessionOwner.Cancellation trustCancellation() { return state.cancellation; }
+            @Override public SshNativeSession create(BooleanSupplier cancelled) throws Exception {
+                fixtureCancelled = cancelled;
+                initialize(false, true, state);
+                store.afterCommit = () -> {
+                    storeCommitted.countDown();
+                    try {
+                        if (!allowStoreReturn.await(10, TimeUnit.SECONDS))
+                            throw new AssertionError("the committed store was not released");
+                    } catch (InterruptedException failure) {
+                        Thread.currentThread().interrupt();
+                        throw new AssertionError(failure);
+                    }
+                };
+                if (!newCandidate() || newEvidence() != null)
+                    throw new AssertionError("the cancelled NEW candidate must not publish a result");
+                callbackFailure.set(callback.lastFailureCode());
+                if (callback.hostProof() != null || callback.kexProof() != null)
+                    throw new AssertionError("cancelled trust published a proof");
+                // The session normally reports cancellation; the bridge must retain the durable-write state.
+                throw new VaultException("SSH_SESSION_CANCELLED", "The native step was cancelled");
+            }
+            @Override public void close() throws Exception {
+                SshChangedHostFlowTest.this.tearDown();
+                callback = null; provider = null; registry = null;
+            }
+        };
+        SshSessionOwner owner = new SshSessionOwner(factory, "ssh", 80, 24, new SshTerminalState(),
+                Runnable::run, new SshSessionOwner.Lifecycle() {
+                    @Override public void state(String value) { }
+                    @Override public void released() { released.countDown(); }
+                });
+        owner.connected.whenComplete((mode, failure) -> {
+            try {
+                String code = failure instanceof VaultException ? ((VaultException)failure).code : "unexpected";
+                bridgeResult.set(SshPasswordConnectBridge.completionFailure(vault, code,
+                        state.publicationUncertain(), false));
+            } finally { mapped.countDown(); }
+        });
+        owner.begin();
+        try {
+            assertTrue(storeCommitted.await(10, TimeUnit.SECONDS));
+            assertEquals(1, store.commits);
+            assertFalse("the provider has not returned its receipt", state.publicationUncertain());
+            assertTrue(owner.stopForScreenLock(owner.id));
+            assertFalse("the final connection result must await the in-flight write", owner.connected.isDone());
+            allowStoreReturn.countDown();
+            try { owner.connected.get(10, TimeUnit.SECONDS); fail("screen lock must stop the connection"); }
+            catch (ExecutionException failure) {
+                assertEquals("SSH_SCREEN_LOCKED", ((VaultException)failure.getCause()).code);
+            }
+            assertTrue(mapped.await(10, TimeUnit.SECONDS));
+            assertEquals("VAULT_COMMIT_UNCERTAIN", callbackFailure.get());
+            assertEquals("VAULT_COMMIT_UNCERTAIN", bridgeResult.get());
+            assertTrue(state.publicationUncertain());
+            assertFalse(vault.session.unlocked());
+            assertArrayEquals(NEW, read(SOURCE));
+            assertTrue(released.await(10, TimeUnit.SECONDS));
+        } finally {
+            allowStoreReturn.countDown();
+            released.await(10, TimeUnit.SECONDS);
+            fixtureCancelled = () -> false;
+        }
     }
 
     @Test public void nativeAbortAfterJavaCommitBeforeStepAcknowledgementLocksVault() throws Exception {
@@ -493,6 +1033,15 @@ public final class SshChangedHostFlowTest {
         return callback.onNativeChangedHostCandidate(TOKEN, 0, 22, CONNECTION, TARGET, HOST,
                 SshNativeCallbackAdapter.HOST_CHANGED, KEY, FINGERPRINT, digest(OLD), digest(NEW),
                 "candidate-1", NEW.clone(), rows);
+    }
+    private boolean newCandidate() {
+        return callback.onNativeKnownHostsCandidate(TOKEN, 0, 22, CONNECTION, TARGET, HOST,
+                SshNativeCallbackAdapter.HOST_NEW, KEY, FINGERPRINT, digest(OLD), digest(NEW),
+                "new-candidate", NEW.clone());
+    }
+    private byte[] newEvidence() {
+        return callback.onNativeHostEvidence(TOKEN, 0, 22, CONNECTION, TARGET, HOST,
+                SshNativeCallbackAdapter.HOST_NEW, KEY, FINGERPRINT, digest(OLD), digest(NEW));
     }
     private boolean review(long token, String key, String fingerprint, byte[] base, byte[] replacement) {
         return callback.onNativeChangedHostReview(token, 0, 22, CONNECTION, TARGET, HOST,

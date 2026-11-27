@@ -78,11 +78,16 @@ final class SshTransientPassword implements AutoCloseable {
             });
             guard.check();
             vault.publishTransientSshPassword(candidate, guard, () -> {
-                synchronized (this) {
-                    if (closed || bytes.length == 0) throw invalid();
-                    output[0] = bytes.clone();
-                    VaultCodec.wipe(bytes);
-                }
+                AppSecrets.EffectGuard copy = () -> {
+                    synchronized (this) {
+                        if (closed || bytes.length == 0) throw invalid();
+                        output[0] = bytes.clone();
+                        VaultCodec.wipe(bytes);
+                    }
+                };
+                if (callbackGuard instanceof AppSecrets.SshStopCopyGuard)
+                    ((AppSecrets.SshStopCopyGuard) callbackGuard).copySecret(copy);
+                else copy.check();
             });
             guard.check();
             delivered = true;

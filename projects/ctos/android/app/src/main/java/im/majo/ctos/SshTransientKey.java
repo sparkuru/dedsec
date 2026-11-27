@@ -18,31 +18,32 @@ final class SshTransientKey implements AutoCloseable {
     private SshAuthenticationSelection selection;
     private Thread owner;
     private final boolean deferred;
+    private final SshSessionOwner.Cancellation phraseCancellation;
     private boolean attempted, closed;
 
     SshTransientKey(AppSecrets vault, SshPasswordProfile profile, SshConnectionMaterial.Key key,
             byte[] privateBody, byte[] phrase, long deadline, AppSecrets.EffectGuard origin,
             SshRoleContext.Clock clock) throws VaultException {
-        this(vault, profile, key, privateBody, phrase, deadline, origin, clock, false);
+        this(vault, profile, key, privateBody, phrase, deadline, origin, clock, false, null);
     }
 
     static SshTransientKey deferred(AppSecrets vault, SshPasswordProfile profile, SshConnectionMaterial.Key key,
-            byte[] privateBody, long deadline, AppSecrets.EffectGuard origin, SshRoleContext.Clock clock)
-            throws VaultException {
-        return new SshTransientKey(vault, profile, key, privateBody, null, deadline, origin, clock, true);
+            byte[] privateBody, long deadline, AppSecrets.EffectGuard origin, SshRoleContext.Clock clock,
+            SshSessionOwner.Cancellation cancellation) throws VaultException {
+        return new SshTransientKey(vault, profile, key, privateBody, null, deadline, origin, clock, true, cancellation);
     }
 
     private SshTransientKey(AppSecrets vault, SshPasswordProfile profile, SshConnectionMaterial.Key key,
             byte[] privateBody, byte[] phrase, long deadline, AppSecrets.EffectGuard origin,
-            SshRoleContext.Clock clock, boolean deferred) throws VaultException {
+            SshRoleContext.Clock clock, boolean deferred, SshSessionOwner.Cancellation cancellation) throws VaultException {
         if (!deferred) SshSavedPassword.validateSecret(phrase);
-        else if (phrase != null) throw invalid();
+        else if (phrase != null || cancellation == null) throw invalid();
         if (vault == null || profile == null || key == null || !key.encrypted || privateBody == null
                 || origin == null || clock == null || deadline <= clock.now()
                 || deadline - clock.now() > SshRoleContext.MAX_LIFETIME_MILLIS) throw invalid();
         this.vault = vault; this.key = key; account = new SshConnectionMaterial.KeyAccount(profile, key);
         this.deadline = deadline; this.origin = origin; this.clock = clock;
-        this.deferred = deferred;
+        this.deferred = deferred; phraseCancellation = cancellation;
         this.phrase = phrase == null ? null : phrase.clone(); bodyDigest = VaultCodec.digest(privateBody);
     }
 
@@ -61,12 +62,22 @@ final class SshTransientKey implements AutoCloseable {
             }
             requireSelection(chosen); guard.check();
             hostKey.requireMatches(candidate); kex.requireMatches(candidate, hostKey);
-            synchronized (this) {
-                if (closed || attempted || phrase != null || selection != chosen) throw invalid();
-                phrase = value.clone();
-            }
+            installDeferredPhrase(chosen, value.clone());
             guard.check(); requireSelection(chosen); hostKey.requireMatches(candidate); kex.requireMatches(candidate, hostKey);
         } catch (VaultException | RuntimeException | Error failure) { close(); throw failure; }
+    }
+
+    private void installDeferredPhrase(SshAuthenticationSelection chosen, byte[] candidate) throws VaultException {
+        boolean installed = false;
+        try {
+            synchronized (this) {
+                if (closed || attempted || phrase != null || selection != chosen) throw invalid();
+                if (!phraseCancellation.admitTerminalIo())
+                    throw new VaultException("SSH_CANCELLED", "The SSH connection was cancelled");
+                phrase = candidate;
+                installed = true;
+            }
+        } finally { if (!installed) VaultCodec.wipe(candidate); }
     }
 
     void bind(SshRoleContext candidate, SshAuthenticationSelection chosen) throws VaultException {
@@ -121,6 +132,11 @@ final class SshTransientKey implements AutoCloseable {
                 }
                 @Override public void withRole(AppSecrets.EffectGuard copy) throws VaultException {
                     candidate.publishBound(clock, copy);
+                }
+                @Override public void copySecret(AppSecrets.EffectGuard copy) throws VaultException {
+                    if (callback instanceof AppSecrets.SshStopCopyGuard)
+                        ((AppSecrets.SshStopCopyGuard) callback).copySecret(copy);
+                    else copy.check();
                 }
             };
             vault.sshPrivateKey(operation, key.path, key.identity, candidate.targetIdentity, candidate.connectionId,

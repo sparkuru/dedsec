@@ -1,0 +1,141 @@
+{
+  "schema_version": "1.0.0",
+  "kind": "test_task",
+  "worker_instructions": "执行方先阅读 test/codex-wont-do/template.json、AGENTS.md 和本任务所列资源；按模板领取并完成符合前置条件的测试，将实际结果和证据追加到本文件的 execution.attempts，交独立 Codex 审核。阻塞或失败时如实报告。",
+  "task_id": "20261127T062718Z-gpt-6-ssh-proxyjump-auth-modes",
+  "state": "blocked",
+  "created_at_utc": "2026-11-27T06:44:11Z",
+  "creator": {
+    "agent": "codex",
+    "model": "gpt-6",
+    "model_precision": "family_only",
+    "start_timestamp_utc": "2026-11-27T06:27:18Z"
+  },
+  "request": {
+    "title": "ProxyJump 逐跳临时凭据、私钥和交互认证",
+    "goal": "实现后验证每跳独立的当次密码、私钥和键盘交互认证，保持精确 endpoint 与凭据所有权。",
+    "baseline": {
+      "git_head": "d281fb5b6b770d137d44bf8d921e3743e7451691",
+      "dirty_worktree": true,
+      "pinned_files": [
+        {
+          "path": "android/app/src/main/java/im/majo/ctos/SshPasswordConnector.java",
+          "sha256": "d68aa4cfb06341fcac8ced0d4b9eb5a1c5cde040deb5bb5c18739d95b93b2e5d"
+        },
+        {
+          "path": "android/app/src/main/java/im/majo/ctos/SshNativeSession.java",
+          "sha256": "c89a53acec83cd5a975163b6afc4f6e8090fbf627292adca3acc62142624adc7"
+        },
+        {
+          "path": "android/app/src/main/cpp/ssh_native_client.c",
+          "sha256": "3496b25dede9a9329ec0c85c27d1c5d4d44c7aee5727177771b9e266c20cf6ea"
+        }
+      ],
+      "capture_policy": "此快照仅记录任务创建时状态；实现或授权前置条件满足后由 Codex 刷新测试单的固定输入。执行方另记测试前后完整相关输入、dirty 状态和产物清单。"
+    },
+    "resources": {
+      "read": [
+        {
+          "path": "design/agent-test-handoff.md",
+          "why": "协作流程"
+        },
+        {
+          "path": "design/handoff-ssh-terminal-client.md",
+          "why": "SSH 当前状态与限制"
+        },
+        {
+          "path": "design/verification.md",
+          "why": "核对历史验证，避免重复或夸大"
+        },
+        {
+          "path": ".trellis/tasks/10-08-ssh-terminal/implement.md",
+          "why": "父任务剩余实施与验收计划"
+        },
+        {
+          "path": "design/ssh-proxyjump.md",
+          "why": "当前仅已保存密码的产品单跳边界"
+        },
+        {
+          "path": "design/ssh-server-driven-authentication.md",
+          "why": "服务器驱动认证与 PARTIAL 合同"
+        }
+      ],
+      "environment": [
+        "只使用本机、隔离或回环上的合成测试资源；不访问真实账号、凭据或生产服务。",
+        "测试环境与权限不足时如实阻塞，不安装依赖或扩大网络/设备权限。",
+        "隔离跳板与目标使用各自合成账号和密钥，不调用真实用户密钥。"
+      ],
+      "allowed_writes": [
+        "build/codex-wont-do/<task_id>/<attempt_id>/ 下的专属报告、输入清单与无秘密日志",
+        "仅经测试单或后续明确授权的测试专用夹具与产物；保留完整 diff，不得修改产品行为或覆盖他人改动"
+      ],
+      "exclusive_locks": [
+        "android-release-build",
+        "ssh-test-inputs"
+      ],
+      "secrets_policy": "仅使用合成测试数据；禁止记录真实凭据、私钥、令牌和用户数据。"
+    },
+    "dependencies": [],
+    "preconditions": [
+      "Codex 先完成并审阅相关合同与产品实现，核对最新设计和可复用的历史覆盖，再细化本任务、更新固定输入并转 queued。"
+    ],
+    "cases": [
+      {
+        "id": "transient-password",
+        "exercise": "分别在跳板和目标选择当次合成密码，记录提示目标、认证和结束后的清理。",
+        "pass": "密码只交给用户选定的实际 endpoint／账号；取消不向错误 hop 交付，也不隐式保存。"
+      },
+      {
+        "id": "private-key",
+        "exercise": "逐跳使用独立合成私钥和可选口令，并核对选定身份与签名目标。",
+        "pass": "各跳只使用其明确授权的密钥／口令；拒绝、失效或错误身份不回退发送其他凭据。"
+      },
+      {
+        "id": "keyboard-interactive",
+        "exercise": "用隔离 sshd 请求 KBI 及已支持的实际 PARTIAL 续接，在不同 hop 验证显示和取消。",
+        "pass": "问题和回答绑定实际 hop 与账号；不把 PARTIAL 认作成功，取消后不交付后续秘密。"
+      }
+    ],
+    "commands": [],
+    "acceptance": [
+      "各模式经实际产品 connector、Java/JNI 与隔离对端验证；相关实现尚未齐备时不把已知主机 saved-password 回归当作本项通过。",
+      "实际案例全部有可核对证据；记录失败、错误、跳过和未覆盖部分，缺少必需案例不得标 pass。"
+    ],
+    "stop_conditions": [
+      "仍只能使用已保存密码，或生产路径尚未接通选定认证模式。",
+      "需修改产品代码、未授权设备/外部网络/真实账号、资源缺失或固定源码不匹配时停止并记录原因；不更改验收标准。"
+    ],
+    "codex_review": [
+      "核对每跳身份、用户同意、合成凭据交付范围和取消后的痕迹。",
+      "核对执行者独立性、当前授权与范围，源码和测试前后输入、产物哈希、实际命令/退出码、每个案例与跳过项及证据。",
+      "检查测试专用代码和 diff，区分测试报告被接受、实际测试通过和产品任务完成。"
+    ]
+  },
+  "blockers": [
+    {
+      "kind": "implementation_or_contract",
+      "detail": "产品单跳当前仅支持确认使用已保存密码；当次密码、逐跳私钥和交互式认证尚未完成。",
+      "release_condition": "Codex 完成并审阅必要合同／实现及权限，复核既有覆盖、更新断言和固定源码后转 queued。"
+    }
+  ],
+  "execution": {
+    "claim": null,
+    "attempts": []
+  },
+  "review": {
+    "status": "pending",
+    "reviewer": null,
+    "reviewed_at_utc": null,
+    "findings": [],
+    "decision_scope": null,
+    "decisions": []
+  },
+  "history": [
+    {
+      "at_utc": "2026-11-27T06:44:11Z",
+      "actor": "codex",
+      "event": "created",
+      "detail": "父任务仍有对应未完成设计或实现；建立未来测试请求，未执行测试。"
+    }
+  ]
+}

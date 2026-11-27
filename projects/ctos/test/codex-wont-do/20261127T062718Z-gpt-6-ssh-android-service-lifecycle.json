@@ -1,0 +1,144 @@
+{
+  "schema_version": "1.0.0",
+  "kind": "test_task",
+  "worker_instructions": "执行方先阅读 test/codex-wont-do/template.json、AGENTS.md 和本任务所列资源；按模板领取并完成符合前置条件的测试，将实际结果和证据追加到本文件的 execution.attempts，交独立 Codex 审核。阻塞或失败时如实报告。",
+  "task_id": "20261127T062718Z-gpt-6-ssh-android-service-lifecycle",
+  "state": "blocked",
+  "created_at_utc": "2026-11-27T06:39:36Z",
+  "creator": {
+    "agent": "codex",
+    "model": "gpt-6",
+    "model_precision": "family_only",
+    "start_timestamp_utc": "2026-11-27T06:27:18Z"
+  },
+  "request": {
+    "title": "授权 Android 设备上的 SSH Service 生命周期与停止",
+    "goal": "在用户当前明确授权的指定设备和合成服务上验证真实 Android Service/Looper 的 SSH owner、Stop、重试及屏锁状态。",
+    "baseline": {
+      "git_head": "d281fb5b6b770d137d44bf8d921e3743e7451691",
+      "dirty_worktree": true,
+      "pinned_files": [
+        {
+          "path": "android/app/src/main/java/im/majo/ctos/SshNativeSession.java",
+          "sha256": "c89a53acec83cd5a975163b6afc4f6e8090fbf627292adca3acc62142624adc7"
+        },
+        {
+          "path": "android/app/src/main/java/im/majo/ctos/SshTerminalSession.java",
+          "sha256": "a7b0e6003423f2dac627f6119ff1fd6a2c319bc2508e1adbac67a4ba5a1e4ffe"
+        },
+        {
+          "path": "android/app/src/main/java/im/majo/ctos/SshSessionOwner.java",
+          "sha256": "fffd8ebd782efa5a607a3300dd033ad0d9d2897e713cedf54d65c0a1b70918a9"
+        }
+      ],
+      "capture_policy": "此快照仅记录任务创建时状态；实现或授权前置条件满足后由 Codex 刷新测试单的固定输入。执行方另记测试前后完整相关输入、dirty 状态和产物清单。"
+    },
+    "resources": {
+      "read": [
+        {
+          "path": "design/agent-test-handoff.md",
+          "why": "协作流程"
+        },
+        {
+          "path": "design/handoff-ssh-terminal-client.md",
+          "why": "SSH 当前状态、旧证据与限制"
+        },
+        {
+          "path": "design/verification.md",
+          "why": "核对实际历史验证，避免重复或夸大"
+        },
+        {
+          "path": ".trellis/spec/backend/ssh-connection-result-delivery.md",
+          "why": "服务 owner 与结果交付合同"
+        },
+        {
+          "path": ".trellis/spec/backend/ssh-terminal-stop-intent.md",
+          "why": "Stop 与 owner 合同"
+        },
+        {
+          "path": "design/constraints.md",
+          "why": "设备与授权边界"
+        }
+      ],
+      "environment": [
+        "只使用本机、隔离或回环上的合成测试资源；不访问真实账号、凭据或生产服务。",
+        "测试环境与权限不足时如实阻塞，不安装依赖或扩大网络/设备权限。",
+        "历史开发板入口 192.168.9.14:5555 仅供用户识别，不构成当前连接或安装授权。",
+        "只能在用户明确批准的 serial、操作、APK、合成服务及数据范围内执行；adb 必须用 -s 指明目标。"
+      ],
+      "allowed_writes": [
+        "build/codex-wont-do/<task_id>/<attempt_id>/ 下的专属报告、输入清单与无秘密日志",
+        "本任务明确列出的构建或测试专用产物；不得清理不属于本次尝试的文件",
+        "经用户明确批准的设备测试安装或清理，以及对应专属证据；禁止访问用户真实库或凭据"
+      ],
+      "exclusive_locks": [
+        "android-release-build",
+        "ssh-test-inputs"
+      ],
+      "secrets_policy": "仅使用合成测试数据；禁止记录真实凭据、私钥、令牌和用户数据。"
+    },
+    "dependencies": [],
+    "preconditions": [
+      "用户在当前任务明确授权目标 serial、连接、需要的安装/运行/清理动作和合成 SSH 服务器范围。",
+      "Codex 更新可执行步骤、构建 APK 的身份与固定源码、设备回滚及具体测试账号为合成数据，并为该明确设备添加排序后的专属资源锁。"
+    ],
+    "cases": [
+      {
+        "id": "service-stop",
+        "exercise": "在真实 Service/Looper 中启动合成连接并按已授权流程触发 Stop。",
+        "pass": "记录 UI/service/owner 实际事件与结果，Stop 行为符合已审阅合同。"
+      },
+      {
+        "id": "retry-owner",
+        "exercise": "在可安全构造的失败或延迟下观察取消、再次 Stop 及原 owner。",
+        "pass": "在实际可观察范围内区分未开始、未知与完成，不以测试 JNI 的 -1 充当生产故障。"
+      },
+      {
+        "id": "lifecycle-lock",
+        "exercise": "按获授权动作触发允许的后台/锁屏生命周期并检查恢复。",
+        "pass": "所测状态和 owner 结果符合合同，记录 Android 版本、设备 serial、APK 哈希及无法观察的边界。"
+      }
+    ],
+    "commands": [],
+    "acceptance": [
+      "仅对用户明确授权且实际执行的设备场景判定；缺失合成故障注入或关键生命周期证据不得标完整 pass。",
+      "实际案例全部有可核对证据；记录失败、错误、跳过和未覆盖部分，缺少必需案例不得标 pass。"
+    ],
+    "stop_conditions": [
+      "固定源码不匹配、未经授权的设备/网络/账号、缺少资源或需要修改产品行为时停止并记录原因；不更改验收标准。"
+    ],
+    "codex_review": [
+      "核对当前具体授权、adb -s 目标、APK 身份、实际设备输出及清理边界；历史设备结论不计为本轮验证。",
+      "对照 template.json 核验独立执行者、当前授权、明确的测试范围和实际 outcome。",
+      "核对执行前后 dirty 状态、相关输入和产物哈希、命令退出码、全部案例、跳过项与可读取证据；不能用 HEAD 代替未提交内容。",
+      "检查允许的测试夹具改动及 diff，区分报告有效与产品测试通过；源码漂移或证据不足时要求补充，且不能更新为当前通过。"
+    ]
+  },
+  "blockers": [
+    {
+      "kind": "authorization",
+      "detail": "当前没有用户对本轮设备连接、安装、测试动作或合成服务的明确授权。",
+      "release_condition": "用户明确批准目标和动作后，Codex 补齐方案与基线，才可转 queued。"
+    }
+  ],
+  "execution": {
+    "claim": null,
+    "attempts": []
+  },
+  "review": {
+    "status": "pending",
+    "reviewer": null,
+    "reviewed_at_utc": null,
+    "findings": [],
+    "decision_scope": null,
+    "decisions": []
+  },
+  "history": [
+    {
+      "at_utc": "2026-11-27T06:39:36Z",
+      "actor": "codex",
+      "event": "created",
+      "detail": "记录尚未满足的前置条件；未执行测试。"
+    }
+  ]
+}

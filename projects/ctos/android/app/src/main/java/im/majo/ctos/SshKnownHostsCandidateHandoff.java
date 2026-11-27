@@ -16,6 +16,7 @@ final class SshKnownHostsCandidateHandoff implements AutoCloseable {
     private final SshManagedKnownHostsProvider provider;
     private final SshManagedKnownHostsProvider.SnapshotReceipt snapshot;
     private boolean used;
+    private boolean closing;
     private boolean closed;
 
     SshKnownHostsCandidateHandoff(SshManagedKnownHostsProvider provider,
@@ -45,7 +46,7 @@ final class SshKnownHostsCandidateHandoff implements AutoCloseable {
 
     private void acceptExact(SshHostKeyAuthority.Evidence evidence, String candidateId,
             byte[] replacementBody, SshHostKeyAuthority.Classification expected) throws VaultException {
-        if (closed || used) {
+        if (closed || closing || used) {
             VaultCodec.wipe(replacementBody);
             throw new VaultException("SSH_HOST_KEY_REVIEW",
                     "The known_hosts candidate handoff is no longer available");
@@ -82,7 +83,10 @@ final class SshKnownHostsCandidateHandoff implements AutoCloseable {
 
     @Override public synchronized void close() {
         if (closed) return;
-        closed = true;
+        // A failed provider abort can leave its candidate attached.  Stop new
+        // acceptance immediately but allow the same owner to retry cleanup.
+        closing = true;
         provider.abortNativeHandoff();
+        closed = true;
     }
 }

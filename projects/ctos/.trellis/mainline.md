@@ -1,5 +1,95 @@
 # ctOS Mainline
 
+## 2026-11-27 SSH：终端 session 撤销重试
+
+已在原 owner 上有界接续精确 session 的 checked 未开始撤销；未知结果及逐跳混合未知仍保留 owner，内部 `stop()` 不重置同一次外部 Stop 的预算。201 项相关 JVM、lint 和 14 个 host JNI 合成场景通过；生产 JNI 当前不产生测试钩子的 `-1`。[验证与限制](../design/verification.md#20261127-ssh-terminal-session-cancel-retry)。
+
+继续处理独立撤销、信任持久化、不确定结果、创建期和整链释放，以及逐跳首次信任和重连；父任务保持 in_progress。
+
+## 2026-11-27 SSH 共享 STOP：本地验证
+
+用户明确要求验证，取代此前停测要求。真实产品 Java／测试 JNI 合成链、独立回调 scope、多跳合成接收器、native 认证链与无外网双 sshd 产品路径已分层检查；具体证据及未覆盖项见[验证](../design/verification.md#20261127-ssh-shared-stop-verification)。
+
+父任务仍为 in_progress；继续处理独立撤销、信任持久化、不确定结果、创建期和整链释放，以及逐跳首次信任和重连。设备和真实 Android 生命周期尚未验证。
+
+## 2026-11-27 继续 SSH 父任务：native 效果 STOP 准入（历史检查点）
+
+原连接 shared STOP 接入选定的 Java／JNI 凭据复制、native 认证／签名及 wire 效果，逐跳原 native generation 保持；独立 callback／session／vault 撤销和信任持久化仍不由此证明。[实现与限制](../design/verification.md#20261127-ssh-native-stop-effects)。按用户要求，本轮未测试、lint、构建或操作设备。
+
+继续处理独立撤销及持久化结果、其他 operation、创建期和整链释放，再完成逐跳首次信任及重连；父任务保持 in_progress，不推定设备、真实账号、安装或提交授权。
+
+## 2026-11-27 继续 SSH 父任务：凭据提示与保存上下文（历史检查点）
+
+密码／口令／KBI 和主机指纹审阅邮箱及选定保存上下文已增加局部 shared STOP 准入；连接器取消异常时尝试清理其仍独占的排队字节及当前提示，保留原异常与未确认 owner。[实现与限制](../design/verification.md#20261127-ssh-prompt-mutation-stop)。用户要求停止测试，本次没有运行测试、lint、构建或设备验证。
+
+继续处理 Java STOP 对 root／child native 凭据复制、认证建包和发送的最终效果顺序，以及 host-review 后的信任写入、其他 operation、创建期和整链回收；原 SSH 父任务保持 in_progress，不推定设备、真实账号、安装或提交授权。
+
+## 2026-11-25 继续 SSH 父任务：停止与 owner 结果顺序
+
+共享停止及首因、未附着 owner 清理、终端结果与 connector handoff 增加顺序保护；普通可重试关闭继续等待，native 结果未知时保留原 owner。[合同](spec/backend/ssh-terminal-stop-intent.md)／[验证](../design/verification.md#20261125-ssh-stop-owner-delivery)。
+
+下一步优先处理 bridge 在取消／锁库异常时的结果交付、敏感材料所有权与 VaultSession／lease 撤销确认；本机 probe 已显示 lock begin 抛错可留下未擦除的 Java key。创建期内部 session、信任写入与整链清理仍开放；父任务 in_progress，不推定设备、账号、安装或提交授权。
+
+## 2026-11-25 继续 SSH 父任务：信任回执停止顺序
+
+NEW／CHANGED 信任回执确认与停止请求的原子发布排序：停止先发生时，即使 native 撤销正在等待或结果未知，回执仍保持未确认；确认先发生则保留原结果。[合同](../.trellis/spec/backend/ssh-trust-commit-ack.md)／[验证](../design/verification.md#20261125-ssh-trust-stop-order)。这不替代信任写入准入、创建期 owner、独立撤销及整链清理；父任务保持 in_progress。
+
+## 2026-11-25 继续 SSH 父任务：会话与共享视图取消
+
+单个 session 和 shared view 分别记录其原生失效、callback／lease、关闭准入及未知结果；可确认未开始时保留同一 owner 并允许重试，未知时拒绝重复或提前释放。[会话合同](../.trellis/spec/backend/ssh-session-cancellation-ownership.md)／[视图合同](../.trellis/spec/backend/ssh-shared-view-cancellation.md)／[验证](../design/verification.md#20261125-ssh-session-view-cancel)。
+
+原任务保持 in_progress：外层创建期、信任提交、独立 callback／lease、terminal 自动重试与整链生命周期仍未统一完成，不能据此开放首次信任或重连。
+
+## 2026-11-25 继续 SSH 父任务：终端停止准入
+
+共享取消现在先发布本地停止意图，终端各 I/O 与输出依次准入；共享 native 失效或 port 取消结果不明时保留 terminal owner。已准入动作与更早开始的关闭可能在停止后结束。[合同](../.trellis/spec/backend/ssh-terminal-stop-intent.md)。
+
+原 `10-08-ssh-terminal` 保持 in_progress。创建期、信任写入、各 hop／共享 view 失效及 Android 生命周期仍需单独修复和验证；不得把局部终端门禁当作完整跨层取消或首次信任实现。
+
+## 2026-11-25 继续 SSH 父任务：取消异常未修复
+
+此节是最初复现和撤回草案时的检查点；当前终端局部改动以上节为准。
+
+原 `10-08-ssh-terminal` 保持 in_progress。真实测试 JNI 注入 native 失效 begin 前异常后，terminal 的逻辑取消未生效，下一轮模拟 pump 仍执行排队 write 与 step；该缺陷尚未修复，fake port 不等于真实网络证据。[复现](../design/verification.md#20261125-ssh-cancel-invalidation-failure)。
+
+用户主动重试草案因 Android START 和跨层取消的未确认所有权而撤回，产品相关文件已恢复本轮之前哈希。下一步先设计并修复共享准入、native 各 session／view 失效确认、创建期部分 owner 和 cleanup 顺序，再继续首次信任写入与新请求；设备、真实账号、安装及提交未获本次授权。
+
+## 2026-11-25 继续 SSH 父任务：候选转交
+
+原 `10-08-ssh-terminal` 保持 in_progress。已批准的测试候选可在原 provider 管理下一次性转交正文；真实 host JNI 与 JVM 回归通过。独立反例确认该操作不检查 native generation，不得用于授权信任写入或凭据。[验证](../design/verification.md#20261125-ssh-jump-candidate-transfer)。
+
+下一步完成原代次／期限与撤销排序、信任写入结果、旧链真实释放及新请求；首跳 NEW 仍须单独处理。设备、真实账号、安装及提交未获本次授权。
+
+## 2026-11-23 继续 SSH 父任务：候选保留夹具
+
+原 `10-08-ssh-terminal` 保持 current／in_progress。真实 Java／JNI 测试 child 的模拟同意可产生绑定精确候选的一次性非授权保留，候选消费／关闭竞争和邮箱完成点按各自锁序验证；产品首次信任、跨链写入准入和重连仍未开放。[验证](../design/verification.md#20261123-ssh-jump-candidate-reservation)／[接管](../design/handoff-ssh-terminal-client.md#接管摘要2026-11-23-候选保留夹具进行中)。
+
+下一步处理跨链候选转移、取消／期限和不确定持久化，再完成清理及新请求；首跳 NEW 不能机械复用普通直连或 child 路径。设备、真实账号、提交及父任务归档未获本次授权。
+
+## 2026-11-23 继续 SSH 父任务：待审调度夹具
+
+此节为上一检查点；当前进度以上一节为准。
+
+原 `10-08-ssh-terminal` 保持 current／in_progress。签名票据已在测试专用真实 Java／JNI child 中接通父链、relay 和有界入站 poll，批准后仍须观察 idle；实际合成测试与已有产品已知主机回归见[验证](../design/verification.md#20261123-ssh-jump-pending-integrated)。产品首次信任、原子写入及重连仍未开放。[接管](../design/handoff-ssh-terminal-client.md#接管摘要2026-11-23-待审调度夹具进行中)。
+
+继续补 JNI 远端断开、view／generation 竞争和协议负例，再解决精确候选转移、期限／取消排序、不确定提交与实际 owner 释放后的新请求。设备、真实账号、提交及父任务归档未获本次授权。
+
+## 2026-11-23 继续 SSH 父任务：签名审阅与受限入站
+
+此节为上一检查点；当前进度以上一节为准。
+
+原 `10-08-ssh-terminal` 保持 current／in_progress。测试专用真实 child 的一次性签名审阅票据和独立的有界 `EXT_INFO` 输入原语已增加；生产首次信任未开放，两个原语尚未与父链 pump 接通。[接管](../design/handoff-ssh-terminal-client.md#接管摘要2026-11-23-签名审阅与受限入站进行中)、[验证与剩余边界](../design/verification.md#20261123-ssh-jump-signed-review-ext)。
+
+下一步继续连接受限待审流程，补异常报文及扩展广告负例，再分别解决信任写入的效果顺序、不确定回执、旧链清理和重新读取配置后的重连。设备、真实账号、提交及父任务归档仍不在当前操作范围。
+
+## 2026-11-23 继续 SSH 父任务：首次信任等待骨架
+
+此节为上一检查点；当前进度以上一节为准。
+
+本轮按用户“继续当前目录下的task进度”恢复既有 `10-08-ssh-terminal`，未新建任务。已增加单跳 signed-NEW 的保守空闲快照及审核邮箱锁外轮询骨架；两者尚未接入产品，合法目标入站消息仍会被保守拒绝。最终归档的原生定向、JVM、lint／构建及本机隔离双 sshd 均按各自范围通过。[接管](../design/handoff-ssh-terminal-client.md#接管摘要2026-11-23-首次信任等待骨架进行中)、[验证](../design/verification.md#20261123-ssh-jump-pending-wait)。
+
+下一步继续同一父任务：建立独立非授权签名候选 review/ticket 与可处理合法协议报文的有界等待，再解决精确写入的撤销排序、旧链清理和新配置重连。首次／换键信任、多跳和设备验收仍未完成；不推定旧设备、账号、安装或提交授权。保留现有未提交改动与相邻项目状态。
+
 ## 2026-11-04 KBI及三处界面修正验收通过，按授权提交
 
 用户反馈“验收通过；可以提交”。正式8b6c2a42…对应本轮独立KBI和UI修正人工验收

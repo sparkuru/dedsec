@@ -32,6 +32,7 @@ public final class SshTransientPasswordTest {
         boolean active = true;
         @Override public boolean active() { return active; }
         @Override public void revoke() { active = false; }
+        @Override public boolean revocationConfirmed() { return !active; }
     }
     private static final class Fixture implements AutoCloseable {
         final Clock clock = new Clock();

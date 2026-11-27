@@ -5,6 +5,10 @@
 Use for SSH foreground service ownership, Activity reattachment, notification actions, or changes
 to established transport lifetime. Product contract: [background session](../../../design/ssh-background-session.md).
 Keep pre-auth file/secret/trust admission and App/Root lifecycle unchanged.
+For a screen lock or service failure racing a possible trust write, also follow the
+[trust commit acknowledgement](ssh-trust-commit-ack.md) owner and result-ordering contract.
+Queued terminal data and replay snapshots also follow the
+[output cancellation ordering](ssh-terminal-output-cancellation.md) admission contract.
 
 ## 2. Signatures
 
@@ -32,6 +36,19 @@ a live client across threads. Intent contains only random session ID, no materia
 empty/stale Intent cannot start a connection. Immediate foreground promotion precedes I/O; startup
 failure cleans the pending factory, including retries. Keep owner busy until cleanup confirms.
 
+When the terminal receives an internal jump child, its actual native port freezes the exact adopted
+child-to-parent owners on their original thread and advances each ancestor, relay and target without
+nested JNI entry. On target RUNNING, retain ancestors from inside out and complete the target's shell
+confirmation before publishing running. Cancellation attempts every frozen session; close proceeds
+target to root and retains the original owners for retry before closing the factory. A retained, CLOSED jump
+may still drain previously accepted bytes; do not step that terminal jump channel. If the target
+closes with buffered output before RUNNING was confirmed, terminate and clean up without publishing
+the unconfirmed bytes, rather than rescheduling indefinitely. The same early-close rule applies to
+direct sessions. A future product jump factory must itself retain all ancestors if native-port chain
+construction fails, because the existing unattached owner closes the target and then the factory.
+Sequential checks are not a cross-hop atomic trust, credential, cancellation or output guarantee;
+the product ProxyJump gate remains closed until those separate contracts are met.
+
 Exact real SUCCESS and current original role/view/selection permit beginShell promotion. Native
 retains exact transport callback/role/KEX/session/PID/UID/owner checks, releases its public-view
 borrow and auth selection. Java retains only the established claim, closes the lease and retires
@@ -39,6 +56,8 @@ connector authentication providers, contexts and Activity closures. `authenticat
 be true before established I/O or output publication. Cleanup failure rejects I/O and retains
 the same close owner. New auth/file/secret/trust reads remain denied, without poisoning the shell
 merely for a rejected post-auth API probe. Prepromotion lock/revoke still rejects. Rekey remains denied.
+Native promotion checks the claimed view and retires it under the managed handle's revoke lock,
+then rechecks the original role deadline before publication; a failed transition remains cleanup-only.
 
 Vault background timeout, screen-off/manual lock and Activity bridge close still revoke secrets.
 Already-established shell is independent of that lease. Screen-off is a separate service policy

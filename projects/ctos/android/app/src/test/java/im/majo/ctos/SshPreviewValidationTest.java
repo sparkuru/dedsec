@@ -427,6 +427,7 @@ public final class SshPreviewValidationTest {
         Pause revocation = new Pause();
         vault.session.attachRevocation(vault.session.epoch(), new VaultSession.Revocation() {
             @Override public boolean active() { return true; }
+            @Override public boolean revocationConfirmed() { return revoked.get() != 0; }
             @Override public void revoke() {
                 assertFalse("native cleanup must never run under phase", Thread.holdsLock(phase)); revoked.incrementAndGet();
                 revocation.await();

@@ -1,5 +1,31 @@
 # ctOS 产品与实施规划
 
+2026-11-27：SSH 终端已接续原 session 明确未开始的撤销重试，仍保留未知结果和逐跳清理约束；当前生产 JNI 不产生测试钩子的 `-1`。信任写入、首次信任与重连等后续任务保持开放。[验证与限制](verification.md#20261127-ssh-terminal-session-cancel-retry)。
+
+2026-11-27：SSH 已为选定 Java／JNI 凭据复制与 native 效果接入共享 STOP，并在用户重新要求验证后完成本地分层检查；独立撤销、信任写入和整链清理仍待处理。[验证与限制](verification.md#20261127-ssh-shared-stop-verification)。
+
+2026-11-27 历史检查点：SSH 实现部分已启动材料的 STOP 准入、精确预览退役和锁屏新请求错误处理时，Java STOP 与 native effect 的顺序窗口尚未修复，且用户当时要求暂停测试。[当时记录](verification.md#20261127-ssh-started-material-preview)。
+
+2026-11-27：SSH 服务先发布原 owner，再绑定可能同步执行的取消回调；工厂退出和结果结算保持同一 owner，bridge 尝试一次交付实际回执。已启动材料、根会话认证效果、锁库预览及 Android 生命周期仍需处理；结果回调不保证对端收到。[验证](verification.md#20261127-ssh-result-delivery)。
+
+2026-11-27：此前 SSH 未启动 connector 的材料退役已与 create 和共享 STOP 排序，服务已接管但尚未进入 create 时仍保留原 owner。[当时验证](verification.md#20261127-ssh-connector-retirement)。
+
+2026-11-27：SSH 父任务补充 vault key／epoch 的失败锁定、文件视图撤销确认和不确定保存回执；逻辑锁定不证明独立 native 视图或整链已撤销。bridge 异常结果投递及整链清理仍未完成，首次信任和重连保持未开放。[验证与下一步](verification.md#20261127-ssh-vault-revocation)。
+
+2026-11-25：当时 SSH 父任务继续补停止与 owner 结果顺序，外层取消先可见、未确认清理保留原 owner，并分别保护终端连接结果和 connector handoff。bridge 异常结果投递、锁库失败及整链清理当时仍未完成。[当时验证](verification.md#20261125-ssh-stop-owner-delivery)。
+
+2026-11-25：SSH 本地终端增加停止准入，单个会话和共享 view 分别跟踪取消与关闭的未确认状态，信任回执与停止请求按同一原子状态排序；创建期、信任写入、独立 callback／lease 和整链生命周期仍待处理。产品重试草案保持撤回。[信任回执验证](verification.md#20261125-ssh-trust-stop-order)／[终端合同](../.trellis/spec/backend/ssh-terminal-stop-intent.md)／[会话合同](../.trellis/spec/backend/ssh-session-cancellation-ownership.md)／[共享 view 合同](../.trellis/spec/backend/ssh-shared-view-cancellation.md)。
+
+2026-11-25：SSH 父任务增加测试候选正文的受限一次性转交；真实信任写入准入、首次信任及重连仍未完成。[验证](verification.md#20261125-ssh-jump-candidate-transfer)。
+
+2026-11-23：SSH 父任务的测试夹具已能在模拟同意后保留精确候选并防止被并发消费；跨链写入排序、首跳 NEW、旧链清理和新请求仍待完成。[结果](verification.md#20261123-ssh-jump-candidate-reservation)。
+
+2026-11-23：SSH 父任务的首次信任已在内部夹具接通签名票据、待审父链调度和受限输入；仍需完成远端断开等边界、信任写入排序和新请求重连。产品首次确认、多跳及设备验收仍未完成。[结果](verification.md#20261123-ssh-jump-pending-integrated)。
+
+2026-11-23：SSH 父任务继续推进首次信任；签名候选的测试票据和受限输入分别实现，仍需接通待审时的父链调度、补协议负例，再处理写入排序和重连。产品首次确认、多跳及设备验收仍未完成。[实际结果](verification.md#20261123-ssh-jump-signed-review-ext)。
+
+2026-11-23：SSH 父任务继续推进受管 ProxyJump。已知主机的受限单跳已在本机隔离双 sshd 贯通；本轮新增首次信任等待的内部原语并完成本地回归，但首次确认／写入／重连、多跳及设备验收仍未完成。[当前进度与验证](verification.md#20261123-ssh-jump-pending-wait)。
+
 2026-11-18：用户确认已安装的服务器驱动 SSH 连接通过[逻辑验收](verification.md#20261118-ssh-server-driven-acceptance)。1008 沿 R10 接入自动提示的凭据保存与复用，通过本地回归和[指定板合成账户验收](verification.md#20261118-ssh-automatic-credentials-device)。真实服务器与完整父任务验收仍开放。
 
 2026-11-16：SSH 默认连接按用户新要求先选目标和可选私钥，再由实际服务器逐步驱动

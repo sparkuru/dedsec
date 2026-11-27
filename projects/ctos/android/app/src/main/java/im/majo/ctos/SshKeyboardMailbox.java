@@ -18,12 +18,16 @@ final class SshKeyboardMailbox implements AutoCloseable {
         final String binding;
         final SshKeyboardChallenge challenge;
         final long deadline;
+        final String host, username;
+        final int port, hop;
         private final long started = System.nanoTime(), budgetNanos;
         private byte[] response;
         private boolean resolved;
 
-        private Ticket(SshRoleContext role, SshKeyboardChallenge challenge, long now) {
+        private Ticket(SshRoleContext role, SshAuthenticationSelection selection,
+                SshKeyboardChallenge challenge, long now) {
             this.challenge = challenge; deadline = role.deadline;
+            host = role.host; port = role.port; hop = role.hop; username = selection.username;
             budgetNanos = Math.min(60_000, deadline - now) * 1_000_000L;
             byte[] publicBinding = ("ctos-keyboard-round-v1\0" + role.binding() + "\0"
                     + role.connectionId + "\0" + challenge.round + "\0" + id + UUID.randomUUID())
@@ -41,16 +45,28 @@ final class SshKeyboardMailbox implements AutoCloseable {
     private final Object lock = new Object();
     private final Thread owner = Thread.currentThread();
     private final SshRoleContext role;
+    private final SshAuthenticationSelection selection;
     private final SshRoleContext.Clock clock;
     private final LiveCheck live;
     private final Sink sink;
+    private final SshSessionOwner.Cancellation cancellation;
     private Ticket pending;
     private int lastRound;
     private boolean cancelled;
 
-    SshKeyboardMailbox(SshRoleContext role, SshRoleContext.Clock clock, LiveCheck live, Sink sink) {
+    SshKeyboardMailbox(SshRoleContext role, SshAuthenticationSelection selection,
+            SshRoleContext.Clock clock, LiveCheck live, Sink sink) throws VaultException {
+        this(role, selection, clock, live, sink, new SshSessionOwner.Cancellation());
+    }
+
+    SshKeyboardMailbox(SshRoleContext role, SshAuthenticationSelection selection,
+            SshRoleContext.Clock clock, LiveCheck live, Sink sink,
+            SshSessionOwner.Cancellation cancellation) throws VaultException {
         this.role = Objects.requireNonNull(role); this.clock = Objects.requireNonNull(clock);
+        this.selection = Objects.requireNonNull(selection);
+        selection.requireMatches(role, selection.kind, clock);
         this.live = Objects.requireNonNull(live); this.sink = Objects.requireNonNull(sink);
+        this.cancellation = Objects.requireNonNull(cancellation);
     }
 
     byte[] await(SshKeyboardChallenge challenge, LiveCheck poll) throws VaultException {
@@ -59,10 +75,11 @@ final class SshKeyboardMailbox implements AutoCloseable {
         if (challenge == null || challenge.round != lastRound + 1) throw SshKeyboardChallenge.failure();
         long now = clock.now();
         if (now <= 0 || now >= role.deadline) throw failure("SSH_TIMED_OUT");
-        Ticket ticket = new Ticket(role, challenge, now);
+        Ticket ticket = new Ticket(role, selection, challenge, now);
         synchronized (lock) {
             if (cancelled) throw failure("SSH_CANCELLED");
             if (pending != null) throw SshKeyboardChallenge.failure();
+            if (!cancellation.admitTerminalIo()) throw failure("SSH_CANCELLED");
             pending = ticket; lastRound = challenge.round;
         }
         byte[] response = null;
@@ -72,7 +89,8 @@ final class SshKeyboardMailbox implements AutoCloseable {
             for (;;) {
                 checkLive(); checkTime(ticket);
                 synchronized (lock) {
-                    if (cancelled || pending != ticket) throw failure("SSH_CANCELLED");
+                    if (cancelled || cancellation.stopRequested() || pending != ticket)
+                        throw failure("SSH_CANCELLED");
                     if (ticket.response != null) {
                         response = ticket.response; ticket.response = null;
                     }
@@ -81,6 +99,7 @@ final class SshKeyboardMailbox implements AutoCloseable {
                     checkLive(); checkTime(ticket);
                     synchronized (lock) {
                         if (cancelled || pending != ticket) throw failure("SSH_CANCELLED");
+                        if (!cancellation.admitTerminalIo()) throw failure("SSH_CANCELLED");
                         pending = null;
                     }
                     returned = true;
@@ -88,7 +107,8 @@ final class SshKeyboardMailbox implements AutoCloseable {
                 }
                 if (poll != null) poll.check();
                 synchronized (lock) {
-                    if (cancelled || pending != ticket) throw failure("SSH_CANCELLED");
+                    if (cancelled || cancellation.stopRequested() || pending != ticket)
+                        throw failure("SSH_CANCELLED");
                     if (ticket.response == null) {
                         try { lock.wait(20); }
                         catch (InterruptedException interrupted) {
@@ -112,7 +132,7 @@ final class SshKeyboardMailbox implements AutoCloseable {
         Ticket ticket;
         synchronized (lock) {
             ticket = pending;
-            if (cancelled || ticket == null || ticket.resolved || !ticket.id.equals(id)
+            if (cancelled || cancellation.stopRequested() || ticket == null || ticket.resolved || !ticket.id.equals(id)
                     || !ticket.binding.equals(binding)) return false;
         }
         checkLive(); checkTime(ticket);
@@ -121,6 +141,7 @@ final class SshKeyboardMailbox implements AutoCloseable {
             checkLive(); checkTime(ticket);
             synchronized (lock) {
                 if (cancelled || pending != ticket || ticket.resolved) return false;
+                if (!cancellation.admitTerminalIo()) return false;
                 ticket.response = response; response = null; ticket.resolved = true;
                 lock.notifyAll();
                 return true;
@@ -129,7 +150,10 @@ final class SshKeyboardMailbox implements AutoCloseable {
     }
 
     boolean pending(Ticket ticket) {
-        synchronized (lock) { return !cancelled && pending == ticket && !ticket.resolved && ticket.liveWall(); }
+        synchronized (lock) {
+            return !cancelled && !cancellation.stopRequested()
+                    && pending == ticket && !ticket.resolved && ticket.liveWall();
+        }
     }
 
     void cancel() {
@@ -143,7 +167,11 @@ final class SshKeyboardMailbox implements AutoCloseable {
     }
 
     @Override public void close() { cancel(); }
-    private void checkLive() throws VaultException { role.requireActive(clock); live.check(); role.requireActive(clock); }
+    private void checkLive() throws VaultException {
+        selection.requireMatches(role, selection.kind, clock); live.check();
+        selection.requireMatches(role, selection.kind, clock);
+        if (cancellation.stopRequested()) throw failure("SSH_CANCELLED");
+    }
     private void checkTime(Ticket ticket) throws VaultException {
         long now = clock.now();
         if (now <= 0 || now >= ticket.deadline || !ticket.liveWall()) throw failure("SSH_TIMED_OUT");

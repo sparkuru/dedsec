@@ -13,12 +13,14 @@ readonly BUILD_ROOT="$PROJECT_ROOT/android/ssh"
 readonly STREAM_PATCH="$BUILD_ROOT/openssh-10.6p1-hostfile-stream-writer.patch"
 readonly KEX_PATCH="$BUILD_ROOT/openssh-10.6p1-kex-guard.patch"
 readonly BANNER_PATCH="$BUILD_ROOT/openssh-10.6p1-banner-atomic.patch"
+readonly PROVISIONAL_PATCH="$BUILD_ROOT/openssh-10.6p1-provisional-input.patch"
 readonly SSH_ARCHIVE_SHA=a9dc9565dffe8640f64d863cd29a32bc4a3dbdec0566a7fc44c5d6ee767d5f39
 readonly SSL_ARCHIVE_SHA=603f5602e2eef00d77fbd429d34dcd5822bb301757a1bc9cdb24c670f1eb859a
 readonly ABI_PATCH_SHA=ea81738f191e7d9fb70ce0943b45ea06b07c4057d3d0128a694331b3a32f8b89
 readonly STREAM_PATCH_SHA=a786566e1842996c0282647457f4dd63558cde00bc79ae1ba6bcd552bf30484a
 readonly KEX_PATCH_SHA=50a59606000dc871f1b29e33eeb6d77fb5da456f40526d2871357758b61f8785
 readonly BANNER_PATCH_SHA=ba61f35303233ebd2bf1c39d167774667766b3461721657f8af0483e51258a18
+readonly PROVISIONAL_PATCH_SHA=075e910206a43452da8e01bb3818e6fb5bc18e0ab8e62a5b5d7c5bd6a0da845a
 readonly LIBSSH_SHA=20b12e756e3be0bf94323dbcc87c7a59eb741c9568a9b2558c089ccfaf0a04f3
 readonly OPENBSD_COMPAT_SHA=a4d908e93ecefd43c09e896d0a50fd3d87f668e73378c06648211bc001e51a17
 readonly CRYPTO_SHA=feb776737f8f84d4110492a03e4c4d91312a65638408851c3a509aabb9736376
@@ -172,6 +174,7 @@ main() {
     fixed_hash "$STREAM_PATCH" "$STREAM_PATCH_SHA"
     fixed_hash "$KEX_PATCH" "$KEX_PATCH_SHA"
     fixed_hash "$BANNER_PATCH" "$BANNER_PATCH_SHA"
+    fixed_hash "$PROVISIONAL_PATCH" "$PROVISIONAL_PATCH_SHA"
     fixed_hash "$OPENSSH_BUILD/libssh.a" "$LIBSSH_SHA"
     fixed_hash "$OPENSSH_BUILD/openbsd-compat/libopenbsd-compat.a" "$OPENBSD_COMPAT_SHA"
     fixed_hash "$OPENSSL_PREFIX/lib/libcrypto.a" "$CRYPTO_SHA"
@@ -210,10 +213,14 @@ main() {
     patch --silent -d "$scratch_dir/kex" -p1 <"$KEX_PATCH"
     cp -- "$OPENSSH_SOURCE/ssh_api.c" "$scratch_dir/upstream/ssh_api.c"
     patch --silent -d "$scratch_dir/upstream" -p1 <"$BANNER_PATCH"
+    cp -- "$OPENSSH_SOURCE/packet.c" "$scratch_dir/upstream/packet.c"
+    patch --batch --fuzz=0 --silent -d "$scratch_dir/upstream" -p1 <"$PROVISIONAL_PATCH"
     grep -Fq 'ctos_hostfile_write_entry' "$scratch_dir/upstream/hostfile.c" \
         || die 'stream writer patch did not apply'
     grep -Fq 'CTOS_SSH_KEX_GUARD' "$scratch_dir/kex/kex.c" \
         || die 'KEX guard patch did not apply'
+    grep -Fq 'ctos_ssh_packet_read_provisional' "$scratch_dir/upstream/packet.c" \
+        || die 'provisional packet patch did not apply'
     cp -- "$OPENSSH_BUILD/Makefile" "$scratch_dir/pic-build/Makefile"
     cp -- "$OPENSSH_BUILD/config.h" "$scratch_dir/pic-build/config.h"
 
@@ -237,6 +244,8 @@ main() {
         "$scratch_dir/upstream/hostfile.c" -o "$scratch_dir/patched/hostfile.o"
     run_stage compile-ssh-api "$cc" "${common_flags[@]}" -c \
         "$scratch_dir/upstream/ssh_api.c" -o "$scratch_dir/patched/ssh_api.o"
+    run_stage compile-packet "$cc" "${common_flags[@]}" -c \
+        "$scratch_dir/upstream/packet.c" -o "$scratch_dir/patched/packet.o"
     for source in kex.c kexgen.c kexgexc.c; do
         run_stage "compile-${source%.c}" "$cc" "${common_flags[@]}" \
             -DCTOS_SSH_KEX_GUARD=1 -I"$PROJECT_CPP" -c \
@@ -245,7 +254,7 @@ main() {
 
     # OpenSSH's Makefile has a source-owned PIC target. Build that target in a
     # fresh directory with the fixed baseline configuration, then replace the
-    # five objects whose sources carry the project patches. Reusing the G1
+    # patched objects whose sources carry the project patches. Reusing the G1
     # executable objects would make a shared JNI library fail with absolute
     # AArch64 relocations.
     run_stage archive-list "$ar" t "$OPENSSH_BUILD/libssh.a" \
@@ -307,6 +316,7 @@ main() {
     cp -- "$scratch_dir/patched/kexgen.o" "$scratch_dir/members/kexgen.o"
     cp -- "$scratch_dir/patched/kexgexc.o" "$scratch_dir/members/kexgexc.o"
     cp -- "$scratch_dir/patched/ssh_api.o" "$scratch_dir/members/ssh_api.o"
+    cp -- "$scratch_dir/patched/packet.o" "$scratch_dir/members/packet.o"
     cp -- "$scratch_dir/pic-build/ssh-pkcs11.lo" \
         "$scratch_dir/members/ssh-pkcs11.o"
     cp -- "$scratch_dir/pic-build/ssh-sk-client.lo" \
@@ -318,6 +328,7 @@ main() {
     cp -- "$scratch_dir/upstream/hostfile.c" "$output_archive.evidence.hostfile.c"
     cp -- "$scratch_dir/upstream/hostfile.h" "$output_archive.evidence.hostfile.h"
     cp -- "$scratch_dir/upstream/ssh_api.c" "$output_archive.evidence.ssh_api.c"
+    cp -- "$scratch_dir/upstream/packet.c" "$output_archive.evidence.packet.c"
     mkdir -p -- "$output_root/include"
     cp -- "$scratch_dir/upstream/hostfile.h" "$output_root/include/hostfile.h"
     cmp -- "$scratch_dir/upstream/hostfile.h" "$output_root/include/hostfile.h" \
@@ -331,6 +342,8 @@ main() {
             "$(sha256_only "$scratch_dir/upstream/hostfile.h")"
         printf '%s  source/ssh_api.c\n' \
             "$(sha256_only "$scratch_dir/upstream/ssh_api.c")"
+        printf '%s  source/packet.c\n' \
+            "$(sha256_only "$scratch_dir/upstream/packet.c")"
         printf '%s  source/kex.c\n' "$(sha256_only "$scratch_dir/kex/kex.c")"
         printf '%s  source/kexgen.c\n' \
             "$(sha256_only "$scratch_dir/kex/kexgen.c")"
@@ -340,6 +353,7 @@ main() {
             "$STREAM_PATCH"
         printf 'source_patch_sha256 %s  %s\n' "$KEX_PATCH_SHA" "$KEX_PATCH"
         printf 'source_patch_sha256 %s  %s\n' "$BANNER_PATCH_SHA" "$BANNER_PATCH"
+        printf 'source_patch_sha256 %s  %s\n' "$PROVISIONAL_PATCH_SHA" "$PROVISIONAL_PATCH"
     } >"$output_archive.evidence.sources.sha256"
     "$ar" rcs "$output_archive" "$scratch_dir/members"/*.o
     "$ranlib" "$output_archive"

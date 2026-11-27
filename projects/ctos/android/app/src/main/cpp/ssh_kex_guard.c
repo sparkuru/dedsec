@@ -8,8 +8,7 @@
 #include "ssherr.h"
 #include "ssh_kex_guard.h"
 
-/* Single native event-loop owner; eight hops are independent, not eight
- * independently authorized sessions. Broker issuance is still required. */
+/* One role per jump and final target; broker issuance is still required. */
 struct role {
     struct ssh *ssh;
     ctos_ssh_role_token bootstrap;
@@ -19,7 +18,7 @@ struct role {
     uint64_t deadline, cycle;
     unsigned char nonce[32], connection[32], host[32];
 };
-static struct role roles[8];
+static struct role roles[CTOS_SSH_ROLE_MAX];
 static uint64_t now(void) {
     struct timespec time;
     if (clock_gettime(CLOCK_BOOTTIME, &time) != 0 || time.tv_sec < 0) return 0;
@@ -33,7 +32,7 @@ static int nonzero(const unsigned char *bytes) {
 }
 static struct role *lookup(struct ssh *ssh) {
     if (ssh == NULL || ssh->kex == NULL || ssh->kex->server) return NULL;
-    for (unsigned int i = 0; i < 8; i++)
+    for (unsigned int i = 0; i < CTOS_SSH_ROLE_MAX; i++)
         if (roles[i].ssh == ssh && roles[i].owner == getpid()
             && ctos_ssh_role_bootstrap_active(roles[i].bootstrap)) return &roles[i];
     return NULL;
@@ -62,7 +61,7 @@ static int bind_role(struct ssh *ssh, ctos_ssh_role_token bootstrap,
         || time == 0 || snapshot.owner_pid != getpid() || snapshot.owner_uid != getuid()
         || lookup(ssh) != NULL)
         return SSH_ERR_INVALID_ARGUMENT;
-    for (unsigned int i = 0; i < 8; i++) {
+    for (unsigned int i = 0; i < CTOS_SSH_ROLE_MAX; i++) {
         if (roles[i].ssh != NULL && (roles[i].ssh == ssh ||
             roles[i].bootstrap == bootstrap ||
             timingsafe_bcmp(roles[i].nonce, snapshot.role_nonce, 32) == 0 ||
@@ -70,7 +69,7 @@ static int bind_role(struct ssh *ssh, ctos_ssh_role_token bootstrap,
                 snapshot.connection_binding, 32) == 0)))
             return SSH_ERR_INVALID_ARGUMENT;
     }
-    for (unsigned int i = 0; i < 8; i++) if (roles[i].ssh == NULL) {
+    for (unsigned int i = 0; i < CTOS_SSH_ROLE_MAX; i++) if (roles[i].ssh == NULL) {
         roles[i].ssh = ssh; roles[i].bootstrap = bootstrap; roles[i].owner = getpid();
         roles[i].hop = snapshot.hop; roles[i].deadline = snapshot.deadline;
         memcpy(roles[i].nonce, snapshot.role_nonce, 32);
@@ -108,7 +107,7 @@ int ctos_ssh_kex_pin_offered_host(struct ssh *ssh, const struct sshkey *key) {
     return result;
 }
 void ctos_ssh_kex_unbind(struct ssh *ssh) {
-    for (unsigned int i = 0; i < 8; i++)
+    for (unsigned int i = 0; i < CTOS_SSH_ROLE_MAX; i++)
         if (roles[i].ssh == ssh) explicit_bzero(&roles[i], sizeof(roles[i]));
 }
 int ctos_ssh_kex_begin(struct ssh *ssh) {
@@ -162,7 +161,7 @@ uint64_t ctos_ssh_kex_transport_ready(struct ssh *ssh, unsigned int hop,
     if (ssh == NULL || ssh->kex == NULL || ssh->kex->server
         || !nonzero(nonce) || !nonzero(connection)) return 0;
     memset(&snapshot, 0, sizeof(snapshot));
-    for (unsigned int i = 0; i < 8; i++) {
+    for (unsigned int i = 0; i < CTOS_SSH_ROLE_MAX; i++) {
         struct role *role = &roles[i];
         if (role->ssh != ssh || role->owner != getpid()) continue;
         if (ctos_ssh_role_transport_snapshot(role->bootstrap, &snapshot) != 0) break;

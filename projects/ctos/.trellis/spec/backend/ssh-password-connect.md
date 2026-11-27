@@ -143,6 +143,8 @@ replace it on successful handoff, not an attempted BUSY connection. Factory iden
 an old cancellation affecting a newer terminal. Ordinary event-stream disposal does not cancel
 the retained successful connector.
 
+Before accepting a live session for handoff, `SshPasswordConnector.handoffLive()` checks the original session and then takes a local admission against its shared owner Stop. A preceding Stop rejects the handoff; an admitted handoff may physically finish later. This is not a native drain or an atomic MethodChannel delivery guarantee. If subsequent connector cancellation or vault locking throws during an unconfirmed native invalidation, the current bridge can fail to deliver a result or finish wiping secrets; that failure path remains open and must not be described as a completed lock.
+
 ### 4. Validation & Error Matrix
 
 Bad booleans, saved+nonempty password, saved+save, malformed tuple/password -> PARAMETERS.

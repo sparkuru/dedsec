@@ -13,12 +13,23 @@
 #define CTOS_SSH_CONFIG_RESOURCE_BYTES 107328U
 #define CTOS_SSH_CONFIG_AUDIT_BYTES 82732U
 #define CTOS_SSH_CONFIG_DIRECT_BYTES (72U + 3U * 259U + (256U + 32U) * 516U)
+#define CTOS_SSH_CONFIG_ROUTE_BYTES (12U + 9U * (4U + CTOS_SSH_CONFIG_DIRECT_BYTES))
+#ifdef CTOS_CONFIG_HANDLE_TEST
+int ctos_ssh_config_handle_test_profile_encode(const struct ctos_ssh_config_direct_plan *,
+    unsigned char [CTOS_SSH_CONFIG_DIRECT_BYTES], size_t *);
+#endif
 
 /* Positive signed-64-bit opaque identity; never an address or reusable slot. */
 typedef uint64_t ctos_ssh_config_token;
 int ctos_ssh_config_handle_open(ctos_ssh_view_token, const unsigned char *, size_t,
     ctos_ssh_config_token *);
 int ctos_ssh_config_handle_open_catalog(ctos_ssh_view_token, ctos_ssh_config_token *);
+int ctos_ssh_config_handle_open_profile_route(ctos_ssh_view_token, const unsigned char *, size_t,
+    ctos_ssh_config_token *);
+int ctos_ssh_config_handle_reserve_profile_route(ctos_ssh_config_token *);
+int ctos_ssh_config_handle_profile_route(ctos_ssh_config_token,
+    unsigned char [CTOS_SSH_CONFIG_ROUTE_BYTES], size_t *);
+int ctos_ssh_config_handle_profile_route_live(ctos_ssh_config_token);
 int ctos_ssh_config_handle_reserve_detached(int, ctos_ssh_config_token *);
 int ctos_ssh_config_handle_reserve_direct(ctos_ssh_config_token *);
 int ctos_ssh_config_handle_reserve_profile_direct(ctos_ssh_config_token *);

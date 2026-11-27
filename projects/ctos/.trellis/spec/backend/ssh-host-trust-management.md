@@ -1,5 +1,44 @@
 # Managed SSH host-trust inspection and forgetting
 
+NEW and CHANGED writes that precede native KEX acknowledgement also follow the
+[trust commit acknowledgement](ssh-trust-commit-ack.md) contract, including
+in-flight screen-lock ordering and the possibly committed receipt.
+
+## Scenario: order local host review against STOP
+
+### 1. Scope / Trigger
+
+STOP may be published while native invalidation is draining or has an unknown result. A pending NEW or CHANGED decision must not rely only on a prior live sample or on the later mailbox cancellation.
+
+### 2. Signatures
+
+Production `SshHostKeyReviewMailbox` receives the connector's exact `SshSessionOwner.Cancellation`; ticket installation, `resolve`, and delivery of an accepted decision to its owner use `Cancellation.admitTerminalIo()`. The signed-NEW fixture additionally admits its local claim and reservation transfer. Standalone constructors retain independent cancellation for isolated callers.
+
+### 3. Contracts
+
+Perform each admission under the mailbox monitor immediately before publishing that local state, except the fixture's lock-free one-shot consume, which admits before its own atomic claim. STOP first denies that step even if native invalidation never completes. An admitted decision or presentation may physically finish after STOP. The decision remains bound to the original review, and the owner rechecks the live role and deadline. A local decision grants no persistent trust write, credential use, new proof, or chain-wide cleanup authority. The product connector uses its shared cancellation; fixture-only signed review is not a product NEW-host flow.
+
+### 4. Validation & Error Matrix
+
+| Condition | Required behavior |
+| --- | --- |
+| STOP before ticket, decision, or owner delivery admission | Deny that local transition; dismiss any presented ticket on its owner path |
+| Decision or presentation admitted before STOP | It may finish later; subsequent unadmitted transitions are denied |
+| Native invalidation throws | Keep the native outcome and owner unresolved; local mailbox cancellation is not proof of native cleanup |
+| Signed fixture review is locally admitted | It remains a test-only candidate reservation, not trust-write authority |
+
+### 5. Good / Base / Bad Cases
+
+Good: STOP wins before decision admission and a late UI result is rejected. Base: the exact live review is accepted and checked by its owner. Bad: treat an earlier live check or accepted UI decision as a durable trust-write permit.
+
+### 6. Tests Required
+
+Exercise actual mailbox and shared cancellation with barriers on both sides of ticket installation, resolve, owner delivery and signed-fixture claim; include pending and unknown native invalidation and confirm the original owner and result are retained. The user authorized local verification on 2026-11-27; keep Android/device results separate from host checks.
+
+### 7. Wrong vs Correct
+
+Wrong: approve a decision after STOP because native invalidation has not finished. Correct: order each local transition with STOP and separately enforce the original trust-commit and native-effect contracts.
+
 ## Scenario: report a rejected host proof during key exchange
 
 ### 1. Scope / Trigger
@@ -247,9 +286,11 @@ single managed known-hosts object used by the current connection.
 ### 2. Signatures
 
 ```text
-hostKeyChanged {requestId,ticketId,binding,host,port,source,keyType,fingerprint,
+hostKey {requestId,ticketId,binding,host,port,hop,keyType,fingerprint,remainingMillis}
+hostKeyDismissed {requestId,ticketId,binding,hop}
+hostKeyChanged {requestId,ticketId,binding,host,port,hop,source,keyType,fingerprint,
                 oldKeys:[{keyType,fingerprint}],remainingMillis}
-hostKeyChangedDismissed {requestId,ticketId,binding}
+hostKeyChangedDismissed {requestId,ticketId,binding,hop}
 ssh.hostKeyDecision(requestId,ticketId,binding,accept) -> applied
 onNativeChangedHostCandidate(role,hop,port,connection,target,host,classification,
     keyType,fingerprint,baseDigest,replacementDigest,candidateId,body,oldRecords) -> boolean
@@ -265,6 +306,13 @@ onNativeKexComplete(cycle,sessionDigest) -> boolean
   missing, malformed, stale or mismatched fields. The source label is never a caller-selected
   authority or replacement body. The actual offered fingerprint is **received**, not yet
   signature verified, when the user reviews it.
+- Both NEW and CHANGED events carry the exact ticket's role-derived host, port and hop (0–8),
+  while dismissal carries that same ticket's binding and hop. The Flutter owner tracks each
+  review decision and waits for every submitted decision acknowledgement before handing off
+  the connection. A later hop cannot replace an earlier pending acknowledgement, and a stale
+  or mismatched ticket, binding or hop cannot dismiss or approve the current review. Until a
+  factory supplies a protected request-bound route, CHANGED review still requires the direct
+  form's exact endpoint; an event's self-reported hop does not authorize another endpoint.
 - The native parser prepares the replacement from the same validated snapshot and exact
   endpoint; preserve unrelated byte spans. Shared, wildcard, marker, certificate,
   unsupported and unrepresentable matches cannot enter the replacement path. Do not merge

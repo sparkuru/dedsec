@@ -1,0 +1,123 @@
+--- a/packet.c
++++ b/packet.c
+@@ -1620,8 +1620,9 @@
+ 	return r;
+ }
+ 
+-int
+-ssh_packet_read_poll2(struct ssh *ssh, u_char *typep, uint32_t *seqnr_p)
++static int
++ssh_packet_read_poll2_internal(struct ssh *ssh, u_char *typep,
++    uint32_t *seqnr_p, int ctos_provisional)
+ {
+ 	struct session_state *state = ssh->state;
+ 	u_int padlen, need;
+@@ -1632,6 +1633,23 @@
+ 	struct sshcomp *comp = NULL;
+ 	int r;
+ 
++	if (ctos_provisional && (ssh->kex == NULL || ssh->kex->server ||
++	    !ssh->kex->done || (ssh->kex->flags & KEX_INITIAL) != 0 ||
++	    state->mux || state->server_side || state->after_authentication ||
++	    state->rekeying || state->packet_discard || state->hook_in != NULL ||
++	    state->input == NULL || state->incoming_packet == NULL ||
++	    sshbuf_len(state->input) > 16U * 1024U ||
++	    sshbuf_len(state->incoming_packet) != 0 ||
++	    state->newkeys[MODE_IN] == NULL || state->receive_context == NULL ||
++	    state->newkeys[MODE_IN]->enc.cipher == NULL ||
++	    cipher_authlen(state->newkeys[MODE_IN]->enc.cipher) == 0 ||
++	    state->newkeys[MODE_IN]->comp.enabled ||
++	    state->p_read.seqnr == UINT32_MAX ||
++	    state->p_read.packets == UINT32_MAX))
++		return SSH_ERR_PROTOCOL_ERROR;
++	if (ctos_provisional &&
++	    (r = ssh_packet_check_rekey_preauth(ssh, 0)) != 0)
++		return r;
+ 	if (state->mux)
+ 		return ssh_packet_read_poll2_mux(ssh, typep, seqnr_p);
+ 
+@@ -1663,6 +1681,8 @@
+ 			sshbuf_dump(state->input, stderr);
+ #endif
+ 			logit("Bad packet length %u.", state->packlen);
++			if (ctos_provisional)
++				return SSH_ERR_CONN_CORRUPT;
+ 			if ((r = sshpkt_disconnect(ssh, "Packet corrupt")) != 0)
+ 				return r;
+ 			return SSH_ERR_CONN_CORRUPT;
+@@ -1699,6 +1719,11 @@
+ 		if ((r = sshbuf_consume(state->input, block_size)) != 0)
+ 			goto out;
+ 	}
++	if (ctos_provisional &&
++	    (aadlen > 16U * 1024U || authlen > 16U * 1024U - aadlen ||
++	    maclen > 16U * 1024U - aadlen - authlen ||
++	    state->packlen > 16U * 1024U - aadlen - authlen - maclen))
++		return SSH_ERR_INVALID_FORMAT;
+ 	DBG(debug("input: packet len %u", state->packlen+4));
+ 
+ 	if (aadlen) {
+@@ -1716,6 +1741,8 @@
+ 	if (need % block_size != 0) {
+ 		logit("padding error: need %d block %d mod %d",
+ 		    need, block_size, need % block_size);
++		if (ctos_provisional)
++			return SSH_ERR_CONN_CORRUPT;
+ 		return ssh_packet_start_discard(ssh, enc, mac, 0,
+ 		    PACKET_MAX_SIZE - block_size);
+ 	}
+@@ -1791,6 +1818,8 @@
+ 	padlen = sshbuf_ptr(state->incoming_packet)[4];
+ 	DBG(debug("input: padlen %d", padlen));
+ 	if (padlen < 4)	{
++		if (ctos_provisional)
++			return SSH_ERR_CONN_CORRUPT;
+ 		if ((r = sshpkt_disconnect(ssh,
+ 		    "Corrupted padlen %d on input.", padlen)) != 0 ||
+ 		    (r = ssh_packet_write_wait(ssh)) != 0)
+@@ -1825,6 +1854,8 @@
+ 		goto out;
+ 	if (ssh_packet_log_type(*typep))
+ 		debug3("receive packet: type %u", *typep);
++	if (ctos_provisional && *typep != SSH2_MSG_EXT_INFO)
++		return SSH_ERR_PROTOCOL_ERROR;
+ 	if (*typep < SSH2_MSG_MIN) {
+ 		if ((r = sshpkt_disconnect(ssh,
+ 		    "Invalid ssh2 packet type: %d", *typep)) != 0 ||
+@@ -1851,12 +1882,35 @@
+ 		state->p_read.seqnr = 0;
+ 	}
+ 
+-	if ((r = ssh_packet_check_rekey(ssh)) != 0)
++	if ((r = ctos_provisional ? ssh_packet_check_rekey_preauth(ssh, 0) :
++	    ssh_packet_check_rekey(ssh)) != 0)
+ 		return r;
+  out:
+ 	return r;
+ }
+ 
++int
++ssh_packet_read_poll2(struct ssh *ssh, u_char *typep, uint32_t *seqnr_p)
++{
++	return ssh_packet_read_poll2_internal(ssh, typep, seqnr_p, 0);
++}
++
++/* Non-dispatching, non-writing parser for an unauthenticated provisional
++ * child. The caller owns the session and validates/discards EXT_INFO. */
++__attribute__((visibility("hidden"))) int
++ctos_ssh_packet_read_provisional(struct ssh *ssh, u_char *typep)
++{
++	int r;
++
++	if (ssh == NULL || ssh->state == NULL || typep == NULL)
++		return SSH_ERR_INVALID_ARGUMENT;
++	*typep = SSH_MSG_NONE;
++	r = ssh_packet_read_poll2_internal(ssh, typep, NULL, 1);
++	if (r != 0)
++		*typep = SSH_MSG_NONE;
++	return r;
++}
++
+ int
+ ssh_packet_read_poll_seqnr(struct ssh *ssh, u_char *typep, uint32_t *seqnr_p)
+ {

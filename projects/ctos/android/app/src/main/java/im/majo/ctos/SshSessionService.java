@@ -68,23 +68,23 @@ public final class SshSessionService extends Service {
     static synchronized CompletableFuture<String> attach(Context context, SshSessionOwner.Factory factory,
             String mode, int columns, int rows) {
         if (screenLocked(context)) {
-            if (owner != null) stopForScreenLock(owner);
+            if (owner != null) owner.stopForScreenLockForLockedAdmission(owner.id);
             return failed("SSH_SCREEN_LOCKED", "Unlock the device before connecting SSH");
         }
         if (owner != null) return failed("BUSY", "SSH terminal cleanup is pending");
         Context application = context.getApplicationContext();
         SessionLifecycle lifecycle = new SessionLifecycle();
         SshSessionOwner created = new SshSessionOwner(factory, mode, columns, rows, EVENTS, MAIN::post,
-                lifecycle);
+                lifecycle, true);
         lifecycle.expected = created;
         owner = created;
-        try {
+        return created.startPublished(() -> {
             ScreenOffRegistration registration = new ScreenOffRegistration(application, created);
             registration.register();
             screenOff = registration;
             if (screenLocked(application)) {
                 stopForScreenLock(created);
-                return created.connected;
+                return;
             }
             createChannel(application);
             Intent intent = new Intent(application, SshSessionService.class).setAction(START)
@@ -95,8 +95,7 @@ public final class SshSessionService extends Service {
                     if (owner == created && (service == null || service.attached != created)) created.rejectStart();
                 }
             }, 10_000);
-        } catch (RuntimeException failure) { created.rejectStart(); }
-        return created.connected;
+        });
     }
 
     static synchronized boolean active() { return owner != null; }

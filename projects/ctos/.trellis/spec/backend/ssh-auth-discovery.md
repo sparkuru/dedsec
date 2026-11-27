@@ -69,9 +69,17 @@ challenge.
 
 ### Signatures
 
-- `passwordRequest` and `keyPassphraseRequest` events carry `savedAvailable: bool`
-  with the original `requestId`, `ticketId`, `binding` and `remainingMillis`.
-  An older event defaults to unavailable.
+- `passwordRequest` and `keyPassphraseRequest` events carry the required `host`, `port`,
+  `username` and `hop` of the exact callback-registered authentication selection and
+  role, alongside `requestId`, `ticketId`, `binding` and `remainingMillis`. Missing,
+  partial or malformed endpoint/hop data is rejected; hop is 0–8. `savedAvailable` is
+  optional for wire compatibility and defaults to unavailable. The optional
+  `savedOnly` flag defaults to false; it can be true only for a password request
+  with `savedAvailable: true`. A saved-only ticket permits exactly the explicit
+  `useSaved: true`, `save: false`, empty-byte response. The mailbox enforces this
+  independently of the Flutter parser and never accepts typed or save responses
+  for that ticket. The flag alone does not authorize a vault read or open the
+  product ProxyJump gate.
 - `ssh.passwordResponse` accepts the original fields and optionally the pair
   `useSaved: bool` and `save: bool`. The original four fields select one-use input.
   The saved choice uses `useSaved: true`, `save: false`, and empty `password` bytes.

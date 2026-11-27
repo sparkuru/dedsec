@@ -11,8 +11,28 @@ general database. Use these guides for work below the Flutter presentation layer
 | [Persistence](./persistence.md) | Current preferences/files and limits on adding durable state |
 | [App Secrets](./app-secrets.md) | Shared vault, detached preview/bundle/TOTP/public/typed SSH reads and SSH entry mutation/trust CAS/TOTP mutation, original contexts/owned candidates, final guarded copy, metadata-only AtomicFile guards and atomic/uncertain effects |
 | [Authenticator](./authenticator.md) | Strict TOTP input, host-only add tickets with original-budget handoff, scoped image/camera, read admission and guarded publication |
+| [SSH Development Workflow](./ssh-development-workflow.md) | Implementation first, minimal necessary tests delegated to user-arranged sessions, and independent Codex review |
 | [SSH Native Gates](./ssh-native.md) | Actual supplied-manifest material inspection/CSMI and shared key policy, partial-only outcomes; declaration catalog/CSCD and separate effective readconf/Options; opaque registry; actual offered-host/NEW review and19sessionJNI; SUCCESS-only PTY/shell/auth, QEMU and separate Android evidence |
 | [Detached SSH Config](./ssh-detached-config.md) | Native supplied file collection, owned CONFIG copies and selected roots; original lifetime, unchanged live adapter, partial-only semantic scope |
+| [SSH ProxyJump Declaration](./ssh-proxyjump-declaration.md) | Native ordered explicit hops, original evaluator lifetime, `none` disambiguation and no connection grant |
+| [SSH ProxyJump Route](./ssh-proxyjump-route.md) | Same-snapshot effective jump configuration, aggregate budgets and retryable all-or-nothing ownership; no transport grant |
+| [SSH ProxyJump Channel](./ssh-proxyjump-channel.md) | Authenticated direct-tcpip channel, next-role binding and nine-role capacity; explicit retention is separate and no product bridge exists |
+| [SSH ProxyJump Relay](./ssh-proxyjump-relay.md) | Provisional bounded local stream relay, single owner and close ordering; no child or product authority |
+| [SSH ProxyJump Child](./ssh-proxyjump-child.md) | Child ownership, checked cleanup, signed-NEW fixture review, idle snapshot and bounded extension input; product review, trust-write and credential authority remain separate |
+| [SSH ProxyJump Fixture Transfer](./ssh-proxyjump-fixture-transfer.md) | Test-only exact candidate ownership transfer and revocation; no native-generation or trust-write authority |
+| [SSH ProxyJump Retained Transport](./ssh-proxyjump-retained-transport.md) | Deepest-first native jump promotion, exact retained descendant proofs, auth retirement and shared-owner limits |
+| [SSH View-borrow Ownership](./ssh-view-borrow-ownership.md) | Exclusive native claims and internal Java shared-lease owner; retryable release and linear-pointer limits |
+| [SSH Shared-view Cancellation](./ssh-shared-view-cancellation.md) | Shared lease cancellation, confirmed pre-begin retry, unknown invalidation and close/revoke ownership |
+| [Vault and SSH View Revocation](./ssh-vault-revocation-ownership.md) | Local key/epoch invalidation, checked native outcomes, exact lease retention and uncertain store receipts |
+| [SSH Session Cancellation](./ssh-session-cancellation-ownership.md) | Per-session native cancellation, callback and close admission with exact owner retention |
+| [SSH Trust Commit Acknowledgement](./ssh-trust-commit-ack.md) | NEW/CHANGED durable receipt, native confirmation, cancellation ordering and in-flight screen-lock result |
+| [SSH Terminal Output Cancellation](./ssh-terminal-output-cancellation.md) | Owner/generation-bound data and replay-snapshot admission versus cancellation; listener completion limits |
+| [SSH Terminal Stop Intent](./ssh-terminal-stop-intent.md) | Local I/O admission before native invalidation and fail-closed terminal ownership; creation and cross-hop cleanup remain separate |
+| [SSH Native STOP Admission](./ssh-native-stop-admission.md) | Connection-specific STOP CAS at selected Java/JNI/native credential and wire effects; independent revocation remains separate |
+| [SSH Connector Unstarted Retirement](./ssh-connector-unstarted-retirement.md) | Atomic connector create/retire and shared STOP admission, with exact outer-owner retention |
+| [SSH Started Material Admission](./ssh-started-material-admission.md) | STOP ordering for selected connector/key material, credential prompts and saving-context ownership |
+| [SSH Connection Result Delivery](./ssh-connection-result-delivery.md) | Published service owner, factory settlement, uncertain receipts and at-most-once bridge reply attempt |
+| [SSH ProxyJump Callback Proof](./ssh-proxyjump-callback-proof.md) | Exact native child callback scope, receiver-bound JNI sequential checks and no effect grant |
 | [Managed Detached Config](./ssh-detached-config-managed.md) | Two-phase Java/JNI owner, CSDI single protected source, all actual CONFIG roots and aggregate budgets; retryable cleanup and partial-only output |
 | [CONFIG Audit](./ssh-config-audit.md) | Explicit AUDIT mode, finite all-branch policy, real static Include edges/CSCA and actual parent direct-reference checks; partial-only |
 | [CONFIG Resource References](./ssh-config-resources.md) | Explicit resource declarations/CSCR, static typed parent references and unresolved context/cwd/key-loading obligations |

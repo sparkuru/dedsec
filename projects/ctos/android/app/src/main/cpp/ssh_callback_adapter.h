@@ -6,7 +6,7 @@
 
 #include "ssh_role_bootstrap.h"
 
-#define CTOS_SSH_CALLBACK_MAX 8U
+#define CTOS_SSH_CALLBACK_MAX CTOS_SSH_ROLE_MAX
 #define CTOS_SSH_CALLBACK_MAX_CREDENTIAL_BYTES (1024U * 1024U)
 #define CTOS_SSH_CALLBACK_MAX_FILE_BYTES (1024U * 1024U)
 #define CTOS_SSH_CALLBACK_MAX_HOST_RESULT_BYTES 2048U
@@ -44,6 +44,12 @@ enum ctos_ssh_callback_host_cas_status {
 
 enum ctos_ssh_callback_host_result_outcome {
     CTOS_SSH_CALLBACK_HOST_RESULT_APPROVED = 1
+};
+
+enum ctos_ssh_provisional_new_stage {
+    CTOS_SSH_PROVISIONAL_NEW_CANDIDATE = 1,
+    CTOS_SSH_PROVISIONAL_NEW_REVIEW = 2,
+    CTOS_SSH_PROVISIONAL_NEW_KEX = 3
 };
 
 /* Metadata copied from the live native role and the current host-key event.
@@ -102,6 +108,9 @@ struct ctos_ssh_changed_host_candidate {
 /* The target is called synchronously on the thread that opens the binding.
  * `environment` is deliberately opaque here: the JNI target validates that it
  * is an attached JNIEnv from the same JavaVM before any Java call. */
+typedef int (*ctos_ssh_callback_receiver_validator)(void *, void *, const void *);
+typedef int (*ctos_ssh_callback_effect_admission)(void *, void *);
+
 struct ctos_ssh_callback_target {
     void *context;
     int (*validate_environment)(void *context, void *environment);
@@ -139,6 +148,23 @@ struct ctos_ssh_callback_target {
         const struct ctos_ssh_changed_host_candidate *candidate);
     int (*changed_host_review)(void *context, void *environment,
         const struct ctos_ssh_host_evidence *evidence);
+    /* Optional child-only NEW path. These hooks never report a durable CAS
+     * or create a host/credential proof. The KEX hook is synchronous and can
+     * precede upstream drain: it only records the signature milestone and
+     * must not write trust or detach a commit admission. These synchronous
+     * hooks must not wait for product UI: a FIN/CLOSE can remain unpumped.
+     * All three are required. */
+    int (*provisional_new_candidate)(void *context, void *environment,
+        const struct ctos_ssh_known_hosts_candidate *candidate);
+    int (*provisional_new_review)(void *context, void *environment,
+        const struct ctos_ssh_host_evidence *evidence);
+    int (*provisional_new_kex)(void *context, void *environment, uint64_t cycle,
+        const unsigned char session_digest[32]);
+    /* Optional identity check for a receiver entering from the active target.
+     * It must not call back into the adapter or retain the receiver. */
+    ctos_ssh_callback_receiver_validator validate_receiver;
+    /* Lock-free STOP admission; called only while the client owns this target. */
+    ctos_ssh_callback_effect_admission admit_effect;
 };
 
 /* Open binds the callback to the calling process, current event-loop thread,
@@ -152,6 +178,39 @@ int ctos_ssh_callback_open(const struct ctos_ssh_callback_target *target,
  * future callback; close still belongs to the bound event-loop thread. */
 int ctos_ssh_callback_cancel(ctos_ssh_callback_token callback);
 int ctos_ssh_callback_close(ctos_ssh_callback_token callback, void *environment);
+
+/* A native client claims its exact role binding only after all fallible
+ * construction steps. Claimed bindings may only be closed by that owner;
+ * failed close retains the claim for retry. */
+int ctos_ssh_callback_client_claim(ctos_ssh_callback_token, void *,
+    ctos_ssh_role_token, const void *);
+int ctos_ssh_callback_client_close(ctos_ssh_callback_token, void *, const void *);
+
+/* Internal scope registration is bound to the same exclusive client claim.
+ * The registered checker alone receives the owner's private pointer and must
+ * validate it before dereferencing. Generic claims have no scoped checker. */
+typedef int (*ctos_ssh_callback_scope_checker)(const void *,
+    ctos_ssh_callback_token, ctos_ssh_role_token, void *);
+int ctos_ssh_callback_client_claim_scoped(ctos_ssh_callback_token, void *,
+    ctos_ssh_role_token, const void *, ctos_ssh_callback_scope_checker);
+/* The client retains the returned target only for the lifetime of its claim. */
+int ctos_ssh_callback_client_claim_scoped_effect(ctos_ssh_callback_token, void *,
+    ctos_ssh_role_token, const void *, ctos_ssh_callback_scope_checker,
+    ctos_ssh_callback_effect_admission *, void **);
+/* The caller supplies only the exact previously registered checker identity;
+ * no owner pointer or arbitrary context is returned. This synchronous scope
+ * rejects nested targets and recursive checks. Scope success is not itself an
+ * ancestor proof, a secret grant or atomicity of an external effect. */
+int ctos_ssh_callback_client_scope_check(ctos_ssh_callback_token, void *,
+    ctos_ssh_callback_scope_checker);
+/* Require the registered validator to match the caller's expected function
+ * before invoking it; a native-only target cannot stand in for the JNI target. */
+int ctos_ssh_callback_client_scope_check_receiver(ctos_ssh_callback_token, void *,
+    const void *receiver, ctos_ssh_callback_receiver_validator,
+    ctos_ssh_callback_scope_checker);
+/* Validates immutable fields of this thread's pinned target without a lock. */
+int ctos_ssh_callback_current_receiver(ctos_ssh_callback_token, void *, const void *,
+    ctos_ssh_callback_receiver_validator);
 
 /* Internal same-client continuation, issued only after its fresh real auth
  * proof. This never permits a host/file/credential callback after expiry. */
@@ -198,6 +257,16 @@ int ctos_ssh_callback_changed_host_review(ctos_ssh_callback_token callback,
     const unsigned char base_digest[32], const unsigned char replacement_digest[32]);
 /* Returns 1 only when the same live owner implements both provisional hooks. */
 int ctos_ssh_callback_supports_changed(ctos_ssh_callback_token callback, void *environment);
+/* Native child dispatch only. These functions are not JNI entrypoints and do
+ * not grant trust or credential authority. */
+int ctos_ssh_callback_supports_provisional_new(ctos_ssh_callback_token, void *);
+int ctos_ssh_callback_provisional_new_candidate(ctos_ssh_callback_token, void *,
+    const char *, const char *, const char *, const unsigned char[32],
+    const unsigned char[32], unsigned char *, size_t, int *);
+int ctos_ssh_callback_provisional_new_review(ctos_ssh_callback_token, void *,
+    const char *, const char *, const unsigned char[32], const unsigned char[32]);
+int ctos_ssh_callback_provisional_new_kex(ctos_ssh_callback_token, void *,
+    uint64_t, const unsigned char[32]);
 int ctos_ssh_callback_kex_complete(ctos_ssh_callback_token callback, void *environment,
     uint64_t cycle, const unsigned char session_digest[32]);
 int ctos_ssh_callback_credential(ctos_ssh_callback_token callback, void *environment,

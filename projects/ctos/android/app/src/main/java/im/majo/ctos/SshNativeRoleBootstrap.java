@@ -18,6 +18,7 @@ import java.nio.charset.CodingErrorAction;
 final class SshNativeRoleBootstrap {
     private static final int MAGIC = 0x43535242; // CSRB
     private static final int VERSION = 1;
+    private static final int CHAIN_VERSION = 2;
     private static final int MAX_WIRE = 2048;
     private static final int ROLE_NONCE_BYTES = 32;
     private static final int CONNECTION_BINDING_BYTES = 32;
@@ -28,6 +29,10 @@ final class SshNativeRoleBootstrap {
         static native byte[] open(int program, int hop, int port, long deadline,
                 String connectionId, String targetIdentity, String host, String publicViewId,
                 byte[] roleNonce, byte[] connectionBinding) throws IOException;
+
+        static native byte[] openChained(int program, int hop, int port, long deadline,
+                String connectionId, String targetIdentity, String host, String publicViewId,
+                byte[] roleNonce, byte[] connectionBinding, String chainIdentity) throws IOException;
 
         static native boolean owns(long token, int ownerUid, byte[] wire) throws IOException;
 
@@ -141,7 +146,7 @@ final class SshNativeRoleBootstrap {
             // Only Native.open can populate production wire. This bounded header read grants
             // cleanup alone and deliberately does not require a fresh clock or live file view.
             if (wire == null || wire.length < 24 || wire.length > MAX_WIRE
-                    || wireInt(0) != MAGIC || wire[4] != VERSION
+                    || wireInt(0) != MAGIC || (wire[4] != VERSION && wire[4] != CHAIN_VERSION)
                     || (wire[5] != 1 && wire[5] != 2) || wire[6] != 0 || wire[7] != 0
                     || wireInt(16) <= 0 || wireInt(20) < 0) throw invalid();
             long token = 0;
@@ -232,7 +237,9 @@ final class SshNativeRoleBootstrap {
         byte[] inputWire = wire.clone();
         ByteBuffer input = ByteBuffer.wrap(inputWire).order(ByteOrder.BIG_ENDIAN);
         try {
-            if (input.getInt() != MAGIC || input.get() != VERSION) throw invalid();
+            if (input.getInt() != MAGIC) throw invalid();
+            int version = Byte.toUnsignedInt(input.get());
+            if (version != VERSION && version != CHAIN_VERSION) throw invalid();
             int programCode = Byte.toUnsignedInt(input.get());
             if (input.getShort() != 0 || (programCode != 1 && programCode != 2)) throw invalid();
             long token = input.getLong();
@@ -249,19 +256,23 @@ final class SshNativeRoleBootstrap {
             String targetIdentity = text(input, 512);
             String host = text(input, 253);
             String publicViewId = text(input, 128);
+            String chainIdentity = version == CHAIN_VERSION ? text(input, 512) : targetIdentity;
             if (input.hasRemaining() || token <= 0 || ownerPid <= 0 || ownerUid < 0
                     || hop < 0 || hop >= SshRoleContext.MAX_HOPS || port < 1 || port > 65535
                     || !nonzero(nonce) || !nonzero(connection)
-                    || !identifier(connectionId, 128) || !target(targetIdentity)
+                    || !identifier(connectionId, 128) || !target(targetIdentity) || !target(chainIdentity)
                     || !host(host) || !identifier(publicViewId, 128)) throw invalid();
             long now = clock.now();
             if (now <= 0 || deadline <= now
                     || deadline - now > SshRoleContext.MAX_LIFETIME_MILLIS) throw invalid();
             SshRoleContext.Program program = programCode == 1
                     ? SshRoleContext.Program.CLIENT : SshRoleContext.Program.JUMP;
-            SshRoleContext.Bootstrap bootstrap = new SshRoleContext.Bootstrap(program, ownerPid,
-                    hop, connectionId, targetIdentity, host, port, publicViewId, nonce,
-                    connection, deadline);
+            SshRoleContext.Bootstrap bootstrap = version == VERSION
+                    ? new SshRoleContext.Bootstrap(program, ownerPid, hop, connectionId,
+                            targetIdentity, host, port, publicViewId, nonce, connection, deadline)
+                    : new SshRoleContext.Bootstrap(program, ownerPid, hop, connectionId,
+                            targetIdentity, host, port, publicViewId, nonce, connection, deadline,
+                            chainIdentity);
             return new Decoded(token, ownerUid, bootstrap, inputWire);
         } catch (BufferUnderflowException | IllegalArgumentException failure) {
             throw invalid();
@@ -318,6 +329,11 @@ final class SshNativeRoleBootstrap {
         byte[] binding = bootstrap.connectionBinding.clone();
         try {
             int program = bootstrap.program == SshRoleContext.Program.CLIENT ? 1 : 2;
+            if (bootstrap.identityVersion == SshRoleContext.IDENTITY_V2) {
+                return Native.openChained(program, bootstrap.hop, bootstrap.port, bootstrap.deadline,
+                        bootstrap.connectionId, bootstrap.targetIdentity, bootstrap.host,
+                        bootstrap.publicViewId, nonce, binding, bootstrap.chainIdentity);
+            }
             return Native.open(program, bootstrap.hop, bootstrap.port, bootstrap.deadline,
                     bootstrap.connectionId, bootstrap.targetIdentity, bootstrap.host,
                     bootstrap.publicViewId, nonce, binding);
@@ -423,6 +439,10 @@ final class SshNativeRoleBootstrap {
                 && value.deadline > 0
                 && identifier(value.connectionId, 128)
                 && target(value.targetIdentity)
+                && target(value.chainIdentity)
+                && (value.identityVersion == SshRoleContext.IDENTITY_V2
+                    || value.identityVersion == SshRoleContext.IDENTITY_V1
+                        && value.targetIdentity.equals(value.chainIdentity))
                 && host(value.host)
                 && identifier(value.publicViewId, 128)
                 && nonzero(value.roleNonce) && value.roleNonce.length == ROLE_NONCE_BYTES

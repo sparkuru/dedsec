@@ -23,15 +23,23 @@ public final class SshPasswordMailboxTest {
                 () -> true, clock);
     }
 
+    private static SshAuthenticationSelection selection(SshRoleContext role, Clock clock) throws VaultException {
+        return SshAuthenticationSelection.keyboardInteractive(role, "prompt-user", clock);
+    }
+
     @Test public void onlyMatchingTicketMaySupplyOneOwnedAnswer() throws Exception {
         Clock clock = new Clock(); SshRoleContext role = role(clock);
         AtomicReference<SshPasswordMailbox> box = new AtomicReference<>();
         AtomicReference<SshPasswordMailbox.Ticket> seen = new AtomicReference<>();
         AtomicInteger dismissed = new AtomicInteger();
         byte[] original = "synthetic-password".getBytes(StandardCharsets.UTF_8);
-        SshPasswordMailbox mailbox = new SshPasswordMailbox(role, clock, () -> {}, new SshPasswordMailbox.Sink() {
+        SshPasswordMailbox mailbox = new SshPasswordMailbox(role, selection(role, clock), clock, () -> {}, new SshPasswordMailbox.Sink() {
             @Override public void present(SshPasswordMailbox.Ticket ticket) throws VaultException {
                 seen.set(ticket);
+                assertEquals("host.invalid", ticket.host);
+                assertEquals(22, ticket.port);
+                assertEquals("prompt-user", ticket.username);
+                assertEquals(0, ticket.hop);
                 assertFalse(box.get().respond("wrong", ticket.binding, original, ONCE));
                 assertFalse(box.get().respond(ticket.id, "0".repeat(64), original, ONCE));
                 try { box.get().respond(ticket.id, ticket.binding, new byte[0], ONCE); fail("empty input"); }
@@ -52,12 +60,40 @@ public final class SshPasswordMailboxTest {
         assertEquals(1, dismissed.get()); mailbox.close(); role.close();
     }
 
+    @Test public void promptUsesTheExactSelectedRoleAndCannotUseAnotherRole() throws Exception {
+        Clock clock = new Clock();
+        byte[] nonce = new byte[32]; nonce[0] = 1;
+        try (SshRoleContext jump = SshRoleContext.issue(new SshRoleContext.Bootstrap(
+                SshRoleContext.Program.JUMP, 123, 0, "connection", "target:jump",
+                "jump.invalid", 2201, "view", nonce, nonce, 61000, "chain:one"), () -> true, clock);
+             SshRoleContext other = SshRoleContext.issue(new SshRoleContext.Bootstrap(
+                SshRoleContext.Program.CLIENT, 123, 1, "connection", "target:destination",
+                "target.invalid", 22, "view", nonce, nonce, 61000, "chain:one"), () -> true, clock)) {
+            SshAuthenticationSelection selected = SshAuthenticationSelection.keyboardInteractive(jump, "jump-user", clock);
+            try {
+                new SshPasswordMailbox(other, selected, clock, () -> {}, ticket -> fail("foreign prompt"), PASSWORD);
+                fail("foreign role");
+            } catch (VaultException expected) { assertEquals("SSH_AUTH_SELECTION", expected.code); }
+            AtomicReference<SshPasswordMailbox> box = new AtomicReference<>();
+            try (SshPasswordMailbox mailbox = new SshPasswordMailbox(jump, selected, clock, () -> {}, ticket -> {
+                assertEquals("jump.invalid", ticket.host);
+                assertEquals(2201, ticket.port);
+                assertEquals("jump-user", ticket.username);
+                assertEquals(0, ticket.hop);
+                assertTrue(box.get().respond(ticket.id, ticket.binding, new byte[] {65}, ONCE));
+            }, PASSWORD)) {
+                box.set(mailbox);
+                try (SshPasswordMailbox.Response ignored = mailbox.await(null, false)) { }
+            }
+        }
+    }
+
     @Test public void crossThreadResponseIsAllowedButOnlyOwnerAwaits() throws Exception {
         Clock clock = new Clock(); SshRoleContext role = role(clock);
         AtomicReference<SshPasswordMailbox> box = new AtomicReference<>();
         AtomicReference<Throwable> error = new AtomicReference<>();
         AtomicReference<Thread> responder = new AtomicReference<>();
-        SshPasswordMailbox mailbox = new SshPasswordMailbox(role, clock, () -> {}, ticket -> {
+        SshPasswordMailbox mailbox = new SshPasswordMailbox(role, selection(role, clock), clock, () -> {}, ticket -> {
             Thread thread = new Thread(() -> {
                 try { assertTrue(box.get().respond(ticket.id, ticket.binding, new byte[] {65}, ONCE)); }
                 catch (Throwable failure) { error.set(failure); }
@@ -80,7 +116,7 @@ public final class SshPasswordMailboxTest {
             Clock clock = new Clock();
             try (SshRoleContext role = role(clock)) {
                 AtomicReference<SshPasswordMailbox> box = new AtomicReference<>();
-                try (SshPasswordMailbox mailbox = new SshPasswordMailbox(role, clock, () -> {}, ticket -> {
+                try (SshPasswordMailbox mailbox = new SshPasswordMailbox(role, selection(role, clock), clock, () -> {}, ticket -> {
                     assertEquals(savedAvailable, ticket.savedAvailable);
                     assertEquals(SshPasswordMailbox.Purpose.KEY_PASSPHRASE, ticket.purpose);
                     try {
@@ -108,11 +144,50 @@ public final class SshPasswordMailboxTest {
         }
     }
 
+    @Test public void savedOnlyRequiresExplicitSavedChoiceForThisTicket() throws Exception {
+        Clock clock = new Clock();
+        try (SshRoleContext role = role(clock)) {
+            AtomicReference<SshPasswordMailbox> box = new AtomicReference<>();
+            try (SshPasswordMailbox mailbox = new SshPasswordMailbox(role, selection(role, clock), clock, () -> {}, ticket -> {
+                assertTrue(ticket.savedAvailable);
+                assertTrue(ticket.savedOnly);
+                for (SshPasswordMailbox.Choice choice : new SshPasswordMailbox.Choice[] {
+                        SshPasswordMailbox.Choice.ONCE, SshPasswordMailbox.Choice.SAVE }) {
+                    try {
+                        box.get().respond(ticket.id, ticket.binding, new byte[] {65}, choice);
+                        fail("saved-only ticket accepted typed input");
+                    } catch (VaultException expected) { assertEquals("PARAMETERS", expected.code); }
+                }
+                try {
+                    box.get().respond(ticket.id, ticket.binding, new byte[] {65}, SshPasswordMailbox.Choice.SAVED);
+                    fail("saved choice carried bytes");
+                } catch (VaultException expected) { assertEquals("PARAMETERS", expected.code); }
+                assertTrue(box.get().respond(ticket.id, ticket.binding, new byte[0], SshPasswordMailbox.Choice.SAVED));
+                assertFalse(box.get().respond(ticket.id, ticket.binding, new byte[0], SshPasswordMailbox.Choice.SAVED));
+            }, PASSWORD)) {
+                box.set(mailbox);
+                try (SshPasswordMailbox.Response answer = mailbox.await(null, true, true)) {
+                    assertEquals(SshPasswordMailbox.Choice.SAVED, answer.choice);
+                    assertArrayEquals(new byte[0], answer.bytes);
+                }
+            }
+            try (SshPasswordMailbox missing = new SshPasswordMailbox(role, selection(role, clock), clock,
+                    () -> {}, ticket -> fail("unavailable saved password prompted"), PASSWORD);
+                 SshPasswordMailbox phrase = new SshPasswordMailbox(role, selection(role, clock), clock,
+                    () -> {}, ticket -> fail("saved-only passphrase prompted"), SshPasswordMailbox.Purpose.KEY_PASSPHRASE)) {
+                try { missing.await(null, false, true); fail("unavailable saved password"); }
+                catch (VaultException expected) { assertEquals("PARAMETERS", expected.code); }
+                try { phrase.await(null, true, true); fail("saved-only passphrase"); }
+                catch (VaultException expected) { assertEquals("PARAMETERS", expected.code); }
+            }
+        }
+    }
+
     @Test public void cancelAfterQueueWipesOwnedAnswer() throws Exception {
         Clock clock = new Clock(); SshRoleContext role = role(clock);
         AtomicReference<SshPasswordMailbox> box = new AtomicReference<>();
         AtomicReference<byte[]> borrowed = new AtomicReference<>();
-        SshPasswordMailbox mailbox = new SshPasswordMailbox(role, clock, () -> {}, ticket -> {
+        SshPasswordMailbox mailbox = new SshPasswordMailbox(role, selection(role, clock), clock, () -> {}, ticket -> {
             assertTrue(box.get().respond(ticket.id, ticket.binding, new byte[] {65}, ONCE));
             try {
                 java.lang.reflect.Field field = ticket.getClass().getDeclaredField("response");
@@ -126,13 +201,38 @@ public final class SshPasswordMailboxTest {
         assertArrayEquals(new byte[borrowed.get().length], borrowed.get()); role.close();
     }
 
+    @Test public void sharedStopAfterResponseWipesQueuedAnswerBeforeHandoff() throws Exception {
+        Clock clock = new Clock();
+        SshSessionOwner.Cancellation cancellation = new SshSessionOwner.Cancellation();
+        AtomicReference<SshPasswordMailbox> box = new AtomicReference<>();
+        AtomicReference<byte[]> queued = new AtomicReference<>();
+        try (SshRoleContext role = role(clock);
+             SshPasswordMailbox mailbox = new SshPasswordMailbox(role, selection(role, clock), clock,
+                     () -> { }, ticket -> {
+                         assertTrue(box.get().respond(ticket.id, ticket.binding, new byte[] {65}, ONCE));
+                         try {
+                             java.lang.reflect.Field field = ticket.getClass().getDeclaredField("response");
+                             field.setAccessible(true);
+                             queued.set(((SshPasswordMailbox.Response)field.get(ticket)).bytes);
+                         } catch (ReflectiveOperationException failure) { throw new AssertionError(failure); }
+                         cancellation.cancel();
+                         assertFalse(box.get().respond(ticket.id, ticket.binding, new byte[] {66}, ONCE));
+                     }, PASSWORD, cancellation)) {
+            box.set(mailbox);
+            try { mailbox.await(null, false); fail("STOP allowed the queued password to escape"); }
+            catch (VaultException expected) { assertEquals("SSH_CANCELLED", expected.code); }
+            assertNotNull(queued.get());
+            assertArrayEquals(new byte[queued.get().length], queued.get());
+        }
+    }
+
     @Test public void expiryOrChangedSessionRejectsAndWipesBeforeHandoff() throws Exception {
         for (boolean expire : new boolean[] {false, true}) {
             Clock clock = new Clock(); SshRoleContext role = role(clock);
             AtomicReference<SshPasswordMailbox> box = new AtomicReference<>();
             AtomicReference<SshPasswordMailbox.Ticket> seen = new AtomicReference<>();
             AtomicBoolean changed = new AtomicBoolean();
-            SshPasswordMailbox mailbox = new SshPasswordMailbox(role, clock, () -> {
+            SshPasswordMailbox mailbox = new SshPasswordMailbox(role, selection(role, clock), clock, () -> {
                 if (changed.get()) throw new VaultException("VAULT_CHANGED", "changed");
             }, ticket -> {
                 seen.set(ticket);

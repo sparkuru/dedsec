@@ -68,6 +68,18 @@ final class SshManagedProvider {
         return provider != null && trustSource == provider && casWriter == provider;
     }
 
+    boolean usesSavedPassword(SshRoleContext role, SshAuthenticationSelection selection,
+            SshManagedKnownHostsProvider provider) throws VaultException {
+        if (role == null || selection == null || selection.role != role
+                || selection.kind != SshCredentialBridge.Kind.PASSWORD
+                || selection.automaticDiscovery || selection.continueKeyboardInteractive
+                || credentialBridge.hasTransientPassword() || credentialBridge.hasTransientKey()
+                || !ownsNativeCandidateProvider(provider) || !credentialBridge.sharesVault(provider)) return false;
+        SshSavedPassword saved = new SshSavedPassword(new SshPasswordProfile(
+                role.host, role.port, selection.username));
+        return saved.target.equals(role.targetIdentity) && saved.entryId.equals(selection.entryId);
+    }
+
     /** Returns one exact NEW-host proposal; the adapter closes it after review. */
     SshTrustProposal proposalFor(SshHostKeyAuthority.Evidence evidence) throws VaultException {
         return proposalFor(evidence, null);

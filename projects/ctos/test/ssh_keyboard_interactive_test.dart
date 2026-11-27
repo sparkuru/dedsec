@@ -91,6 +91,8 @@ void main() {
           SshEvent.parse(_challenge('attempt')) as SshKeyboardChallenge;
       expect(parsed.prompts.map((prompt) => prompt.echo), [true, false]);
       expect(parsed.instruction, '请输入账号\n然后回答服务器问题。');
+      expect(parsed.endpoint.label, 'alice@server.invalid:2222');
+      expect(parsed.hop, 0);
       for (final bad in <Map<String, Object>>[
         {..._challenge('attempt'), 'extra': 'raw'},
         {..._challenge('attempt'), 'round': 0},
@@ -99,6 +101,16 @@ void main() {
         {..._challenge('attempt'), 'binding': 'unbound'},
         {..._challenge('attempt'), 'name': String.fromCharCode(0xd800)},
         {..._challenge('attempt'), 'instruction': '文' * 1366},
+        {..._challenge('attempt')}..remove('host'),
+        {..._challenge('attempt')}..remove('port'),
+        {..._challenge('attempt')}..remove('username'),
+        {..._challenge('attempt')}..remove('hop'),
+        {..._challenge('attempt'), 'host': 'bad host'},
+        {..._challenge('attempt'), 'port': 65536},
+        {..._challenge('attempt'), 'username': ''},
+        {..._challenge('attempt'), 'hop': -1},
+        {..._challenge('attempt'), 'hop': 9},
+        {..._challenge('attempt'), 'hop': '1'},
         {
           ..._challenge('attempt'),
           'prompts': [
@@ -1580,6 +1592,10 @@ Map<String, Object> _challenge(
   List<Map<String, Object>>? prompts,
 }) => {
   'type': 'keyboardChallenge',
+  'hop': 0,
+  'host': 'server.invalid',
+  'port': 2222,
+  'username': 'alice',
   'requestId': id,
   'ticketId': 'ticket_$round',
   'binding': 'b' * 64,
